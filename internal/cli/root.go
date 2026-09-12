@@ -9,10 +9,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // Build information, overridden at link time via -ldflags:
@@ -68,14 +70,19 @@ func newServeCommand() *cobra.Command {
 	}
 }
 
-// newDoctorCommand builds the environment diagnostics command (stub until G6).
+// newDoctorCommand builds the environment diagnostics command. The
+// provider enumeration is live; the full check suite lands at G6.
 func newDoctorCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose the local environment (providers, player, paths)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runDoctor(cmd.Context(), cmd.OutOrStdout())
+			settingsPath, err := ConfigPathFrom(cmd)
+			if err != nil {
+				return err
+			}
+			return runDoctor(cmd.Context(), settingsPath, cmd.OutOrStdout())
 		},
 	}
 }
@@ -106,10 +113,40 @@ func runServe(_ context.Context, out io.Writer) error {
 	return nil
 }
 
-// runDoctor prints environment diagnostics (planned for G6).
-func runDoctor(_ context.Context, out io.Writer) error {
-	_, _ = fmt.Fprintln(out, "anicli doctor: not implemented yet")
+// runDoctor prints environment diagnostics. For now it enumerates the
+// registered providers: registry construction only builds clients, no
+// network egress happens. Real health checks land at G6.
+func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
+	_, _ = fmt.Fprintln(out, "anicli doctor")
+
+	settings, err := loadSettingsOrFail(settingsPath)
+	if err != nil {
+		return err
+	}
+
+	reg, err := providers.NewRegistry(settings.Network, nil)
+	if err != nil {
+		return fmt.Errorf("build provider registry: %w", err)
+	}
+
+	ids := make([]string, 0, len(reg.List()))
+	for _, p := range reg.List() {
+		ids = append(ids, p.ID())
+	}
+	_, _ = fmt.Fprintf(out, "providers (%d): %s\n", len(ids), strings.Join(ids, ", "))
+	_, _ = fmt.Fprintln(out, "health checks: not implemented yet")
 	return nil
+}
+
+// loadSettingsOrFail resolves the effective settings for a command,
+// failing loudly on a broken settings file (config.Load already treats a
+// missing file as defaults).
+func loadSettingsOrFail(path string) (*config.Settings, error) {
+	settings, err := config.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	return settings, nil
 }
 
 // printVersion renders the build triple.

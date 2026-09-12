@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": 16488,
+      "rus_name": "Блич: Тысячелетняя кровавая война",
+      "name": "Bleach: Sennen Kessen-hen",
+      "eng_name": "Bleach: Thousand-Year Blood War",
+      "slug_url": "16488--bleach-sennen-kessen-hen",
+      "cover": {
+        "default": "https://cdn-libria.info/cover/16488/default.jpg"
+      }
+    },
+    {
+      "id": 9001,
+      "rus_name": null,
+      "name": "Yofukashi no Uta",
+      "eng_name": "Call of the Night",
+      "slug_url": "9001--yofukashi-no-uta",
+      "cover": {
+        "default": "https://cdn-libria.info/cover/9001/default.jpg"
+      }
+    },
+    {
+      "id": 9002,
+      "rus_name": null,
+      "name": null,
+      "eng_name": "Eng Only Title",
+      "slug_url": "9002--eng-only",
+      "cover": {}
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "data": {
+    "players": [
+      {
+        "team": { "name": "AniLib" },
+        "player": "AnimeLib",
+        "video": {
+          "quality": [
+            { "href": "bleach/ep1_1080.m3u8", "quality": 1080 },
+            { "href": "bleach/ep1_720.m3u8", "quality": 720 }
+          ]
+        }
+      },
+      {
+        "team": { "name": "Studio Band" },
+        "player": "Kodik",
+        "src": "//kodik.info/serial/12345/xyz/720p"
+      }
+    ]
+  }
+}

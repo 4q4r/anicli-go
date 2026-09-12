@@ -179,9 +179,9 @@ func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page 
 
 // ResolveStream scrapes the play page's quality dropdown and feeds each
 // href to the extractor factory (port of animepahe.py:93-150). Kwik
-// embed URLs stay unresolved (the kwik extractor is disabled in the
-// Python factory too), so a page of pure kwik links yields an empty
-// stream, not an error; direct media hrefs resolve via the fallback.
+// embed URLs resolve through the ported kwik extractor (the Python
+// factory disabled it; PR7 completes the flow the Python stub described);
+// direct media hrefs resolve via the fallback.
 func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		// Python hardcodes the dub name, ignoring dub_id (animepahe.py:150).
@@ -207,10 +207,10 @@ func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode
 	// The play page is parsed with the Python regex, not goquery: the
 	// matched anchor layout is attribute-order-sensitive (href, class).
 	for _, match := range animePaheDropRe.FindAllSubmatch(resp.Body, -1) {
-		sources, err := resolveEmbeds([]string{string(match[1])})
+		sources, err := resolveEmbeds(ctx, p.http, []string{string(match[1])})
 		if err != nil {
 			// Python ignores per-link extraction failures (an empty
-			// extractor result updates nothing); a pending extractor
+			// extractor result updates nothing); a failing extractor
 			// must not shadow links that do resolve.
 			if len(stream.Links) == 0 {
 				return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)

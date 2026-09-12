@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/crypto"
 )
 
 func TestGogoAnimeSearch(t *testing.T) {
@@ -220,21 +221,64 @@ func TestGogoAnimeResolveStreamLazyFetchesDubs(t *testing.T) {
 	}
 }
 
-func TestGogoAnimeResolveStreamPendingExtractor(t *testing.T) {
+// TestGogoAnimeResolveStreamGogoPlayRoundTrip is the PR7 round trip for
+// the lazy-dub path: episode page server list -> gogoplay embed ->
+// AES keys + data-value -> encrypt-ajax.php -> decrypted sources
+// (gogoanime.py:122-134 with the ported gogoplay extractor).
+func TestGogoAnimeResolveStreamGogoPlayRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	const (
+		keyEnc = "3947103857291746"
+		keyIV  = "1029384756102938"
+		keyDec = "5647382910473829"
+	)
+	gogo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/embedplus":
+			enc, err := crypto.AESEncrypt("id=content123&alias=naruto", []byte(keyEnc), []byte(keyIV))
+			if err != nil {
+				t.Errorf("encrypt data-value: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `<div class="container-%s" id="videocontent-%s" data-value=%q></div><script>var videocontent-%s; var container-%s;</script>`,
+				keyEnc, keyIV, enc, keyDec, keyDec)
+		case "/encrypt-ajax.php":
+			enc, err := crypto.AESEncrypt(
+				`{"source":[{"file":"https://h.example/hls/master.m3u8","label":"1080 P"}]}`,
+				[]byte(keyDec), []byte(keyIV))
+			if err != nil {
+				t.Errorf("encrypt ajax payload: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"data":%q}`, enc)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(gogo.Close)
+
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "gogoanime_episode.html"))
+		_, _ = fmt.Fprintf(w, `<div class="anime_muti_link"><a href="javascript:void(0)" data-video="%s/embedplus?id=content123">Choose this server Vidstreaming</a></div>`, gogo.URL)
 	})
 	p := newGogoAnime(srv.URL, srv.URL+"/ajax/load-list-episode", testClient(t, "gogoanime"))
 
 	episode := contracts.Episode{Num: "1", RawID: "/naruto-episode-1"}
-	_, err := p.ResolveStream(context.Background(), episode, "Vidstreaming")
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("error = %v, want pending ErrExtractFailed for the gogoplay link", err)
+	stream, err := p.ResolveStream(context.Background(), episode, "Vidstreaming")
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
 	}
-	if !strings.Contains(err.Error(), "gogoplay") {
-		t.Errorf("error = %v, want the gogoplay extractor name", err)
+	if stream.DubName != "Vidstreaming" {
+		t.Errorf("DubName = %q", stream.DubName)
+	}
+	src, ok := stream.Links["1080"]
+	if !ok {
+		t.Fatalf("Links = %v, want a 1080 entry from the gogoplay extraction", stream.Links)
+	}
+	if src.URL != "https://h.example/hls/master.m3u8" || src.Type != "m3u8" {
+		t.Errorf("1080 = %+v, want the decrypted master.m3u8", src)
 	}
 }
 

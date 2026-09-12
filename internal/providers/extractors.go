@@ -1,95 +1,59 @@
 package providers
 
 import (
-	"fmt"
+	"context"
 	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/extractors"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// embedExtractors ports the URL matching table of the Python
-// ExtractorFactory (anicli-py anicli/core/extractors.py:658-671) in its
-// original order. The extractors themselves land in a later PR
-// (internal/extractors); until then a matched URL surfaces as an
-// ErrExtractFailed "pending" error instead of the Python original's
-// silently empty result (task ruling: no silent success paths).
-var embedExtractors = []struct {
-	name    string
-	matches func(u string) bool
-}{
-	{"kodik", func(u string) bool { return strings.Contains(u, "kodik") || strings.Contains(u, "aniqit") }},
-	{"aniboom", func(u string) bool { return strings.Contains(u, "aniboom") }},
-	{"cdnvideohub", func(u string) bool { return strings.Contains(u, "cdn-iframe") }},
-	{"alloha", func(u string) bool { return strings.Contains(u, "alloha") || strings.Contains(u, "all.") }},
-	{"sibnet", func(u string) bool { return strings.Contains(u, "sibnet") }},
-	{"askor", func(u string) bool { return strings.Contains(u, "aksor.yani.tv") }},
-	{"csst", func(u string) bool { return strings.Contains(u, "csst.online") }},
-	{"sovetromantica_embed", func(u string) bool { return strings.Contains(u, "sovetromantica.com/embed") }},
-	{"gogoplay", func(u string) bool {
-		return strings.Contains(u, "gogoplay") || strings.Contains(u, "playtaku") ||
-			strings.Contains(u, "playgo") || strings.Contains(u, "goload") ||
-			strings.Contains(u, "streaming.php") || strings.Contains(u, "embedplus")
-	}},
-	{"streamtape", func(u string) bool { return strings.Contains(u, "streamtape") }},
-	{"dood", func(u string) bool { return strings.Contains(u, "dood") }},
-}
-
-// matchEmbedExtractor returns the name of the first extractor whose URL
-// rule matches link, in ExtractorFactory order.
-func matchEmbedExtractor(link string) (string, bool) {
-	for _, ex := range embedExtractors {
-		if ex.matches(link) {
-			return ex.name, true
-		}
-	}
-	return "", false
-}
-
-// pendingExtractorError marks an embed URL whose extractor is not ported
-// yet.
-func pendingExtractorError(name string) error {
-	return fmt.Errorf("extractor:%s pending: %w", name, contracts.ErrExtractFailed)
-}
-
-// resolveEmbeds ports the surface of ExtractorFactory.get_sources
-// (anicli-py anicli/core/extractors.py:673-689) needed by the wave-1
-// providers:
+// resolveEmbeds ports the provider-facing surface of
+// ExtractorFactory.get_sources (anicli-py anicli/core/extractors.py:
+// 673-689) as consumed by the provider resolve loops:
 //
 //   - URLs ending in .mp4/.m3u8 resolve directly to a quality-720
-//     VideoSource (extractors.py:686-687). Python tries extractors first
-//     and reaches this fallback only when they all yield empty — which is
-//     exactly what happens for a raw media URL that happens to match an
-//     extractor substring (e.g. "all.mp4" matching Alloha's "all."):
-//     the extractor extracts nothing from a bare media file. Since the
-//     Go port has no extractors yet (a match only yields the pending
-//     marker), checking the suffix FIRST reproduces the observable
-//     Python outcome for such URLs;
-//   - other URLs matched by an extractor rule carry a pending error (the
-//     Python original would attempt extraction; that machinery is a
-//     later PR);
-//   - URLs matching nothing contribute nothing (Python: {}).
-//
-// Blending mirrors the Python dict.update semantics: a link that cannot
-// resolve does not fail links that can. Only when nothing resolved AND a
-// pending extractor was hit does the function surface the pending error.
-func resolveEmbeds(links []string) (map[string]contracts.VideoSource, error) {
+//     VideoSource (extractors.py:686-687). The suffix is checked FIRST:
+//     Python tries extractors and only reaches the fallback when they
+//     all yield empty — which is exactly what happens for a raw media
+//     URL that happens to match an extractor substring (e.g. "all.mp4"
+//     matching Alloha's "all."): the extractor extracts nothing from a
+//     bare media file. Checking the suffix first reproduces the
+//     observable Python outcome while skipping the wasted embed fetch;
+//   - other URLs run through the real extractor factory in Python
+//     registration order (kwik appended where Python disabled it);
+//   - results merge across links with Python dict.update semantics —
+//     later links overwrite earlier keys (gogoanime.py:128-132,
+//     animego.py:134-137, kodik.py:178-183, anilib.py:162);
+//   - a link whose extraction fails contributes nothing but is
+//     remembered: only when NOTHING resolved does the first failure
+//     surface (the Go no-silent-failure replacement for Python's
+//     swallowed exceptions), never shadowing links that do resolve.
+func resolveEmbeds(ctx context.Context, http *netclient.Client, links []string) (map[string]contracts.VideoSource, error) {
+	factory := extractors.NewFactory(http)
 	sources := map[string]contracts.VideoSource{}
-	var pending error
+	var firstErr error
 
 	for _, link := range links {
 		if strings.HasSuffix(link, ".mp4") || strings.HasSuffix(link, ".m3u8") {
 			sources["720"] = contracts.VideoSource{URL: link, Quality: "720"}
 			continue
 		}
-		if name, matched := matchEmbedExtractor(link); matched {
-			if pending == nil {
-				pending = pendingExtractorError(name)
+		res, err := factory.GetSources(ctx, link)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
+			continue
+		}
+		for quality, src := range res {
+			sources[quality] = src // dict.update: later links overwrite
 		}
 	}
 
-	if len(sources) == 0 && pending != nil {
-		return nil, pending
+	if len(sources) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 	return sources, nil
 }

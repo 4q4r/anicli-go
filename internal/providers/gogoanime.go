@@ -240,9 +240,8 @@ func (p *GogoAnime) FetchDubs(ctx context.Context, episode *contracts.Episode) (
 
 // ResolveStream resolves the chosen server's embed URLs (port of
 // gogoanime.py:122-134). Like the Python original it lazily fetches the
-// dub list when the episode carries none. Direct media URLs resolve via
-// the factory fallback; gogoplay/streamtape/dood embeds surface the
-// pending-extractor error.
+// dub list when the episode carries none; embed URLs run through the
+// extractor factory, direct media URLs through the fallback.
 func (p *GogoAnime) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	if len(episode.RawEmbeds) == 0 {
 		hydrated, err := p.FetchDubs(ctx, &episode)
@@ -258,7 +257,7 @@ func (p *GogoAnime) ResolveStream(ctx context.Context, episode contracts.Episode
 	}
 	links := episode.RawEmbeds[dubID]
 
-	sources, err := resolveEmbeds(links)
+	sources, err := resolveEmbeds(ctx, p.http, links)
 	if err != nil {
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
 	}

@@ -278,28 +278,47 @@ func TestKodikGetEpisodesTransportFailureSilent(t *testing.T) {
 	}
 }
 
-func TestKodikResolveStreamPendingExtractor(t *testing.T) {
+func TestKodikResolveStreamRoundTrip(t *testing.T) {
 	t.Parallel()
+
+	// Local kodik player fake: hash/id vars on the page, /ftor API with a
+	// plain passthrough src (extractors.py:193-194 — bare https .m3u8
+	// srcs are not encoded).
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
+	})
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ftor" {
+			_, _ = fmt.Fprint(w, `{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
+	})
 
 	p := newKodik("https://kodik-api.com", "tok", testClient(t, "kodik"))
 	episode := contracts.Episode{
 		Num:   "1",
 		RawID: "1",
 		RawEmbeds: map[string][]string{
-			"Original": {"https://kodik.info/serial/450123/abc123def/720p?min_age=16&first_url=false&season=1&episode=1"},
+			"Original": {srv.URL + "/kodik/serial/450123/abc123def/720p"},
 		},
 	}
 
 	stream, err := p.ResolveStream(context.Background(), episode, "Original")
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("error = %v, want pending ErrExtractFailed for the kodik player link", err)
-	}
-	if !strings.Contains(err.Error(), "kodik") {
-		t.Errorf("error = %v, want the kodik extractor name", err)
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
 	}
 	if stream.DubName != "Original" {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
+	src, ok := stream.Links["720"]
+	if !ok {
+		t.Fatalf("Links = %v, want a 720 entry from the kodik extractor", stream.Links)
+	}
+	if src.URL != "https://plain.example/x/720.m3u8" {
+		t.Errorf("720 URL = %q", src.URL)
+	}
+	_ = rec // fixtureServer recorder unused; handler replaced above
 }
 
 func TestKodikProviderMeta(t *testing.T) {

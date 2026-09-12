@@ -2,9 +2,9 @@ package providers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -309,41 +309,56 @@ func TestAnilibResolveStreamInternal(t *testing.T) {
 	}
 }
 
-func TestAnilibResolveStreamKodikIsPending(t *testing.T) {
+// TestAnilibResolveStreamKodikRoundTrip covers the Kodik-player branch of
+// anilib resolve (anilib.py:160-162) with the ported kodik extractor:
+// the embed URL runs through the factory and yields the /ftor sources.
+func TestAnilibResolveStreamKodikRoundTrip(t *testing.T) {
 	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ftor" {
+			_, _ = fmt.Fprint(w, `{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
+	}))
+	t.Cleanup(srv.Close)
 
 	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
 	episode := contracts.Episode{
 		RawEmbeds: map[string][]string{
-			"Studio Band (Kodik)": {"//kodik.info/serial/12345/xyz/720p"},
+			"Studio Band (Kodik)": {srv.URL + "/kodik/serial/12345/xyz/720p"},
 		},
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "Studio Band (Kodik)")
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("error = %v, want ErrExtractFailed", err)
+	stream, err := p.ResolveStream(context.Background(), episode, "Studio Band (Kodik)")
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "anilib" {
-		t.Errorf("error = %v, want anilib ProviderError", err)
+	if src, ok := stream.Links["720"]; !ok || src.URL != "https://plain.example/x/720.m3u8" {
+		t.Errorf("720 = %+v, ok=%v, want the kodik extractor result", src, ok)
 	}
 }
 
-func TestAnilibResolveStreamProtocolRelativeKodikIsPending(t *testing.T) {
+// TestAnilibResolveStreamProtocolRelativeKodik pins the "//" prefix
+// normalization (anilib.py:161) against a dead endpoint: the absolutized
+// https URL fails transport-side and the extractor-tagged error surfaces.
+func TestAnilibResolveStreamProtocolRelativeKodikFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	// The "//" prefix must be normalized to "https:" before extractor
-	// matching (anilib.py:161); the pending marker must still fire.
 	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
 	episode := contracts.Episode{
 		RawEmbeds: map[string][]string{
-			"D (Kodik)": {"//kodik.biz/e/9"},
+			"D (Kodik)": {"//" + newDeadListener(t).Addr().String() + "/kodik/e/9"},
 		},
 	}
 
 	_, err := p.ResolveStream(context.Background(), episode, "D (Kodik)")
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("error = %v, want ErrExtractFailed", err)
+	if err == nil {
+		t.Fatal("error = nil, want the transport failure of the absolutized https URL")
+	}
+	if !strings.Contains(err.Error(), "extractor:kodik") {
+		t.Errorf("error = %v, want extractor:kodik context on the transport failure", err)
 	}
 }
 

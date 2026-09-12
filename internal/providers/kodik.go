@@ -213,15 +213,15 @@ func (p *Kodik) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.E
 }
 
 // ResolveStream resolves the chosen translation's player link (port of
-// kodik.py:172-183): the kodik.info URL matches the (pending) kodik
-// extractor and surfaces ErrExtractFailed.
-func (p *Kodik) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+// kodik.py:172-183): the kodik.info URL runs through the extractor
+// factory, which folds the /ftor API sources into the stream.
+func (p *Kodik) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
 		Links:   map[string]contracts.VideoSource{},
 	}
 
-	sources, err := resolveEmbeds(episode.RawEmbeds[dubID])
+	sources, err := resolveEmbeds(ctx, p.http, episode.RawEmbeds[dubID])
 	if err != nil {
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
 	}

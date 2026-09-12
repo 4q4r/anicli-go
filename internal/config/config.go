@@ -1,6 +1,7 @@
 // Package config loads anicli settings from TOML with layered overrides:
 // defaults first, then the settings file, then ANICLI_* environment variables
-// for secrets only (proxy URL, shikimori session cookie, database URL).
+// for secrets only (proxy URL, shikimori session cookie, database URL,
+// kodik API token).
 //
 // It is hand-rolled on top of github.com/BurntSushi/toml by design ruling:
 // no viper anywhere in this codebase.
@@ -33,6 +34,7 @@ const (
 	EnvProxyURL         = "ANICLI_PROXY_URL"
 	EnvShikimoriSession = "ANICLI_SHIKIMORI_SESSION"
 	EnvDBURL            = "ANICLI_DB_URL"
+	EnvKodikToken       = "ANICLI_KODIK_TOKEN"
 )
 
 // Filesystem names and default values.
@@ -102,6 +104,23 @@ type API struct {
 	TokenTTL time.Duration `toml:"token_ttl"`
 }
 
+// Providers holds per-provider settings. Only providers that need
+// user-supplied credentials appear here; the rest run credential-free.
+type Providers struct {
+	// Kodik configures the Kodik API source.
+	Kodik ProvidersKodik `toml:"kodik"`
+}
+
+// ProvidersKodik carries the Kodik API token (https://kodik-api.com
+// answers 401 without one). Empty by default: the kodik provider fails
+// loud on use, never at startup, so the credential is only demanded from
+// users who actually select that source.
+type ProvidersKodik struct {
+	// Token is the Kodik API token; also settable via ANICLI_KODIK_TOKEN
+	// (env wins over the file).
+	Token string `toml:"token"`
+}
+
 // Settings is the full configuration surface.
 type Settings struct {
 	General   General   `toml:"general"`
@@ -111,6 +130,7 @@ type Settings struct {
 	Skip      Skip      `toml:"skip"`
 	Download  Download  `toml:"download"`
 	API       API       `toml:"api"`
+	Providers Providers `toml:"providers"`
 }
 
 // Default returns the built-in settings: user-tuned timeout values carried
@@ -216,6 +236,9 @@ func applyEnv(s *Settings) {
 	}
 	if v, ok := lookupEnv(EnvShikimoriSession); ok {
 		s.Shikimori.Session = v
+	}
+	if v, ok := lookupEnv(EnvKodikToken); ok {
+		s.Providers.Kodik.Token = v
 	}
 }
 

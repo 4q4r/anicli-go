@@ -70,6 +70,9 @@ func TestDefaults(t *testing.T) {
 	if want := 15 * time.Minute; got.API.TokenTTL != want {
 		t.Errorf("API.TokenTTL = %v, want %v", got.API.TokenTTL, want)
 	}
+	if got.Providers.Kodik.Token != "" {
+		t.Errorf("Providers.Kodik.Token = %q, want empty (must be user-supplied)", got.Providers.Kodik.Token)
+	}
 }
 
 func writeTOML(t *testing.T, content string) string {
@@ -103,6 +106,9 @@ bind = "127.0.0.1:9999"
 
 [download]
 max_concurrency = 5
+
+[providers.kodik]
+token = "file-kodik-token"
 `)
 	got, err := Load(path)
 	if err != nil {
@@ -127,6 +133,9 @@ max_concurrency = 5
 	}
 	if got.Download.MaxConcurrency != 5 {
 		t.Errorf("MaxConcurrency = %d, want 5", got.Download.MaxConcurrency)
+	}
+	if got.Providers.Kodik.Token != "file-kodik-token" {
+		t.Errorf("Providers.Kodik.Token = %q, want file value", got.Providers.Kodik.Token)
 	}
 
 	// Untouched values keep their defaults (file must not zero them).
@@ -191,6 +200,11 @@ func TestLoadUnknownKeys(t *testing.T) {
 			key:     "network.frobnicate",
 		},
 		{
+			name:    "unknown key inside providers.kodik",
+			content: "[providers.kodik]\nbogus = true\n",
+			key:     "providers.kodik.bogus",
+		},
+		{
 			name:    "unknown top-level key",
 			content: "top_level_secret = 1\n",
 			key:     "top_level_secret",
@@ -219,6 +233,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	// Uses t.Setenv: no t.Parallel here.
 	t.Setenv("ANICLI_PROXY_URL", "http://127.0.0.1:8080")
 	t.Setenv("ANICLI_SHIKIMORI_SESSION", "env-session")
+	t.Setenv("ANICLI_KODIK_TOKEN", "env-kodik-token")
 
 	path := writeTOML(t, `
 [network]
@@ -227,6 +242,9 @@ proxy_url = "socks5://file-proxy:9050"
 [shikimori]
 session = "file-session"
 access_token = "file-token"
+
+[providers.kodik]
+token = "file-kodik-token"
 `)
 	got, err := Load(path)
 	if err != nil {
@@ -239,6 +257,9 @@ access_token = "file-token"
 	}
 	if got.Shikimori.Session != "env-session" {
 		t.Errorf("Session = %q, want env value to win", got.Shikimori.Session)
+	}
+	if got.Providers.Kodik.Token != "env-kodik-token" {
+		t.Errorf("Providers.Kodik.Token = %q, want env value to win", got.Providers.Kodik.Token)
 	}
 	// Non-secret fields stay file-driven.
 	if got.Shikimori.AccessToken != "file-token" {

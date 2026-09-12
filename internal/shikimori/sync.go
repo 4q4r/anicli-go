@@ -66,12 +66,21 @@ func (s *Syncer) SyncEpisodeProgress(ctx context.Context, progress storage.Anime
 		return err
 	}
 
+	return s.persistSuccess(ctx, progress, rateID)
+}
+
+// persistSuccess records a successful push: the new rate id and the
+// cleared dirty flag. Both writes are detached from the caller's
+// context (F39): a cancellation arriving in the window after the
+// server already recorded the push must not lose the rate id locally —
+// the next sync would otherwise create a duplicate rate.
+func (s *Syncer) persistSuccess(ctx context.Context, progress storage.AnimeProgress, rateID int64) error {
 	if rateID != 0 && (progress.ShikimoriRateID == nil || *progress.ShikimoriRateID != rateID) {
-		if err := s.repo.SetRateID(ctx, progress.ID, rateID); err != nil {
+		if err := s.repo.SetRateID(context.WithoutCancel(ctx), progress.ID, rateID); err != nil {
 			return fmt.Errorf("shikimori sync: persist rate id %d: %w", rateID, err)
 		}
 	}
-	if err := s.repo.ClearDirty(ctx, progress.ID); err != nil {
+	if err := s.repo.ClearDirty(context.WithoutCancel(ctx), progress.ID); err != nil {
 		return fmt.Errorf("shikimori sync: clear dirty %d: %w", progress.ID, err)
 	}
 	return nil

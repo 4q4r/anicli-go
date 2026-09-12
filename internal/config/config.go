@@ -13,6 +13,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -165,7 +166,12 @@ func Load(path string) (*Settings, error) {
 			if err := applyFile(path, &s); err != nil {
 				return nil, err
 			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			// Exists but is not stat-able (e.g. permission denied on a
+			// parent directory): must not masquerade as "missing file".
+			return nil, fmt.Errorf("stat settings %s: %w", path, err)
 		}
+		// Missing file: defaults apply, not an error.
 	}
 
 	applyEnv(&s)

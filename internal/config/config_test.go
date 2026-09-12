@@ -286,7 +286,9 @@ func TestResolveConfigPathPrecedence(t *testing.T) {
 		},
 		{
 			name: "home fallback",
-			env:  map[string]string{"HOME": "/home/tester"},
+			// XDG_CONFIG_HOME cleared explicitly: the result must not
+			// depend on the ambient developer environment.
+			env:  map[string]string{"HOME": "/home/tester", "XDG_CONFIG_HOME": ""},
 			want: "/home/tester/.config/anicli/settings.toml",
 		},
 	}

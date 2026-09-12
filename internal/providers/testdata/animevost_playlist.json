@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Серия 1",
+    "hd": "https://video.animevost.org/cowboy_bebop/1_hd.mp4",
+    "std": "https://video.animevost.org/cowboy_bebop/1_std.mp4"
+  },
+  {
+    "hd": "https://video.animevost.org/cowboy_bebop/2_hd.mp4",
+    "std": "https://video.animevost.org/cowboy_bebop/2_std.mp4"
+  },
+  {
+    "name": "Серия 3 (без std)",
+    "hd": "https://video.animevost.org/cowboy_bebop/3_hd.mp4"
+  }
+]

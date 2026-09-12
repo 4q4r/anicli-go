@@ -1,0 +1,36 @@
+{
+  "results": [
+    {
+      "id": 12345,
+      "title": "Наруто",
+      "title_orig": "Naruto",
+      "link": "//kodik.info/serial/123-456/720p?season=1",
+      "year": 2002,
+      "type": "anime-serial",
+      "material_data": {
+        "poster_url": "https://img.example/naruto.jpg",
+        "anime_poster_url": "https://img.example/naruto-alt.jpg"
+      }
+    },
+    {
+      "id": 67890,
+      "title": null,
+      "title_orig": "No Title Anime",
+      "link": "https://kodik.info/video/789-012/720p",
+      "year": null,
+      "type": "movie",
+      "material_data": {
+        "anime_poster_url": "https://img.example/no-title.jpg"
+      }
+    },
+    {
+      "id": 999,
+      "title": "Broken",
+      "title_orig": "Broken Entry",
+      "link": null,
+      "year": 2020,
+      "type": "anime",
+      "material_data": {}
+    }
+  ]
+}

@@ -7,11 +7,19 @@ package shikimori
 // top level of the details aggregate).
 
 // Image is Shikimori's image object; fields are site-root-relative paths.
+// The full size ladder mirrors the API payload (python _anime_poster
+// prefers original > main > preview > x96 > x48).
 type Image struct {
 	// Original is the full-size artwork path, e.g. "/animes/original/1.jpg".
 	Original string `json:"original,omitempty"`
+	// Main is the mid-size artwork path.
+	Main string `json:"main,omitempty"`
 	// Preview is the thumbnail path.
 	Preview string `json:"preview,omitempty"`
+	// X96 is the tiny 96px artwork path.
+	X96 string `json:"x96,omitempty"`
+	// X48 is the tiny 48px artwork path.
+	X48 string `json:"x48,omitempty"`
 }
 
 // Genre is a brief anime genre entry.
@@ -39,6 +47,12 @@ type Anime struct {
 	Genres        []Genre `json:"genres,omitempty"`
 	AiredOn       string  `json:"aired_on,omitempty"`
 	ReleasedOn    string  `json:"released_on,omitempty"`
+	// NextEpisode and NextEpisodeAt feed the home feed and release
+	// calendar projections (python anime rows carry them on /api/animes
+	// list responses).
+	NextEpisode   int    `json:"next_episode,omitempty"`
+	NextEpisodeAt string `json:"next_episode_at,omitempty"`
+	URL           string `json:"url,omitempty"`
 	// Characters/Staff/Related/Similar implement the inventory ruling:
 	// structured relations inside the anime payload. Empty when the anime
 	// was fetched without relations.

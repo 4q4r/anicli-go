@@ -81,6 +81,32 @@ func (r *EpisodeProgressRepo) ListByAnime(ctx context.Context, animeID int64) ([
 	return out, nil
 }
 
+// GetByEpisode loads one episode progress row by (anime, episode);
+// missing rows map to contracts.ErrNotFound.
+func (r *EpisodeProgressRepo) GetByEpisode(ctx context.Context, animeID int64, episode string) (*EpisodeProgress, error) {
+	e, err := scanEpisodeProgress(r.db.QueryRowContext(ctx,
+		`SELECT id, anime_id, episode, position_sec, duration_sec, video_key, audio_key, quality, updated_at
+		 FROM anime_episode_progress WHERE anime_id = ? AND episode = ?`, animeID, episode))
+	if err != nil {
+		return nil, notFound(fmt.Errorf("get episode progress (anime %d, episode %q): %w", animeID, episode, err))
+	}
+	return e, nil
+}
+
+// LatestByAnime returns the most recently updated episode row of one
+// anime (the GET /api/v1/history/{anime_id}/progress default when no
+// episode is requested).
+func (r *EpisodeProgressRepo) LatestByAnime(ctx context.Context, animeID int64) (*EpisodeProgress, error) {
+	e, err := scanEpisodeProgress(r.db.QueryRowContext(ctx,
+		`SELECT id, anime_id, episode, position_sec, duration_sec, video_key, audio_key, quality, updated_at
+		 FROM anime_episode_progress WHERE anime_id = ?
+		 ORDER BY updated_at DESC, id DESC LIMIT 1`, animeID))
+	if err != nil {
+		return nil, notFound(fmt.Errorf("latest episode progress (anime %d): %w", animeID, err))
+	}
+	return e, nil
+}
+
 func scanEpisodeProgress(row rowScanner) (*EpisodeProgress, error) {
 	var (
 		e                EpisodeProgress

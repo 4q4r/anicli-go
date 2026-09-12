@@ -37,6 +37,8 @@ type Store struct {
 	AutoRules *AutoRuleRepo
 	// ProviderStats is the provider_search_stat repository.
 	ProviderStats *ProviderStatRepo
+	// AuthSessions is the api_auth_session repository (API token auth).
+	AuthSessions *AuthSessionRepo
 }
 
 // buildDSN converts a filesystem path (or ":memory:") into a
@@ -82,6 +84,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	st.Sources = &SourceRepo{db: db}
 	st.AutoRules = &AutoRuleRepo{db: db}
 	st.ProviderStats = &ProviderStatRepo{db: db}
+	st.AuthSessions = &AuthSessionRepo{db: db}
 	return st, nil
 }
 

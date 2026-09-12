@@ -258,7 +258,7 @@ func TestAnilibriaResolveStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("Links missing 480: %v", stream.Links)
 	}
-	if sd.URL != "https:/v/1/480.m3u8" && sd.URL != "https:"+"/v/1/480.m3u8" {
+	if sd.URL != "https:/v/1/480.m3u8" {
 		t.Errorf("480 URL = %q, want python-style https:+path concatenation", sd.URL)
 	}
 }

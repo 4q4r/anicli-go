@@ -81,6 +81,41 @@ func TestResolveEmbedsPendingExtractorNamed(t *testing.T) {
 	}
 }
 
+func TestResolveEmbedsDirectMediaBeatsExtractorSubstring(t *testing.T) {
+	t.Parallel()
+
+	// A raw media URL that ALSO matches an extractor substring resolves
+	// to the direct 720 fallback in Python: the extractor extracts
+	// nothing from a bare media file, so get_sources falls through to
+	// the .mp4/.m3u8 branch (extractors.py:677-687). The suffix check
+	// must therefore win over the extractor match.
+	tests := []struct {
+		name string
+		link string
+	}{
+		{name: "all.mp4 matches alloha substring", link: "https://cdn.example.com/videos/all.mp4"},
+		{name: "dood.mp4 matches dood substring", link: "https://cdn.example.com/videos/dood.mp4"},
+		{name: "all. m3u8 matches alloha substring", link: "https://all.cdn.example.com/hls/master.m3u8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sources, err := resolveEmbeds([]string{tt.link})
+			if err != nil {
+				t.Fatalf("resolveEmbeds(%q) err = %v, want direct fallback (no pending extractor)", tt.link, err)
+			}
+			src, ok := sources["720"]
+			if !ok {
+				t.Fatalf("sources = %v, want a direct 720 entry", sources)
+			}
+			if src.URL != tt.link || src.Quality != "720" {
+				t.Errorf("source = %+v, want url %q quality 720", src, tt.link)
+			}
+		})
+	}
+}
+
 func TestResolveEmbedsUnmatchedURLYieldsNothing(t *testing.T) {
 	t.Parallel()
 

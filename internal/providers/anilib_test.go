@@ -79,6 +79,46 @@ func TestAnilibSearch(t *testing.T) {
 	}
 }
 
+func TestAnilibSearchQueryUnquoteSemantics(t *testing.T) {
+	t.Parallel()
+
+	// Python sends ("q", unquote(query)) (anilib.py:50): the query is
+	// percent-DECODED first, then re-encoded by the request layer.
+	// unquote leaves a literal "+" untouched, so requests puts q=foo%2Bbar
+	// on the wire. The Go twin of unquote is url.PathUnescape (Query-
+	// Unescape would decode "+" to a space).
+	tests := []struct {
+		name  string
+		query string
+		wantQ string
+	}{
+		{name: "literal plus stays plus", query: "foo+bar", wantQ: "foo+bar"},
+		{name: "percent-encoded plus decodes to literal plus", query: "bleach%2Bmovie", wantQ: "bleach+movie"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, `{"data": []}`)
+			})
+			p := newAnilib(srv.URL, testClient(t, "anilib"))
+
+			if _, err := p.Search(context.Background(), tt.query); err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+
+			params, err := url.ParseQuery(rec.Query)
+			if err != nil {
+				t.Fatalf("ParseQuery(%q): %v", rec.Query, err)
+			}
+			if got := params["q"]; len(got) != 1 || got[0] != tt.wantQ {
+				t.Errorf("server-side q = %v, want [%q]", got, tt.wantQ)
+			}
+		})
+	}
+}
+
 func TestAnilibSearchSendsSiteHeaders(t *testing.T) {
 	t.Parallel()
 

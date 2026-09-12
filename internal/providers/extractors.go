@@ -55,10 +55,18 @@ func pendingExtractorError(name string) error {
 // (anicli-py anicli/core/extractors.py:673-689) needed by the wave-1
 // providers:
 //
-//   - URLs matched by an extractor rule carry a pending error (the Python
-//     original would attempt extraction; that machinery is a later PR);
 //   - URLs ending in .mp4/.m3u8 resolve directly to a quality-720
-//     VideoSource (extractors.py:686-687);
+//     VideoSource (extractors.py:686-687). Python tries extractors first
+//     and reaches this fallback only when they all yield empty — which is
+//     exactly what happens for a raw media URL that happens to match an
+//     extractor substring (e.g. "all.mp4" matching Alloha's "all."):
+//     the extractor extracts nothing from a bare media file. Since the
+//     Go port has no extractors yet (a match only yields the pending
+//     marker), checking the suffix FIRST reproduces the observable
+//     Python outcome for such URLs;
+//   - other URLs matched by an extractor rule carry a pending error (the
+//     Python original would attempt extraction; that machinery is a
+//     later PR);
 //   - URLs matching nothing contribute nothing (Python: {}).
 //
 // Blending mirrors the Python dict.update semantics: a link that cannot
@@ -69,14 +77,14 @@ func resolveEmbeds(links []string) (map[string]contracts.VideoSource, error) {
 	var pending error
 
 	for _, link := range links {
+		if strings.HasSuffix(link, ".mp4") || strings.HasSuffix(link, ".m3u8") {
+			sources["720"] = contracts.VideoSource{URL: link, Quality: "720"}
+			continue
+		}
 		if name, matched := matchEmbedExtractor(link); matched {
 			if pending == nil {
 				pending = pendingExtractorError(name)
 			}
-			continue
-		}
-		if strings.HasSuffix(link, ".mp4") || strings.HasSuffix(link, ".m3u8") {
-			sources["720"] = contracts.VideoSource{URL: link, Quality: "720"}
 		}
 	}
 

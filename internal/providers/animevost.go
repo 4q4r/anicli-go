@@ -78,7 +78,7 @@ func (p *AnimeVost) Search(ctx context.Context, query string) ([]contracts.Searc
 	for _, item := range data.Data {
 		results = append(results, contracts.SearchResult{
 			Title:    item.Title,
-			URL:      item.ID.String(),
+			URL:      pythonStr(item.ID), // Python str(item.get("id")) → "None" when missing
 			SourceID: p.ID(),
 			Poster:   item.URLImagePreview,
 		})
@@ -102,16 +102,13 @@ func (p *AnimeVost) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 	}
 
 	// Decode failures and {"error": ...} objects both yield an empty
-	// list (animevost.py:43-48).
+	// list (animevost.py:43-48). Python decodes once into a generic
+	// value and type-checks; here the array decode alone suffices —
+	// a JSON body is either an array or an object, so an {"error":...}
+	// response fails array-decoding and returns [] on the same path.
 	var entries []animevostPlaylistEntry
 	if jsonErr := json.Unmarshal(resp.Body, &entries); jsonErr != nil {
 		return []contracts.Episode{}, nil
-	}
-	var errObj map[string]any
-	if json.Unmarshal(resp.Body, &errObj) == nil {
-		if _, has := errObj["error"]; has {
-			return []contracts.Episode{}, nil
-		}
 	}
 
 	episodes := make([]contracts.Episode, 0, len(entries))

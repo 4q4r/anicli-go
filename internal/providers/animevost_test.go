@@ -55,6 +55,28 @@ func TestAnimevostSearch(t *testing.T) {
 	}
 }
 
+func TestAnimevostSearchMissingIDRendersNone(t *testing.T) {
+	t.Parallel()
+
+	// Python builds url=str(item.get("id")) (animevost.py:33): a missing
+	// id renders as "None", not "".
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"data": [{"title": "Ghost Anime", "urlImagePreview": ""}]}`)
+	})
+	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+
+	results, err := p.Search(context.Background(), "ghost")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	if results[0].URL != "None" {
+		t.Errorf("URL = %q, want None (str(None))", results[0].URL)
+	}
+}
+
 func TestAnimevostSearchMalformedJSONReturnsEmpty(t *testing.T) {
 	t.Parallel()
 

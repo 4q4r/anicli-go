@@ -110,10 +110,13 @@ type anilibEpisode struct {
 //
 // The Python `("q", unquote(query))` parameter is preserved: the query is
 // percent-DECODED before being re-encoded by the request layer. Python's
-// unquote never fails (invalid escapes pass through); Go's equivalent
-// falls back to the raw query on error.
+// unquote leaves a literal "+" untouched (and never fails on invalid
+// escapes); Go's behavioral twin is url.PathUnescape — QueryUnescape
+// would decode "+" to a space, diverging from the Python request shape.
+// Invalid escapes fall back to the raw query, matching unquote's
+// pass-through.
 func (p *Anilib) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	decoded, err := url.QueryUnescape(query)
+	decoded, err := url.PathUnescape(query)
 	if err != nil {
 		decoded = query
 	}

@@ -1,3 +1,4 @@
 /anicli-go
 /dist/
 /*.db
+.sdd/

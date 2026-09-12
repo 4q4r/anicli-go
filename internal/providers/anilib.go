@@ -262,8 +262,8 @@ func (p *Anilib) FetchDubs(ctx context.Context, episode *contracts.Episode) (*co
 // ResolveStream turns the raw embeds of the chosen dub into quality-
 // keyed VideoSources (port of anilib.py:141-163): internal: payloads
 // resolve to the video1.cdnlibs.org CDN with the v3.animelib.org
-// Referer; embed URLs go through the (pending) extractor path.
-func (p *Anilib) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+// Referer; embed URLs go through the extractor factory.
+func (p *Anilib) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
 		Links:   map[string]contracts.VideoSource{},
@@ -278,10 +278,10 @@ func (p *Anilib) ResolveStream(_ context.Context, episode contracts.Episode, dub
 			link = "https:" + link
 		}
 		// Python merges extractor output via dict.update and never fails;
-		// with extractors pending, a link that resolves to nothing and
-		// needs an extractor surfaces the pending error instead (task
-		// ruling), but never shadows sources already resolved.
-		sources, err := resolveEmbeds([]string{link})
+		// a link whose extraction fails surfaces its error only while no
+		// source has resolved yet (task ruling), never shadowing sources
+		// already resolved.
+		sources, err := resolveEmbeds(ctx, p.http, []string{link})
 		if err != nil {
 			if len(stream.Links) == 0 {
 				return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)

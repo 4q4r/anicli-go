@@ -40,8 +40,14 @@ type aaEnv struct {
 	lastAPIHdr      atomic.Value // http.Header: last API request header
 	apiBehaviors    []func(r *http.Request, w http.ResponseWriter) bool
 	clockHits       atomic.Int32
-	mu              sync.Mutex // guards referer page mutation below
-	refererBody     atomic.Value
+	// lastMasterReferer records the Referer of the last /master.m3u8
+	// fetch; masterForbidden counts requests the fake CDN rejected for
+	// a wrong Referer (F30: the playlist must be fetched with the clock
+	// URL as Referer, Python allanime.py:233-236).
+	lastMasterReferer atomic.Value
+	masterForbidden   atomic.Int32
+	mu                sync.Mutex // guards referer page mutation below
+	refererBody       atomic.Value
 }
 
 // aaHexEnc is the inverse of the Python "--" decoder (chr ^ 56).
@@ -158,6 +164,15 @@ func newAAEnv(t *testing.T) *aaEnv {
 				`{"link":%q,"hls":true,"resolution":"1080","subtitles":[]}]}`,
 				env.stream.URL+"/master.m3u8")
 		case "/master.m3u8":
+			// F30 server-side assertion: a real CDN rejects playlist
+			// fetches without the clock-URL Referer (Python parity
+			// allanime.py:233-236).
+			if ref := r.Header.Get("Referer"); !strings.HasPrefix(ref, env.stream.URL+"/all/manga/clock.json") {
+				env.masterForbidden.Add(1)
+				http.Error(w, "wrong referer", http.StatusForbidden)
+				return
+			}
+			env.lastMasterReferer.Store(r.Header.Get("Referer"))
 			_, _ = w.Write([]byte("#EXTM3U\n" +
 				"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n" +
 				"1080.m3u8\n" +
@@ -351,6 +366,15 @@ func TestAllAnimeResolveStreamRoundTrip(t *testing.T) {
 	wantReferer := env.stream.URL + "/all/manga/clock.json?w=1"
 	if l1080.Headers["Referer"] != wantReferer {
 		t.Errorf("1080 Referer = %q, want %q", l1080.Headers["Referer"], wantReferer)
+	}
+	// F30: the master playlist itself must have been FETCHED with the
+	// clock URL as Referer (allanime.py:233-236), not the provider
+	// headers — the fake CDN above 403s anything else.
+	if got := env.lastMasterReferer.Load(); got == nil || got.(string) != wantReferer {
+		t.Errorf("master.m3u8 fetch Referer = %v, want %q (F30)", got, wantReferer)
+	}
+	if env.masterForbidden.Load() != 0 {
+		t.Errorf("master.m3u8 rejected %d fetches for a wrong Referer", env.masterForbidden.Load())
 	}
 	if _, ok := stream.Links["720"]; !ok {
 		t.Error("no 720 link from the second variant")

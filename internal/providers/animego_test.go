@@ -318,13 +318,18 @@ func TestAnimegoResolveStreamDirectFallback(t *testing.T) {
 	}
 }
 
-func TestAnimegoResolveStreamPendingExtractor(t *testing.T) {
+// TestAnimegoResolveStreamSkippedExtractor covers the typed error for an
+// embed URL whose extractor is deliberately unported (unreachable from
+// the registered providers): the resolve path surfaces the extractor
+// error wrapped in the provider context instead of the old pending
+// marker.
+func TestAnimegoResolveStreamSkippedExtractor(t *testing.T) {
 	t.Parallel()
 
 	p := newAnimego(AnimeGoBase, testClient(t, "animego"))
 	episode := contracts.Episode{
 		RawEmbeds: map[string][]string{
-			"Studio Band": {"https://kodik.info/serial/12345/xyz"},
+			"Studio Band": {"https://csst.online/embed/2"},
 		},
 	}
 
@@ -336,8 +341,8 @@ func TestAnimegoResolveStreamPendingExtractor(t *testing.T) {
 	if !errors.As(err, &perr) || perr.Provider != "animego" {
 		t.Errorf("error = %v, want animego ProviderError", err)
 	}
-	if !strings.Contains(err.Error(), "extractor:kodik pending") {
-		t.Errorf("error = %v, want extractor:kodik pending context", err)
+	if !strings.Contains(err.Error(), "extractor:csst") {
+		t.Errorf("error = %v, want extractor:csst context", err)
 	}
 }
 

@@ -85,6 +85,11 @@ type Response struct {
 	Status     string
 	Header     stdhttp.Header
 	Body       []byte
+	// FinalURL is the URL of the last request in the redirect chain —
+	// equal to the request URL when no redirect occurred. Extractors
+	// that recover a media Location via a redirecting POST (kwik) read
+	// it instead of the body.
+	FinalURL string
 }
 
 // Option customizes a Client.
@@ -254,11 +259,18 @@ func (c *Client) attempt(ctx context.Context, req Request, payload []byte) (*Res
 	if int64(len(data)) > c.bodyLimit {
 		return nil, fmt.Errorf("%w: %d bytes > %d", ErrBodyLimit, len(data), c.bodyLimit)
 	}
+	// fhttp mirrors net/http: resp.Request is the request that produced
+	// this (final) response, i.e. the post-redirect URL when one occurred.
+	finalURL := req.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
 		Header:     stdhttp.Header(resp.Header),
 		Body:       data,
+		FinalURL:   finalURL,
 	}, nil
 }
 

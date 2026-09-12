@@ -32,7 +32,6 @@ the expected input.
 | `animepahe_search.json` | `anicli/providers/animepahe.py:26-46` — `/api?m=search` response object with `data[]`; per item reads `title`, `session`, `poster`. |
 | `animepahe_episodes_p1.json` | `anicli/providers/animepahe.py:48-91` — `/api?m=release` first page carrying `total`/`per_page`/`last_page`=2 and `data[]` (`episode`, `session`). |
 | `animepahe_episodes_p2.json` | same endpoint, page 2; a fractional `episode: 2.5` pins the wire-form number rendering (`str(2.5)` → `"2.5"`). |
-| `animepahe_play.html` | `anicli/providers/animepahe.py:93-150` — `/play/<a>/<e>` page with `<a href="..." ... class="dropdown-item">NNNp</a>` kwik links (attribute order matters to the ported regex). |
 | `dreamcast_anime.html` | `anicli/providers/dreamcast.py:50-88` — anime page with an inline `new Playerjs("<encoded>")` script and a `/js/playerjs/...` script src. **Oracle-generated**: the encoded blob and the key inside the playerjs decode through the frozen Python `_decode_playlist`, verified 2026-09-12. |
 | `dreamcast_player.js` | `anicli/providers/dreamcast.py:101-258` — unpacked playerjs carrying the `u: '#0<key>=\\'` crypt marker. Same oracle run as above. |
 | `sameband_search.html` | `anicli/providers/sameband.py:23-46` — DLE search result page; selectors `.col-auto`, `.image[href]`, `.poster[title]`, `img.swiper-lazy`; models the always-prefix poster quirk. |

@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -183,11 +186,75 @@ func TestAnimePaheSearchFollowsRedirects(t *testing.T) {
 	}
 }
 
-func TestAnimePaheResolveStreamKwikLinks(t *testing.T) {
+// paheKwikEncode is the test-side inverse of crypto.KwikDecrypt (same
+// oracle as the extractors package tests): ord(r)+v1 in base v2 over the
+// key alphabet, segments delimited by key[v2].
+func paheKwikEncode(plaintext, key string, v1, v2 int) string {
+	var b strings.Builder
+	for _, r := range plaintext {
+		n := int(r) + v1
+		var digits []int
+		for n > 0 {
+			digits = append(digits, n%v2)
+			n /= v2
+		}
+		if len(digits) == 0 {
+			digits = []int{0}
+		}
+		for i := len(digits) - 1; i >= 0; i-- {
+			b.WriteByte(key[digits[i]])
+		}
+		b.WriteByte(key[v2])
+	}
+	return b.String()
+}
+
+// paheKwikPage packs the form HTML into the kwik embed page shape the
+// extractor scrapes (extractors.py:604).
+func paheKwikPage(actionURL string) string {
+	const (
+		key = "zpcmtfvk"
+		v1  = 30
+		v2  = 4
+	)
+	plaintext := `<form method="POST" action="` + actionURL + `">` +
+		`<input type="hidden" name="_token" value="tok123"/></form>`
+	return `<!DOCTYPE html><html><body><script>eval(f("` +
+		paheKwikEncode(plaintext, key, v1, v2) +
+		`",9,"` + key + `",30,4,0)</script></body></html>`
+}
+
+// TestAnimePaheResolveStreamKwikRoundTrip is the PR7 round trip: play
+// page dropdown -> kwik embed page -> packed params -> KwikDecrypt ->
+// token POST -> 302 -> m3u8 link in the stream (animepahe.py:93-150 with
+// the now-ported kwik extractor replacing the Python factory's disabled
+// stub).
+func TestAnimePaheResolveStreamKwikRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	// kwik fake: embed page, /dl POST redirects to the playlist.
+	var playlistHits atomic.Int32
+	kwik := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/kwik/e/abc123XYZ":
+			if got := r.Header.Get("Referer"); got != "https://animepahe.ru" {
+				t.Errorf("kwik embed Referer = %q, want https://animepahe.ru (extractors.py:600)", got)
+			}
+			_, _ = w.Write([]byte(paheKwikPage("http://" + r.Host + "/dl"))) //nolint:gosec // test-owned fixture writer
+		case "/dl":
+			//nolint:gosec // test-owned redirect target
+			http.Redirect(w, r, "http://"+r.Host+"/f/master.m3u8", http.StatusFound)
+		case "/f/master.m3u8":
+			playlistHits.Add(1)
+			_, _ = w.Write([]byte("#EXTM3U\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(kwik.Close)
+
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "animepahe_play.html"))
+		_, _ = fmt.Fprintf(w, `<a href="%s/kwik/e/abc123XYZ" class="dropdown-item" target="_blank">1080p</a>`, kwik.URL) //nolint:gosec // test-owned fixture writer
 	})
 	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
 	episode := contracts.Episode{
@@ -202,14 +269,21 @@ func TestAnimePaheResolveStreamKwikLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
-	// Kwik is explicitly disabled in the Python ExtractorFactory
-	// (extractors.py:664-665), so kwik.cx embed URLs resolve to nothing:
-	// Python returns an empty MediaStream, not an error.
-	if len(stream.Links) != 0 {
-		t.Errorf("Links = %v, want empty (kwik extractor disabled upstream)", stream.Links)
-	}
 	if stream.DubName != "Original (Pahe)" {
 		t.Errorf("DubName = %q, want the fixed dub name (animepahe.py:150)", stream.DubName)
+	}
+	if playlistHits.Load() != 1 {
+		t.Errorf("playlist hits = %d, want 1", playlistHits.Load())
+	}
+	src, ok := stream.Links["1080"]
+	if !ok {
+		t.Fatalf("Links = %v, want a 1080 entry from the kwik extraction", stream.Links)
+	}
+	if src.URL != kwik.URL+"/f/master.m3u8" {
+		t.Errorf("1080 URL = %q, want the kwik redirect Location on the fake host", src.URL)
+	}
+	if src.Type != "m3u8" || src.Headers["Referer"] != "https://kwik.cx/" {
+		t.Errorf("1080 source = %+v, want m3u8 with the kwik.cx Referer", src)
 	}
 }
 

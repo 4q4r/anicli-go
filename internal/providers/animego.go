@@ -261,15 +261,15 @@ func (p *AnimeGo) parseEmbeds(doc *goquery.Document, episode *contracts.Episode)
 }
 
 // ResolveStream resolves the embed URLs of the chosen dub (port of
-// animego.py:131-138). Direct media URLs resolve via the factory
-// fallback; embed player URLs surface the pending-extractor error.
-func (p *AnimeGo) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+// animego.py:131-138) through the extractor factory; direct media URLs
+// resolve via the factory fallback.
+func (p *AnimeGo) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
 		Links:   map[string]contracts.VideoSource{},
 	}
 
-	sources, err := resolveEmbeds(episode.RawEmbeds[dubID])
+	sources, err := resolveEmbeds(ctx, p.http, episode.RawEmbeds[dubID])
 	if err != nil {
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
 	}

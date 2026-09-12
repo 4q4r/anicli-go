@@ -168,7 +168,9 @@ func TestAnimePaheSearchFollowsRedirects(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"data": [{"title": "Redirected", "session": "s1", "poster": "p.jpg"}]}`)
 	})
 	redirector, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, final.URL+r.URL.RequestURI(), http.StatusFound)
+		// Both endpoints are throwaway test fixtures; the redirect target
+		// is the test's own second server, not user input.
+		http.Redirect(w, r, final.URL+r.URL.RequestURI(), http.StatusFound) //nolint:gosec // test-only redirect chain
 	})
 	p := newAnimePahe(redirector.URL, testClient(t, "animepahe"))
 

@@ -9,13 +9,13 @@ import (
 	"github.com/an0nx/anicli-go/internal/providers"
 )
 
-// mustDefaultNetwork returns the default network config without proxy:
+// mustDefaultSettings returns the default settings without proxy:
 // registry construction in tests must never route egress anywhere.
-func mustDefaultNetwork(t *testing.T) config.Network {
+func mustDefaultSettings(t *testing.T) config.Settings {
 	t.Helper()
 
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
 	return cfg
 }
 
@@ -25,13 +25,13 @@ func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
 	// The doctor enumeration must match the registry exactly and must
 	// not touch the network: building the registry only initializes
 	// clients.
-	cfg := mustDefaultNetwork(t)
+	cfg := mustDefaultSettings(t)
 	reg, err := providers.NewRegistry(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if got := len(reg.List()); got != 5 {
-		t.Fatalf("registry has %d providers, want 5", got)
+	if got := len(reg.List()); got != 10 {
+		t.Fatalf("registry has %d providers, want 10", got)
 	}
 
 	var buf bytes.Buffer
@@ -96,9 +96,13 @@ func TestStubOutputs(t *testing.T) {
 			contains: []string{"serve", "not implemented"},
 		},
 		{
-			name:     "doctor lists registered providers",
-			args:     []string{"doctor"},
-			contains: []string{"doctor", "providers", "anilibria", "animevost", "anilib", "animego", "sovetromantica"},
+			name: "doctor lists registered providers",
+			args: []string{"doctor"},
+			contains: []string{
+				"doctor", "providers",
+				"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+				"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
+			},
 		},
 		{
 			name:     "version prints build info",

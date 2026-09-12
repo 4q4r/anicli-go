@@ -34,7 +34,9 @@ const (
 	EnvProxyURL         = "ANICLI_PROXY_URL"
 	EnvShikimoriSession = "ANICLI_SHIKIMORI_SESSION"
 	EnvDBURL            = "ANICLI_DB_URL"
-	EnvKodikToken       = "ANICLI_KODIK_TOKEN"
+	// EnvKodikToken carries the NAME of the kodik token environment
+	// variable, not a credential value.
+	EnvKodikToken = "ANICLI_KODIK_TOKEN" //nolint:gosec // variable name, not a secret
 )
 
 // Filesystem names and default values.

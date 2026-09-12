@@ -141,9 +141,9 @@ func (p *DreamCast) Search(ctx context.Context, query string) ([]contracts.Searc
 // (both requests sit outside the Python try).
 func (p *DreamCast) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
 	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     animeURL,
-		Op:      contracts.OpGetEpisodes,
+		Method: "GET",
+		URL:    animeURL,
+		Op:     contracts.OpGetEpisodes,
 	})
 	if err != nil {
 		return nil, err
@@ -362,7 +362,9 @@ func unpackPlayerJS(packed string) string {
 		}
 		r := n % a
 		if r > 35 {
-			return head + string(rune(r+29))
+			// Python chr(n%a+29): the packer radix keeps n%a ≤ 61, so the
+			// rune stays inside 'A'..'Z'.
+			return head + string(rune(r+29)) //nolint:gosec // bounded by the radix (≤ 61+29)
 		}
 		return head + string(base36[r])
 	}
@@ -473,7 +475,7 @@ func dreamSugar(x string) (int, error) {
 		if err != nil || v > 255 {
 			return 0, fmt.Errorf("sugar decode %q: out of range", part)
 		}
-		out = append(out, byte(v))
+		out = append(out, byte(v)) //nolint:gosec // guarded by the v>255 check above
 	}
 	if len(out) == 0 {
 		return 0, nil
@@ -511,12 +513,14 @@ func dreamSaltD(e, keyStr string) (string, error) {
 		n := (s << 2) | (o >> 4)
 		r := ((o & 15) << 4) | (u >> 2)
 		i := ((u & 3) << 6) | a
-		t = append(t, byte(n))
+		// Every operand is a ≤64 alphabet index, so all three values fit
+		// a byte by construction (i only emits when a != 64).
+		t = append(t, byte(n)) //nolint:gosec // 6-bit group arithmetic, ≤ 255
 		if u != 64 {
-			t = append(t, byte(r))
+			t = append(t, byte(r)) //nolint:gosec // 6-bit group arithmetic, ≤ 255
 		}
 		if a != 64 {
-			t = append(t, byte(i))
+			t = append(t, byte(i)) //nolint:gosec // 6-bit group arithmetic, ≤ 255
 		}
 	}
 

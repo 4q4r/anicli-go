@@ -25,3 +25,20 @@ the expected input.
 | `sovetromantica_search.html` | `anicli/providers/sovetromantica.py:29-53` — search page; selectors `.anime--block`, `.anime--block__name`, first `a` descendant. |
 | `sovetromantica_anime.html` | `anicli/providers/sovetromantica.py:55-82` — anime page; selectors `.episodes-slick .episode` (fallback `.episodes-list .episode`), first `a`, first `span` text `Эпизод N`. |
 | `sovetromantica_episode.html` | `anicli/providers/sovetromantica.py:84-98` — episode page embedding `file: "<url>.m3u8"` in inline JS (regex `file\s*:\s*"([^"]+\.m3u8[^"]*)"`). |
+| `gogoanime_search.html` | `anicli/providers/gogoanime.py:21-42` — search page; selectors `.last_episodes li`, first `a` (title/href attrs), first `img` (src attr). The fourth li models the anchor-less skip. |
+| `gogoanime_anime.html` | `anicli/providers/gogoanime.py:44-71` — anime page with the hidden `#movie_id`/`#alias_anime` inputs feeding the ajax episode list. |
+| `gogoanime_episodes.html` | `anicli/providers/gogoanime.py:71-95` — ajax.gogo-load.com load-list-episode body; `li` items with first `a` href and `.name` text `EP N` (nameless entry models the "0" fallback; order models the verbatim reversal). |
+| `gogoanime_episode.html` | `anicli/providers/gogoanime.py:97-120` — episode page; `.anime_muti_link a` with `data-video` (protocol-relative absolutized, "Choose this server" label stripped, empty attrs skipped). |
+| `animepahe_search.json` | `anicli/providers/animepahe.py:26-46` — `/api?m=search` response object with `data[]`; per item reads `title`, `session`, `poster`. |
+| `animepahe_episodes_p1.json` | `anicli/providers/animepahe.py:48-91` — `/api?m=release` first page carrying `total`/`per_page`/`last_page`=2 and `data[]` (`episode`, `session`). |
+| `animepahe_episodes_p2.json` | same endpoint, page 2; a fractional `episode: 2.5` pins the wire-form number rendering (`str(2.5)` → `"2.5"`). |
+| `animepahe_play.html` | `anicli/providers/animepahe.py:93-150` — `/play/<a>/<e>` page with `<a href="..." ... class="dropdown-item">NNNp</a>` kwik links (attribute order matters to the ported regex). |
+| `dreamcast_anime.html` | `anicli/providers/dreamcast.py:50-88` — anime page with an inline `new Playerjs("<encoded>")` script and a `/js/playerjs/...` script src. **Oracle-generated**: the encoded blob and the key inside the playerjs decode through the frozen Python `_decode_playlist`, verified 2026-09-12. |
+| `dreamcast_player.js` | `anicli/providers/dreamcast.py:101-258` — unpacked playerjs carrying the `u: '#0<key>=\\'` crypt marker. Same oracle run as above. |
+| `sameband_search.html` | `anicli/providers/sameband.py:23-46` — DLE search result page; selectors `.col-auto`, `.image[href]`, `.poster[title]`, `img.swiper-lazy`; models the always-prefix poster quirk. |
+| `sameband_anime.html` | `anicli/providers/sameband.py:48-59` — anime page; selector `.player > .player-content > iframe[src]`. |
+| `sameband_playlist.json` | `anicli/providers/sameband.py:67-81` — player JSON playlist array; per item reads `title` (optional) and `file` (`[NNNp]url` comma-joined). |
+| `kodik_search.json` | `anicli/providers/kodik.py:42-95` — `/search` response with `results[]`; per item reads `title`/`title_orig` (fallback chain), `link` (protocol-relative, may be null → skip), `year`, `type`, `material_data.poster_url`/`anime_poster_url`. |
+| `kodik_serial.html` | `anicli/providers/kodik.py:97-170, 185-247` — serial player page: `.serial-series-box select` options (episode numbers) + `.serial-translations-box select` options (`data-media-id`/`data-media-hash`; an option missing the id models the skip). |
+| `kodik_movie.html` | `anicli/providers/kodik.py:153-168` — movie page: `.movie-translations-box select` only → single film episode (`Фильм`). |
+| `kodik_default.html` | `anicli/providers/kodik.py:219-247` — no translations box; inline script with `.media_id`/`.media_hash` globals → the "Default" translation fallback. |

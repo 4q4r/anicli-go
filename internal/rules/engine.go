@@ -117,7 +117,10 @@ func Extract(data any, rules []Rule) ([]Result, error) {
 				continue
 			}
 			value = rules[i].Prefix + value + rules[i].Postfix
-			value = applyTransform(rules[i].Transform, value)
+			value, err = applyTransform(rules[i], value)
+			if err != nil {
+				return nil, err
+			}
 			switch rules[i].Attr {
 			case AttrTitle:
 				res.Title = value
@@ -132,20 +135,25 @@ func Extract(data any, rules []Rule) ([]Result, error) {
 	return results, nil
 }
 
-// applyTransform post-processes an extracted value.
-func applyTransform(tr Transform, value string) string {
-	switch tr {
+// applyTransform post-processes an extracted value. Unknown transforms are
+// a configuration typo and fail loud as a RuleError instead of silently
+// passing the value through (rule sets should be Validate()d at
+// construction; this is the extraction-time backstop).
+func applyTransform(rule Rule, value string) (string, error) {
+	switch rule.Transform {
 	case TransformProtocolRelative:
 		if len(value) >= 2 && value[0] == '/' && value[1] == '/' {
-			return "https:" + value
+			return "https:" + value, nil
 		}
-		return value
+		return value, nil
 	case TransformNone:
-		return value
+		return value, nil
 	default:
-		// Unknown transforms are a config typo; failing here keeps the
-		// loud-error contract without a second validation pass.
-		return value
+		return "", &RuleError{
+			Path: rule.Path, Attr: rule.Attr,
+			Err: fmt.Errorf("unknown transform %q (want %q or %q)",
+				rule.Transform, TransformNone, TransformProtocolRelative),
+		}
 	}
 }
 

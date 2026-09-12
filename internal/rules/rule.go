@@ -56,6 +56,21 @@ type Rule struct {
 	Postfix string
 }
 
+// Validate rejects construction-time configuration errors: an unknown
+// Transform is a sources.toml typo and must fail loud, not pass through.
+func (r Rule) Validate() error {
+	switch r.Transform {
+	case TransformNone, TransformProtocolRelative:
+		return nil
+	default:
+		return &RuleError{
+			Path: r.Path, Attr: r.Attr,
+			Err: fmt.Errorf("unknown transform %q (want %q or %q)",
+				r.Transform, TransformNone, TransformProtocolRelative),
+		}
+	}
+}
+
 // RuleError annotates a rule failure with the rule's context so mispaired
 // rules and typoed paths surface with their origin.
 type RuleError struct {

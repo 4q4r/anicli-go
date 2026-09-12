@@ -12,7 +12,8 @@
 #   ANICLI_PROXY_URL           — прокси-URL;
 #   ANICLI_SHIKIMORI_SESSION   — cookie _kawai_session;
 #   ANICLI_DB_URL              — путь к базе SQLite;
-#   ANICLI_KODIK_TOKEN         — токен API Kodik.
+#   ANICLI_KODIK_TOKEN         — токен API Kodik;
+#   ANICLI_API_AUTH_SECRET     — ключ подписи API-токенов.
 
 # ------------------------------------------
 # [general] Общие пути
@@ -103,6 +104,22 @@ bind = "127.0.0.1:8765"
 
 # Время жизни access-токена.
 token_ttl = "15m"
+
+# Время жизни refresh-токена (сессии входа; ротация при каждом refresh).
+refresh_token_ttl = "720h"
+
+# Ключ подписи access-токенов (HMAC-SHA256). Обязателен при enabled = true.
+# Переменная окружения ANICLI_API_AUTH_SECRET перекрывает это значение.
+# auth_secret_key = "СЛУЧАЙНАЯ_ДЛИННАЯ_СТРОКА"
+
+# ------------------------------------------
+# [web.users] Пользователи API (token auth)
+# ------------------------------------------
+# Каждый пользователь — секция [web.users.<имя>] с pbkdf2-хэшем пароля.
+# Формат: pbkdf2_sha256$<итерации>$<соль_b64url>$<дайджест_b64url>
+# (совместим с anicli-py; Basic Auth удалён).
+# [web.users.alice]
+# password_hash = "pbkdf2_sha256$240000$..."
 
 # ------------------------------------------
 # [providers] Настройки отдельных источников

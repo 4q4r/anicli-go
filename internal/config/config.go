@@ -34,6 +34,8 @@ const (
 	EnvProxyURL         = "ANICLI_PROXY_URL"
 	EnvShikimoriSession = "ANICLI_SHIKIMORI_SESSION"
 	EnvDBURL            = "ANICLI_DB_URL"
+	// EnvAPISecret overrides the API auth signing secret.
+	EnvAPISecret = "ANICLI_API_AUTH_SECRET"
 	// EnvKodikToken carries the NAME of the kodik token environment
 	// variable, not a credential value.
 	EnvKodikToken = "ANICLI_KODIK_TOKEN" //nolint:gosec // variable name, not a secret
@@ -104,6 +106,27 @@ type API struct {
 	Enabled  bool          `toml:"enabled"`
 	Bind     string        `toml:"bind"`
 	TokenTTL time.Duration `toml:"token_ttl"`
+	// RefreshTokenTTL bounds the rotating refresh token session
+	// (python api.refresh_token_ttl_seconds).
+	RefreshTokenTTL time.Duration `toml:"refresh_token_ttl"`
+	// AuthSecret is the HMAC key signing access tokens (python
+	// api.auth_secret_key). Secret: also settable via
+	// ANICLI_API_AUTH_SECRET (env wins over the file).
+	AuthSecret string `toml:"auth_secret_key"`
+}
+
+// Web holds the API user registry (python [web.users.<login>]
+// password_hash ruling; legacy api.auth_users removed).
+type Web struct {
+	// Users maps login -> credential entry for token auth login.
+	Users map[string]WebUser `toml:"users"`
+}
+
+// WebUser is one API login entry.
+type WebUser struct {
+	// PasswordHash is a pbkdf2_sha256$<iterations>$<salt_b64url>$<digest_b64url>
+	// hash, verified with constant-time comparison at login.
+	PasswordHash string `toml:"password_hash"`
 }
 
 // Providers holds per-provider settings. Only providers that need
@@ -132,6 +155,7 @@ type Settings struct {
 	Skip      Skip      `toml:"skip"`
 	Download  Download  `toml:"download"`
 	API       API       `toml:"api"`
+	Web       Web       `toml:"web"`
 	Providers Providers `toml:"providers"`
 }
 
@@ -170,10 +194,13 @@ func Default() Settings {
 			MaxConcurrency: 2,
 		},
 		API: API{
-			Enabled:  false,
-			Bind:     DefaultBind,
-			TokenTTL: 15 * time.Minute,
+			Enabled:         false,
+			Bind:            DefaultBind,
+			TokenTTL:        15 * time.Minute,
+			RefreshTokenTTL: 30 * 24 * time.Hour,
+			AuthSecret:      "",
 		},
+		Web: Web{Users: map[string]WebUser{}},
 	}
 }
 
@@ -242,15 +269,23 @@ func applyEnv(s *Settings) {
 	if v, ok := lookupEnv(EnvKodikToken); ok {
 		s.Providers.Kodik.Token = v
 	}
+	if v, ok := lookupEnv(EnvAPISecret); ok {
+		s.API.AuthSecret = v
+	}
 }
 
 // Validate checks values that are cheap to verify at startup and cheap to
-// get wrong: the API bind address and the proxy URL.
+// get wrong: the API bind address, the proxy URL and the API auth
+// secret (an enabled API without a signing key would 500 on every
+// guarded request — better to fail at startup).
 func (s *Settings) Validate() error {
 	if s.API.Bind != "" {
 		if _, _, err := net.SplitHostPort(s.API.Bind); err != nil {
 			return fmt.Errorf("api.bind %q: %w", s.API.Bind, err)
 		}
+	}
+	if s.API.Enabled && strings.TrimSpace(s.API.AuthSecret) == "" {
+		return fmt.Errorf("api.enabled requires api.auth_secret_key (or %s)", EnvAPISecret)
 	}
 	if s.Network.ProxyURL != "" {
 		u, err := url.Parse(s.Network.ProxyURL)

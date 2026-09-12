@@ -281,14 +281,20 @@ func TestResolveConfigPathPrecedence(t *testing.T) {
 		},
 		{
 			name: "xdg beats home",
-			env:  map[string]string{"XDG_CONFIG_HOME": "/xdg-home"},
+			// ANICLI_CONFIG reset: an ambient value would win over XDG and
+			// make this subtest environment-dependent.
+			env:  map[string]string{"ANICLI_CONFIG": "", "XDG_CONFIG_HOME": "/xdg-home"},
 			want: "/xdg-home/anicli/settings.toml",
 		},
 		{
 			name: "home fallback",
-			// XDG_CONFIG_HOME cleared explicitly: the result must not
-			// depend on the ambient developer environment.
-			env:  map[string]string{"HOME": "/home/tester", "XDG_CONFIG_HOME": ""},
+			// ANICLI_CONFIG and XDG_CONFIG_HOME cleared explicitly: the
+			// result must not depend on the ambient developer environment.
+			env: map[string]string{
+				"ANICLI_CONFIG":   "",
+				"HOME":            "/home/tester",
+				"XDG_CONFIG_HOME": "",
+			},
 			want: "/home/tester/.config/anicli/settings.toml",
 		},
 	}

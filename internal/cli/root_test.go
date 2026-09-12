@@ -4,7 +4,51 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
+
+// mustDefaultNetwork returns the default network config without proxy:
+// registry construction in tests must never route egress anywhere.
+func mustDefaultNetwork(t *testing.T) config.Network {
+	t.Helper()
+
+	cfg := config.Default().Network
+	cfg.ProxyURL = ""
+	return cfg
+}
+
+func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
+	t.Parallel()
+
+	// The doctor enumeration must match the registry exactly and must
+	// not touch the network: building the registry only initializes
+	// clients.
+	cfg := mustDefaultNetwork(t)
+	reg, err := providers.NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if got := len(reg.List()); got != 5 {
+		t.Fatalf("registry has %d providers, want 5", got)
+	}
+
+	var buf bytes.Buffer
+	root := NewRootCommand()
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"doctor"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute doctor: %v", err)
+	}
+	out := buf.String()
+	for _, p := range reg.List() {
+		if !strings.Contains(out, p.ID()) {
+			t.Errorf("doctor output %q missing provider %q", out, p.ID())
+		}
+	}
+}
 
 func TestNewRootCommandShape(t *testing.T) {
 	t.Parallel()
@@ -52,9 +96,9 @@ func TestStubOutputs(t *testing.T) {
 			contains: []string{"serve", "not implemented"},
 		},
 		{
-			name:     "doctor stub",
+			name:     "doctor lists registered providers",
 			args:     []string{"doctor"},
-			contains: []string{"doctor", "not implemented"},
+			contains: []string{"doctor", "providers", "anilibria", "animevost", "anilib", "animego", "sovetromantica"},
 		},
 		{
 			name:     "version prints build info",

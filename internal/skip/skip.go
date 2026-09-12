@@ -33,8 +33,8 @@ var APISupportedTypes = []string{"op", "ed"}
 // only accepts op/ed.
 var ErrUnsupportedSkipType = errors.New("skip type not supported by remote (want op or ed)")
 
-// SkipInterval is one normalized skip segment across all providers.
-type SkipInterval struct {
+// Interval is one normalized skip segment across all providers.
+type Interval struct {
 	// SkipType is the chapter type: op, ed, recap, preview, mixed-op...
 	SkipType string
 	// StartTime is the interval start in seconds.

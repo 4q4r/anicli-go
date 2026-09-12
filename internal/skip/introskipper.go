@@ -112,7 +112,7 @@ func (c *IntroSkipperClient) ID() string { return ProviderIntroSkipper }
 // plus a machine-readable detail code. Errors are reserved for hard
 // failures (missing binaries); analysis misses are detail codes with
 // empty intervals, mirroring the python semantics.
-func (c *IntroSkipperClient) GetSkipTimes(ctx context.Context, mediaInput string) ([]SkipInterval, string, error) {
+func (c *IntroSkipperClient) GetSkipTimes(ctx context.Context, mediaInput string) ([]Interval, string, error) {
 	if !c.opts.Enabled {
 		return nil, "intro_skipper_disabled", nil
 	}
@@ -139,7 +139,7 @@ func (c *IntroSkipperClient) GetSkipTimes(ctx context.Context, mediaInput string
 		{"blackdetect", c.detectBlackFrames},
 	} {
 		ranges := probe.run(ctx, mediaInput)
-		intervals := BuildSkipIntervalsFromRanges(ranges, duration,
+		intervals := BuildIntervalsFromRanges(ranges, duration,
 			c.opts.OpeningMaxEndSeconds, c.opts.EndingSearchWindowSeconds)
 		if len(intervals) > 0 {
 			return intervals, detailWithMarkers(probe.marker+"_detected", intervals), nil
@@ -158,7 +158,7 @@ func (c *IntroSkipperClient) GetSkipTimes(ctx context.Context, mediaInput string
 
 // detailWithMarkers renders "<detail>:<sorted,type,list>" (python
 // f"{details}:{','.join(markers)}").
-func detailWithMarkers(detail string, intervals []SkipInterval) string {
+func detailWithMarkers(detail string, intervals []Interval) string {
 	seen := make(map[string]struct{}, len(intervals))
 	var markers []string
 	for _, iv := range intervals {
@@ -197,7 +197,7 @@ func (c *IntroSkipperClient) probeDuration(ctx context.Context, mediaInput strin
 
 // detectFromChapters recovers op/ed from embedded chapter titles via
 // ffprobe (python _detect_from_chapters).
-func (c *IntroSkipperClient) detectFromChapters(ctx context.Context, mediaInput string) []SkipInterval {
+func (c *IntroSkipperClient) detectFromChapters(ctx context.Context, mediaInput string) []Interval {
 	out, _, err := c.run(ctx, c.opts.FFprobeBin, ffprobeChaptersArgs(mediaInput))
 	if err != nil {
 		return nil
@@ -335,7 +335,7 @@ func parseFloatsAll(re *regexp.Regexp, text string) []float64 {
 // -show_chapters JSON payload. Non-dict entries are skipped (python
 // isinstance guard) and non-string tag values ignored. The second
 // return is the detail code (python _detect_from_chapters verdicts).
-func parseChaptersJSON(payload []byte) ([]SkipInterval, string) {
+func parseChaptersJSON(payload []byte) ([]Interval, string) {
 	var doc struct {
 		// Pointer distinguishes an absent key (chapter_missing) from an
 		// empty array (chapter_not_detected).
@@ -348,7 +348,7 @@ func parseChaptersJSON(payload []byte) ([]SkipInterval, string) {
 		return nil, "chapter_missing"
 	}
 
-	intervals := make([]SkipInterval, 0, len(*doc.Chapters))
+	intervals := make([]Interval, 0, len(*doc.Chapters))
 	for _, raw := range *doc.Chapters {
 		var chapter struct {
 			StartTime any            `json:"start_time"`
@@ -367,9 +367,9 @@ func parseChaptersJSON(payload []byte) ([]SkipInterval, string) {
 		lowered := strings.ToLower(title)
 		switch {
 		case containsAny(lowered, "op", "opening", "intro"):
-			intervals = append(intervals, SkipInterval{SkipType: "op", StartTime: start, EndTime: end})
+			intervals = append(intervals, Interval{SkipType: "op", StartTime: start, EndTime: end})
 		case containsAny(lowered, "ed", "ending", "credit"):
-			intervals = append(intervals, SkipInterval{SkipType: "ed", StartTime: start, EndTime: end})
+			intervals = append(intervals, Interval{SkipType: "ed", StartTime: start, EndTime: end})
 		}
 	}
 	if len(intervals) == 0 {
@@ -411,14 +411,14 @@ func asFloat(v any) (float64, bool) {
 	}
 }
 
-// BuildSkipIntervalsFromRanges converts detected ranges into op/ed
+// BuildIntervalsFromRanges converts detected ranges into op/ed
 // intervals (python _build_skip_intervals_from_ranges): the first range
 // ending within the opening window becomes the op (anchored at 0), the
 // last range starting inside the ending window becomes the ed (anchored
 // at the duration); both must exceed the minimum segment length.
-func BuildSkipIntervalsFromRanges(ranges [][2]float64, duration float64,
+func BuildIntervalsFromRanges(ranges [][2]float64, duration float64,
 	openingMaxEndSeconds, endingSearchWindowSeconds int,
-) []SkipInterval {
+) []Interval {
 	if len(ranges) == 0 {
 		return nil
 	}
@@ -442,9 +442,9 @@ func BuildSkipIntervalsFromRanges(ranges [][2]float64, duration float64,
 		}
 	}
 
-	var result []SkipInterval
+	var result []Interval
 	if opEnd != nil && *opEnd > minSkipSegmentSeconds {
-		result = append(result, SkipInterval{
+		result = append(result, Interval{
 			SkipType:      "op",
 			StartTime:     0,
 			EndTime:       min(*opEnd, duration),
@@ -452,7 +452,7 @@ func BuildSkipIntervalsFromRanges(ranges [][2]float64, duration float64,
 		})
 	}
 	if edStart != nil && duration-*edStart > minSkipSegmentSeconds {
-		result = append(result, SkipInterval{
+		result = append(result, Interval{
 			SkipType:      "ed",
 			StartTime:     max(*edStart, 0),
 			EndTime:       duration,

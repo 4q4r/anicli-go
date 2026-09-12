@@ -120,7 +120,7 @@ func TestAnimeSkipFirstQueryWins(t *testing.T) {
 		t.Errorf("body %q lacks episodeNumber variable 2", reqs[0].Body)
 	}
 
-	want := []SkipInterval{
+	want := []Interval{
 		{SkipType: "op", StartTime: 0, EndTime: 90.5},
 		{SkipType: "ed", StartTime: 1300, EndTime: 1400},
 	}
@@ -168,7 +168,7 @@ func TestAnimeSkipFallsThroughQueryShapes(t *testing.T) {
 		t.Fatalf("intervals = %+v, want 1", intervals)
 	}
 	// from/to keys + type "intro" classify as op.
-	if intervals[0] != (SkipInterval{SkipType: "op", StartTime: 10, EndTime: 95}) {
+	if intervals[0] != (Interval{SkipType: "op", StartTime: 10, EndTime: 95}) {
 		t.Errorf("interval = %+v, want op 10-95", intervals[0])
 	}
 }
@@ -238,7 +238,7 @@ func TestAnimeSkipDedupeAndClamp(t *testing.T) {
 	if len(intervals) != 1 {
 		t.Fatalf("intervals = %+v, want only the deduped op", intervals)
 	}
-	if intervals[0] != (SkipInterval{SkipType: "op", StartTime: 0, EndTime: 90}) {
+	if intervals[0] != (Interval{SkipType: "op", StartTime: 0, EndTime: 90}) {
 		t.Errorf("interval = %+v, want op 0-90", intervals[0])
 	}
 }

@@ -57,13 +57,13 @@ type ffmetaChapter struct {
 // chapters, a leading gap becomes a prologue and a trailing gap becomes
 // a typed tail (epilogue after an ending, credits after a preview).
 // Empty input renders as empty content.
-func GenerateFFMetadata(intervals []SkipInterval) string {
+func GenerateFFMetadata(intervals []Interval) string {
 	if len(intervals) == 0 {
 		return ""
 	}
 
 	episodeLen := 0.0
-	sorted := make([]SkipInterval, len(intervals))
+	sorted := make([]Interval, len(intervals))
 	copy(sorted, intervals)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].StartTime < sorted[j].StartTime

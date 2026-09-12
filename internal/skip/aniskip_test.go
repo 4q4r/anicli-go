@@ -127,7 +127,7 @@ func TestAniSkipGetSkipTimes(t *testing.T) {
 		t.Errorf("query = %q, want types=op&types=ed", reqs[0].Query)
 	}
 
-	want := []SkipInterval{
+	want := []Interval{
 		{SkipType: "op", StartTime: 0, EndTime: 90.5, EpisodeLength: 1440},
 		{SkipType: "ed", StartTime: 1300.25, EndTime: 1400, EpisodeLength: 1440},
 	}

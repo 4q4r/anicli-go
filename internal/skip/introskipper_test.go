@@ -88,7 +88,7 @@ func TestParseChaptersJSON(t *testing.T) {
 	if detail != "chapter_detected" {
 		t.Fatalf("detail = %q, want chapter_detected", detail)
 	}
-	want := []SkipInterval{
+	want := []Interval{
 		{SkipType: "op", StartTime: 0, EndTime: 90},
 		{SkipType: "ed", StartTime: 1300.5, EndTime: 1400},
 	}
@@ -123,8 +123,8 @@ func TestParseChaptersJSONFailures(t *testing.T) {
 	}
 }
 
-// TestBuildSkipIntervalsFromRanges pins the op/ed inference table.
-func TestBuildSkipIntervalsFromRanges(t *testing.T) {
+// TestBuildIntervalsFromRanges pins the op/ed inference table.
+func TestBuildIntervalsFromRanges(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -133,7 +133,7 @@ func TestBuildSkipIntervalsFromRanges(t *testing.T) {
 		duration float64
 		opMaxEnd int
 		edWindow int
-		want     []SkipInterval
+		want     []Interval
 	}{
 		{
 			name:     "op and ed from silence",
@@ -141,7 +141,7 @@ func TestBuildSkipIntervalsFromRanges(t *testing.T) {
 			duration: 1440,
 			opMaxEnd: 180,
 			edWindow: 300,
-			want: []SkipInterval{
+			want: []Interval{
 				{SkipType: "op", StartTime: 0, EndTime: 90, EpisodeLength: 1440},
 				{SkipType: "ed", StartTime: 1299, EndTime: 1440, EpisodeLength: 1440},
 			},
@@ -183,7 +183,7 @@ func TestBuildSkipIntervalsFromRanges(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := BuildSkipIntervalsFromRanges(tc.ranges, tc.duration, tc.opMaxEnd, tc.edWindow)
+			got := BuildIntervalsFromRanges(tc.ranges, tc.duration, tc.opMaxEnd, tc.edWindow)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("intervals = %+v, want %+v", got, tc.want)
 			}

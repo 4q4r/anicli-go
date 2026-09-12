@@ -83,7 +83,7 @@ type aniskipSubmitPayload struct {
 // GetSkipTimes fetches the op/ed skip times of one episode. A clean
 // found=false answers as an empty slice with a nil error; transport and
 // HTTP failures propagate as errors.
-func (c *AniSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, episodeNum float64) ([]SkipInterval, error) {
+func (c *AniSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, episodeNum float64) ([]Interval, error) {
 	url := fmt.Sprintf("%s/v2/skip-times/%d/%s?types=op&types=ed",
 		c.opts.BaseURL, shikimoriID, normalizeEpisodeNum(episodeNum))
 
@@ -97,12 +97,12 @@ func (c *AniSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, epi
 		return nil, fmt.Errorf("aniskip decode response (%d, %v): %w", shikimoriID, episodeNum, err)
 	}
 	if !payload.Found {
-		return []SkipInterval{}, nil
+		return []Interval{}, nil
 	}
 
-	intervals := make([]SkipInterval, 0, len(payload.Results))
+	intervals := make([]Interval, 0, len(payload.Results))
 	for _, item := range payload.Results {
-		intervals = append(intervals, SkipInterval{
+		intervals = append(intervals, Interval{
 			SkipType:      item.SkipType,
 			StartTime:     item.Interval.StartTime,
 			EndTime:       item.Interval.EndTime,

@@ -31,7 +31,7 @@ func isErrUnsupportedSkipType(err error) bool {
 func TestGenerateFFMetadataGolden(t *testing.T) {
 	t.Parallel()
 
-	got := GenerateFFMetadata([]SkipInterval{
+	got := GenerateFFMetadata([]Interval{
 		{SkipType: "op", StartTime: 0, EndTime: 90, EpisodeLength: 1440},
 		{SkipType: "ed", StartTime: 1300, EndTime: 1400, EpisodeLength: 1440},
 	})
@@ -81,7 +81,7 @@ func TestGenerateFFMetadataGolden(t *testing.T) {
 func TestGenerateFFMetadataPrologueAndRecap(t *testing.T) {
 	t.Parallel()
 
-	got := GenerateFFMetadata([]SkipInterval{
+	got := GenerateFFMetadata([]Interval{
 		{SkipType: "recap", StartTime: 20, EndTime: 60, EpisodeLength: 0},
 	})
 
@@ -137,7 +137,7 @@ func TestGenerateFFMetadataLabels(t *testing.T) {
 	}
 
 	for skipType, wantLabel := range cases {
-		content := GenerateFFMetadata([]SkipInterval{
+		content := GenerateFFMetadata([]Interval{
 			// Single interval inside the episode; episode_length equals
 			// its end so no tail chapter is emitted.
 			{SkipType: skipType, StartTime: 10, EndTime: 20, EpisodeLength: 20},
@@ -153,7 +153,7 @@ func TestGenerateFFMetadataLabels(t *testing.T) {
 func TestGenerateFFMetadataPreviewTail(t *testing.T) {
 	t.Parallel()
 
-	content := GenerateFFMetadata([]SkipInterval{
+	content := GenerateFFMetadata([]Interval{
 		{SkipType: "preview", StartTime: 1380, EndTime: 1420, EpisodeLength: 1440},
 	})
 	if !strings.Contains(content, "title=Титры\n") {
@@ -169,7 +169,7 @@ func TestGenerateFFMetadataEmpty(t *testing.T) {
 	if got := GenerateFFMetadata(nil); got != "" {
 		t.Errorf("GenerateFFMetadata(nil) = %q, want empty", got)
 	}
-	if got := GenerateFFMetadata([]SkipInterval{}); got != "" {
+	if got := GenerateFFMetadata([]Interval{}); got != "" {
 		t.Errorf("GenerateFFMetadata(empty) = %q, want empty", got)
 	}
 }
@@ -179,7 +179,7 @@ func TestGenerateFFMetadataEmpty(t *testing.T) {
 func TestGenerateFFMetadataFractionalTruncation(t *testing.T) {
 	t.Parallel()
 
-	content := GenerateFFMetadata([]SkipInterval{
+	content := GenerateFFMetadata([]Interval{
 		{SkipType: "op", StartTime: 0.5, EndTime: 90.9, EpisodeLength: 91},
 	})
 	if !strings.Contains(content, "START=500\n") {
@@ -197,7 +197,7 @@ func TestWriteChaptersFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	content := GenerateFFMetadata([]SkipInterval{
+	content := GenerateFFMetadata([]Interval{
 		{SkipType: "op", StartTime: 0, EndTime: 90, EpisodeLength: 1440},
 	})
 
@@ -215,7 +215,7 @@ func TestWriteChaptersFile(t *testing.T) {
 		t.Errorf("path %q lacks anicli_ prefix", path)
 	}
 
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // test reads its own temp file
 	if err != nil {
 		t.Fatalf("read chapters file: %v", err)
 	}

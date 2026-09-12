@@ -80,7 +80,7 @@ type graphqlBody struct {
 // deduplicated op/ed intervals. A valid-but-empty answer across all
 // shapes is an empty slice with a nil error; transport, HTTP and decode
 // failures on every shape surface as an error.
-func (c *AnimeSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, episodeNum float64) ([]SkipInterval, error) {
+func (c *AnimeSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, episodeNum float64) ([]Interval, error) {
 	headers := map[string]string{"X-Client-ID": c.opts.ClientID}
 	variables := map[string]any{
 		"malId":         shikimoriID,
@@ -104,7 +104,7 @@ func (c *AnimeSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, e
 		}
 
 		intervals := collectGraphQLIntervals(payload["data"])
-		deduped := dedupeAnimeSkipIntervals(intervals)
+		deduped := dedupeAnimeIntervals(intervals)
 		if len(deduped) > 0 {
 			return deduped, nil
 		}
@@ -113,7 +113,7 @@ func (c *AnimeSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, e
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return []SkipInterval{}, nil
+	return []Interval{}, nil
 }
 
 // collectGraphQLIntervals recursively extracts timestamp-like intervals
@@ -121,13 +121,13 @@ func (c *AnimeSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, e
 // start/end may arrive as startTime/from/start and endTime/to/end, and
 // types classify through skipType/type/label with a start-time
 // heuristic for neutral values.
-func collectGraphQLIntervals(node any) []SkipInterval {
-	var out []SkipInterval
+func collectGraphQLIntervals(node any) []Interval {
+	var out []Interval
 	collectGraphQLNode(node, &out)
 	return out
 }
 
-func collectGraphQLNode(node any, out *[]SkipInterval) {
+func collectGraphQLNode(node any, out *[]Interval) {
 	switch typed := node.(type) {
 	case map[string]any:
 		start := numericValue(typed, "startTime", "from", "start")
@@ -136,16 +136,16 @@ func collectGraphQLNode(node any, out *[]SkipInterval) {
 			rawType := strings.ToLower(strings.TrimSpace(stringValue(typed, "skipType", "type", "label")))
 			switch {
 			case strings.Contains(rawType, "op") || strings.Contains(rawType, "opening") || rawType == "intro":
-				*out = append(*out, SkipInterval{SkipType: "op", StartTime: *start, EndTime: *end})
+				*out = append(*out, Interval{SkipType: "op", StartTime: *start, EndTime: *end})
 			case strings.Contains(rawType, "ed") || strings.Contains(rawType, "ending") || strings.Contains(rawType, "credit"):
-				*out = append(*out, SkipInterval{SkipType: "ed", StartTime: *start, EndTime: *end})
+				*out = append(*out, Interval{SkipType: "ed", StartTime: *start, EndTime: *end})
 			default:
 				// Neutral type: don't discard useful timings.
 				skipType := "ed"
 				if *start < opClassifyMaxStartSeconds {
 					skipType = "op"
 				}
-				*out = append(*out, SkipInterval{SkipType: skipType, StartTime: *start, EndTime: *end})
+				*out = append(*out, Interval{SkipType: skipType, StartTime: *start, EndTime: *end})
 			}
 		}
 		for _, value := range typed {
@@ -190,17 +190,17 @@ func stringValue(node map[string]any, names ...string) string {
 	return ""
 }
 
-// dedupeAnimeSkipIntervals normalizes the collected set (python
+// dedupeAnimeIntervals normalizes the collected set (python
 // deduped): only op/ed survive, end must exceed start and identical
 // (type, start-ms, end-ms) triples collapse.
-func dedupeAnimeSkipIntervals(intervals []SkipInterval) []SkipInterval {
+func dedupeAnimeIntervals(intervals []Interval) []Interval {
 	type key struct {
 		skipType string
 		startMS  int64
 		endMS    int64
 	}
 
-	seen := make(map[key]SkipInterval, len(intervals))
+	seen := make(map[key]Interval, len(intervals))
 	order := make([]key, 0, len(intervals))
 	for _, iv := range intervals {
 		if iv.SkipType != "op" && iv.SkipType != "ed" {
@@ -217,7 +217,7 @@ func dedupeAnimeSkipIntervals(intervals []SkipInterval) []SkipInterval {
 		order = append(order, k)
 	}
 
-	out := make([]SkipInterval, 0, len(order))
+	out := make([]Interval, 0, len(order))
 	for _, k := range order {
 		out = append(out, seen[k])
 	}

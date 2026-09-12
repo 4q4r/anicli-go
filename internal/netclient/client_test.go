@@ -548,3 +548,58 @@ func TestRetryBudgetStopsAtThreeAttempts(t *testing.T) {
 		t.Errorf("server hits = %d, want 3 (max attempts)", got)
 	}
 }
+
+// TestDoFinalURLTracksRedirects pins the redirect-following behavior the
+// kwik extractor depends on: a POST whose response redirects must surface
+// the post-redirect URL of the final response, so callers can recover the
+// media Location, and the redirect-followed request must keep the
+// caller-supplied headers (Referer parity with Python cloudscraper).
+func TestDoFinalURLTracksRedirects(t *testing.T) {
+	t.Parallel()
+
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Referer"); got != "https://kwik.cx/" {
+			t.Errorf("redirected request Referer = %q, want the caller header to persist", got)
+		}
+		writeBody(w, "#EXTM3U\n")
+	}))
+	defer final.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/playlist.m3u8", http.StatusFound) //nolint:gosec // test-owned redirect target
+	}))
+	defer srv.Close()
+
+	c, _ := newTestClient(t, testConfig())
+	resp, err := c.Do(context.Background(), Request{
+		Method:  http.MethodPost,
+		URL:     srv.URL + "/dl",
+		Headers: map[string]string{"Referer": "https://kwik.cx/"},
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if want := final.URL + "/playlist.m3u8"; resp.FinalURL != want {
+		t.Errorf("FinalURL = %q, want %q", resp.FinalURL, want)
+	}
+}
+
+// TestDoFinalURLEqualsURLWithoutRedirect pins the non-redirect case: a
+// plain 200 reports the request URL itself.
+func TestDoFinalURLEqualsURLWithoutRedirect(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(w, "ok")
+	}))
+	defer srv.Close()
+
+	c, _ := newTestClient(t, testConfig())
+	resp, err := c.Do(context.Background(), Request{Method: http.MethodGet, URL: srv.URL + "/page"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.FinalURL != srv.URL+"/page" {
+		t.Errorf("FinalURL = %q, want the request URL", resp.FinalURL)
+	}
+}

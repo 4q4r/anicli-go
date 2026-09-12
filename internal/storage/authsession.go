@@ -127,9 +127,9 @@ var ErrSessionNotFound = fmt.Errorf("api auth session not found")
 
 func scanAuthSession(row rowScanner) (*AuthSession, error) {
 	var (
-		s                                   AuthSession
-		mode, user, cookie, token, revoked  sql.NullString
-		expires, created, updated           string
+		s                                  AuthSession
+		mode, user, cookie, token, revoked sql.NullString
+		expires, created, updated          string
 	)
 	err := row.Scan(&s.ID, &s.SessionID, &s.UserLogin, &s.RefreshTokenHash,
 		&mode, &user, &cookie, &token,

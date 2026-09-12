@@ -22,13 +22,13 @@ func TestAuthSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	sess := &AuthSession{
-		SessionID:         "sid-1",
-		UserLogin:         "alice",
-		RefreshTokenHash:  "hash-1",
-		ShikiAuthMode:     strPtr("cookie"),
-		ShikiUsername:     strPtr("alice-shiki"),
+		SessionID:          "sid-1",
+		UserLogin:          "alice",
+		RefreshTokenHash:   "hash-1",
+		ShikiAuthMode:      strPtr("cookie"),
+		ShikiUsername:      strPtr("alice-shiki"),
 		ShikiCookieSession: strPtr("kawai"),
-		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
+		ExpiresAt:          time.Now().Add(time.Hour).UTC(),
 	}
 	if err := st.AuthSessions.Create(ctx, sess); err != nil {
 		t.Fatalf("create: %v", err)

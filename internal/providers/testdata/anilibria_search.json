@@ -1,0 +1,19 @@
+[
+  {
+    "id": 42,
+    "code": "re-zero",
+    "alias": "re-zero-kara-hajimeru-isekai-seikatsu",
+    "name": {
+      "main": "Re:Zero. Жизнь с нуля в другом мире",
+      "alternative": "Re:Zero kara Hajimeru Isekai Seikatsu"
+    }
+  },
+  {
+    "id": 7,
+    "code": "cowboy-bebop",
+    "alias": "cowboy-bebop",
+    "name": {
+      "main": "Ковбой Бибоп"
+    }
+  }
+]

@@ -19,9 +19,9 @@ type stubProvider struct {
 	gotQuery string
 }
 
-func (s *stubProvider) ID() string                     { return s.id }
-func (s *stubProvider) Name() string                   { return "Stub " + s.id }
-func (s *stubProvider) BaseURL() string                { return "https://stub.example" }
+func (s *stubProvider) ID() string                       { return s.id }
+func (s *stubProvider) Name() string                     { return "Stub " + s.id }
+func (s *stubProvider) BaseURL() string                  { return "https://stub.example" }
 func (s *stubProvider) SourceType() contracts.SourceType { return contracts.SourceTypeBoth }
 
 func (s *stubProvider) Search(_ context.Context, query string) ([]contracts.SearchResult, error) {

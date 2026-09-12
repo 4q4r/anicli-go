@@ -10,6 +10,7 @@
 package providers
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,18 @@ func (b Base) BaseURL() string { return b.baseURL }
 // SourceType reports what kind of content the provider serves (Python
 // source_type / SourceCapability).
 func (b Base) SourceType() contracts.SourceType { return b.sourceType }
+
+// pythonStr ports Python's str() over a JSON number field: the wire
+// literal is preserved ("1" stays "1", "1.5" stays "1.5"), and a missing
+// field yields "None" exactly like str(None) on a JSON null (this is
+// load-bearing for anilib, where episode "number": null sorts as "None"
+// → key 0 in the Python episode sort).
+func pythonStr(n json.Number) string {
+	if n == "" {
+		return "None"
+	}
+	return n.String()
+}
 
 // pythonFloatKey ports the Python episode sort keys of the form
 //

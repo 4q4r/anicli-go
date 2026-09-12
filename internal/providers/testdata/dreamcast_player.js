@@ -1,0 +1,2 @@
+var K={u: \'#0RyJVNzAVbVJzmjiXMWAyaWA5MgItNniuNy16mkJvIVwVlZsxIWoVP2iYmDIwMWlwbgEyLjp1OZstO25YIVwVlZsyIWoVP2iYmDIwMWlwbgEyLjp1OZstQHQvIVwVlZszIWoVP2iYmDIwMWlwbgEyLjp1OZstQGUymjhVLCJVNzdVbVJzmjiXMWAyaWA5MgItNniuNy1ZO3iyIn0=\\'};
+function Playerjs(p){document.getElementById(p.id).innerHTML=p.file;}

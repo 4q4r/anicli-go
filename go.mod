@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/bogdanfinn/fhttp v0.6.9
 	github.com/bogdanfinn/tls-client v1.16.0
+	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
 )
 

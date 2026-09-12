@@ -1,17 +1,3 @@
-// This file implements the AllAnime per-epoch client crypto required
-// since the 2026-07-22 rotation (ani-cli PR #1779, issues #1677/#1772):
-// there is no static key anymore. The key is derived at runtime as
-// mask XOR partB — the mkissa.to referer page embeds "epoch" and
-// base64(32-byte) "partB" plus the entry-bundle URL; one of the first
-// code-split chunks the bundle imports embeds a 64-hex "mask". The same
-// 32-byte key both signs the aaReq GraphQL token and decrypts the
-// "tobeparsed" response blob (AES-256-GCM on both sides).
-//
-// Reference implementation (semantics, not code): alvarorichard/Goanime
-// v1.8.6 internal/scraper/providers/allanime {keys.go, crypto.go},
-// fetched via pkg.go.dev/GitHub for this port. Live behaviour is
-// [UNVERIFIED] until the parity pass; every assumption is listed in the
-// PR6 report.
 package providers
 
 import (
@@ -31,6 +17,21 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/crypto"
 )
+
+// This file implements the AllAnime per-epoch client crypto required
+// since the 2026-07-22 rotation (ani-cli PR #1779, issues #1677/#1772):
+// there is no static key anymore. The key is derived at runtime as
+// mask XOR partB — the mkissa.to referer page embeds "epoch" and
+// base64(32-byte) "partB" plus the entry-bundle URL; one of the first
+// code-split chunks the bundle imports embeds a 64-hex "mask". The same
+// 32-byte key both signs the aaReq GraphQL token and decrypts the
+// "tobeparsed" response blob (AES-256-GCM on both sides).
+//
+// Reference implementation (semantics, not code): alvarorichard/Goanime
+// v1.8.6 internal/scraper/providers/allanime {keys.go, crypto.go},
+// fetched via pkg.go.dev/GitHub for this port. Live behaviour is
+// [UNVERIFIED] until the parity pass; every assumption is listed in the
+// PR6 report.
 
 // aaKeys is the per-epoch secret material: a 32-byte AES-256 key plus
 // the numeric epoch string. Both are bound into the aaReq token; the
@@ -58,6 +59,9 @@ var (
 	errAAPartBMissing = errors.New("allanime: partB not found on referer page")
 	errAAAppMissing   = errors.New("allanime: entry bundle URL not found on referer page")
 	errAAMaskNotFound = errors.New("allanime: mask not found in entry bundle chunks")
+	// errAAGCMAuth marks a tobeparsed blob that failed GCM
+	// authentication (wrong key — the refresh-and-retry trigger).
+	errAAGCMAuth = errors.New("allanime: tobeparsed gcm authentication failed")
 	// errAADecryptFailed marks a tobeparsed blob that still fails GCM
 	// authentication after one forced key refresh.
 	errAADecryptFailed = errors.New("allanime: tobeparsed decrypt failed after key refresh")
@@ -166,15 +170,15 @@ func decodeToBeParsed(blob string, key []byte) ([]aaSource, error) {
 	// is exactly the wire layout after the version byte.
 	plaintext, err := crypto.GCMDecrypt(data[13:], data[1:13], key)
 	if err != nil {
-		return nil, fmt.Errorf("allanime tobeparsed gcm: %w", err)
+		return nil, fmt.Errorf("%w: %w", errAAGCMAuth, err)
 	}
 
 	var parsed struct {
 		Data struct {
 			Episode struct {
 				SourceUrls []struct {
-					SourceURL   string `json:"sourceUrl"`
-					SourceName  string `json:"sourceName"`
+					SourceURL  string `json:"sourceUrl"`
+					SourceName string `json:"sourceName"`
 				} `json:"sourceUrls"`
 			} `json:"episode"`
 		} `json:"data"`
@@ -231,20 +235,23 @@ func aaDecodeHexPairs(raw string) (string, bool) {
 
 // decodeAllAnimeSourceURL turns one sourceUrls entry into a fetchable
 // URL (port of allanime.py:196-208, transport updated for the mkissa
-// rotation): trim the "--" marker, hex-pair decode, rewrite "clock" to
-// "clock.json", then absolutize — http(s) URLs pass through, "/..." is
-// prefixed with the internal base (allanime.day in production,
-// injectable for tests).
+// rotation): hex-pair decode, rewrite "clock" to "clock.json", then
+// absolutize — http(s) URLs pass through, "/..." is prefixed with the
+// internal base (allanime.day in production, injectable for tests).
 //
-// Divergence from Python: a value without the "--" marker is passed
-// through verbatim instead of being pushed through the hex decoder
-// (Python crashed the whole resolve on such values with ValueError);
-// and a decoded relative path without a leading slash gains the missing
+// The "--" marker may already be stripped by decodeToBeParsed, so the
+// encoded body is detected structurally: a "--"-marked value must
+// decode or the source is rejected; an unmarked value that is entirely
+// hex pairs decodes too; anything else is a plain URL passed through
+// verbatim (documented divergence: Python pushed every value through
+// the hex decoder and crashed the whole resolve on non-hex input).
+// A decoded relative path without a leading slash gains the missing
 // "/" (Python concatenated a malformed URL that could only 404).
 func decodeAllAnimeSourceURL(src, internalBase string) (string, bool) {
-	plain := src
-	if strings.HasPrefix(plain, "--") {
-		decoded, ok := aaDecodeHexPairs(plain[2:])
+	body := strings.TrimPrefix(src, "--")
+	plain := body
+	if strings.HasPrefix(src, "--") || aaLooksHexPairs(body) {
+		decoded, ok := aaDecodeHexPairs(body)
 		if !ok {
 			return "", false
 		}
@@ -265,6 +272,22 @@ func decodeAllAnimeSourceURL(src, internalBase string) (string, bool) {
 		return internalBase + "/" + plain, true
 	}
 }
+
+// aaLooksHexPairs reports whether s is a non-empty even-length run of
+// hex digits (a candidate encoded body).
+func aaLooksHexPairs(s string) bool {
+	if len(s) == 0 || len(s)%2 != 0 {
+		return false
+	}
+	for _, r := range s {
+		hexDigit := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !hexDigit {
+			return false
+		}
+	}
+	return true
+}
+
 // aaParseRefererPage scrapes epoch, partB (still base64) and the entry
 // bundle URL off the mkissa.to landing HTML.
 func aaParseRefererPage(page string) (epoch, partB, appURL string, err error) {

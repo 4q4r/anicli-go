@@ -418,10 +418,10 @@ func TestAAFindMask(t *testing.T) {
 	const cdnRoot = "https://cdn.example/all/mk/_app/immutable"
 
 	chunks := map[string]string{
-		cdnRoot + "/chunks/one.js":   `console.log("no hex here")`,
-		cdnRoot + "/chunks/two.js":   fmt.Sprintf(`const k=%q;export{k}`, mask),
-		cdnRoot + "/chunks/five.js":  `export const x = 1;`,
-		cdnRoot + "/chunks/six.js":   fmt.Sprintf(`const late=%q;`, hex.EncodeToString(aaTestKey(99))),
+		cdnRoot + "/chunks/one.js":  `console.log("no hex here")`,
+		cdnRoot + "/chunks/two.js":  fmt.Sprintf(`const k=%q;export{k}`, mask),
+		cdnRoot + "/chunks/five.js": `export const x = 1;`,
+		cdnRoot + "/chunks/six.js":  fmt.Sprintf(`const late=%q;`, hex.EncodeToString(aaTestKey(99))),
 	}
 
 	got, err := aaFindMask(entry, cdnRoot, func(url string) (string, bool) {
@@ -466,9 +466,9 @@ func TestAAFetchKeys(t *testing.T) {
 	}
 	const cdnRoot = "https://cdn.example/all/mk/_app/immutable"
 	bodies := map[string]string{
-		"https://ref.example/":         aaTestPage(4130, base64.StdEncoding.EncodeToString(partB), cdnRoot+"/entry/app.x1.js"),
-		cdnRoot + "/entry/app.x1.js":   `import"../chunks/a.js";`,
-		cdnRoot + "/chunks/a.js":       `const m="` + hex.EncodeToString(mask) + `";`,
+		"https://ref.example/":       aaTestPage(4130, base64.StdEncoding.EncodeToString(partB), cdnRoot+"/entry/app.x1.js"),
+		cdnRoot + "/entry/app.x1.js": `import"../chunks/a.js";`,
+		cdnRoot + "/chunks/a.js":     `const m="` + hex.EncodeToString(mask) + `";`,
 	}
 	keys, err := aaFetchKeys(context.Background(), "https://ref.example/", func(_ context.Context, url string) (string, error) {
 		body, ok := bodies[url]
@@ -500,7 +500,7 @@ func TestAAKeyManagerCachingAndTTL(t *testing.T) {
 	m := newAllAnimeKeyManager(
 		func(context.Context) (*aaKeys, error) {
 			n := calls.Add(1)
-			return &aaKeys{key: aaTestKey(byte(n)), epoch: fmt.Sprint(4000 + n)}, nil
+			return &aaKeys{key: aaTestKey(byte(n & 0xff)), epoch: fmt.Sprint(4000 + n)}, nil
 		},
 		func() time.Time { return now },
 	)

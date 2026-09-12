@@ -133,6 +133,13 @@ func New(cfg config.Shikimori, net *netclient.Client, logger *slog.Logger) *Clie
 // ("disabled", "none", "cookie" or "bearer").
 func (c *Client) Mode() string { return c.mode.String() }
 
+// Authenticated reports whether the client carries user credentials
+// (cookie or bearer) — the gate for personalized endpoints (python
+// is_authenticated).
+func (c *Client) Authenticated() bool {
+	return c.mode == modeCookie || c.mode == modeBearer
+}
+
 // apiHeaders builds the headers every JSON API request carries: the
 // strict User-Agent, JSON accept and the XMLHttpRequest marker (ported
 // from the Python api_headers), plus mode credentials.

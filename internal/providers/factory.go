@@ -48,6 +48,9 @@ var allFactories = []struct {
 	{"kodik", func(http *netclient.Client, cfg config.Settings) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
 	}},
+	{"allanime", func(http *netclient.Client, _ config.Settings) contracts.Provider {
+		return newAllAnime(AllAnimeAPIBase, AllAnimeReferer, AllAnimeInternalBase, http)
+	}},
 }
 
 // All builds every implemented provider: one netclient client each

@@ -8,6 +8,7 @@ require (
 	github.com/bogdanfinn/tls-client v1.16.0
 	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/sync v0.23.0
 )
 
 require (

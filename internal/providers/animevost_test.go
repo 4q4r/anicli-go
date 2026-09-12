@@ -86,6 +86,12 @@ func TestAnimevostSearchProvider403(t *testing.T) {
 	if !errors.Is(err, contracts.ErrProvider403) {
 		t.Fatalf("error = %v, want ErrProvider403", err)
 	}
+	// The operation tag must reach the ProviderError (netclient Do Op),
+	// not the generic "request".
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) || perr.Op != contracts.OpSearch {
+		t.Errorf("ProviderError.Op = %q, want %q", perr.Op, contracts.OpSearch)
+	}
 }
 
 func TestAnimevostGetEpisodes(t *testing.T) {

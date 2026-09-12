@@ -126,7 +126,12 @@ func (p *Anilib) Search(ctx context.Context, query string) ([]contracts.SearchRe
 		params.Add("fields[]", field)
 	}
 
-	resp, err := p.http.Get(ctx, p.Base.baseURL+"/anime?"+params.Encode(), p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/anime?" + params.Encode(),
+		Headers: p.headers,
+		Op:      contracts.OpSearch,
+	})
 	if err != nil {
 		return []contracts.SearchResult{}, nil
 	}
@@ -166,7 +171,12 @@ func (p *Anilib) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 	params := url.Values{}
 	params.Set("anime_id", animeID)
 
-	resp, err := p.http.Get(ctx, p.Base.baseURL+"/episodes?"+params.Encode(), p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/episodes?" + params.Encode(),
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return []contracts.Episode{}, nil
 	}
@@ -203,7 +213,12 @@ func (p *Anilib) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 // (the Python original swallows the exception); the failure is logged via
 // slog so it stays visible.
 func (p *Anilib) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
-	resp, err := p.http.Get(ctx, p.Base.baseURL+"/episodes/"+episode.RawID, p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/episodes/" + episode.RawID,
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		slog.Warn("anilib: fetch dubs failed", "episode", episode.RawID, "error", err)
 		return episode, nil

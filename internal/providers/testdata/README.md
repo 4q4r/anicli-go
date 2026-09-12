@@ -20,7 +20,7 @@ the expected input.
 | `animego_search.html` | `anicli/providers/animego.py:27-50` — search page; selectolax selectors `.row > .col-ul-2`, `.text-truncate a[title]`, `.lazy[data-original]`. |
 | `animego_anime.html` | `anicli/providers/animego.py:52-59` — anime page; selector `.br-2 .my-list-anime` with `id="my-list-<id>"`. |
 | `animego_player_series.json` | `anicli/providers/animego.py:61-81` — player API JSON with `content` HTML; selector `#video-carousel .mb-0` with `data-episode`, `data-id`, `data-episode-title`. |
-| `animego_player_film.json` | `anicli/providers/animego.py:82-105` — player API JSON with `content` HTML lacking `#video-carousel`; film path parses `#video-dubbing .mb-1` (`data-dubbing`) and `#video-players > .mb-1` (`data-player`, `data-provide-dubbing`). |
+| `animego_player_film.json` | `anicli/providers/animego.py:82-105` — player API JSON with `content` HTML lacking `#video-carousel`; film path parses `#video-dubbing .mb-1` (`data-dubbing`) and `#video-players > span` children WITHOUT `.mb-1` so the Python fallback selector branch (`#video-players > span`, animego.py:115) is exercised (`data-player`, `data-provide-dubbing`). |
 | `animego_series.json` | `anicli/providers/animego.py:93-105` — `/anime/series` API JSON with `content` HTML carrying the same dubbing/players markup. |
 | `sovetromantica_search.html` | `anicli/providers/sovetromantica.py:29-53` — search page; selectors `.anime--block`, `.anime--block__name`, first `a` descendant. |
 | `sovetromantica_anime.html` | `anicli/providers/sovetromantica.py:55-82` — anime page; selectors `.episodes-slick .episode` (fallback `.episodes-list .episode`), first `a`, first `span` text `Эпизод N`. |

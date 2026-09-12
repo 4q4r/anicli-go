@@ -53,7 +53,12 @@ func (p *AnimeGo) Search(ctx context.Context, query string) ([]contracts.SearchR
 	params := url.Values{}
 	params.Set("q", query)
 
-	resp, err := p.http.Get(ctx, p.Base.baseURL+"/search/anime?"+params.Encode(), p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/search/anime?" + params.Encode(),
+		Headers: p.headers,
+		Op:      contracts.OpSearch,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +99,12 @@ func (p *AnimeGo) Search(ctx context.Context, query string) ([]contracts.SearchR
 // episode per `#video-carousel .mb-0` entry; anything else is treated as
 // a film with a single episode whose embeds are parsed inline.
 func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	resp, err := p.http.Get(ctx, animeURL, p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     animeURL,
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +125,13 @@ func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 		return []contracts.Episode{}, nil
 	}
 
-	playerURL := fmt.Sprintf("%s/anime/%s/player?_allow=true", p.Base.baseURL, animeID)
-	playerResp, err := p.http.Get(ctx, playerURL, p.headers)
+	playerURL := fmt.Sprintf("%s/anime/%s/player?_allow=true", p.baseURL, animeID)
+	playerResp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     playerURL,
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +192,12 @@ func (p *AnimeGo) FetchDubs(ctx context.Context, episode *contracts.Episode) (*c
 	params := url.Values{}
 	params.Set("id", episode.RawID)
 
-	resp, err := p.http.Get(ctx, p.Base.baseURL+"/anime/series?"+params.Encode(), p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/anime/series?" + params.Encode(),
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return nil, err
 	}

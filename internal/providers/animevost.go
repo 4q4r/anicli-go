@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
@@ -14,6 +15,10 @@ import (
 // AnimeVostBase is the JSON API root (anicli-py anicli/providers/
 // animevost.py:17). Search and playlist are form-encoded POSTs.
 const AnimeVostBase = "https://api.animevost.org/v1"
+
+// formContentType marks a request body as form-encoded (the header
+// PostForm used to set; kept explicit for Do-based calls).
+var formContentType = map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
 
 // AnimeVost is the port of anicli-py anicli/providers/animevost.py.
 // Source type BOTH, single fixed dub "AnimeVost", mp4 links carried in a
@@ -53,8 +58,13 @@ type animevostPlaylistEntry struct {
 // Decode failures return an empty result set — the Python original
 // swallows them (except Exception: return []).
 func (p *AnimeVost) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	resp, err := p.http.PostForm(ctx, p.Base.baseURL+"/search",
-		url.Values{"name": {query}}, nil)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "POST",
+		URL:     p.baseURL + "/search",
+		Headers: formContentType,
+		Body:    strings.NewReader(url.Values{"name": {query}}.Encode()),
+		Op:      contracts.OpSearch,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -80,8 +90,13 @@ func (p *AnimeVost) Search(ctx context.Context, query string) ([]contracts.Searc
 // animevost.py:39-64). Episodes are numbered 1-based; the name falls back
 // to the index string; links are stashed as one JSON object raw embed.
 func (p *AnimeVost) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	resp, err := p.http.PostForm(ctx, p.Base.baseURL+"/playlist",
-		url.Values{"id": {animeURL}}, nil)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "POST",
+		URL:     p.baseURL + "/playlist",
+		Headers: formContentType,
+		Body:    strings.NewReader(url.Values{"id": {animeURL}}.Encode()),
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return nil, err
 	}

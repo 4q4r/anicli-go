@@ -92,13 +92,13 @@ func (d SearchDelegator) recordStat(ctx context.Context, success bool, latencyMS
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statWriteTimeout)
 	defer cancel()
 
-	if err := d.stats.RecordResult(rctx, d.Provider.ID(), success, latencyMS); err != nil {
+	if err := d.stats.RecordResult(rctx, d.ID(), success, latencyMS); err != nil {
 		logger := d.logger
 		if logger == nil {
 			logger = slog.Default()
 		}
 		logger.Warn("record provider search stat",
-			"provider", d.Provider.ID(), "error", err)
+			"provider", d.ID(), "error", err)
 	}
 }
 
@@ -109,5 +109,5 @@ func (d SearchDelegator) wrapErr(err error) error {
 	if errors.As(err, &perr) {
 		return err
 	}
-	return contracts.WrapProvider(d.Provider.ID(), contracts.OpSearch, 0, err)
+	return contracts.WrapProvider(d.ID(), contracts.OpSearch, 0, err)
 }

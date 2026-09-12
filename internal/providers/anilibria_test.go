@@ -37,7 +37,8 @@ func testClient(t *testing.T, providerID string) *netclient.Client {
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	// Constant fixture directory; name is test-controlled.
+	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec // trusted testdata path
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}

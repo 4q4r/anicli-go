@@ -69,7 +69,7 @@ type anilibriaRelease struct {
 // Divergence from Python: the query is URL-encoded here; the Python
 // original interpolated it raw into the f-string URL (task ruling).
 func (p *AniLibria) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	searchURL := p.Base.baseURL + "/app/search/releases?query=" + url.QueryEscape(query)
+	searchURL := p.baseURL + "/app/search/releases?query=" + url.QueryEscape(query)
 
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method: "GET",
@@ -112,7 +112,7 @@ func (p *AniLibria) Search(ctx context.Context, query string) ([]contracts.Searc
 // with sorted keys. Only ResolveStream consumes the payload and JSON
 // object key order is not semantically load-bearing there.
 func (p *AniLibria) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	releaseURL := p.Base.baseURL + "/anime/releases/" + animeURL
+	releaseURL := p.baseURL + "/anime/releases/" + animeURL
 
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method: "GET",

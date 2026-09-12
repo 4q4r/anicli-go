@@ -45,9 +45,14 @@ func newSovetRomantica(baseURL string, http *netclient.Client) *SovetRomantica {
 // sovetromantica.py:29-53). The query keeps Python's urllib quote()
 // encoding (spaces as %20, not form-style +).
 func (p *SovetRomantica) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	searchURL := p.Base.baseURL + "/anime?query=" + pyQuote(query)
+	searchURL := p.baseURL + "/anime?query=" + pyQuote(query)
 
-	resp, err := p.http.Get(ctx, searchURL, p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     searchURL,
+		Headers: p.headers,
+		Op:      contracts.OpSearch,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +76,7 @@ func (p *SovetRomantica) Search(ctx context.Context, query string) ([]contracts.
 			return
 		}
 		if !strings.HasPrefix(link, "http") {
-			link = p.Base.baseURL + link
+			link = p.baseURL + link
 		}
 
 		results = append(results, contracts.SearchResult{
@@ -88,7 +93,12 @@ func (p *SovetRomantica) Search(ctx context.Context, query string) ([]contracts.
 // .episodes-list .episode); the "Эпизод" label is stripped off the span
 // text and the raw id is the absolute episode URL.
 func (p *SovetRomantica) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	resp, err := p.http.Get(ctx, animeURL, p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     animeURL,
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +125,7 @@ func (p *SovetRomantica) GetEpisodes(ctx context.Context, animeURL string) ([]co
 			return
 		}
 		if !strings.HasPrefix(rawURL, "http") {
-			rawURL = p.Base.baseURL + rawURL
+			rawURL = p.baseURL + rawURL
 		}
 
 		numNode := item.Find("span").First()
@@ -158,7 +168,12 @@ func (p *SovetRomantica) ResolveStream(ctx context.Context, episode contracts.Ep
 		return stream, nil
 	}
 
-	resp, err := p.http.Get(ctx, embeds[0], p.headers)
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     embeds[0],
+		Headers: p.headers,
+		Op:      contracts.OpResolveStream,
+	})
 	if err != nil {
 		return stream, err
 	}
@@ -166,12 +181,12 @@ func (p *SovetRomantica) ResolveStream(ctx context.Context, episode contracts.Ep
 	if match := sovetFileRe.FindSubmatch(resp.Body); match != nil {
 		m3u8URL := string(match[1])
 		if !strings.HasPrefix(m3u8URL, "http") {
-			m3u8URL = p.Base.baseURL + m3u8URL
+			m3u8URL = p.baseURL + m3u8URL
 		}
 		stream.Links["1080"] = contracts.VideoSource{
 			URL:     m3u8URL,
 			Quality: "1080",
-			Headers: map[string]string{"Referer": p.Base.baseURL},
+			Headers: map[string]string{"Referer": p.baseURL},
 		}
 	}
 	return stream, nil

@@ -1,0 +1,45 @@
+# golangci-lint v2 configuration.
+# Strict gate: zero errors, zero warnings in scope.
+# sloglint intentionally NOT enabled (std log/slog usage is minimal at this stage).
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck # supersedes gosimple since golangci-lint v2
+    - unused
+    - revive
+    - gocritic
+    - errorlint
+    - gosec
+    - copyloopvar
+    - intrange
+  settings:
+    revive:
+      severity: warning
+      rules:
+        - name: package-comments
+        - name: exported
+        - name: var-naming
+        - name: error-strings
+        - name: unexported-return
+    gocritic:
+      enable-all: false
+  exclusions:
+    paths:
+      # G1 gate probe, kept verbatim for provenance; not production code.
+      - cmd/spike
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

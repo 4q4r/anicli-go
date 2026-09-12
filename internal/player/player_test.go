@@ -14,10 +14,12 @@ import (
 
 // stubSource is the test-double mpv: mode "sleep30" (default) sleeps
 // 30s and exits 0 on SIGTERM, "trapterm" additionally ignores SIGTERM
-// (SIGKILL escalation), "exitnow" exits immediately with status 1.
+// (SIGKILL escalation), "exitnow" exits immediately with status 1,
+// "printslow" dumps 400 log lines then exits after 600ms (pump race).
 const stubSource = `package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -33,6 +35,13 @@ func main() {
 		os.Exit(1)
 	}
 	if mode == "exitsoon" {
+		time.Sleep(600 * time.Millisecond)
+		os.Exit(0)
+	}
+	if mode == "printslow" {
+		for i := 0; i < 400; i++ {
+			fmt.Printf("stub line %03d\n", i)
+		}
 		time.Sleep(600 * time.Millisecond)
 		os.Exit(0)
 	}
@@ -408,4 +417,32 @@ func TestPlayLogPump(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	_ = lines
+}
+
+// TestPlayLogPumpDeliversAllOutput pins the pump-before-Wait contract:
+// Wait closes the stdout pipe when the process exits, so a pump racing
+// Wait loses tail lines still buffered in the pipe. The slow sink
+// keeps the pump behind the process exit so the race shows up as
+// missing lines; draining the pipe to EOF before Wait must deliver
+// every line the process wrote.
+func TestPlayLogPumpDeliversAllOutput(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlayer(buildStub(t))
+	var mu sync.Mutex
+	delivered := 0
+	p.SetLog(func(string) {
+		time.Sleep(3 * time.Millisecond) // lag the pump behind the exit
+		mu.Lock()
+		delivered++
+		mu.Unlock()
+	})
+	if err := p.Play(context.Background(), Request{URL: "printslow"}); err != nil {
+		t.Fatalf("Play: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if delivered != 400 {
+		t.Errorf("log lines delivered = %d, want 400 (pipe must drain before Wait)", delivered)
+	}
 }

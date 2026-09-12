@@ -3,7 +3,6 @@ package skip
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -109,9 +108,10 @@ func NewIntroSkipperClient(opts IntroSkipperOptions) *IntroSkipperClient {
 func (c *IntroSkipperClient) ID() string { return ProviderIntroSkipper }
 
 // GetSkipTimes analyses the media file and returns detected intervals
-// plus a machine-readable detail code. Errors are reserved for hard
-// failures (missing binaries); analysis misses are detail codes with
-// empty intervals, mirroring the python semantics.
+// plus a machine-readable detail code. Missing ffmpeg/ffprobe binaries
+// degrade to the duration_probe_failed detail code with empty
+// intervals — mirroring the python semantics, every miss (including
+// missing binaries) is a detail code and the error return stays nil.
 func (c *IntroSkipperClient) GetSkipTimes(ctx context.Context, mediaInput string) ([]Interval, string, error) {
 	if !c.opts.Enabled {
 		return nil, "intro_skipper_disabled", nil
@@ -179,13 +179,12 @@ func detailWithMarkers(detail string, intervals []Interval) string {
 }
 
 // probeDuration returns the media duration in seconds via ffprobe
-// (python _probe_duration). A missing binary is a hard error.
+// (python _probe_duration). Any runner failure — including a missing
+// ffprobe binary (ErrBinaryNotFound) — degrades to (0, false), which
+// GetSkipTimes reports as the duration_probe_failed detail code.
 func (c *IntroSkipperClient) probeDuration(ctx context.Context, mediaInput string) (float64, bool) {
 	out, _, err := c.run(ctx, c.opts.FFprobeBin, ffprobeDurationArgs(mediaInput))
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) || isNotFound(err) {
-			return 0, false
-		}
 		return 0, false
 	}
 	duration, parseErr := strconv.ParseFloat(strings.TrimSpace(out), 64)
@@ -239,12 +238,6 @@ func realCommandRunner(ctx context.Context, bin string, args []string) (string, 
 		return stdout.String(), stderr.String(), fmt.Errorf("run %s: %w", bin, err)
 	}
 	return stdout.String(), stderr.String(), nil
-}
-
-// isNotFound matches the typed wrapper too.
-func isNotFound(err error) bool {
-	var notFound *ErrBinaryNotFound
-	return errors.As(err, &notFound)
 }
 
 // ffprobeDurationArgs builds the duration probe argv.

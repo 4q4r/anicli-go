@@ -147,10 +147,9 @@ func (p *Player) launchOpts() Options {
 	return Options{Bin: p.bin, Timeout: p.opts.Timeout, Profile: p.opts.Profile}
 }
 
-// mapExit converts a process exit into a Go error verdict: clean exits
-// are nil, signal kills are context-flavored only when our own
-// cancellation drove them (the caller cancelled), otherwise the raw
-// error.
+// mapExit is the exit-verdict seam; it is currently the identity.
+// Wait already reports clean exits as nil, and the cancellation paths
+// return ctx.Err() directly, so no translation is needed here.
 func (p *Player) mapExit(err error) error {
 	return err
 }
@@ -202,9 +201,12 @@ func (p *Player) start(ctx context.Context, args []string) (*process, error) {
 
 	proc := &process{cmd: cmd, wait: make(chan error, 1)}
 	go func() {
+		// Drain the pipe to EOF before Wait: Wait closes it on
+		// process exit, which would drop log lines still buffered
+		// inside (os/exec pipe contract).
+		p.pump(stdout)
 		proc.wait <- cmd.Wait()
 	}()
-	go p.pump(stdout)
 	return proc, nil
 }
 

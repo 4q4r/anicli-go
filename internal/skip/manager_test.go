@@ -331,9 +331,67 @@ func TestManagerResolveAllProvidersFail(t *testing.T) {
 		AnimeSkipEnabled: true, IntroSkipperEnabled: false}
 	f := newManagerFixture(t, cfg, "", "")
 
-	_, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
+	bundle, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
 	if err == nil {
 		t.Fatal("Resolve with all providers failing returned nil error, want aggregate error")
+	}
+	if !containsStr(bundle.Details, "aniskip") || !containsStr(bundle.Details, "anime_skip") {
+		t.Errorf("Details = %q, want joined per-provider errors", bundle.Details)
+	}
+}
+
+// TestManagerResolveMixedCleanEmptyAndFailure pins the all-failed
+// semantics: a transport error from one provider plus a clean-empty
+// answer from another degrades to an empty no_provider_result bundle,
+// not the loud aggregate error (clean-empty counts as completion).
+func TestManagerResolveMixedCleanEmptyAndFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Skip{ProvidersOrder: []string{"aniskip", "anime_skip"},
+		AnimeSkipEnabled: true, IntroSkipperEnabled: false}
+	// aniskip 403s (empty payload); anime_skip answers cleanly empty.
+	f := newManagerFixture(t, cfg, "", emptyGraphQLPayload())
+
+	bundle, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
+	if err != nil {
+		t.Fatalf("Resolve: %v, want nil (anime_skip completed cleanly)", err)
+	}
+	if !bundle.Empty() || bundle.ProviderID != "" {
+		t.Errorf("bundle = %+v, want empty", bundle)
+	}
+	if !strings.HasPrefix(bundle.Details, "no_provider_result") {
+		t.Errorf("Details = %q, want no_provider_result prefix", bundle.Details)
+	}
+	if !containsStr(bundle.Details, "aniskip") {
+		t.Errorf("Details = %q, want degraded aniskip note", bundle.Details)
+	}
+}
+
+// TestManagerResolveLateContributorAttributesProvider pins the
+// contributor-index mapping: when the first provider answers
+// clean-empty and only the second contributes, ProviderID must name
+// the contributing (second) provider, not the first set slot.
+func TestManagerResolveLateContributorAttributesProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Skip{ProvidersOrder: []string{"aniskip", "anime_skip"},
+		AnimeSkipEnabled: true, IntroSkipperEnabled: false}
+	f := newManagerFixture(t, cfg, emptyFoundPayload(),
+		`{"data":{"episodeByMalId":{"timestamps":[{"skipType":"ED","startTime":1300,"endTime":1400}]}}}`)
+
+	bundle, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if bundle.FFMetadata == "" {
+		t.Fatal("FFMetadata empty, want anime_skip ED chapter")
+	}
+	if bundle.ProviderID != ProviderAnimeSkip {
+		t.Errorf("ProviderID = %q, want %q (sole contributor was the second provider)",
+			bundle.ProviderID, ProviderAnimeSkip)
+	}
+	if !reflect.DeepEqual(bundle.ChapterTypes, []string{"ed"}) {
+		t.Errorf("ChapterTypes = %v, want [ed]", bundle.ChapterTypes)
 	}
 }
 

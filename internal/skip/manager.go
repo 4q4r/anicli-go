@@ -169,13 +169,18 @@ func (m *Manager) providerEnabled(id string) bool {
 
 // Resolve runs the provider orchestration for one episode and renders
 // the merged FFMETADATA content. Errors are reserved for the case where
-// every consulted provider failed; clean empty answers yield an empty
-// bundle with Details "no_provider_result".
+// every consulted provider failed (no provider completed cleanly — a
+// clean-empty answer counts as a completion); otherwise clean empty
+// answers yield an empty bundle with Details "no_provider_result"
+// (carrying a degraded note when a sibling provider failed).
 func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, error) {
 	var (
 		sets        [][]Interval
 		providerIDs []string
 		errs        []error
+		// clean counts consulted providers that completed without a
+		// hard error, including clean-empty answers.
+		clean int
 	)
 
 	for _, id := range m.ActiveOrder() {
@@ -195,6 +200,7 @@ func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, erro
 			}
 			sets = append(sets, intervals)
 			providerIDs = append(providerIDs, id)
+			clean++
 		case ProviderIntroSkipper:
 			// Local-only: needs a media file and never runs for URLs;
 			// also only consulted when the API merge found nothing, so
@@ -207,15 +213,16 @@ func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, erro
 		bundle := Bundle{
 			FFMetadata:   GenerateFFMetadata(merged),
 			ChapterTypes: chapterTypes(merged),
+			ProviderID:   ProviderIDMerged,
 			Details:      "ok",
 		}
-		switch len(contributors) {
-		case 0:
-			bundle.ProviderID = ""
-		case 1:
-			bundle.ProviderID = providerIDs[0]
-		default:
-			bundle.ProviderID = ProviderIDMerged
+		// Single contributor: its "pN" label maps back through
+		// providerIDs, which also index the clean-empty sets collected
+		// before it.
+		if len(contributors) == 1 {
+			if idx, ok := parseProviderIndex(contributors[0]); ok && idx < len(providerIDs) {
+				bundle.ProviderID = providerIDs[idx]
+			}
 		}
 		if len(errs) > 0 {
 			bundle.Details = fmt.Sprintf("ok (degraded: %v)", joinErrors(errs))
@@ -226,20 +233,29 @@ func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, erro
 	// API providers empty: fall back to the local detector.
 	if m.providerEnabled(ProviderIntroSkipper) && req.MediaInput != "" {
 		intervals, details, err := m.intro.GetSkipTimes(ctx, req.MediaInput)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("%s: %w", ProviderIntroSkipper, err))
-		} else if len(intervals) > 0 {
+		case len(intervals) > 0:
 			return Bundle{
 				FFMetadata:   GenerateFFMetadata(intervals),
 				ChapterTypes: chapterTypes(intervals),
 				ProviderID:   ProviderIntroSkipper,
 				Details:      details,
 			}, nil
+		default:
+			// Clean-empty local pass: a completion, not a failure.
+			clean++
 		}
 	}
 
-	if len(errs) > 0 && m.allConsultedFailed(errs) {
+	if m.allConsultedFailed(errs, clean) {
 		return Bundle{Details: joinErrors(errs)}, errors.Join(errs...)
+	}
+	if len(errs) > 0 {
+		return Bundle{
+			Details: fmt.Sprintf("no_provider_result (degraded: %v)", joinErrors(errs)),
+		}, nil
 	}
 	return Bundle{Details: "no_provider_result"}, nil
 }
@@ -252,11 +268,13 @@ func (m *Manager) queryAPIProvider(ctx context.Context, id string, req ResolveRe
 	return m.aniskip.GetSkipTimes(ctx, req.ShikimoriID, req.EpisodeNum)
 }
 
-// allConsultedFailed reports whether hard errors outnumber any clean
-// provider completion. With no sets collected at all and any error
-// present, the run is treated as failed (loud aggregate).
-func (m *Manager) allConsultedFailed(errs []error) bool {
-	return len(errs) > 0
+// allConsultedFailed reports whether every consulted provider ended
+// in a hard error: at least one error and zero clean completions. A
+// clean-empty answer counts as a clean completion, so a mixed
+// clean-empty/failed run degrades to no_provider_result instead of
+// the loud aggregate error (python returns no_provider_result there).
+func (m *Manager) allConsultedFailed(errs []error, clean int) bool {
+	return len(errs) > 0 && clean == 0
 }
 
 // chapterTypes extracts the sorted unique skip types.

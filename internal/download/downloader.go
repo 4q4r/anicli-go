@@ -7,7 +7,6 @@ package download
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -220,7 +219,3 @@ func oneLine(stderr string, err error) string {
 	}
 	return trimmed
 }
-
-// ErrNoOutput reports ffmpeg succeeding without producing the temp
-// file (defensive; keeps finalize honest).
-var ErrNoOutput = errors.New("download: ffmpeg produced no output file")

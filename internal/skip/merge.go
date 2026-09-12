@@ -1,12 +1,9 @@
 package skip
 
-import "sort"
-
-// MergeThreshold is the seconds window in which two same-type intervals
-// from different providers count as agreement (python
-// AniSkipClient.MERGE_THRESHOLD, kept as the documented smart-merge
-// constant).
-const MergeThreshold = 10.0
+import (
+	"sort"
+	"strconv"
+)
 
 // MergeByType smart-merges interval sets given in priority order (first
 // set = highest priority provider).
@@ -15,7 +12,7 @@ const MergeThreshold = 10.0
 //   - a skip type produced by several providers resolves to the single
 //     entry of the highest-priority provider — the old API>ML authority
 //     rule generalized to provider priority, whether the intervals
-//     agree within MergeThreshold or conflict far apart;
+//     agree closely or conflict far apart;
 //   - types the winner does not carry flow in from lower-priority
 //     providers (python "only API exists" union branch);
 //   - the merged set is ordered by start time.
@@ -62,4 +59,16 @@ func MergeByType(sets [][]Interval) ([]Interval, []string) {
 // providerIndexLabel renders a set index for contributor reporting.
 func providerIndexLabel(idx int) string {
 	return "p" + string(rune('0'+idx%10))
+}
+
+// parseProviderIndex decodes a providerIndexLabel back into its set
+// index (the manager maps it through the per-consultation provider id
+// list). The round trip is exact for the single-digit indexes produced
+// here; malformed labels report false.
+func parseProviderIndex(label string) (int, bool) {
+	if len(label) != 2 || label[0] != 'p' {
+		return 0, false
+	}
+	idx, err := strconv.Atoi(label[1:])
+	return idx, err == nil
 }

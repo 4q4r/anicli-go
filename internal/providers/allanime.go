@@ -315,11 +315,15 @@ func (p *AllAnime) expandClockLinks(ctx context.Context, stream *contracts.Media
 			continue
 		}
 		if strings.Contains(src, "m3u8") || pyTruthy(entry.HLS) {
+			// The playlist is fetched with the clock URL as its own
+			// Referer (Python allanime.py:233-236 parity, F30): the CDN
+			// serving it rejects the provider Referer.
 			m3u8Headers := map[string]string{"Referer": clockURL}
-			playlist, err := p.fetchText(ctx, src)
+			resp, err := p.http.Get(ctx, src, m3u8Headers)
 			if err != nil {
 				continue
 			}
+			playlist := string(resp.Body)
 			if variants, isVariant := aaParseMasterPlaylist(playlist, src); isVariant {
 				for _, v := range variants {
 					stream.Links[v.height] = contracts.VideoSource{

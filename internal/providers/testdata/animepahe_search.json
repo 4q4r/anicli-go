@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "id": 431,
+      "title": "Sen to Chihiro no Kamikakushi",
+      "session": "e3f9a1c2d4b5",
+      "poster": "https://i.animepahe.example/successors/cover.jpg",
+      "type": "Movie"
+    },
+    {
+      "id": 5081,
+      "title": "One Piece Film: Red",
+      "session": "d00dcafe99",
+      "poster": "https://i.animepahe.example/onepiece-red/cover.jpg",
+      "type": "Movie"
+    }
+  ]
+}

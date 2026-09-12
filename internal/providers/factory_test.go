@@ -8,21 +8,24 @@ import (
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
-func TestAllReturnsFiveWaveOneProviders(t *testing.T) {
+func TestAllReturnsTenProviders(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 5 {
-		t.Fatalf("All() = %d providers, want 5", len(bare))
+	if len(bare) != 10 {
+		t.Fatalf("All() = %d providers, want 10", len(bare))
 	}
 
-	wantIDs := []string{"anilibria", "animevost", "anilib", "animego", "sovetromantica"}
+	wantIDs := []string{
+		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
+	}
 	seen := map[string]bool{}
 	for _, p := range bare {
 		if seen[p.ID()] {
@@ -37,11 +40,38 @@ func TestAllReturnsFiveWaveOneProviders(t *testing.T) {
 	}
 }
 
+func TestAllWiresKodikTokenFromConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.Kodik.Token = "from-config"
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, p := range bare {
+		if p.ID() != "kodik" {
+			continue
+		}
+		k, ok := p.(*Kodik)
+		if !ok {
+			t.Fatalf("kodik entry is %T, want *Kodik", p)
+		}
+		if k.token != "from-config" {
+			t.Errorf("kodik token = %q, want the settings value", k.token)
+		}
+		return
+	}
+	t.Fatal("All() missing the kodik provider")
+}
+
 func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {
@@ -49,11 +79,14 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 5 {
-		t.Fatalf("List() = %d providers, want 5", len(list))
+	if len(list) != 10 {
+		t.Fatalf("List() = %d providers, want 10", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
-	wantOrder := []string{"anilibria", "animevost", "anilib", "animego", "sovetromantica"}
+	wantOrder := []string{
+		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
+	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
 			t.Errorf("list[%d] = %s, want %s", i, p.ID(), wantOrder[i])
@@ -83,8 +116,8 @@ func TestNewRegistryRecordsSearchStatsWiring(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
 
 	reg, err := NewRegistry(cfg, st.ProviderStats)
 	if err != nil {
@@ -103,8 +136,8 @@ func TestNewRegistryPropagatesClientError(t *testing.T) {
 
 	// An invalid proxy URL makes per-provider client construction fail;
 	// NewRegistry must surface it instead of dropping providers.
-	cfg := config.Default().Network
-	cfg.ProxyURL = "://not-a-url"
+	cfg := config.Default()
+	cfg.Network.ProxyURL = "://not-a-url"
 
 	if _, err := NewRegistry(cfg, nil); err == nil {
 		t.Fatal("NewRegistry with invalid proxy must fail")

@@ -124,7 +124,7 @@ func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
 		return err
 	}
 
-	reg, err := providers.NewRegistry(settings.Network, nil)
+	reg, err := providers.NewRegistry(*settings, nil)
 	if err != nil {
 		return fmt.Errorf("build provider registry: %w", err)
 	}

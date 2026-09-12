@@ -1,0 +1,4 @@
+[
+  {"title": "Серия 1", "file": "[1080p]/hls/1/1080/index.m3u8,[720p]/hls/1/720/index.m3u8"},
+  {"file": "[1080p]/hls/2/1080/index.m3u8,[720p]/hls/2/720/index.m3u8"}
+]

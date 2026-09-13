@@ -215,6 +215,45 @@ func (r *ProgressRepo) setDirty(ctx context.Context, id int64, dirty bool) error
 	return requireAffected(res, fmt.Errorf("set dirty %d = %v: %w", id, dirty, contracts.ErrNotFound))
 }
 
+// UpdateLocalStatus patches the caller-supplied subset of the local
+// status fields (python db_service.update_local_status as consumed by
+// PATCH /api/v1/history/{anime_id}): nil pointers leave their column
+// untouched. A missing row fails with contracts.ErrNotFound.
+func (r *ProgressRepo) UpdateLocalStatus(ctx context.Context, id int64,
+	status *string, score *int, rewatches *int, episodes *string,
+) error {
+	sets := ""
+	var args []any
+	if status != nil {
+		sets += ", shikimori_status = ?"
+		args = append(args, *status)
+	}
+	if score != nil {
+		sets += ", score = ?"
+		args = append(args, *score)
+	}
+	if rewatches != nil {
+		sets += ", rewatches = ?"
+		args = append(args, *rewatches)
+	}
+	if episodes != nil {
+		sets += ", current_episode = ?"
+		args = append(args, *episodes)
+	}
+
+	args = append(args, fmtTime(time.Now()), id)
+
+	query := `UPDATE anime_progress SET updated_at = ? WHERE id = ?`
+	if sets != "" {
+		query = `UPDATE anime_progress SET ` + sets[1:] + `, updated_at = ? WHERE id = ?`
+	}
+	res, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("update local status %d: %w", id, err)
+	}
+	return requireAffected(res, fmt.Errorf("update local status %d: %w", id, contracts.ErrNotFound))
+}
+
 // Delete removes an anime and, via ON DELETE CASCADE, its episode progress,
 // sources and auto-download rule.
 func (r *ProgressRepo) Delete(ctx context.Context, id int64) error {

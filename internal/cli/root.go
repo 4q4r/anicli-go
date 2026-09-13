@@ -9,12 +9,19 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
+	"github.com/an0nx/anicli-go/internal/api"
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // Build information, overridden at link time via -ldflags:
@@ -58,14 +65,18 @@ func NewRootCommand() *cobra.Command {
 	return root
 }
 
-// newServeCommand builds the HTTP API server command (stub until G5).
+// newServeCommand builds the HTTP API server command.
 func newServeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runServe(cmd.Context(), cmd.OutOrStdout())
+			settingsPath, err := ConfigPathFrom(cmd)
+			if err != nil {
+				return err
+			}
+			return runServe(cmd.Context(), cmd.OutOrStdout(), settingsPath)
 		},
 	}
 }
@@ -107,10 +118,57 @@ func runTUI(_ context.Context, out io.Writer) error {
 	return nil
 }
 
-// runServe is the HTTP API face (chi server, planned for G5).
-func runServe(_ context.Context, out io.Writer) error {
-	_, _ = fmt.Fprintln(out, "anicli serve: not implemented yet")
-	return nil
+// runServe is the HTTP API face: loads settings, opens storage, builds
+// the provider registry and shikimori client, and serves the API until
+// SIGTERM/SIGINT with graceful drain.
+func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
+	settings, err := loadSettingsOrFail(settingsPath)
+	if err != nil {
+		return err
+	}
+	if !settings.API.Enabled {
+		return fmt.Errorf("api server is disabled: set api.enabled = true in settings (bind %s)",
+			settings.API.Bind)
+	}
+
+	dbPath, err := settings.DBPath()
+	if err != nil {
+		return fmt.Errorf("resolve db path: %w", err)
+	}
+	store, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return fmt.Errorf("open storage: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	reg, err := providers.NewRegistry(*settings, store.ProviderStats)
+	if err != nil {
+		return fmt.Errorf("build provider registry: %w", err)
+	}
+
+	shikiNet, err := netclient.New(settings.Network, netclient.WithProvider("shikimori"))
+	if err != nil {
+		return fmt.Errorf("build shikimori transport: %w", err)
+	}
+	var shiki api.ShikiClient = shikimori.New(settings.Shikimori, shikiNet, nil)
+
+	app, err := api.NewApp(api.Config{
+		Settings: *settings,
+		Store:    store,
+		Registry: reg,
+		Shiki:    shiki,
+		ShikiNet: shikiNet,
+	})
+	if err != nil {
+		return fmt.Errorf("build api app: %w", err)
+	}
+	defer app.Close()
+
+	_, _ = fmt.Fprintf(out, "anicli serve: listening on %s\n", settings.API.Bind)
+
+	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer stop()
+	return app.ServeBind(signalCtx)
 }
 
 // runDoctor prints environment diagnostics. For now it enumerates the

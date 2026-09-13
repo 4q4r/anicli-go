@@ -37,15 +37,10 @@ func newTestApp(root Screen) App {
 	return NewApp(root, nil, testLogger())
 }
 
-// drive runs one message through the model and then executes every
-// command the updates returned (the way the bubbletea runtime would),
-// so Cmd-driven navigation lands synchronously in tests.
-func drive(model tea.Model, msg tea.Msg) tea.Model {
+// drive re-uses the shared drain helper from search_test.go.
+func appDrive(model tea.Model, msg tea.Msg) tea.Model {
 	m, cmd := model.Update(msg)
-	for cmd != nil {
-		m, cmd = m.Update(cmd())
-	}
-	return m
+	return drain(m, cmd)
 }
 
 // TestAppPushPopNavigation: screen-stack push, pop and pop-to-root.
@@ -111,8 +106,8 @@ func TestAppPushPopNavigation(t *testing.T) {
 // (the Back semantics of I2 driven through a real screen).
 func TestAppBackOnEsc(t *testing.T) {
 	app := newTestApp(&countingScreen{id: "root"})
-	model := drive(app, pushMsg{screen: &countingScreen{id: "search"}})
-	model = drive(model, esc())
+	model := appDrive(app, pushMsg{screen: &countingScreen{id: "search"}})
+	model = appDrive(model, esc())
 	app2 := model.(App)
 	if len(app2.stack) != 1 || app2.stack[0].ID() != "root" {
 		t.Fatalf("esc must pop one level, got %v", screenIDs(app2.stack))
@@ -140,9 +135,9 @@ func TestAppPanicRecovery(t *testing.T) {
 
 	t.Run("dismissing the error screen pops one level", func(t *testing.T) {
 		app := newTestApp(&countingScreen{id: "root"})
-		model := drive(app, pushMsg{screen: &countingScreen{id: "broken", panics: true}})
-		model = drive(model, tea.KeyPressMsg{Code: 'x'})
-		model = drive(model, enter()) // dismiss
+		model := appDrive(app, pushMsg{screen: &countingScreen{id: "broken", panics: true}})
+		model = appDrive(model, tea.KeyPressMsg{Code: 'x'})
+		model = appDrive(model, enter()) // dismiss
 		app2 := model.(App)
 		if len(app2.stack) != 2 || app2.stack[0].ID() != "root" || app2.stack[1].ID() != "broken" {
 			t.Fatalf("dismiss must return one level up, got %v", screenIDs(app2.stack))

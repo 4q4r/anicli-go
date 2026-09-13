@@ -180,7 +180,7 @@ func renderRow(item Choice, index, cursor int, marker string) string {
 	if marker != "" {
 		text = marker + " " + text
 	}
-	return style.Render(pointer + text)
+	return style.Render(pointer+text) + "\n"
 }
 
 func clamp(v, lo, hi int) int {

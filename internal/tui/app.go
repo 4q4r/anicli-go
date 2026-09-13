@@ -281,6 +281,7 @@ func (a App) Ctx() context.Context { return a.ctx }
 // inject fakes.
 type Deps struct {
 	Search   SearchService
+	Episode  EpisodeService
 	Playback PlaybackService
 	History  HistoryService
 	Offline  OfflineService

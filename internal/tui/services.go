@@ -62,6 +62,9 @@ type HistoryService interface {
 	List(ctx context.Context) ([]storage.AnimeProgress, error)
 	// SavePlayback records the watched episode and dub preferences.
 	SavePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
+	// BindSource rebinds a record onto a new (source_id, url) pair
+	// (python search_and_bind record patch).
+	BindSource(ctx context.Context, id int64, sourceID, sourceURL string) error
 }
 
 // OfflineTitle is one downloaded title directory with its snapshot.

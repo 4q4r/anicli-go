@@ -84,7 +84,9 @@ type UpdateStatus struct {
 	CheckedAt time.Time `json:"checked_at"`
 	// LatestVersion is the newest free-release version seen.
 	LatestVersion string `json:"latest_version"`
-	// InstalledVersion is the cache's newest complete version.
+	// InstalledVersion is the tier line's installed version at check
+	// time (pro checks: the newest pro-marked dir; free checks: the
+	// cache's newest complete dir; "" when the line has none).
 	InstalledVersion string `json:"installed_version"`
 	// Deferred marks an update that is waiting for connectivity.
 	Deferred bool `json:"deferred"`
@@ -339,7 +341,7 @@ func (u *Updater) check(ctx context.Context) error {
 		licRep = nil // key-less: the free channel proceeds
 	}
 	if licRep != nil && licRep.Status.Valid {
-		return u.checkPro(ctx, cacheDir, spec, installedVersion, licRep, logger)
+		return u.checkPro(ctx, cacheDir, spec, licRep, logger)
 	}
 
 	// Free channel: unchanged semantics.
@@ -382,11 +384,21 @@ func (u *Updater) check(ctx context.Context) error {
 }
 
 // checkPro runs the pro-channel update cycle: marker-gated latest
-// version, comparison against the installed cache, verified pro
-// install. Failures defer (the network-gated retry semantics are
-// identical to the free channel); a free download is NEVER
-// substituted.
-func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, installedVersion string, licRep *LicenseReport, logger *slog.Logger) error {
+// version, comparison against the PRO-installed line, verified pro
+// install. The comparison baseline is the newest pro-marked cache
+// directory only — a free-installed dir (same or newer version)
+// must never satisfy a pro update check; with no pro dir installed
+// the resolved version always downloads. Failures defer (the
+// network-gated retry semantics are identical to the free channel);
+// a free download is NEVER substituted.
+func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger) error {
+	// The pro line's baseline: pro-marked dirs only ("" when none).
+	proInstalled, _ := scanProCache(cacheDir, spec)
+	installedVersion := ""
+	if proInstalled != nil {
+		installedVersion = proInstalled.Version
+	}
+
 	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
 		CacheDir:     u.cfg.CacheDir,
 		DownloadBase: u.cfg.DownloadBase,
@@ -401,7 +413,7 @@ func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSp
 		})
 		return err
 	}
-	if CompareVersions(version, installedVersion) <= 0 {
+	if proInstalled != nil && CompareVersions(version, installedVersion) <= 0 {
 		u.record(cacheDir, UpdateStatus{
 			LatestVersion: version, InstalledVersion: installedVersion,
 		})

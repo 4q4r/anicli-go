@@ -40,10 +40,13 @@ type ResolveOptions struct {
 
 // ResolveCurrentBinary resolves the browser binary WITHOUT network
 // access: $CLOAKBROWSER_BINARY_PATH > pinned $CLOAKBROWSER_VERSION
-// (cache only) > newest complete cache chromium-*/ directory. The
-// reported channel reflects the CACHED license state (a valid
-// .license_cache entry upgrades the reported tier — no network). It
-// is the registry-build-time check and the solver's lazy-launch
+// (cache only) > with a valid cached license, the newest pro-marked
+// cache directory > the newest complete cache chromium-*/
+// directory. The reported channel is the resolved directory's
+// factual install line (its .channel marker), never the license
+// tier: a valid key over a free-only cache honestly reports the
+// free line (the next online install/update lands pro). It is the
+// registry-build-time check and the solver's lazy-launch
 // resolution, so auto-updated binaries are picked up on the next
 // solve. A missing binary fails with BinaryMissingError (carrying
 // the `anicli cf install` hint).
@@ -63,18 +66,24 @@ func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	channel := tierChannel(cachedLicenseValid(cacheDir))
 	if pinned := os.Getenv(EnvVersion); pinned != "" {
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
-			bin.Channel = channel
 			return bin, nil
 		}
 		return nil, &BinaryMissingError{
 			Cause: fmt.Errorf("pinned version %s is not installed ($%s)", pinned, EnvVersion),
 		}
 	}
+	// Pro preference under a valid cached license: the newest
+	// pro-marked directory outranks the generic free scan, so solve
+	// sessions launch the pro line whenever it is installed. With no
+	// pro directory installed the free scan keeps solves working.
+	if cachedLicenseValid(cacheDir) {
+		if bin, ok := scanProCache(cacheDir, spec); ok {
+			return bin, nil
+		}
+	}
 	if bin, ok := scanCache(cacheDir, spec); ok {
-		bin.Channel = channel
 		return bin, nil
 	}
 	return nil, &BinaryMissingError{}

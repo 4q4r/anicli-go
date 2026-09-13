@@ -34,6 +34,26 @@ const (
 	planFree = "free"
 )
 
+// Exported BinaryInfo.Channel values (display and CLI comparisons).
+const (
+	// ChannelUser is the $CLOAKBROWSER_BINARY_PATH override line.
+	ChannelUser = channelUser
+	// ChannelFree is the free GitHub release line.
+	ChannelFree = channelFree
+	// ChannelPro is the license-keyed pro download line.
+	ChannelPro = channelPro
+)
+
+// channelMarkerFile is the install-line marker written inside every
+// installed chromium-<version> directory: its content is the channel
+// name ("pro"/"free"). Both channels share the same directory
+// naming, so the marker is the only durable record of which line a
+// directory came from. Directories without the marker (installs
+// predating it, including every pro install from PR15) resolve as
+// the free line — a one-time corrective re-download moves them onto
+// the marked pro line.
+const channelMarkerFile = ".channel"
+
 // OfflineError reports that installation needs the network but none
 // is reachable (or the API answered with a transport failure).
 type OfflineError struct {
@@ -160,9 +180,13 @@ func ResolveCacheDir(explicit string) (string, error) {
 //  2. pinned version ($CLOAKBROWSER_VERSION): installed → use, else
 //     download via the tier the version resolves to (pro first with
 //     a valid license, the GitHub free tag otherwise);
-//  3. pro tier (valid license): newest cached binary reported as pro;
-//     none cached → pro latest download (Ed25519-verified). Pro
-//     failures are LOUD — never a silent free downgrade;
+//  3. pro tier (valid license): resolve the pro latest version
+//     (marker-cached API) and reuse the cache only when THAT exact
+//     pro-resolved version is installed as a pro-marked directory
+//     (".channel" marker — a free-installed dir never qualifies, no
+//     matter its version); otherwise download pro latest
+//     (Ed25519-verified). Pro failures are LOUD — never a silent
+//     free downgrade;
 //  4. free tier: newest cached binary > latest free GitHub release.
 //
 // Every downloaded archive — either channel — passes the pinned
@@ -198,7 +222,6 @@ func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 		logger.Warn("cfbrowser: license check failed; resolving as free tier", "error", licErr)
 	}
 	licenseValid := licRep != nil && licRep.Status.Valid
-	channel := tierChannel(licenseValid)
 	if licenseValid {
 		logger.Info("cfbrowser: license valid — pro channel", "plan", licRep.Status.Plan, "expires", licRep.Status.Expires)
 	} else if licRep != nil {
@@ -225,34 +248,26 @@ func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 			return nil, err
 		}
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
-			bin.Channel = channel
 			logger.Info("cfbrowser: reusing pinned stealth chromium", "path", bin.Path, "version", bin.Version)
 			return bin, nil
 		}
 		return installPinned(ctx, opts, spec, cacheDir, pinned, licenseValid, licRep, logger)
 	}
 
-	// 3./4. Cached binary reuse (tier reported from the license).
-	if bin, ok := scanCache(cacheDir, spec); ok {
-		bin.Channel = channel
-		logger.Info("cfbrowser: reusing cached stealth chromium",
-			"path", bin.Path, "version", bin.Version, "channel", channel)
-		return bin, nil
-	}
-
+	// 3. Pro tier: the pro-resolved version decides reuse — never
+	// the mere existence of a cached dir (a free-line dir, whatever
+	// its version, must not satisfy the pro tier).
 	if licenseValid {
-		// Pro: never a silent free downgrade on any failure.
 		return installProLatest(ctx, opts, spec, cacheDir, licRep, logger)
 	}
-	return installFreeLatest(ctx, opts, spec, cacheDir, logger)
-}
 
-// tierChannel renders the resolution channel for a license state.
-func tierChannel(licenseValid bool) string {
-	if licenseValid {
-		return channelPro
+	// 4. Free tier: newest cached binary > latest free GitHub release.
+	if bin, ok := scanCache(cacheDir, spec); ok {
+		logger.Info("cfbrowser: reusing cached stealth chromium",
+			"path", bin.Path, "version", bin.Version, "channel", bin.Channel)
+		return bin, nil
 	}
-	return channelFree
+	return installFreeLatest(ctx, opts, spec, cacheDir, logger)
 }
 
 // installFreeLatest is the classic free ladder rung: latest release
@@ -311,6 +326,10 @@ func isProNotFound(err error) bool {
 }
 
 // installProLatest resolves the newest pro version and installs it.
+// Cache reuse follows the upstream rule: the pro-resolved version
+// must match an installed PRO-marked directory (scanCacheVersionPro)
+// — a free-installed dir of the same version does not qualify. Any
+// failure is loud: no silent free downgrade.
 func installProLatest(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, licRep *LicenseReport, logger *slog.Logger) (*BinaryInfo, error) {
 	tag := spec.Tag()
 	version, err := ResolveProVersion(ctx, tag, ProVersionOptions{
@@ -320,6 +339,11 @@ func installProLatest(ctx context.Context, opts InstallOptions, spec PlatformSpe
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cfbrowser: pro channel (лицензия действует, откат на free не выполняется): %w", err)
+	}
+	if bin, ok := scanCacheVersionPro(cacheDir, spec, version); ok {
+		logger.Info("cfbrowser: reusing cached pro stealth chromium",
+			"path", bin.Path, "version", bin.Version, "channel", channelPro)
+		return bin, nil
 	}
 	return installProVersion(ctx, opts, spec, cacheDir, version, licRep, logger)
 }
@@ -424,6 +448,8 @@ func resolveOverride(path string) (*BinaryInfo, error) {
 
 // scanCache returns the newest complete chromium-<version> directory
 // for the platform (containing the expected executable), or ok=false.
+// The reported channel is the directory's factual install line
+// (dirChannel), not the resolving tier.
 func scanCache(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) {
 	for _, name := range cachedVersions(cacheDir) {
 		dir := filepath.Join(cacheDir, name)
@@ -432,20 +458,65 @@ func scanCache(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) {
 			continue // incomplete install: skip
 		}
 		version, _ := VersionFromDirName(name)
-		return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelFree}, true
+		return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: dirChannel(dir)}, true
 	}
 	return nil, false
 }
 
 // scanCacheVersion resolves one exact cached version (the pinned
-// rung), or ok=false.
+// rung), or ok=false. The channel is the dir's factual line.
 func scanCacheVersion(cacheDir string, spec PlatformSpec, version string) (*BinaryInfo, bool) {
 	dir := filepath.Join(cacheDir, VersionDirName(version))
 	execPath, err := locateExecutable(dir, spec.ExecName)
 	if err != nil {
 		return nil, false
 	}
-	return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelFree}, true
+	return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: dirChannel(dir)}, true
+}
+
+// scanCacheVersionPro resolves one exact cached version like
+// scanCacheVersion but only when the directory is pro-marked: the
+// pro-resolved activation rule — the version must have been
+// installed BY the pro channel, not merely exist in the cache.
+func scanCacheVersionPro(cacheDir string, spec PlatformSpec, version string) (*BinaryInfo, bool) {
+	bin, ok := scanCacheVersion(cacheDir, spec, version)
+	if !ok || bin.Channel != channelPro {
+		return nil, false
+	}
+	return bin, true
+}
+
+// scanProCache returns the newest complete pro-marked
+// chromium-<version> directory — the offline pro line (solver
+// resolution under a valid cached license).
+func scanProCache(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) {
+	for _, name := range cachedVersions(cacheDir) {
+		dir := filepath.Join(cacheDir, name)
+		if dirChannel(dir) != channelPro {
+			continue
+		}
+		execPath, err := locateExecutable(dir, spec.ExecName)
+		if err != nil {
+			continue // incomplete install: skip
+		}
+		version, _ := VersionFromDirName(name)
+		return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelPro}, true
+	}
+	return nil, false
+}
+
+// dirChannel reports the install line of a cache directory from its
+// .channel marker; absent or unrecognized markers resolve as the
+// free line (legacy directories predate the marker).
+func dirChannel(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, channelMarkerFile)) //nolint:gosec // app-owned cache path
+	if err != nil {
+		return channelFree
+	}
+	if strings.TrimSpace(string(raw)) == channelPro {
+		return channelPro
+	}
+	return channelFree
 }
 
 // downloadAndInstall streams the free release asset into a
@@ -548,8 +619,24 @@ func unpackAndFinalize(work, archivePath string, spec PlatformSpec, version, cac
 		return nil, err
 	}
 	targetDir := filepath.Join(cacheDir, VersionDirName(version))
+	// A same-version reinstall (or a channel switch onto an existing
+	// dir — free and pro share the directory name) replaces the
+	// previous payload wholesale: the freshly verified archive is
+	// the authority.
+	if _, err := os.Stat(targetDir); err == nil {
+		if err := os.RemoveAll(targetDir); err != nil {
+			return nil, fmt.Errorf("cfbrowser: replace existing %s: %w", targetDir, err)
+		}
+	}
 	if err := relocatePayload(unpacked, execPath, targetDir); err != nil {
 		return nil, err
+	}
+	// Record the install line inside the dir: cache scans (pro
+	// activation, solver pro preference) key off this marker, and
+	// writing it after relocation means an archive-supplied marker
+	// file can never win.
+	if err := os.WriteFile(filepath.Join(targetDir, channelMarkerFile), []byte(channel), 0o644); err != nil { //nolint:gosec // non-secret bookkeeping
+		return nil, fmt.Errorf("cfbrowser: write channel marker: %w", err)
 	}
 
 	finalExec, err := locateExecutable(targetDir, spec.ExecName)

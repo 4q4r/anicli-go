@@ -2,6 +2,7 @@ package cfbrowser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -227,38 +228,62 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 	state, navErr := nav.Navigate(ctx, targetURL)
 	clicked := false
 	for {
-		if navErr != nil {
+		if navErr != nil && !errors.Is(navErr, ErrNavDeadline) {
+			// The solve budget expiring mid-navigation is a
+			// symptom of the timeout, not a navigation failure —
+			// report the typed error the caller can act on.
+			if ctx.Err() != nil {
+				return Clearance{}, &SolveTimeoutError{Host: host}
+			}
 			// A crashed browser must not poison the next solve:
 			// dead sessions are torn down now, the next solve
 			// relaunches (lazy retry).
 			s.pool.discardIfDead(nav)
 			return Clearance{}, fmt.Errorf("cfbrowser: navigate %s: %w", host, navErr)
 		}
-		if SolvedState(state.Title, state.Body, cookiesHaveCFClearance(state.Cookies)) {
-			c := Clearance{
-				Cookies:        state.Cookies,
-				UserAgent:      state.UserAgent,
-				AcceptLanguage: state.AcceptLanguage,
-				Obtained:       time.Now(),
+		// ErrNavDeadline ticks: the per-navigation cap (navPollCap)
+		// fired. The session itself is healthy — the loop keeps
+		// polling; whatever state the capped navigation harvested
+		// still gates this tick.
+		capped := navErr != nil
+		if capped && !navStateHasSignal(state) {
+			// Capped before ANY state landed: this tick is blind.
+			// Log and re-poll; an empty state must NOT reach
+			// SolvedState (empty fingerprints read as a clean
+			// page and would return a phantom cookie-less
+			// clearance).
+			logger.Warn("cfbrowser: navigation capped before state; re-polling", "host", host)
+		} else {
+			if capped {
+				logger.Info("cfbrowser: navigation capped, polling on partial state", "host", host)
 			}
-			if err := s.cfg.Store.Put(host, c); err != nil {
-				logger.Warn("cfbrowser: persist clearance", "host", host, "error", err)
+			if SolvedState(state.Title, state.Body, cookiesHaveCFClearance(state.Cookies)) {
+				c := Clearance{
+					Cookies:        state.Cookies,
+					UserAgent:      state.UserAgent,
+					AcceptLanguage: state.AcceptLanguage,
+					Obtained:       time.Now(),
+				}
+				if err := s.cfg.Store.Put(host, c); err != nil {
+					logger.Warn("cfbrowser: persist clearance", "host", host, "error", err)
+				}
+				logger.Info("cfbrowser: challenge solved", "host", host,
+					"cf_clearance", c.HasCFClearance(), "user_agent", c.UserAgent)
+				return c, nil
 			}
-			logger.Info("cfbrowser: challenge solved", "host", host,
-				"cf_clearance", c.HasCFClearance(), "user_agent", c.UserAgent)
-			return c, nil
-		}
 
-		// One best-effort interactive click on the Turnstile
-		// checkbox. Non-fatal by design: solving is headless-only, so an
-		// interactive challenge that resists the scripted click simply
-		// runs to the solve budget and reports a typed timeout.
-		if !clicked && state.HasClickTarget {
-			clicked = true
-			logger.Info("cfbrowser: attempting turnstile click", "host", host,
-				"x", state.ClickX, "y", state.ClickY)
-			if err := nav.Click(ctx, state.ClickX, state.ClickY); err != nil {
-				logger.Warn("cfbrowser: turnstile click failed (non-fatal)", "host", host, "error", err)
+			// One best-effort interactive click on the Turnstile
+			// checkbox. Non-fatal by design: solving is
+			// headless-only, so an interactive challenge that
+			// resists the scripted click simply runs to the solve
+			// budget and reports a typed timeout.
+			if !clicked && state.HasClickTarget {
+				clicked = true
+				logger.Info("cfbrowser: attempting turnstile click", "host", host,
+					"x", state.ClickX, "y", state.ClickY)
+				if err := nav.Click(ctx, state.ClickX, state.ClickY); err != nil {
+					logger.Warn("cfbrowser: turnstile click failed (non-fatal)", "host", host, "error", err)
+				}
 			}
 		}
 
@@ -270,6 +295,14 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 		}
 		state, navErr = nav.Navigate(ctx, targetURL)
 	}
+}
+
+// navStateHasSignal reports whether a harvested NavState carries any
+// challenge-relevant signal (title, body markup or cookies). A capped
+// navigation with signal still gates the solved check; without signal
+// the tick is blind and the loop simply re-polls.
+func navStateHasSignal(st NavState) bool {
+	return st.Title != "" || st.Body != "" || len(st.Cookies) > 0
 }
 
 // Close releases the browser session (idempotent). It CANCELS

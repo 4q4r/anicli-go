@@ -377,7 +377,7 @@ func (m *searchProgress) View() tea.View {
 	for _, row := range m.rows {
 		state := m.status[row.ID]
 		count := "—"
-		style := theme.Dim
+		var style lipgloss.Style
 		switch {
 		case m.pending[row.ID]:
 			state = m.spin.View() + " Поиск…"

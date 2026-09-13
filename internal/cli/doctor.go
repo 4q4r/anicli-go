@@ -1,9 +1,10 @@
-// doctor.go hosts the search-based environment diagnostics (PR24):
-// the doctor command probes every registered provider with two real
+package cli
+
+// The search-based environment diagnostics (PR24) live here: the
+// doctor command probes every registered provider with two real
 // queries instead of merely listing them, renders a live
 // Provider|Статус|Результатов table and marks unconfigured or excluded
 // providers ОТКЛЮЧЁН without probing them.
-package cli
 
 import (
 	"context"
@@ -69,7 +70,7 @@ var noticeRed = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 
 // startupRed renders one notice line in ANSI red.
 func startupRed(w io.Writer, line string) {
-	fmt.Fprintln(w, noticeRed.Render(line))
+	_, _ = fmt.Fprintln(w, noticeRed.Render(line))
 }
 
 // runDoctor probes every registered provider with the two test
@@ -184,7 +185,7 @@ func startDoctorSpinner(out io.Writer, total int) (stop func()) {
 			case <-done:
 				return
 			case <-ticker.C:
-				fmt.Fprintf(f, "\r%s проверка провайдеров (%d)…", frames[i%len(frames)], total)
+				_, _ = fmt.Fprintf(f, "\r%s проверка провайдеров (%d)…", frames[i%len(frames)], total)
 				i++
 			}
 		}
@@ -192,6 +193,6 @@ func startDoctorSpinner(out io.Writer, total int) (stop func()) {
 	return func() {
 		close(done)
 		wg.Wait()
-		fmt.Fprint(f, "\r\033[K")
+		_, _ = fmt.Fprint(f, "\r\033[K")
 	}
 }

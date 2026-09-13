@@ -12,10 +12,9 @@ import (
 
 // fakeMetadata implements MetadataService with per-query fixtures.
 type fakeMetadata struct {
-	aliases    map[string][]string
-	err        error
-	queries    []string
-	altTimeout bool
+	aliases map[string][]string
+	err     error
+	queries []string
 }
 
 func (f *fakeMetadata) SearchAlternativeTitles(_ context.Context, query string) ([]string, error) {

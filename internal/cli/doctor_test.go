@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,15 +38,20 @@ func TestStartupNotices(t *testing.T) {
 }
 
 // stubProbe replaces the live doctor probe (no network egress in
-// tests) and records the providers it saw.
+// tests) and records the providers it saw. The doctor probes
+// concurrently, so the log is mutex-guarded.
 type stubProbe struct {
 	results int
 	err     error
-	seen    []string
+
+	mu   sync.Mutex
+	seen []string
 }
 
 func (s *stubProbe) probe(_ context.Context, p contracts.Provider, _ time.Duration) (int, error) {
+	s.mu.Lock()
 	s.seen = append(s.seen, p.ID())
+	s.mu.Unlock()
 	return s.results, s.err
 }
 

@@ -91,21 +91,45 @@ func downloadAssetURL(asset ghAsset) (string, error) {
 		return "", fmt.Errorf("cfbrowser: asset %q has non-http download URL %q", asset.Name, asset.URL)
 	}
 	if base := os.Getenv(EnvDownloadURL); base != "" {
-		bu, err := url.Parse(base)
-		if err != nil {
-			return "", fmt.Errorf("cfbrowser: $%s %q: %w", EnvDownloadURL, base, err)
-		}
-		if (bu.Scheme != "http" && bu.Scheme != "https") || bu.Host == "" {
-			return "", fmt.Errorf("cfbrowser: $%s %q is not an absolute http(s) URL", EnvDownloadURL, base)
-		}
-		bu.Path = strings.TrimSuffix(bu.Path, "/") + au.Path
-		bu.RawQuery = au.RawQuery
-		return bu.String(), nil
+		return rewriteOntoBase(au, base)
 	}
 	if !hostAllowedBy(au.Hostname()) {
 		return "", &DownloadHostError{Asset: asset.Name, Host: au.Hostname()}
 	}
 	return asset.URL, nil
+}
+
+// rewriteOntoBase rewrites the parsed URL onto the override base
+// (path and query kept). Shared by asset downloads and the
+// github-shaped manifest origin.
+func rewriteOntoBase(au *url.URL, base string) (string, error) {
+	bu, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("cfbrowser: $%s %q: %w", EnvDownloadURL, base, err)
+	}
+	if (bu.Scheme != "http" && bu.Scheme != "https") || bu.Host == "" {
+		return "", fmt.Errorf("cfbrowser: $%s %q is not an absolute http(s) URL", EnvDownloadURL, base)
+	}
+	bu.Path = strings.TrimSuffix(bu.Path, "/") + au.Path
+	bu.RawQuery = au.RawQuery
+	return bu.String(), nil
+}
+
+// rewriteWithDownloadOverride applies the $CLOAKBROWSER_DOWNLOAD_URL
+// base rewrite to an absolute URL string (identity when unset).
+func rewriteWithDownloadOverride(rawURL string) (string, error) {
+	au, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("cfbrowser: rewrite %q: %w", rawURL, err)
+	}
+	if (au.Scheme != "http" && au.Scheme != "https") || au.Host == "" {
+		return "", fmt.Errorf("cfbrowser: rewrite %q: not an absolute http(s) URL", rawURL)
+	}
+	base := os.Getenv(EnvDownloadURL)
+	if base == "" {
+		return rawURL, nil
+	}
+	return rewriteOntoBase(au, base)
 }
 
 // ghAsset mirrors the GitHub release-asset fields the installer needs.
@@ -178,9 +202,7 @@ func NewGitHubClient(apiBase string, hc *http.Client) *GitHubClient {
 
 // LatestFreeRelease walks the release listing (newest first) and
 // returns the first release carrying spec.Asset. Releases without the
-// asset — the Pro line and darwin-less tags — are skipped. When the
-// API omits the asset digest, the release's SHA256SUMS asset is
-// consulted as a fallback.
+// asset — the Pro line and darwin-less tags — are skipped.
 func (g *GitHubClient) LatestFreeRelease(ctx context.Context, spec PlatformSpec) (*FreeRelease, error) {
 	var releases []ghRelease
 	err := g.getJSON(ctx, "/repos/"+githubRepo+"/releases?per_page="+fmt.Sprint(releasesPerPage), &releases)
@@ -198,9 +220,6 @@ func (g *GitHubClient) LatestFreeRelease(ctx context.Context, spec PlatformSpec)
 			if a.Name != spec.Asset {
 				continue
 			}
-			if a.Digest == "" {
-				a.Digest = g.digestFromSums(ctx, rel, a.Name)
-			}
 			version, err := ParseVersionFromTag(rel.TagName)
 			if err != nil {
 				// Malformed tag: skip rather than poison the ladder.
@@ -212,26 +231,34 @@ func (g *GitHubClient) LatestFreeRelease(ctx context.Context, spec PlatformSpec)
 	return nil, &AssetUnavailableError{Platform: spec, LatestTag: latest}
 }
 
-// digestFromSums fetches and parses the release SHA256SUMS asset for
-// name; empty string when unavailable (verification then fails loud).
-func (g *GitHubClient) digestFromSums(ctx context.Context, rel *ghRelease, name string) string {
-	for _, a := range rel.Assets {
-		if a.Name != sumsAssetName {
+// FreeReleaseForVersion resolves the free release carrying spec.Asset
+// for one exact version (the pinned-version rung). The listing walk
+// tolerates newer pro-line tags; only tag chromium-v<version> can
+// match.
+func (g *GitHubClient) FreeReleaseForVersion(ctx context.Context, spec PlatformSpec, version string) (*FreeRelease, error) {
+	wantTag := tagPrefix + version
+	var releases []ghRelease
+	err := g.getJSON(ctx, "/repos/"+githubRepo+"/releases?per_page="+fmt.Sprint(releasesPerPage), &releases)
+	if err != nil {
+		return nil, fmt.Errorf("cfbrowser: list CloakBrowser releases: %w (manual: %s)", err, ManualReleasesURL)
+	}
+	latest := ""
+	for i := range releases {
+		rel := &releases[i]
+		if latest == "" {
+			latest = rel.TagName
+		}
+		if rel.TagName != wantTag {
 			continue
 		}
-		var body []byte
-		if _, err := g.DownloadAsset(ctx, a, nil, &byteWriter{&body}); err != nil {
-			return ""
-		}
-		for _, line := range strings.Split(string(body), "\n") {
-			// "<hex>  <name>" (two spaces); tolerate tabs.
-			fields := strings.Fields(line)
-			if len(fields) == 2 && fields[1] == name && len(fields[0]) == 64 {
-				return "sha256:" + fields[0]
+		for _, a := range rel.Assets {
+			if a.Name != spec.Asset {
+				continue
 			}
+			return &FreeRelease{TagName: rel.TagName, Version: version, Asset: a}, nil
 		}
 	}
-	return ""
+	return nil, &AssetUnavailableError{Platform: spec, LatestTag: latest}
 }
 
 // DownloadAsset streams asset bytes into w while hashing (SHA-256) and

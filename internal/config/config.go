@@ -35,7 +35,7 @@ const (
 	EnvShikimoriSession = "ANICLI_SHIKIMORI_SESSION"
 	EnvDBURL            = "ANICLI_DB_URL"
 	// EnvAPISecret overrides the API auth signing secret.
-	EnvAPISecret = "ANICLI_API_AUTH_SECRET"
+	EnvAPISecret = "ANICLI_API_AUTH_SECRET" //nolint:gosec // variable name, not a secret
 	// EnvKodikToken carries the NAME of the kodik token environment
 	// variable, not a credential value.
 	EnvKodikToken = "ANICLI_KODIK_TOKEN" //nolint:gosec // variable name, not a secret

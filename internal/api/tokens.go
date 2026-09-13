@@ -105,8 +105,8 @@ func pbkdf2SHA256(password, salt []byte, iterations, keyLen int) []byte {
 	return out[:keyLen]
 }
 
-// accessClaims is the decoded access-token payload.
-type accessClaims struct {
+// AccessClaims is the decoded access-token payload.
+type AccessClaims struct {
 	Subject   string `json:"sub"`
 	SessionID string `json:"sid"`
 	IssuedAt  int64  `json:"iat"`
@@ -129,7 +129,7 @@ func IssueAccessToken(secret []byte, login, sessionID string, ttl time.Duration,
 		// impossible path instead of panicking mid-request.
 		return ""
 	}
-	claims, err := json.Marshal(accessClaims{
+	claims, err := json.Marshal(AccessClaims{
 		Subject:   login,
 		SessionID: sessionID,
 		IssuedAt:  now.Unix(),
@@ -150,7 +150,7 @@ func IssueAccessToken(secret []byte, login, sessionID string, ttl time.Duration,
 // DecodeAccessToken verifies the signature and expiry and returns the
 // claims (python _decode_access_token). Every failure is errToken —
 // callers surface it as the unauthorized error contract.
-func DecodeAccessToken(secret []byte, token string, now time.Time) (*accessClaims, error) {
+func DecodeAccessToken(secret []byte, token string, now time.Time) (*AccessClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errToken
@@ -164,7 +164,7 @@ func DecodeAccessToken(secret []byte, token string, now time.Time) (*accessClaim
 	if err != nil {
 		return nil, errToken
 	}
-	var claims accessClaims
+	var claims AccessClaims
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return nil, errToken
 	}

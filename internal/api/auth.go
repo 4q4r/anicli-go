@@ -88,9 +88,10 @@ func (a *App) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		UserLogin:        req.Login,
 		RefreshTokenHash: HashRefreshToken(refresh),
 		ExpiresAt:        now.Add(a.cfg.API.RefreshTokenTTL),
-		ShikiAuthMode:    strPtrIfSet(req.Shiki != nil, req.Shiki.AuthMode),
 	}
 	if req.Shiki != nil {
+		mode := req.Shiki.AuthMode
+		sess.ShikiAuthMode = &mode
 		sess.ShikiUsername = req.Shiki.Username
 		sess.ShikiCookieSession = req.Shiki.CookieSession
 		sess.ShikiAccessToken = req.Shiki.AccessToken
@@ -223,12 +224,4 @@ func newSessionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-// strPtrIfSet returns a pointer to s when set is true.
-func strPtrIfSet(set bool, s string) *string {
-	if !set {
-		return nil
-	}
-	return &s
 }

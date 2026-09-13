@@ -22,7 +22,7 @@ type (
 // base client exists; the base client when the session carries no
 // credentials; otherwise a derived client with the session's cookie or
 // token credentials riding the shared transport.
-func (a *App) requestShiki(r *http.Request) shikiAPI {
+func (a *App) requestShiki(r *http.Request) ShikiClient {
 	base, isConcrete := a.shiki.(*shikimori.Client)
 	if !isConcrete || a.shikiNet == nil {
 		if a.shiki == nil {
@@ -58,7 +58,7 @@ func (a *App) requestShiki(r *http.Request) shikiAPI {
 
 // shikiBaseURL renders the effective shikimori root for URL
 // normalization.
-func (a *App) shikiBaseURL(shikiAPI) string {
+func (a *App) shikiBaseURL(ShikiClient) string {
 	return shikimori.DefaultBaseURL
 }
 
@@ -80,7 +80,6 @@ func cacheScopeOf(r *http.Request) string {
 type snapshot struct {
 	rates     []shikiRate
 	animeByID map[int64]map[string]any
-	updatedAt time.Time
 }
 
 // snapshotFullTTL caches the full snapshot (rates + anime rows);
@@ -90,7 +89,7 @@ const snapshotFullTTL = 43200 * time.Second
 // loadShikimoriUserSnapshot loads (and caches) the user's rates and
 // anime rows (python _load_shikimori_user_snapshot). A client failure
 // falls back to the cached snapshot, then to empty.
-func (a *App) loadShikimoriUserSnapshot(r *http.Request, client shikiAPI, scope string, includeAnimeDetails bool) ([]shikiRate, map[int64]map[string]any) {
+func (a *App) loadShikimoriUserSnapshot(r *http.Request, client ShikiClient, scope string, includeAnimeDetails bool) ([]shikiRate, map[int64]map[string]any) {
 	mode := "rates"
 	if includeAnimeDetails {
 		mode = "full"
@@ -129,7 +128,11 @@ func (a *App) loadShikimoriUserSnapshot(r *http.Request, client shikiAPI, scope 
 	}
 
 	payload := encodeSnapshot(rates, animeByID, a.now())
-	a.cache.Set(key, payload, snapshotRatesTTL)
+	ttl := snapshotRatesTTL
+	if includeAnimeDetails {
+		ttl = snapshotFullTTL
+	}
+	a.cache.Set(key, payload, ttl)
 	return rates, animeByID
 }
 

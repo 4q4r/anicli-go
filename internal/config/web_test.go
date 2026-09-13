@@ -63,7 +63,7 @@ func TestAPIDefaults(t *testing.T) {
 	if s.API.AuthSecret != "" {
 		t.Fatalf("API.AuthSecret default = %q, want empty", s.API.AuthSecret)
 	}
-	if s.Web.Users != nil && len(s.Web.Users) != 0 {
+	if len(s.Web.Users) != 0 {
 		t.Fatal("Web.Users must default empty")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"runtime/debug"
 	"time"
 )
 
@@ -98,7 +99,7 @@ func (a *App) withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				a.log.Error("api panic", "panic", rec, "trace_id", traceIDOf(r))
+				a.log.Error("api panic", "panic", rec, "trace_id", traceIDOf(r), "stack", string(debug.Stack()))
 				writeAPIError(w, r, errInternal("Internal server error"))
 			}
 		}()

@@ -164,7 +164,7 @@ func (a *App) handleHomeFeed(w http.ResponseWriter, r *http.Request) {
 
 // loadOngoingHeroItems caches the ongoing gallery candidates (python
 // home:hero:ongoing:v2).
-func (a *App) loadOngoingHeroItems(r *http.Request, client shikiAPI) []map[string]any {
+func (a *App) loadOngoingHeroItems(r *http.Request, client ShikiClient) []map[string]any {
 	const key = "home:hero:ongoing:v2"
 	if cached := a.cache.Get(key); cached != nil {
 		if items, ok := cached["items"].([]any); ok {

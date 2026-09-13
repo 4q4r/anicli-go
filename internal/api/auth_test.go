@@ -205,13 +205,13 @@ func TestAuthFullLifecycle(t *testing.T) {
 		t.Fatalf("rotation broken: %v", payload)
 	}
 
-	rec, payload = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
+	rec, _ = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
 		fmt.Sprintf(`{"refresh_token": %q}`, refresh1), nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("old refresh must be invalid after rotation, got %d", rec.Code)
 	}
 
-	rec, payload = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
+	rec, _ = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
 		fmt.Sprintf(`{"refresh_token": %q}`, refresh2), nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rotated refresh must work, got %d: %v", rec.Code, payload)
@@ -236,7 +236,7 @@ func TestAuthFullLifecycle(t *testing.T) {
 		t.Fatalf("revocation message = %v", errObj["message"])
 	}
 
-	rec, payload = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
+	rec, _ = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
 		fmt.Sprintf(`{"refresh_token": %q}`, refresh2), nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("refresh of revoked session must fail, got %d", rec.Code)
@@ -293,13 +293,13 @@ func TestAuthLoginValidationErrors(t *testing.T) {
 		t.Fatalf("code = %v", errObj["code"])
 	}
 
-	rec, payload = doJSON(t, h, http.MethodPost, "/api/v1/auth/login", `{"password": "x"}`, nil)
+	rec, _ = doJSON(t, h, http.MethodPost, "/api/v1/auth/login", `{"password": "x"}`, nil)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing login = %d, want 422", rec.Code)
 	}
 
 	// Unknown user is unauthorized (not 404) — no user enumeration.
-	rec, payload = doJSON(t, h, http.MethodPost, "/api/v1/auth/login", `{"login":"eve","password":"x"}`, nil)
+	rec, _ = doJSON(t, h, http.MethodPost, "/api/v1/auth/login", `{"login":"eve","password":"x"}`, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unknown user = %d, want 401", rec.Code)
 	}
@@ -344,7 +344,7 @@ func TestAuthPerUserShikimoriScoping(t *testing.T) {
 	}
 }
 
-func decodeForTest(t *testing.T, token string) *accessClaims {
+func decodeForTest(t *testing.T, token string) *AccessClaims {
 	t.Helper()
 	claims, err := DecodeAccessToken([]byte("test-secret"), token, time.Now())
 	if err != nil {

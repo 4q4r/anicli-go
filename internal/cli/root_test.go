@@ -81,9 +81,10 @@ func TestStubOutputs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		args     []string
-		contains []string
+		name        string
+		args        []string
+		contains    []string
+		errContains string // non-empty: Execute must fail containing this
 	}{
 		{
 			name:     "bare invocation runs tui stub",
@@ -91,9 +92,11 @@ func TestStubOutputs(t *testing.T) {
 			contains: []string{"tui", "not implemented"},
 		},
 		{
-			name:     "serve stub",
-			args:     []string{"serve"},
-			contains: []string{"serve", "not implemented"},
+			name: "serve requires api.enabled",
+			args: []string{"serve"},
+			// The default settings keep the API off; serve must refuse
+			// loudly instead of silently binding a port.
+			errContains: "disabled",
 		},
 		{
 			name: "doctor lists registered providers",
@@ -120,7 +123,14 @@ func TestStubOutputs(t *testing.T) {
 			root.SetErr(&buf)
 			root.SetArgs(tt.args)
 
-			if err := root.Execute(); err != nil {
+			err := root.Execute()
+			if tt.errContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("Execute(%v) err = %v, want containing %q", tt.args, err, tt.errContains)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("Execute(%v): %v", tt.args, err)
 			}
 			out := buf.String()

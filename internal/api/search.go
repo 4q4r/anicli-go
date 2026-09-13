@@ -100,7 +100,7 @@ func (a *App) handleReleasesCalendar(w http.ResponseWriter, r *http.Request) {
 // buildReleaseEvents is the calendar service skeleton (python
 // build_release_events): rates of watching/rewatching/planned statuses
 // whose anime has a next_episode_at inside the window.
-func (a *App) buildReleaseEvents(r *http.Request, client shikiAPI, days int) []map[string]any {
+func (a *App) buildReleaseEvents(r *http.Request, client ShikiClient, days int) []map[string]any {
 	rates, err := client.GetUserRates(r.Context())
 	if err != nil || len(rates) == 0 {
 		return nil

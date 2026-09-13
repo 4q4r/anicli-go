@@ -35,7 +35,7 @@ const detailsRefreshBatchLimit = 8
 // loadAnimeDetailsMap loads detail payloads for the visible ids
 // (python _load_anime_details_map): db cache first, then a bounded
 // refresh of missing/stale rows via GetAnimesInfo.
-func (a *App) loadAnimeDetailsMap(r *http.Request, client shikiAPI, animeIDs []int64) map[int64]map[string]any {
+func (a *App) loadAnimeDetailsMap(r *http.Request, client ShikiClient, animeIDs []int64) map[int64]map[string]any {
 	detailsMap := map[int64]map[string]any{}
 	if client == nil || len(animeIDs) == 0 {
 		return detailsMap

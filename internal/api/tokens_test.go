@@ -15,7 +15,7 @@ const (
 	pyVector1Password = "correct horse battery staple"
 
 	pyVector2Hash     = "pbkdf2_sha256$120000$g6X6shLqMc4YnTK2_GrY3A$Z2XDqxTZZ9JCiXledc_Ho4o8f0Cq3q0A4eXtF7HKgNM"
-	pyVector2Password = "пароль с юникодом ✓"
+	pyVector2Password = "пароль с юникодом ✓" //nolint:gosec // test vector, not a credential
 )
 
 func TestVerifyPasswordHashPythonVectors(t *testing.T) {

@@ -16,9 +16,9 @@ import (
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
-// shikiAPI is the shikimori surface the API face consumes; *shikimori.Client
+// ShikiClient is the shikimori surface the API face consumes; *shikimori.Client
 // satisfies it, tests inject fakes.
-type shikiAPI interface {
+type ShikiClient interface {
 	Autocomplete(ctx context.Context, query string, limit int) ([]shikimori.AutocompleteItem, error)
 	GetUserRates(ctx context.Context) ([]shikimori.UserRate, error)
 	GetAnimesInfo(ctx context.Context, ids []int64) ([]shikimori.Anime, error)
@@ -34,7 +34,7 @@ type Config struct {
 	Registry *providers.Registry
 	// Shiki is the app-default Shikimori client; nil disables tracker
 	// features (they degrade to empty payloads, python parity).
-	Shiki shikiAPI
+	Shiki ShikiClient
 	// ShikiNet is the netclient used to build request-scoped clients
 	// from per-user credentials; nil means Shiki's transport is shared
 	// when present, otherwise scoped clients cannot be built.
@@ -48,7 +48,7 @@ type App struct {
 	cfg      config.Settings
 	store    *storage.Store
 	registry *providers.Registry
-	shiki    shikiAPI
+	shiki    ShikiClient
 	shikiNet *netclient.Client
 	log      *slog.Logger
 	cache    *TTLCache

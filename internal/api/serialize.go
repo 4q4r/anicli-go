@@ -237,7 +237,7 @@ func animeRowMap(a *shikimori.Anime) map[string]any {
 func firstDigits(s string) string {
 	start := -1
 	end := -1
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] >= '0' && s[i] <= '9' {
 			if start == -1 {
 				start = i

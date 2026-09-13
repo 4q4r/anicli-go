@@ -2,11 +2,12 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -217,6 +218,24 @@ func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, source
 	return nil
 }
 
+// GetByShikimoriID loads the row bound to a shikimori anime; a miss
+// maps to (nil, nil) so TUI callers treat it as "no stored rate".
+func (s *realHistory) GetByShikimoriID(ctx context.Context, shikimoriID int64) (*storage.AnimeProgress, error) {
+	rec, err := s.store.Progress.GetByShikimoriID(ctx, shikimoriID)
+	if err != nil {
+		if errors.Is(err, contracts.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return rec, nil
+}
+
+// SetRateID persists the shikimori rate id of a history row.
+func (s *realHistory) SetRateID(ctx context.Context, animeID, rateID int64) error {
+	return s.store.Progress.SetRateID(ctx, animeID, rateID)
+}
+
 // --- OfflineService ---
 
 type realOffline struct{ settings config.Settings }
@@ -332,6 +351,11 @@ func (s *realShiki) UpdateStatus(ctx context.Context, shikimoriID, rateID int64,
 	return s.client.CreateRate(ctx, shikimoriID, input)
 }
 
+// SearchIDs maps candidate titles to shikimori anime ids.
+func (s *realShiki) SearchIDs(ctx context.Context, query string) (map[string]int64, error) {
+	return s.client.SearchIDs(ctx, query)
+}
+
 // --- DownloadService ---
 
 // realDownload bridges the TUI tasks onto the background manager.
@@ -355,6 +379,15 @@ func (s *realDownload) Submit(task DownloadTask) {
 	s.mu.Lock()
 	if s.parts == nil {
 		s.parts = make(map[string]DownloadTask)
+	}
+	// Prune parts of tasks the manager already settled (done/failed):
+	// they can never run again, and a resubmit re-inserts its parts
+	// under this same lock, so the check-and-drop is race-free (M13).
+	for partID := range s.parts {
+		if t, ok := s.manager.Task(partID); ok &&
+			(t.State == download.StateDone || t.State == download.StateFailed) {
+			delete(s.parts, partID)
+		}
 	}
 	s.parts[id] = task
 	s.mu.Unlock()
@@ -424,7 +457,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) error {
 		if ap, ok := c.registry.Get(providerOfTrackKey(audioKey)); ok {
 			audioStream, err := ap.ResolveStream(ctx, task.Episode, audioKey)
 			if err == nil && len(audioStream.Links) > 0 {
-				best := audioStream.Links[sortedQualityDescContract(audioStream.Links)[0]]
+				best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
 				audio = &best
 			}
 		}
@@ -508,48 +541,15 @@ func pickQuality(links map[string]contracts.VideoSource, preferred string) strin
 			return preferred
 		}
 	}
-	sorted := sortedQualityDescContract(links)
+	sorted := sortedQualityDesc(links)
 	if len(sorted) == 0 {
 		return "720"
 	}
 	return sorted[0]
 }
 
-// sortedQualityDescContract orders quality labels numerically
-// descending over the contracts map.
-func sortedQualityDescContract(links map[string]contracts.VideoSource) []string {
-	keys := make([]string, 0, len(links))
-	for k := range links {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, ea := strconvAtoi(keys[i])
-		b, eb := strconvAtoi(keys[j])
-		if ea == nil && eb == nil {
-			return a > b
-		}
-		return keys[i] > keys[j]
-	})
-	return keys
-}
-
-// strconvAtoi is strconv.Atoi without the import shadow churn.
-func strconvAtoi(s string) (int, error) {
-	n := 0
-	if s == "" {
-		return 0, fmt.Errorf("empty")
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("not numeric")
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, nil
-}
-
 func qualityIntOf(q string) int {
-	n, _ := strconvAtoi(q)
+	n, _ := strconv.Atoi(q)
 	return n
 }
 

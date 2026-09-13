@@ -24,8 +24,9 @@ var hasCyrillic = regexp.MustCompile(`[а-яА-Я]`)
 // by episode number (python session_loop merged_episodes_map port):
 // the first source providing a number wins the slot; later sources
 // append their embeds under "[provider] dub" keys and compose the raw
-// id as "prov1:id1|prov2:id2". The returned order sorts numerically
-// with unparseable labels (OVA etc.) last.
+// id as "prov1:id1|prov2:id2". The returned order sorts numerically;
+// unparseable labels (OVA etc.) key 0.0 and therefore sort FIRST —
+// python bug-compatibility (see group_test).
 func MergeEpisodeLists(sources []SourceEpisodes) (map[string]contracts.Episode, []string) {
 	merged := make(map[string]contracts.Episode)
 	for _, src := range sources {
@@ -71,8 +72,8 @@ func prefixEmbeds(sourceID string, embeds map[string][]string) map[string][]stri
 	return out
 }
 
-// EpisodeSortKey parses an episode label; unparseable labels sort as 0
-// but land last through the lexical tiebreak of the caller.
+// EpisodeSortKey parses an episode label; unparseable labels key 0.0
+// and so sort first in the callers' ascending orders (python parity).
 func EpisodeSortKey(num string) float64 {
 	v, err := strconv.ParseFloat(strings.TrimSpace(num), 64)
 	if err != nil {

@@ -136,8 +136,15 @@ type App struct {
 	log    *slog.Logger
 	width  int
 	height int
-	// ctx is the app-lifecycle context; screens' commands derive
-	// cancellable children so quitting stops all provider work.
+	// ctx is the app-lifecycle context. DIVERGENCE (documented, kept
+	// deliberately): screen commands (search fan-out, episode lookups,
+	// plays, status patches) build their own context.Background()
+	// children with explicit timeouts instead of deriving from ctx —
+	// the Screen contract exposes no ctx to commands, and threading
+	// one through every constructor is an architectural change outside
+	// this package's scope. The per-command timeouts bound runaway
+	// work instead; App.Cancel still stops the runtime between
+	// updates.
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -289,4 +296,15 @@ type Deps struct {
 	Health   HealthService
 	Shiki    ShikimoriService
 	Download DownloadService
+	// Log is the diagnostics sink for quiet-skip notes (shikimori
+	// binding etc.); nil degrades to slog.Default().
+	Log *slog.Logger
+}
+
+// logger returns the diagnostics sink, defaulting to slog.Default().
+func (d *Deps) logger() *slog.Logger {
+	if d == nil || d.Log == nil {
+		return slog.Default()
+	}
+	return d.Log
 }

@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"strconv"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/download"
@@ -17,6 +20,9 @@ type offlinePlayMsg struct {
 	path  string
 	title string
 }
+
+// offlinePlayedMsg settles one offline playback (C3).
+type offlinePlayedMsg struct{ err error }
 
 // NewOfflineTitles builds the «📂 Скачанное» title list (python
 // offline_menu port) with episode and variant counts; an empty
@@ -39,7 +45,7 @@ func NewOfflineTitles(deps *Deps) *MenuScreen {
 		}
 		choices = append(choices, Choice{
 			ID:    t.Name,
-			Label: "📁 " + t.Name + " [" + intToStr(len(episodes)) + " сер., " + intToStr(t.Snapshot.TotalDownloaded()) + " лок. вариантов]",
+			Label: "📁 " + t.Name + " [" + strconv.Itoa(len(episodes)) + " сер., " + strconv.Itoa(t.Snapshot.TotalDownloaded()) + " лок. вариантов]",
 			Value: &titles[i],
 		})
 	}
@@ -75,6 +81,7 @@ type offlineSession struct {
 	list         *PinList // action menu
 	episodeList  *PinList // episodes
 	variantList  *PinList // local variant picker
+	status       string   // transient status line (play verdicts)
 }
 
 // NewOfflineSession builds the offline session for one title.
@@ -107,7 +114,9 @@ func (s *offlineSession) episodes() []string {
 	return out
 }
 
-// sortByEpisodeKey sorts episode labels numerically with junk last.
+// sortByEpisodeKey sorts episode labels numerically; junk labels key
+// 0.0 and therefore sort FIRST (python bug-compatibility, see
+// group_test).
 func sortByEpisodeKey(labels []string) {
 	for i := 1; i < len(labels); i++ {
 		for j := i; j > 0; j-- {
@@ -162,24 +171,42 @@ func (s *offlineSession) buildActionMenu() {
 	}...), defaultListHeight)
 }
 
-// header renders the offline session header.
+// header renders the offline session header with the active variant.
 func (s *offlineSession) header() string {
 	variants := s.variants()
 	vLabel := "—"
-	if len(variants) > 0 {
-		best := ResolveVariant(variants, "", "", 0)
-		if best != nil {
-			vLabel = stripProviderTag(best.VideoKey) + " · " + intToStr(best.Quality) + "p"
-		}
+	if best := ResolveVariant(variants, s.videoKey, s.audioKey, s.quality); best != nil {
+		vLabel = stripProviderTag(best.VideoKey) + " · " + strconv.Itoa(best.Quality) + "p"
 	}
-	return "📂 " + s.title.Name + " | Эп. " + s.current + " | Вариантов: " + intToStr(len(variants)) + " | " + vLabel
+	return "📂 " + s.title.Name + " | Эп. " + s.current + " | Вариантов: " + strconv.Itoa(len(variants)) + " | " + vLabel
 }
 
-// Update implements Screen.
+// Update implements Screen: settles playback messages (C3) and
+// routes key presses by surface.
 func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	key, ok := msg.(tea.KeyPressMsg)
-	if !ok {
+	switch m := msg.(type) {
+	case offlinePlayMsg:
+		return s.playLocal(m)
+	case offlinePlayedMsg:
+		if m.err != nil {
+			s.status = "Ошибка воспроизведения: " + m.err.Error()
+		} else {
+			s.status = "Воспроизведение завершено"
+		}
 		return s, nil
+	case tea.KeyPressMsg:
+		return s.handleKey(m)
+	default:
+		return s, nil
+	}
+}
+
+// handleKey routes key presses: the variant picker (when engaged)
+// consumes keys first (C4); Esc inside it cancels the picker instead
+// of leaving the session.
+func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.stateVariant && s.current != "" {
+		return s.handleVariantKey(key)
 	}
 	if IsCancelKey(key) {
 		return s, pop()
@@ -223,16 +250,58 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.shiftEpisode(-1, eps)
 	case "jump":
 		s.current = ""
+		s.stateVariant = false // reset the picker on exit paths (C4)
 		return s, nil
 	case "variant":
 		return s.pickVariant()
 	case "exit":
+		s.stateVariant = false
 		return s, pop()
 	default:
 		return s, nil
 	}
 	s.buildActionMenu()
 	return s, nil
+}
+
+// handleVariantKey drives the local variant picker (C4): Enter
+// applies the variant and returns to the menu; Esc/Back cancels.
+func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.variantList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.variantList.Menu(), s.variantList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	s.stateVariant = false
+	if resolved == Back {
+		return s, nil
+	}
+	entry, ok := resolved.(download.Entry)
+	if !ok {
+		return s, nil
+	}
+	s.videoKey, s.audioKey, s.quality = entry.VideoKey, entry.AudioKey, entry.Quality
+	s.buildActionMenu()
+	s.status = "Локальный поток переключён"
+	return s, nil
+}
+
+// playLocal runs the resolved local file through the playback
+// service (C3): [OFFLINE] title, no skip lookups ever.
+func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
+	if s.deps == nil || s.deps.Playback == nil {
+		s.status = "Плеер недоступен"
+		return s, nil
+	}
+	deps := s.deps
+	return s, safeCmd(offlineSessionID, func() tea.Msg {
+		return offlinePlayedMsg{err: deps.Playback.Play(context.Background(), PlayRequest{
+			URL:   m.path,
+			Title: m.title,
+		})}
+	})
 }
 
 // shiftEpisode moves the current episode with clamping.
@@ -273,8 +342,8 @@ func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 	choices := make([]Choice, 0, len(entries))
 	for i, e := range entries {
 		choices = append(choices, Choice{
-			ID:    intToStr(i),
-			Label: "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + intToStr(e.Quality) + "p",
+			ID:    strconv.Itoa(i),
+			Label: "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + strconv.Itoa(e.Quality) + "p",
 			Value: e,
 		})
 	}
@@ -285,13 +354,19 @@ func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 
 // View implements Screen.
 func (s *offlineSession) View() tea.View {
-	if s.current == "" {
-		return tea.NewView(s.episodeList.Render())
+	var body string
+	switch {
+	case s.current == "":
+		body = s.episodeList.Render()
+	case s.stateVariant && s.variantList != nil:
+		body = s.variantList.Render()
+	default:
+		body = theme.Title.Render(s.header()) + "\n" + s.list.Render()
 	}
-	if s.stateVariant && s.variantList != nil {
-		return tea.NewView(s.variantList.Render())
+	if s.status != "" {
+		body += "\n" + theme.StatusLine.Render(s.status)
 	}
-	return tea.NewView(theme.Title.Render(s.header()) + "\n" + s.list.Render())
+	return tea.NewView(body)
 }
 
 // offlineTitle composes the [OFFLINE] window title.

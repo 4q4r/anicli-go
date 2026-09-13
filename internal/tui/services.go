@@ -65,6 +65,12 @@ type HistoryService interface {
 	// BindSource rebinds a record onto a new (source_id, url) pair
 	// (python search_and_bind record patch).
 	BindSource(ctx context.Context, id int64, sourceID, sourceURL string) error
+	// GetByShikimoriID loads the record bound to a shikimori anime,
+	// nil when none is bound.
+	GetByShikimoriID(ctx context.Context, shikimoriID int64) (*storage.AnimeProgress, error)
+	// SetRateID persists the shikimori rate (list entry) id of a
+	// record (SyncEpisodeProgress pattern: PATCH vs Create dispatch).
+	SetRateID(ctx context.Context, animeID, rateID int64) error
 }
 
 // OfflineTitle is one downloaded title directory with its snapshot.
@@ -102,13 +108,17 @@ type HealthService interface {
 }
 
 // ShikimoriService is the manual status-update surface of «Изменить
-// инфо».
+// инфо» plus the title→id binding lookup.
 type ShikimoriService interface {
 	// Enabled reports whether the tracker integration is active.
 	Enabled() bool
 	// UpdateStatus patches the rate of one anime; nil score/rewatches
-	// leave them untouched.
+	// leave them untouched. rateID > 0 PATCHes the existing rate,
+	// otherwise a new rate is created and its id returned.
 	UpdateStatus(ctx context.Context, shikimoriID, rateID int64, status string, score, rewatches *int) (int64, error)
+	// SearchIDs maps candidate titles to shikimori anime ids (python
+	// search_ids autocomplete port).
+	SearchIDs(ctx context.Context, query string) (map[string]int64, error)
 }
 
 // DownloadTask is one episode download submitted by «Скачать серии».

@@ -60,6 +60,7 @@ func NewHealthScreen(deps *Deps) *healthScreen {
 func (h *healthScreen) ID() string { return healthID }
 
 // Init implements Screen: one panic-safe check command per provider.
+// Commands own their timeout contexts — see the App.ctx note.
 func (h *healthScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{h.spin.Tick}
 	for _, row := range h.rows {

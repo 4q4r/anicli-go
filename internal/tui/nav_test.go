@@ -51,6 +51,17 @@ func TestI3EmptyChoiceListLegal(t *testing.T) {
 		}
 	})
 
+	t.Run("empty menu renders Back plus empty-state (PinList parity, M15)", func(t *testing.T) {
+		m := NewMenu("Результаты", "Список пуст")
+		r := m.RenderItems()
+		if !strings.Contains(r, BackLabel) {
+			t.Fatalf("empty menu must still render the Back row (I1), got %q", r)
+		}
+		if !strings.Contains(r, "Список пуст") {
+			t.Fatalf("empty-state message must render alongside Back, got %q", r)
+		}
+	})
+
 	t.Run("non-empty menu renders choices and no empty message", func(t *testing.T) {
 		m := NewMenu("Меню", "никогда",
 			Choice{ID: "a", Label: "Первый"},

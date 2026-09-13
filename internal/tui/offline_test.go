@@ -140,6 +140,127 @@ func (p *skipPanicPlayback) ResolveSkips(context.Context, int64, float64) (strin
 	panic("offline playback must never resolve skips")
 }
 
+func offlineActionIndex(s *offlineSession, id string) int {
+	for i, c := range s.list.Menu().Items {
+		if c.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestOfflineWatchDispatchesPlayback (C3): selecting an episode and
+// watching drives the playback service with the local path and the
+// [OFFLINE] title; the settle reaches the status line.
+func TestOfflineWatchDispatchesPlayback(t *testing.T) {
+	pb := &fakePlayback{}
+	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}, Playback: pb}
+	titles, _ := deps.Offline.Titles()
+	s := NewOfflineSession(deps, titles[0])
+
+	s.episodeList.Jump(1) // episode 1
+	next, _ := s.Update(enter())
+	ss := next.(*offlineSession)
+	ss.list.Jump(offlineActionIndex(ss, "watch"))
+	_, cmd := ss.Update(enter())
+	if cmd == nil {
+		t.Fatalf("watch must schedule playback")
+	}
+	msg := cmd()
+	pm, ok := msg.(offlinePlayMsg)
+	if !ok {
+		t.Fatalf("offline watch must emit offlinePlayMsg, got %T", msg)
+	}
+
+	// The screen must CONSUME offlinePlayMsg: dispatch Playback.Play.
+	next, cmd = ss.Update(pm)
+	if cmd == nil {
+		t.Fatalf("offlinePlayMsg must dispatch Playback.Play")
+	}
+	settled := cmd()
+	dm, ok := settled.(offlinePlayedMsg)
+	if !ok {
+		t.Fatalf("play must settle into offlinePlayedMsg, got %T", settled)
+	}
+	if dm.err != nil {
+		t.Fatalf("fake playback must succeed, got %v", dm.err)
+	}
+	next, _ = next.Update(dm)
+	ss = next.(*offlineSession)
+	if !contains(ss.status, "Воспроизведение завершено") {
+		t.Fatalf("settle must reach the status line, got %q", ss.status)
+	}
+	if len(pb.played) != 1 {
+		t.Fatalf("exactly one playback expected, got %d", len(pb.played))
+	}
+	if pb.played[0].URL != "/dl/Ванпанчмен/ep1.mkv" {
+		t.Fatalf("player must get the local path, got %q", pb.played[0].URL)
+	}
+	if !contains(pb.played[0].Title, "[OFFLINE]") {
+		t.Fatalf("player title must carry the [OFFLINE] marker, got %q", pb.played[0].Title)
+	}
+}
+
+// TestOfflineVariantPickerFlow (C4): «Сменить локальный поток» opens
+// a real picker; Enter switches the local variant and returns to the
+// menu; Esc cancels the picker without leaving the session.
+func TestOfflineVariantPickerFlow(t *testing.T) {
+	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}}
+	titles, _ := deps.Offline.Titles()
+	s := NewOfflineSession(deps, titles[0])
+	s.episodeList.Jump(1)
+	next, _ := s.Update(enter())
+	ss := next.(*offlineSession)
+
+	t.Run("enter switches the variant", func(t *testing.T) {
+		ss.list.Jump(offlineActionIndex(ss, "variant"))
+		next, _ := ss.Update(enter())
+		vs := next.(*offlineSession)
+		if !vs.stateVariant {
+			t.Fatalf("variant picker must engage")
+		}
+		// Down moves the PICKER (not the action menu): two downs from
+		// Back land on the 720p [b] sub variant; Enter applies it.
+		next, _ = vs.Update(down())
+		next, _ = next.Update(down())
+		next, _ = next.Update(enter())
+		picked := next.(*offlineSession)
+		if picked.stateVariant {
+			t.Fatalf("picker must close after selection")
+		}
+		if picked.videoKey != "[a] dub" || picked.audioKey != "[b] sub" || picked.quality != 720 {
+			t.Fatalf("variant switch must apply, got %q/%q/%d",
+				picked.videoKey, picked.audioKey, picked.quality)
+		}
+		if !contains(picked.header(), "720p") {
+			t.Fatalf("header must reflect the switched variant: %q", picked.header())
+		}
+		if picked.current != "1" {
+			t.Fatalf("session must stay on the menu at the same episode, got %q", picked.current)
+		}
+	})
+
+	t.Run("esc cancels the picker back to the menu", func(t *testing.T) {
+		ss.list.Jump(offlineActionIndex(ss, "variant"))
+		next, _ := ss.Update(enter())
+		vs := next.(*offlineSession)
+		if !vs.stateVariant {
+			t.Fatalf("picker must engage")
+		}
+		next, cmd := vs.Update(esc())
+		cancelled := next.(*offlineSession)
+		if cancelled.stateVariant {
+			t.Fatalf("esc must reset the picker state")
+		}
+		if cmd != nil {
+			t.Fatalf("esc in the picker cancels it without popping, got %#v", cmd())
+		}
+		if cancelled.current != "1" {
+			t.Fatalf("esc must keep the episode, got %q", cancelled.current)
+		}
+	})
+}
+
 // TestOfflineBackLeavesSession: esc from the offline session pops.
 func TestOfflineBackLeavesSession(t *testing.T) {
 	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}}

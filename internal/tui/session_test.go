@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // fakeEpisode implements EpisodeService.
@@ -35,11 +38,13 @@ var _ EpisodeService = (*fakeEpisode)(nil)
 // fakePlayback implements PlaybackService.
 type fakePlayback struct {
 	played   []PlayRequest
+	skipIDs  []int64 // shikimori ids seen by ResolveSkips
 	skipPath string
 	err      error
 }
 
-func (f *fakePlayback) ResolveSkips(_ context.Context, _ int64, _ float64) (string, func(), error) {
+func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), error) {
+	f.skipIDs = append(f.skipIDs, shikimoriID)
 	cleanup := func() {}
 	if f.skipPath != "" {
 		return f.skipPath, cleanup, nil
@@ -377,4 +382,506 @@ func sessionActionIndex(s *sessionScreen, id string) int {
 		}
 	}
 	return -1
+}
+
+func down() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyDown} }
+
+// openInfo enters the «Изменить инфо» submenu from the action menu.
+func openInfo(s *sessionScreen) *sessionScreen {
+	idx := sessionActionIndex(s, "info")
+	s.list.Jump(idx)
+	next, _ := s.Update(enter())
+	return next.(*sessionScreen)
+}
+
+// shikiSessionForTests builds a loaded session whose primary carries a
+// shikimori binding, with the given shiki/history fakes attached.
+func shikiSessionForTests(t *testing.T, shiki *fakeShiki, hist *fakeHistory) *sessionScreen {
+	t.Helper()
+	if hist == nil {
+		hist = &fakeHistory{} // avoid a typed-nil interface trap
+	}
+	deps := &Deps{Episode: &fakeEpisode{episodes: testEpisodeSet()}, Shiki: shiki, History: hist, Log: testLogger()}
+	group := []contracts.SearchResult{{
+		Title: "Тайтл", URL: "u1", SourceID: "animego",
+		Meta: map[string]any{"shikimori_id": int64(21)},
+	}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	return s
+}
+
+// TestSessionScoreSubmitsAsScore (C1): a score entered through the
+// info menu reaches UpdateStatus as Score with nil Rewatches — not as
+// a rewatch count.
+func TestSessionScoreSubmitsAsScore(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	s := shikiSessionForTests(t, shiki, nil)
+
+	ss := openInfo(s)
+	next, _ := ss.Update(down())  // cursor → Статус
+	next, _ = next.Update(down()) // cursor → Оценка
+	next, _ = next.Update(enter())
+	prompt := next.(*sessionScreen)
+	if prompt.state != sessionStateInfoScore {
+		t.Fatalf("info menu must reach the score prompt, got %v", prompt.state)
+	}
+	prompt.infoPrompt.typeText("9")
+	next, cmd := prompt.Update(enter())
+	if cmd == nil {
+		t.Fatalf("score submit must dispatch the shikimori update")
+	}
+	if _, ok := cmd().(shikiUpdatedMsg); !ok {
+		t.Fatalf("status patch must settle into shikiUpdatedMsg, got %T", cmd())
+	}
+	if len(shiki.updates) != 1 {
+		t.Fatalf("exactly one update expected, got %d", len(shiki.updates))
+	}
+	u := shiki.updates[0]
+	if u.shikimoriID != 21 || u.score == nil || *u.score != 9 || u.rewatches != nil {
+		t.Fatalf("score must submit as score (rewatches nil), got %+v", u)
+	}
+	// The prompt returns to the menu with the dedicated status line.
+	next, _ = next.Update(shikiUpdatedMsg{})
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateMenu {
+		t.Fatalf("after submit the menu returns, got %v", ss.state)
+	}
+	if !contains(ss.status, "Информация обновлена") {
+		t.Fatalf("dedicated success status expected, got %q", ss.status)
+	}
+}
+
+// TestSessionRewatchesSubmit (C1 complement): the rewatches prompt
+// submits as Rewatches with nil Score.
+func TestSessionRewatchesSubmit(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	s := shikiSessionForTests(t, shiki, nil)
+
+	ss := openInfo(s)
+	next, _ := ss.Update(down())  // Статус
+	next, _ = next.Update(down()) // Оценка
+	next, _ = next.Update(down()) // Пересмотры
+	next, _ = next.Update(enter())
+	prompt := next.(*sessionScreen)
+	if prompt.state != sessionStateInfoRewatches {
+		t.Fatalf("must reach the rewatches prompt, got %v", prompt.state)
+	}
+	prompt.infoPrompt.typeText("3")
+	_, cmd := prompt.Update(enter())
+	if cmd == nil {
+		t.Fatalf("rewatches submit must dispatch")
+	}
+	cmd()
+	u := shiki.updates[0]
+	if u.rewatches == nil || *u.rewatches != 3 || u.score != nil {
+		t.Fatalf("rewatches must submit as rewatches (score nil), got %+v", u)
+	}
+}
+
+// TestSessionInfoMenuPersists (C2): the info submenu survives
+// keypresses — Down moves the cursor instead of resetting it.
+func TestSessionInfoMenuPersists(t *testing.T) {
+	s := newSessionForTests(t)
+	ss := openInfo(s)
+	next, _ := ss.Update(down())
+	next, _ = next.Update(enter())
+	got := next.(*sessionScreen)
+	if got.state != sessionStateInfoStatus {
+		t.Fatalf("Down+Enter in the info menu must reach the status picker, got %v", got.state)
+	}
+}
+
+// TestSessionStatusPickDispatches (C2): the status picker persists
+// across keypresses; selecting a status dispatches UpdateStatus with
+// the picked key.
+func TestSessionStatusPickDispatches(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	s := shikiSessionForTests(t, shiki, nil)
+
+	ss := openInfo(s)
+	next, _ := ss.Update(down()) // Статус
+	next, _ = next.Update(enter())
+	sp := next.(*sessionScreen)
+	if sp.state != sessionStateInfoStatus {
+		t.Fatalf("must open the status picker, got %v", sp.state)
+	}
+	// Down lands on «Смотрю»; Enter resolves it (not Back).
+	next, _ = sp.Update(down())
+	_, cmd := next.Update(enter())
+	if cmd == nil {
+		t.Fatalf("status pick must dispatch UpdateStatus")
+	}
+	if _, ok := cmd().(shikiUpdatedMsg); !ok {
+		t.Fatalf("status pick must settle into shikiUpdatedMsg, got %T", cmd())
+	}
+	if len(shiki.updates) != 1 || shiki.updates[0].status != "watching" {
+		t.Fatalf("watching must be dispatched, got %+v", shiki.updates)
+	}
+}
+
+// TestSessionDownloadForegroundDispatch (C2 + I8): the download-mode
+// menu persists; picking «Передний план» actually downloads the range
+// and the settle reaches the status line.
+func TestSessionDownloadForegroundDispatch(t *testing.T) {
+	dl := &fakeDownload{}
+	s := newSessionForTests(t)
+	s.deps.Download = dl
+
+	idx := sessionActionIndex(s, "download")
+	s.list.Jump(idx)
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.rangeInput.typeText("1-2")
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+	}
+	// Down → «Передний план» (first body item), Enter dispatches.
+	next, _ = ss.Update(down())
+	next, cmd := next.Update(enter())
+	if cmd == nil {
+		t.Fatalf("foreground pick must dispatch the download")
+	}
+	settled, ok := cmd().(downloadSettledMsg)
+	if !ok {
+		t.Fatalf("foreground download must settle into downloadSettledMsg, got %T", cmd())
+	}
+	if settled.err != nil {
+		t.Fatalf("fake download must succeed, got %v", settled.err)
+	}
+	if len(dl.downloads) != 2 {
+		t.Fatalf("foreground must download both episodes, got %d", len(dl.downloads))
+	}
+	next, _ = next.Update(settled)
+	if !contains(next.(*sessionScreen).status, "Загружено") {
+		t.Fatalf("settle must update the status line, got %q", next.(*sessionScreen).status)
+	}
+}
+
+// TestSessionDownloadBackgroundSubmits (C2): the background mode
+// submits tasks to the manager-backed service.
+func TestSessionDownloadBackgroundSubmits(t *testing.T) {
+	dl := &fakeDownload{}
+	s := newSessionForTests(t)
+	s.deps.Download = dl
+
+	idx := sessionActionIndex(s, "download")
+	s.list.Jump(idx)
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.rangeInput.typeText("1")
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	next, _ = ss.Update(down())
+	next, _ = next.Update(down()) // «Фон»
+	next, _ = next.Update(enter())
+	if len(dl.submitted) != 1 {
+		t.Fatalf("background pick must submit one task, got %d", len(dl.submitted))
+	}
+	if !contains(next.(*sessionScreen).status, "фон") {
+		t.Fatalf("background status expected, got %q", next.(*sessionScreen).status)
+	}
+}
+
+// TestSessionDownloadSettledFailure (I8): a failed foreground download
+// surfaces its error on the status line.
+func TestSessionDownloadSettledFailure(t *testing.T) {
+	dl := &errDownload{}
+	s := newSessionForTests(t)
+	s.deps.Download = dl
+	idx := sessionActionIndex(s, "download")
+	s.list.Jump(idx)
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.rangeInput.typeText("1")
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	next, _ = ss.Update(down())
+	next, cmd := next.Update(enter())
+	settled := cmd().(downloadSettledMsg)
+	if settled.err == nil {
+		t.Fatalf("download failure must be carried")
+	}
+	next, _ = next.Update(settled)
+	if !contains(next.(*sessionScreen).status, "Ошибка загрузки") {
+		t.Fatalf("failure must surface on the status line, got %q", next.(*sessionScreen).status)
+	}
+}
+
+// errDownload fails every foreground download.
+type errDownload struct{ fakeDownload }
+
+func (f *errDownload) Download(_ context.Context, _ DownloadTask) error {
+	return errors.New("disk full")
+}
+
+// watchToQuality drives the dub video→audio picks and the stream
+// resolve, landing on the quality picker with links loaded.
+func watchToQuality(t *testing.T, s *sessionScreen) *sessionScreen {
+	t.Helper()
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.dubList.Jump(1)
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	ss.dubList.Jump(1)
+	next, cmd := ss.Update(enter())
+	if cmd == nil {
+		t.Fatalf("audio pick must schedule the stream resolve")
+	}
+	msg := cmd()
+	if _, ok := msg.(streamResolvedMsg); !ok {
+		t.Fatalf("stream resolve expected, got %T", msg)
+	}
+	next, _ = next.Update(msg)
+	return next.(*sessionScreen)
+}
+
+// TestSessionQualityMemory (I9): the quality used by one playback is
+// remembered on the live model, so the next auto play prefers it.
+func TestSessionQualityMemory(t *testing.T) {
+	pb := &fakePlayback{}
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+					"720":  {URL: "v720"},
+				}},
+			},
+		},
+		Playback: pb,
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	// First watch: pick 720 explicitly (items: Back, auto, 1080, 720).
+	ss := watchToQuality(t, s)
+	ss.qualityList.Jump(3)
+	next, cmd := ss.Update(enter())
+	msg := cmd().(playedMsg)
+	if msg.err != nil {
+		t.Fatalf("play must succeed, got %v", msg.err)
+	}
+	if msg.quality != "720" {
+		t.Fatalf("playedMsg must carry the used quality, got %q", msg.quality)
+	}
+	next, _ = next.Update(msg)
+	ss = next.(*sessionScreen)
+	if ss.lastQuality != "720" {
+		t.Fatalf("quality must be remembered on the model, got %q", ss.lastQuality)
+	}
+
+	// Second watch: auto quality must resolve to the remembered 720.
+	ss.list.Jump(sessionActionIndex(ss, "watch"))
+	next, cmd = ss.Update(enter())
+	srMsg := cmd()
+	if _, ok := srMsg.(streamResolvedMsg); !ok {
+		t.Fatalf("stream resolve expected, got %T", srMsg)
+	}
+	next, _ = next.Update(srMsg)
+	ss = next.(*sessionScreen)
+	ss.qualityList.Jump(1) // Авто
+	_, cmd = ss.Update(enter())
+	if _, ok := cmd().(playedMsg); !ok {
+		t.Fatalf("second play must settle, got %T", cmd())
+	}
+	if len(pb.played) != 2 {
+		t.Fatalf("two playbacks expected, got %d", len(pb.played))
+	}
+	if pb.played[1].URL != "v720" {
+		t.Fatalf("auto must reuse the remembered quality, got %q", pb.played[1].URL)
+	}
+}
+
+// TestSessionStatusUpdateRateIDReuse (I10): the first patch creates
+// the rate and persists its id; the second patch PATCHes the stored
+// id instead of creating a duplicate.
+func TestSessionStatusUpdateRateIDReuse(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	rec := &storage.AnimeProgress{ID: 5, Title: "Тайтл", ShikimoriID: ptrTo(int64(21))}
+	hist := &fakeHistory{byShiki: map[int64]*storage.AnimeProgress{21: rec}}
+	s := shikiSessionForTests(t, shiki, hist)
+
+	pickStatus := func(sess *sessionScreen) (*sessionScreen, tea.Cmd) {
+		ss := openInfo(sess)
+		next, _ := ss.Update(down()) // Статус
+		next, _ = next.Update(enter())
+		sp := next.(*sessionScreen)
+		next, _ = sp.Update(down()) // «Смотрю»
+		screen, cmd := next.Update(enter())
+		return screen.(*sessionScreen), cmd
+	}
+
+	// First patch: drive the real dispatch — the create path must
+	// persist the new rate id against the history row.
+	next, cmd := pickStatus(s)
+	msg := cmd().(shikiUpdatedMsg)
+	if msg.rateID == 0 {
+		t.Fatalf("create must return a rate id")
+	}
+	if hist.rateIDs[5] != msg.rateID {
+		t.Fatalf("rate id must be persisted after create, got %v want %d", hist.rateIDs, msg.rateID)
+	}
+	screen, _ := next.Update(msg)
+	next = screen.(*sessionScreen)
+
+	// Second patch on the same session: PATCH the stored id.
+	_, cmd2 := pickStatus(next)
+	_ = cmd2()
+	if len(shiki.rateIDs) != 2 {
+		t.Fatalf("two updates expected, got %v", shiki.rateIDs)
+	}
+	if shiki.rateIDs[0] != 0 {
+		t.Fatalf("first update must be a create (rate id 0), got %d", shiki.rateIDs[0])
+	}
+	if shiki.rateIDs[1] != msg.rateID {
+		t.Fatalf("second update must PATCH the stored rate id, got %d want %d",
+			shiki.rateIDs[1], msg.rateID)
+	}
+}
+
+// TestSessionStatusMessageDistinct (I10): a status patch never
+// reports playback verdicts.
+func TestSessionStatusMessageDistinct(t *testing.T) {
+	s := newSessionForTests(t)
+	next, _ := s.Update(shikiUpdatedMsg{})
+	ss := next.(*sessionScreen)
+	if contains(ss.status, "Воспроизведение") {
+		t.Fatalf("status patch must not report playback verdicts, got %q", ss.status)
+	}
+	if !contains(ss.status, "Информация обновлена") {
+		t.Fatalf("dedicated status expected, got %q", ss.status)
+	}
+
+	next, _ = s.Update(shikiUpdatedMsg{err: errors.New("boom")})
+	if !contains(next.(*sessionScreen).status, "Ошибка") {
+		t.Fatalf("failure must surface, got %q", next.(*sessionScreen).status)
+	}
+}
+
+// TestSessionResumeCarriesShikimoriBinding (I5): a resumed session
+// restores episode and dubs from the record and passes the bound
+// shikimori id to the skip resolver.
+func TestSessionResumeCarriesShikimoriBinding(t *testing.T) {
+	pb := &fakePlayback{}
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"1080": {URL: "v1080"}}},
+			},
+		},
+		Playback: pb,
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	rec := storage.AnimeProgress{
+		ID: 9, Title: "Тайтл", CurrentEpisode: "2",
+		ShikimoriID: ptrTo(int64(33)),
+		VideoDub:    ptrTo("[animego] Дубль 1"),
+		AudioDub:    ptrTo("[animego] Дубль 1"),
+	}
+	s := newResumedSession(deps, group[0], group, rec)
+	s.loadEpisodesSync()
+
+	if s.currentEpisode() != "2" {
+		t.Fatalf("resume must restore the saved episode, got %q", s.currentEpisode())
+	}
+	if s.videoDub != "[animego] Дубль 1" || s.audioDub != "[animego] Дубль 1" {
+		t.Fatalf("resume must restore dubs, got %q/%q", s.videoDub, s.audioDub)
+	}
+	if s.shikimoriID() != 33 {
+		t.Fatalf("resume must carry the shikimori binding, got %d", s.shikimoriID())
+	}
+
+	// Watch straight to dispatch: dubs are already set, so watch goes
+	// directly to the stream resolve.
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, cmd := s.Update(enter())
+	msg := cmd()
+	if _, ok := msg.(streamResolvedMsg); !ok {
+		t.Fatalf("stream resolve expected, got %T", msg)
+	}
+	next, _ = next.Update(msg)
+	ss := next.(*sessionScreen)
+	ss.qualityList.Jump(1) // Авто
+	_, cmd = ss.Update(enter())
+	if _, ok := cmd().(playedMsg); !ok {
+		t.Fatalf("play must settle, got %T", cmd())
+	}
+	if len(pb.skipIDs) == 0 || pb.skipIDs[0] != 33 {
+		t.Fatalf("skip resolver must receive the bound id, got %v", pb.skipIDs)
+	}
+}
+
+// TestSessionShikiResolveFreshSearch (I5): fresh sessions resolve the
+// shikimori id in the background (python _resolve_shikimori_info:
+// best similarity > 0.6 wins; a weak match skips the binding
+// quietly).
+func TestSessionShikiResolveFreshSearch(t *testing.T) {
+	collect := func(cmd tea.Cmd) shikiBoundMsg {
+		var bound shikiBoundMsg
+		grab := func(m tea.Msg) {
+			if b, ok := m.(shikiBoundMsg); ok {
+				bound = b
+			}
+		}
+		switch v := cmd().(type) {
+		case tea.BatchMsg:
+			for _, sub := range v {
+				grab(sub())
+			}
+		default:
+			grab(v)
+		}
+		return bound
+	}
+
+	t.Run("confident match binds", func(t *testing.T) {
+		shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Тайтл": 55}}
+		deps := &Deps{
+			Episode: &fakeEpisode{episodes: testEpisodeSet()},
+			Shiki:   shiki,
+			Log:     testLogger(),
+		}
+		group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+		s := NewSessionScreen(deps, group[0], group)
+		bound := collect(s.Init())
+		if bound.id != 55 {
+			t.Fatalf("exact title must bind, got %+v", bound)
+		}
+		next, _ := s.Update(bound)
+		if got := next.(*sessionScreen).shikimoriID(); got != 55 {
+			t.Fatalf("binding must land in primary.Meta, got %d", got)
+		}
+		if len(shiki.queries) != 1 || shiki.queries[0] != "Тайтл" {
+			t.Fatalf("resolver must search by title, got %v", shiki.queries)
+		}
+	})
+
+	t.Run("weak match skips quietly", func(t *testing.T) {
+		shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Совсем Другое Название": 77}}
+		deps := &Deps{
+			Episode: &fakeEpisode{episodes: testEpisodeSet()},
+			Shiki:   shiki,
+			Log:     testLogger(),
+		}
+		group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+		s := NewSessionScreen(deps, group[0], group)
+		bound := collect(s.Init())
+		if bound.id != 0 {
+			t.Fatalf("weak match must not bind, got %+v", bound)
+		}
+		next, _ := s.Update(bound)
+		if got := next.(*sessionScreen).shikimoriID(); got != 0 {
+			t.Fatalf("no binding expected, got %d", got)
+		}
+	})
 }

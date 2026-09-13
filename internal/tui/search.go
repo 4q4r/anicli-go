@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // Search flow screen ids.
@@ -76,6 +77,9 @@ func searchOne(ctx context.Context, deps *Deps, providerID, query string) (msg p
 // search_provider_task + generate_search_table port): one row per
 // provider, spinner while pending, Найдено/Ошибка when settled; enter
 // advances to the manual grouping checklist once every row settled.
+// In resume mode (resume != nil) enter first tries the record's
+// rehydrate auto-match (I6) and only falls through to manual
+// grouping with a note when no match exists.
 type searchProgress struct {
 	deps    *Deps
 	query   string
@@ -84,6 +88,9 @@ type searchProgress struct {
 	status  map[string]string
 	pending map[string]bool
 	results []contracts.SearchResult
+	// resume carries the history record being continued (I6); nil in
+	// the plain search flow.
+	resume *storage.AnimeProgress
 }
 
 // NewSearchProgress builds the fan-out screen and schedules one
@@ -115,7 +122,8 @@ func NewSearchProgress(deps *Deps, query string) *searchProgress {
 func (m *searchProgress) ID() string { return searchProgressID }
 
 // Init implements Screen: fan out one safe command per provider plus
-// the spinner tick.
+// the spinner tick. Commands own their timeout contexts rather than
+// deriving from the app lifecycle — see the App.ctx divergence note.
 func (m *searchProgress) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spin.Tick}
 	for _, row := range m.rows {
@@ -156,6 +164,20 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		if len(m.pending) > 0 {
 			return m, nil
+		}
+		if m.resume != nil {
+			// Resume (I6, python history.py _rehydrate_group): a
+			// confident match enters the session directly, restored
+			// to the saved episode and dubs; anything else (including
+			// an empty result set) falls through to manual grouping
+			// with a note.
+			groups := GroupByTitle(m.results, rehydrateGroupThreshold)
+			if matched := RehydrateGroup(groups, *m.resume); matched != nil {
+				primary := primaryForResume(matched, *m.resume)
+				return m, replace(newResumedSession(m.deps, primary, matched, *m.resume))
+			}
+			return m, replace(newSearchGroupNoted(m.deps, m.results,
+				"Автопривязка не найдена — отметьте один тайтл и сгруппируйте вручную"))
 		}
 		if len(m.results) == 0 {
 			return m, pop()
@@ -205,12 +227,20 @@ func (m *searchProgress) View() tea.View {
 type searchGroup struct {
 	deps  *Deps
 	check *CheckList
+	// note renders above the checklist (resume fall-through notice).
+	note string
 }
 
 // NewSearchGroup builds the grouping screen over the flat result set.
 //
 //nolint:revive // internal screen type
 func NewSearchGroup(deps *Deps, results []contracts.SearchResult) *searchGroup {
+	return newSearchGroupNoted(deps, results, "")
+}
+
+// newSearchGroupNoted builds the grouping screen with an explanatory
+// note (the resume fall-through path, I6).
+func newSearchGroupNoted(deps *Deps, results []contracts.SearchResult, note string) *searchGroup {
 	items := make([]Choice, 0, len(results))
 	for i, r := range results {
 		items = append(items, Choice{
@@ -219,7 +249,7 @@ func NewSearchGroup(deps *Deps, results []contracts.SearchResult) *searchGroup {
 			Value: r,
 		})
 	}
-	return &searchGroup{deps: deps, check: NewCheckList("Результаты поиска — отметьте один тайтл", items)}
+	return &searchGroup{deps: deps, check: NewCheckList("Результаты поиска — отметьте один тайтл", items), note: note}
 }
 
 // ID implements Screen.
@@ -258,7 +288,27 @@ func (g *searchGroup) Update(msg tea.Msg) (Screen, tea.Cmd) {
 
 // View implements Screen.
 func (g *searchGroup) View() tea.View {
+	if g.note != "" {
+		return tea.NewView(theme.Warning.Render(g.note) + "\n" + g.check.Render())
+	}
 	return tea.NewView(g.check.Render())
+}
+
+// rehydrateGroupThreshold is the clustering similarity used before the
+// resume rehydrate match (same 0.6 family as the rebind flow).
+const rehydrateGroupThreshold = 0.6
+
+// primaryForResume picks the session primary: the group member that
+// matches the record's stored (source, url); else the record's own
+// source (python keeps the saved res as primary even when only a
+// similar group matched).
+func primaryForResume(group []contracts.SearchResult, rec storage.AnimeProgress) contracts.SearchResult {
+	for _, res := range group {
+		if res.SourceID == rec.SourceID && res.URL == rec.SourceURL {
+			return res
+		}
+	}
+	return contracts.SearchResult{Title: rec.Title, SourceID: rec.SourceID, URL: rec.SourceURL}
 }
 
 // searchSource picks the primary source of the freshly grouped title

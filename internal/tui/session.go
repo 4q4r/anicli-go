@@ -12,6 +12,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -72,8 +73,33 @@ type streamResolvedMsg struct {
 	err   error
 }
 
-// playedMsg settles one playback.
-type playedMsg struct{ err error }
+// playedMsg settles one playback; quality is the label actually used
+// so the model (not a snapshot copy) can remember it (I9).
+type playedMsg struct {
+	err     error
+	quality string
+}
+
+// shikiUpdatedMsg settles one manual «Изменить инфо» patch (I10):
+// a distinct verdict from playback, carrying the (new) rate id.
+type shikiUpdatedMsg struct {
+	err    error
+	rateID int64
+}
+
+// shikiBoundMsg settles the background shikimori id resolution (I5);
+// id 0 means "no confident match, binding skipped".
+type shikiBoundMsg struct {
+	id    int64
+	title string
+}
+
+// downloadSettledMsg reports a finished foreground download batch
+// (I8).
+type downloadSettledMsg struct {
+	count int
+	err   error
+}
 
 // sessionScreen is the watch-session state machine: a merged episode
 // aggregate over the grouped sources with the python session_loop
@@ -83,6 +109,9 @@ type sessionScreen struct {
 	deps    *Deps
 	primary contracts.SearchResult
 	group   []contracts.SearchResult
+	// resume carries the history record being continued, nil for a
+	// fresh search session (I5/I6).
+	resume *storage.AnimeProgress
 
 	// merged state
 	parts    []SourceEpisodes
@@ -95,6 +124,9 @@ type sessionScreen struct {
 	videoDub    string
 	audioDub    string
 	lastQuality string
+	// shikiRateID is the known shikimori rate id of the bound anime
+	// (0 = none yet); PATCHed instead of re-created on updates (I10).
+	shikiRateID int64
 
 	state sessionState
 
@@ -102,8 +134,14 @@ type sessionScreen struct {
 	episodeList *PinList // «Перейти к серии»
 	dubList     *PinList // video/audio dub pickers
 	qualityList *PinList
-	rangeInput  *TextPrompt // download range + info numeric fields
-	infoPrompt  *TextPrompt // score / rewatches entry
+	// infoList/statusList/modeList persist their submenus for the
+	// whole substate visit: rebuilding per keypress reset the cursor
+	// and made Enter always resolve Back (C2).
+	infoList   *PinList    // «Изменить инфо» submenu
+	statusList *PinList    // RU status picker
+	modeList   *PinList    // download mode picker
+	rangeInput *TextPrompt // download range + info numeric fields
+	infoPrompt *TextPrompt // score / rewatches entry
 
 	downloadEpisodes []string
 	resolvedLinks    map[string]contracts.VideoSource
@@ -126,10 +164,34 @@ func NewSessionScreen(deps *Deps, primary contracts.SearchResult, group []contra
 	}
 }
 
+// newResumedSession builds a session continued from a history record
+// (I5/I6): the stored shikimori binding is injected immediately and
+// the saved episode/dubs are restored once the merge finalizes.
+func newResumedSession(deps *Deps, primary contracts.SearchResult, group []contracts.SearchResult, rec storage.AnimeProgress) *sessionScreen {
+	s := NewSessionScreen(deps, primary, group)
+	if rec.ShikimoriID != nil && *rec.ShikimoriID != 0 {
+		s.setShikimoriBinding(*rec.ShikimoriID)
+	}
+	s.resume = &rec
+	return s
+}
+
+// setShikimoriBinding injects the shikimori id into the primary's
+// metadata (python: item.meta["shikimori_id"]); only primary.Meta is
+// consulted by the session flows.
+func (s *sessionScreen) setShikimoriBinding(id int64) {
+	if s.primary.Meta == nil {
+		s.primary.Meta = map[string]any{}
+	}
+	s.primary.Meta["shikimori_id"] = id
+}
+
 // ID implements Screen.
 func (s *sessionScreen) ID() string { return sessionScreenID }
 
-// Init implements Screen: fetch every source's episodes.
+// Init implements Screen: fetch every source's episodes and, for a
+// fresh session, resolve the shikimori binding in the background
+// (commands own their timeout contexts — see the App.ctx note).
 func (s *sessionScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{}
 	for _, res := range s.group {
@@ -141,8 +203,61 @@ func (s *sessionScreen) Init() tea.Cmd {
 			return episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err}
 		}))
 	}
+	if resolve := s.maybeShikiResolve(); resolve != nil {
+		cmds = append(cmds, resolve)
+	}
 	return tea.Batch(cmds...)
 }
+
+// maybeShikiResolve schedules the background shikimori binding for
+// fresh sessions (I5, python _resolve_shikimori_info): best
+// similarity-ratio match above 0.6 wins, anything less skips the
+// binding quietly with a log note.
+func (s *sessionScreen) maybeShikiResolve() tea.Cmd {
+	if s.deps == nil || s.deps.Shiki == nil || !s.deps.Shiki.Enabled() {
+		return nil
+	}
+	if s.shikimoriID() != 0 {
+		return nil // already bound (resumed session)
+	}
+	deps := s.deps
+	title := BestDisplayTitle(s.group)
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		return resolveShikiBinding(deps, title)
+	})
+}
+
+// resolveShikiBinding runs the binding lookup: SearchIDs over the
+// display title, best SequenceMatcher ratio (bug-compatible port)
+// must clear 0.6 or the binding is skipped with a note.
+func resolveShikiBinding(deps *Deps, title string) shikiBoundMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	defer cancel()
+	ids, err := deps.Shiki.SearchIDs(ctx, title)
+	if err != nil {
+		deps.logger().Warn("tui: shikimori id lookup failed; binding skipped",
+			"title", title, "error", err)
+		return shikiBoundMsg{}
+	}
+	bestTitle, bestID := "", int64(0)
+	bestRatio := 0.0
+	for cand, id := range ids {
+		ratio := providers.SimilarityRatio(strings.ToLower(title), strings.ToLower(cand))
+		if ratio > bestRatio {
+			bestRatio, bestTitle, bestID = ratio, cand, id
+		}
+	}
+	if bestID == 0 || bestRatio <= shikiBindMinRatio {
+		deps.logger().Info("tui: no confident shikimori match; binding skipped",
+			"title", title, "best", bestTitle)
+		return shikiBoundMsg{}
+	}
+	return shikiBoundMsg{id: bestID, title: bestTitle}
+}
+
+// shikiBindMinRatio is the python _resolve_shikimori_info confidence
+// threshold (difflib ratio > 0.6).
+const shikiBindMinRatio = 0.6
 
 // loadEpisodesSync is the synchronous loading path for tests and for
 // rehydration flows that already hold the parts.
@@ -186,9 +301,34 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.status = "Ошибка воспроизведения: " + msg.err.Error()
 			return s, nil
 		}
+		if msg.quality != "" {
+			s.lastQuality = msg.quality
+		}
 		s.status = "Воспроизведение завершено"
 		s.saveProgress()
 		return s, s.maybeNext()
+	case shikiUpdatedMsg:
+		if msg.err != nil {
+			s.status = "Ошибка обновления: " + msg.err.Error()
+			return s, nil
+		}
+		if msg.rateID != 0 {
+			s.shikiRateID = msg.rateID
+		}
+		s.status = "Информация обновлена"
+		return s, nil
+	case shikiBoundMsg:
+		if msg.id != 0 {
+			s.setShikimoriBinding(msg.id)
+		}
+		return s, nil
+	case downloadSettledMsg:
+		if msg.err != nil {
+			s.status = "Ошибка загрузки: " + msg.err.Error()
+			return s, nil
+		}
+		s.status = fmt.Sprintf("✓ Загружено серий: %d", msg.count)
+		return s, nil
 	case tea.KeyPressMsg:
 		return s.handleKey(msg)
 	default:
@@ -279,6 +419,7 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	case "info":
 		s.state = sessionStateInfoMenu
+		s.buildInfoList()
 		return s, nil
 	case "download":
 		if s.deps == nil || s.deps.Download == nil {
@@ -440,12 +581,14 @@ func (s *sessionScreen) playCmd(qualityChoice string) tea.Cmd {
 	}
 }
 
-// doPlay performs the synchronous play pipeline.
+// doPlay performs the synchronous play pipeline. It runs on a struct
+// snapshot, so the quality used travels back via playedMsg and the
+// live model applies it in Update (I9).
 func (s *sessionScreen) doPlay(qualityChoice string) tea.Msg {
 	ctx := context.Background()
 	ep := s.currentEpisodeData()
 
-	video, err := s.pickVideo(ctx, ep, qualityChoice)
+	video, usedQuality, err := s.pickVideo(ctx, ep, qualityChoice)
 	if err != nil {
 		return playedMsg{err: err}
 	}
@@ -487,26 +630,23 @@ func (s *sessionScreen) doPlay(qualityChoice string) tea.Msg {
 		ExtraMPVOpts: video.ExtraMPVOpts,
 		ChaptersFile: chapters,
 	})
-	if err == nil {
-		if q := qualityChoice; q != "auto" {
-			s.lastQuality = q
-		} else if video.Quality != "" {
-			s.lastQuality = video.Quality
-		}
+	if err != nil {
+		return playedMsg{err: err}
 	}
-	return playedMsg{err: err}
+	return playedMsg{quality: usedQuality}
 }
 
 // errNoPlayback reports an unwired playback service.
 var errNoPlayback = fmt.Errorf("tui: playback service unavailable")
 
-// pickVideo resolves the video variant for the chosen quality.
-func (s *sessionScreen) pickVideo(ctx context.Context, ep *contracts.Episode, qualityChoice string) (*contracts.VideoSource, error) {
+// pickVideo resolves the video variant for the chosen quality,
+// returning the source and the quality label actually used.
+func (s *sessionScreen) pickVideo(ctx context.Context, ep *contracts.Episode, qualityChoice string) (*contracts.VideoSource, string, error) {
 	links := s.resolvedLinks
 	if links == nil {
 		stream, err := s.deps.Episode.ResolveStream(ctx, providerOfTrackKey(s.videoDub), *ep, s.videoDub)
 		if err != nil {
-			return nil, fmt.Errorf("видео %s: %w", s.videoDub, err)
+			return nil, "", fmt.Errorf("видео %s: %w", s.videoDub, err)
 		}
 		links = stream.Links
 	}
@@ -520,16 +660,16 @@ func (s *sessionScreen) pickVideo(ctx context.Context, ep *contracts.Episode, qu
 		if quality == "auto" || quality == "" {
 			qualities := sortedQualityDesc(links)
 			if len(qualities) == 0 {
-				return nil, fmt.Errorf("нет потоков у %s", s.videoDub)
+				return nil, "", fmt.Errorf("нет потоков у %s", s.videoDub)
 			}
 			quality = qualities[0]
 		}
 	}
 	src, ok := links[quality]
 	if !ok {
-		return nil, fmt.Errorf("качество %s недоступно", quality)
+		return nil, "", fmt.Errorf("качество %s недоступно", quality)
 	}
-	return &src, nil
+	return &src, quality, nil
 }
 
 // pickAudio resolves the separate audio track when the dubs differ.
@@ -621,13 +761,16 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 	return s, nil
 }
 
-// handleInfoMenuKey drives the «Изменить инфо» submenu.
+// handleInfoMenuKey drives the «Изменить инфо» submenu over the
+// persisted list (C2).
 func (s *sessionScreen) handleInfoMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
-	menu := s.infoMenu()
-	if menu.list.HandleKey(key) {
+	if s.infoList == nil {
+		s.buildInfoList()
+	}
+	if s.infoList.HandleKey(key) {
 		return s, nil
 	}
-	resolved := ResolveKey(menu.list.Menu(), menu.list.Cursor(), key)
+	resolved := ResolveKey(s.infoList.Menu(), s.infoList.Cursor(), key)
 	if resolved == nil {
 		return s, nil
 	}
@@ -639,6 +782,7 @@ func (s *sessionScreen) handleInfoMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 	switch id {
 	case "status":
 		s.state = sessionStateInfoStatus
+		s.buildStatusList()
 	case "score":
 		s.state = sessionStateInfoScore
 		s.infoPrompt = NewTextPrompt(TextPromptConfig{ID: "info-score", Title: "Введите оценку (0-10):"})
@@ -651,26 +795,25 @@ func (s *sessionScreen) handleInfoMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 	return s, nil
 }
 
-// infoMenu builds the info submenu view model.
-func (s *sessionScreen) infoMenu() *MenuScreen {
-	return NewMenuScreen(MenuScreenConfig{
-		ID:    "session-info",
-		Title: "Что изменить?",
-		Choices: []Choice{
-			{ID: "status", Label: "Статус"},
-			{ID: "score", Label: "Оценка"},
-			{ID: "rewatches", Label: "Пересмотры"},
-		},
-	})
+// buildInfoList renders the info submenu once per visit.
+func (s *sessionScreen) buildInfoList() {
+	s.infoList = NewPinList(NewMenu("Что изменить?", "", []Choice{
+		{ID: "status", Label: "Статус"},
+		{ID: "score", Label: "Оценка"},
+		{ID: "rewatches", Label: "Пересмотры"},
+	}...), defaultListHeight)
 }
 
-// handleInfoStatusKey drives the RU status picker.
+// handleInfoStatusKey drives the RU status picker over the persisted
+// list (C2).
 func (s *sessionScreen) handleInfoStatusKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
-	menu := s.statusMenu()
-	if menu.list.HandleKey(key) {
+	if s.statusList == nil {
+		s.buildStatusList()
+	}
+	if s.statusList.HandleKey(key) {
 		return s, nil
 	}
-	resolved := ResolveKey(menu.list.Menu(), menu.list.Cursor(), key)
+	resolved := ResolveKey(s.statusList.Menu(), s.statusList.Cursor(), key)
 	if resolved == nil {
 		return s, nil
 	}
@@ -683,13 +826,13 @@ func (s *sessionScreen) handleInfoStatusKey(key tea.KeyPressMsg) (Screen, tea.Cm
 	return s, s.pushShikiUpdate(statusKey, nil, nil)
 }
 
-// statusMenu builds the RU status picker.
-func (s *sessionScreen) statusMenu() *MenuScreen {
+// buildStatusList renders the RU status picker once per visit.
+func (s *sessionScreen) buildStatusList() {
 	choices := make([]Choice, 0, len(ruStatuses))
 	for _, st := range ruStatuses {
 		choices = append(choices, Choice{ID: st.Key, Label: st.Label, Value: st.Key})
 	}
-	return NewMenuScreen(MenuScreenConfig{ID: "session-status", Title: "Выберите статус:", Choices: choices})
+	s.statusList = NewPinList(NewMenu("Выберите статус:", "", choices...), defaultListHeight)
 }
 
 // handleInfoNumericKey submits score/rewatches.
@@ -710,15 +853,20 @@ func (s *sessionScreen) handleInfoNumericKey(key tea.KeyPressMsg) (Screen, tea.C
 		return s, nil
 	}
 	v := value
+	// Branch on the ORIGINAL substate before returning to the menu —
+	// the score prompt must submit as score, not rewatches (C1).
+	wasScore := s.state == sessionStateInfoScore
 	s.state = sessionStateMenu
-	if s.state == sessionStateInfoScore {
+	if wasScore {
 		return s, s.pushShikiUpdate("", &v, nil)
 	}
 	return s, s.pushShikiUpdate("", nil, &v)
 }
 
 // pushShikiUpdate applies the manual status patch (python
-// update_shikimori_status_manual port).
+// update_shikimori_status_manual port). The settle is the dedicated
+// shikiUpdatedMsg (I10); the rate id is looked up, reused and
+// persisted so repeated patches PATCH instead of duplicating rates.
 func (s *sessionScreen) pushShikiUpdate(status string, score, rewatches *int) tea.Cmd {
 	if s.deps == nil || s.deps.Shiki == nil || !s.deps.Shiki.Enabled() {
 		s.status = "Shikimori отключён — обновление только локально невозможно"
@@ -730,14 +878,39 @@ func (s *sessionScreen) pushShikiUpdate(status string, score, rewatches *int) te
 		return nil
 	}
 	deps := s.deps
+	knownRate := s.shikiRateID
 	return safeCmd(sessionScreenID, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-		defer cancel()
-		if _, err := deps.Shiki.UpdateStatus(ctx, id, 0, status, score, rewatches); err != nil {
-			return playedMsg{err: fmt.Errorf("shikimori: %w", err)}
-		}
-		return playedMsg{}
+		return pushShikiUpdateCmd(deps, id, knownRate, status, score, rewatches)
 	})
+}
+
+// pushShikiUpdateCmd runs one patch: resolve the stored rate id (the
+// session's, else the history row's), PATCH it when present or create
+// and persist a new one (SyncEpisodeProgress pattern — the id write
+// survives caller cancellation so the next patch reuses it).
+func pushShikiUpdateCmd(deps *Deps, shikimoriID, knownRate int64, status string, score, rewatches *int) shikiUpdatedMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	defer cancel()
+	rateID, animeID := knownRate, int64(0)
+	if rateID == 0 && deps.History != nil {
+		if rec, err := deps.History.GetByShikimoriID(ctx, shikimoriID); err == nil && rec != nil {
+			animeID = rec.ID
+			if rec.ShikimoriRateID != nil {
+				rateID = *rec.ShikimoriRateID
+			}
+		}
+	}
+	newRate, err := deps.Shiki.UpdateStatus(ctx, shikimoriID, rateID, status, score, rewatches)
+	if err != nil {
+		return shikiUpdatedMsg{err: fmt.Errorf("shikimori: %w", err)}
+	}
+	if rateID == 0 && newRate != 0 && animeID != 0 && deps.History != nil {
+		if err := deps.History.SetRateID(context.WithoutCancel(ctx), animeID, newRate); err != nil {
+			deps.logger().Warn("tui: persist shikimori rate id failed",
+				"anime", animeID, "error", err)
+		}
+	}
+	return shikiUpdatedMsg{rateID: newRate}
 }
 
 // handleDownloadRangeKey parses the range and moves to the mode pick.
@@ -769,16 +942,20 @@ func (s *sessionScreen) handleDownloadRangeKey(key tea.KeyPressMsg) (Screen, tea
 		return s, nil
 	}
 	s.state = sessionStateDownloadMode
+	s.buildModeList()
 	return s, nil
 }
 
-// handleDownloadModeKey dispatches foreground/background downloads.
+// handleDownloadModeKey dispatches foreground/background downloads
+// over the persisted mode list (C2).
 func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
-	menu := s.downloadModeMenu()
-	if menu.list.HandleKey(key) {
+	if s.modeList == nil {
+		s.buildModeList()
+	}
+	if s.modeList.HandleKey(key) {
 		return s, nil
 	}
-	resolved := ResolveKey(menu.list.Menu(), menu.list.Cursor(), key)
+	resolved := ResolveKey(s.modeList.Menu(), s.modeList.Cursor(), key)
 	if resolved == nil {
 		return s, nil
 	}
@@ -806,14 +983,18 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	}
 	switch mode {
 	case "foreground":
-		cmds := make([]tea.Cmd, 0, len(tasks))
-		for _, task := range tasks {
-			cmds = append(cmds, safeCmd(sessionScreenID, func() tea.Msg {
-				return downloadSettledMsg{err: s.deps.Download.Download(context.Background(), task)}
-			}))
-		}
-		s.status = fmt.Sprintf("Загрузка %d серий (передний план)…", len(tasks))
-		return s, tea.Sequence(cmds...)
+		deps := s.deps
+		count := len(tasks)
+		s.status = fmt.Sprintf("Загрузка %d серий (передний план)…", count)
+		return s, safeCmd(sessionScreenID, func() tea.Msg {
+			var firstErr error
+			for _, task := range tasks {
+				if err := deps.Download.Download(context.Background(), task); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			return downloadSettledMsg{count: count, err: firstErr}
+		})
 	case "background":
 		for _, task := range tasks {
 			s.deps.Download.Submit(task)
@@ -825,21 +1006,16 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	}
 }
 
-// downloadSettledMsg reports one finished foreground download.
-type downloadSettledMsg struct{ err error }
-
-// downloadModeMenu builds the foreground/background picker.
-func (s *sessionScreen) downloadModeMenu() *MenuScreen {
-	return NewMenuScreen(MenuScreenConfig{
-		ID:    "download-mode",
-		Title: "Режим загрузки:",
-		Choices: []Choice{
-			{ID: "foreground", Label: "⏳ Передний план (последовательно)", Value: "foreground"},
-			{ID: "background", Label: "🔁 Фон (продолжить работу)", Value: "background"},
-		},
-		Status: s.deps.Download.ActiveBanner(),
-	})
+// buildModeList renders the foreground/background picker once per
+// visit (C2).
+func (s *sessionScreen) buildModeList() {
+	s.modeList = NewPinList(NewMenu("Режим загрузки:", "", []Choice{
+		{ID: "foreground", Label: "⏳ Передний план (последовательно)", Value: "foreground"},
+		{ID: "background", Label: "🔁 Фон (продолжить работу)", Value: "background"},
+	}...), defaultListHeight)
 }
+
+// downloadSettledMsg reports one finished foreground download.
 
 // finalizeMerge assembles the merged aggregate and the action menu.
 func (s *sessionScreen) finalizeMerge() {
@@ -852,6 +1028,33 @@ func (s *sessionScreen) finalizeMerge() {
 	s.attachLocalCounts()
 	s.buildActionMenu()
 	s.buildEpisodeList()
+	s.restoreResume()
+}
+
+// restoreResume re-applies the history record's saved episode and dub
+// preferences once the merge is final (I6, python session_loop's
+// start_episode / initial dubs).
+func (s *sessionScreen) restoreResume() {
+	if s.resume == nil {
+		return
+	}
+	rec := *s.resume
+	for i, n := range s.order {
+		if n == rec.CurrentEpisode {
+			s.currentIdx = i
+			break
+		}
+	}
+	if rec.VideoDub != nil && *rec.VideoDub != "" {
+		s.videoDub = *rec.VideoDub
+	}
+	if rec.AudioDub != nil && *rec.AudioDub != "" {
+		s.audioDub = *rec.AudioDub
+	}
+	if rec.ShikimoriRateID != nil && *rec.ShikimoriRateID != 0 {
+		s.shikiRateID = *rec.ShikimoriRateID
+	}
+	s.buildActionMenu()
 }
 
 // buildActionMenu renders the python session_loop choices.
@@ -969,9 +1172,10 @@ func (s *sessionScreen) renderEpisodeList() string {
 
 // renderInfoMenu renders the info submenu surface.
 func (s *sessionScreen) renderInfoMenu() string {
-	menu := s.infoMenu()
-	// reflect the live cursor: cheap rebuild for rendering only
-	return menu.View().Content
+	if s.infoList == nil {
+		s.buildInfoList()
+	}
+	return theme.Title.Render("Что изменить?") + "\n" + s.infoList.Render()
 }
 
 // View implements Screen.
@@ -994,13 +1198,26 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateInfoMenu:
 		body = s.renderInfoMenu()
 	case sessionStateInfoStatus:
-		body = s.statusMenu().View().Content
+		if s.statusList == nil {
+			s.buildStatusList()
+		}
+		body = theme.Title.Render("Выберите статус:") + "\n" + s.statusList.Render()
 	case sessionStateInfoScore, sessionStateInfoRewatches:
 		body = s.infoPrompt.View().Content
 	case sessionStateDownloadRange:
 		body = s.rangeInput.View().Content
 	case sessionStateDownloadMode:
-		body = s.downloadModeMenu().View().Content
+		if s.modeList == nil {
+			s.buildModeList()
+		}
+		banner := ""
+		if s.deps != nil && s.deps.Download != nil {
+			banner = s.deps.Download.ActiveBanner()
+		}
+		if banner != "" {
+			banner = theme.StatusLine.Render(banner) + "\n"
+		}
+		body = theme.Title.Render("Режим загрузки:") + "\n" + banner + s.modeList.Render()
 	default:
 		body = s.list.Render()
 	}

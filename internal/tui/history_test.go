@@ -14,9 +14,11 @@ import (
 
 // fakeHistory implements HistoryService.
 type fakeHistory struct {
-	items []storage.AnimeProgress
-	saved []int64
-	binds []int64
+	items   []storage.AnimeProgress
+	saved   []int64
+	binds   []int64
+	byShiki map[int64]*storage.AnimeProgress
+	rateIDs map[int64]int64 // animeID -> last SetRateID
 }
 
 func (f *fakeHistory) List(_ context.Context) ([]storage.AnimeProgress, error) {
@@ -33,24 +35,64 @@ func (f *fakeHistory) BindSource(_ context.Context, id int64, _, _ string) error
 	return nil
 }
 
+func (f *fakeHistory) GetByShikimoriID(_ context.Context, shikimoriID int64) (*storage.AnimeProgress, error) {
+	if rec, ok := f.byShiki[shikimoriID]; ok {
+		return rec, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeHistory) SetRateID(_ context.Context, animeID, rateID int64) error {
+	if f.rateIDs == nil {
+		f.rateIDs = map[int64]int64{}
+	}
+	f.rateIDs[animeID] = rateID
+	return nil
+}
+
 var _ HistoryService = (*fakeHistory)(nil)
 
 // fakeShiki implements ShikimoriService.
 type fakeShiki struct {
 	enabled bool
 	updates []shikiUpdate
+	// rateIDs records the rate id received per UpdateStatus call
+	// (0 = the create/POST path).
+	rateIDs []int64
+	// queries records SearchIDs lookups; ids is their fixture.
+	queries []string
+	ids     map[string]int64
+	// next is the rate id returned for the next create (PATCH echoes
+	// the incoming id).
+	next int64
 }
 
 type shikiUpdate struct {
 	shikimoriID int64
+	rateID      int64
 	status      string
+	score       *int
+	rewatches   *int
 }
 
 func (f *fakeShiki) Enabled() bool { return f.enabled }
 
-func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, _ int64, status string, _, _ *int) (int64, error) {
-	f.updates = append(f.updates, shikiUpdate{shikimoriID: shikimoriID, status: status})
-	return 42, nil
+func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, rateID int64, status string, score, rewatches *int) (int64, error) {
+	f.updates = append(f.updates, shikiUpdate{
+		shikimoriID: shikimoriID, rateID: rateID, status: status,
+		score: score, rewatches: rewatches,
+	})
+	f.rateIDs = append(f.rateIDs, rateID)
+	if rateID > 0 {
+		return rateID, nil
+	}
+	f.next++
+	return f.next, nil
+}
+
+func (f *fakeShiki) SearchIDs(_ context.Context, query string) (map[string]int64, error) {
+	f.queries = append(f.queries, query)
+	return f.ids, nil
 }
 
 var _ ShikimoriService = (*fakeShiki)(nil)
@@ -262,6 +304,129 @@ func TestDBMenuConfirmFlow(t *testing.T) {
 			t.Fatalf("confirm must run the clear, got %v", db.cleared)
 		}
 	})
+
+	t.Run("cleared feedback lands and enter leaves (I7)", func(t *testing.T) {
+		db2 := &fakeDatabase{}
+		deps2 := &Deps{Database: db2, Log: testLogger()}
+		m := NewDBMenu(deps2)
+		idx := dbActionIndex(m, "clear_history")
+		m.list.Jump(idx)
+		_, cmd := m.Update(enter())
+		conf := cmd().(pushMsg).screen
+		next, cmd := conf.Update(enter()) // Да
+		cleared := cmd()
+		cm, ok := cleared.(dbClearedMsg)
+		if !ok {
+			t.Fatalf("clear must settle into dbClearedMsg, got %T", cleared)
+		}
+		// The screen must CONSUME dbClearedMsg: counts on the status
+		// line, no silent drop.
+		next, _ = next.Update(cm)
+		if !contains(next.View().Content, "Удалено 7") {
+			t.Fatalf("cleared counts must render:\n%s", next.View().Content)
+		}
+		// Enter after clearing pops back instead of re-clearing.
+		_, cmd = next.Update(enter())
+		if cmd == nil {
+			t.Fatalf("enter after clear must leave the screen")
+		}
+		if _, ok := cmd().(popMsg); !ok {
+			t.Fatalf("enter after clear must pop, got %#v", cmd())
+		}
+		if len(db2.cleared) != 1 {
+			t.Fatalf("no second clear may run, got %v", db2.cleared)
+		}
+	})
+}
+
+// TestHistoryResumeAutoEntersSession (I6): resume with matching
+// results skips manual grouping and enters the session restored to
+// the saved episode and dubs, carrying the shikimori binding.
+func TestHistoryResumeAutoEntersSession(t *testing.T) {
+	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
+		results: map[string][]contracts.SearchResult{
+			"animego": {{Title: "Ванпанчмен", URL: "u1", SourceID: "animego"}},
+		},
+		queries: map[string]string{}}
+	ep := &fakeEpisode{
+		episodes: testEpisodeSet(),
+		streams: map[string]contracts.MediaStream{
+			"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"1080": {URL: "v1080"}}},
+		},
+	}
+	deps := &Deps{Search: fs, Episode: ep, Playback: &fakePlayback{}, Log: testLogger()}
+	rec := historyItems()[0] // Ванпанчмен animego u1, shikimori 11
+	rec.CurrentEpisode = "2"
+	rec.VideoDub = ptrTo("[animego] Дубль 1")
+	rec.AudioDub = ptrTo("[animego] Дубль 1")
+
+	app := NewApp(NewRootScreen(deps), deps, testLogger())
+	model := drive(app, pushMsg{screen: newHistoryResume(deps, &rec)})
+
+	// Enter on the settled fan-out: auto-match replaces the screen
+	// with the resumed session.
+	top := topOf(model)
+	_, cmd := top.Update(enter())
+	if cmd == nil {
+		t.Fatalf("enter on settled resume must advance")
+	}
+	rm, ok := cmd().(replaceMsg)
+	if !ok {
+		t.Fatalf("resume must replace with the session, got %T", cmd())
+	}
+	if _, ok := rm.screen.(*sessionScreen); !ok {
+		t.Fatalf("resume must enter a session, got %T", rm.screen)
+	}
+
+	// Drive the session's own Init (episode fan-out) through the app.
+	model = drive(model, replaceMsg{screen: rm.screen})
+	sess := topOf(model).(*sessionScreen)
+	if sess.state != sessionStateMenu {
+		t.Fatalf("session must land on the menu, got %v", sess.state)
+	}
+	if sess.currentEpisode() != "2" {
+		t.Fatalf("session must resume at the saved episode, got %q", sess.currentEpisode())
+	}
+	if sess.videoDub != "[animego] Дубль 1" || sess.audioDub != "[animego] Дубль 1" {
+		t.Fatalf("session must restore dubs, got %q/%q", sess.videoDub, sess.audioDub)
+	}
+	if sess.shikimoriID() != 11 {
+		t.Fatalf("session must carry the record's shikimori binding, got %d", sess.shikimoriID())
+	}
+}
+
+// TestHistoryResumeNoMatchFallsToManualGrouping (I6): without a
+// confident match, resume falls through to the manual grouping screen
+// with a note.
+func TestHistoryResumeNoMatchFallsToManualGrouping(t *testing.T) {
+	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
+		results: map[string][]contracts.SearchResult{
+			"animego": {{Title: "Совсем Другое Аниме", URL: "u9", SourceID: "animego"}},
+		},
+		queries: map[string]string{}}
+	deps := &Deps{Search: fs, Episode: &fakeEpisode{episodes: testEpisodeSet()}, Log: testLogger()}
+	rec := historyItems()[0]
+	rec.SourceURL = "u-changed"
+
+	app := NewApp(NewRootScreen(deps), deps, testLogger())
+	model := drive(app, pushMsg{screen: newHistoryResume(deps, &rec)})
+
+	top := topOf(model)
+	_, cmd := top.Update(enter())
+	if cmd == nil {
+		t.Fatalf("enter on settled resume must advance")
+	}
+	rm, ok := cmd().(replaceMsg)
+	if !ok {
+		t.Fatalf("no-match resume must fall through to grouping, got %T", cmd())
+	}
+	group, ok := rm.screen.(*searchGroup)
+	if !ok {
+		t.Fatalf("expected the manual grouping screen, got %T", rm.screen)
+	}
+	if !contains(group.View().Content, "сгруппируйте вручную") {
+		t.Fatalf("fall-through must carry a note:\n%s", group.View().Content)
+	}
 }
 
 func dbActionIndex(m *MenuScreen, id string) int {

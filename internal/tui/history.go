@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,11 +32,11 @@ func historyStatusChoices(items []storage.AnimeProgress) []Choice {
 	for _, st := range ruStatuses {
 		choices = append(choices, Choice{
 			ID:    st.Key,
-			Label: st.Label + " [" + intToStr(counts[st.Key]) + "]",
+			Label: st.Label + " [" + strconv.Itoa(counts[st.Key]) + "]",
 			Value: st.Key,
 		})
 	}
-	choices = append(choices, Choice{ID: "all", Label: "Все [" + intToStr(len(items)) + "]", Value: ""})
+	choices = append(choices, Choice{ID: "all", Label: "Все [" + strconv.Itoa(len(items)) + "]", Value: ""})
 	return choices
 }
 
@@ -48,26 +49,6 @@ func FilterHistory(items []storage.AnimeProgress, status string) []storage.Anime
 		}
 	}
 	return out
-}
-
-// intToStr renders a small integer.
-func intToStr(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	digits := ""
-	for v > 0 {
-		digits = string(rune('0'+v%10)) + digits
-		v /= 10
-	}
-	if neg {
-		return "-" + digits
-	}
-	return digits
 }
 
 // NewHistoryFilter builds the status filter screen — always the FIRST
@@ -145,11 +126,11 @@ func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *Men
 		it := filtered[i]
 		ep := it.CurrentEpisode
 		if it.TotalEpisodes > 0 {
-			ep += "/" + intToStr(it.TotalEpisodes)
+			ep += "/" + strconv.Itoa(it.TotalEpisodes)
 		}
 		label := historyBadge(it) + " " + it.Title + " (Серия " + ep + ")"
 		choices = append(choices, Choice{
-			ID:    intToStr(int(it.ID)),
+			ID:    strconv.Itoa(int(it.ID)),
 			Label: label,
 			Value: &filtered[i],
 		})
@@ -255,7 +236,8 @@ func newRebindProgress(deps *Deps, rec *storage.AnimeProgress, query string) *re
 // ID implements Screen.
 func (r *rebindProgress) ID() string { return historyRebindID + "-search" }
 
-// Init implements Screen.
+// Init implements Screen: one safe search command per provider.
+// Commands own their timeout contexts — see the App.ctx note.
 func (r *rebindProgress) Init() tea.Cmd {
 	providers := r.deps.Search.Providers()
 	cmds := make([]tea.Cmd, 0, len(providers))
@@ -323,8 +305,8 @@ func (r *rebindProgress) buildGroupList(groups [][]contracts.SearchResult) {
 			sources = append(sources, res.SourceID)
 		}
 		choices = append(choices, Choice{
-			ID:    "g" + intToStr(i),
-			Label: BestDisplayTitle(g) + " (" + intToStr(len(sources)) + " ист.) [" + strings.Join(dedupe(sources), ", ") + "]",
+			ID:    "g" + strconv.Itoa(i),
+			Label: BestDisplayTitle(g) + " (" + strconv.Itoa(len(sources)) + " ист.) [" + strings.Join(dedupe(sources), ", ") + "]",
 			Value: g,
 		})
 	}
@@ -356,9 +338,13 @@ func (r *rebindProgress) View() tea.View {
 
 // newHistoryResume rehydrates the source group and opens the resume
 // fan-out (python _rehydrate_group): the standard search progress
-// surface driven by the record's bound title.
+// surface driven by the record's bound title, with the record
+// attached so a confident auto-match enters the session directly
+// (I6).
 func newHistoryResume(deps *Deps, rec *storage.AnimeProgress) *searchProgress {
-	return NewSearchProgress(deps, derefStr(rec.BoundTitle, rec.Title))
+	m := NewSearchProgress(deps, derefStr(rec.BoundTitle, rec.Title))
+	m.resume = rec
+	return m
 }
 
 // RehydrateGroup applies the two-strategy match over similarity

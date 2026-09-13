@@ -77,11 +77,12 @@ func NewMenu(title, emptyMessage string, choices ...Choice) Menu {
 }
 
 // RenderItems renders the plain-text item labels, one per line, in
-// menu order (Back first, I1). Styling is applied by the screen layer;
-// this pure rendering keeps the invariant observable in tests.
+// menu order (Back first, I1). An empty menu keeps the Back row and
+// appends the empty-state message below it — the same layout
+// PinList.Render uses for empty menus.
 func (m Menu) RenderItems() string {
 	if len(m.Items) == 1 && m.EmptyMessage != "" {
-		return m.EmptyMessage
+		return BackLabel + "\n" + m.EmptyMessage
 	}
 	lines := make([]string, 0, len(m.Items))
 	for _, item := range m.Items {

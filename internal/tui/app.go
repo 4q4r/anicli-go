@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -296,6 +297,12 @@ type Deps struct {
 	Health   HealthService
 	Shiki    ShikimoriService
 	Download DownloadService
+	// Metadata expands the hybrid search variants (PR24); nil skips
+	// enrichment.
+	Metadata MetadataService
+	// SearchTimeout bounds ONE provider's whole fan-out participation
+	// (all its query variants); 0 means the package default (30s).
+	SearchTimeout time.Duration
 	// Log is the diagnostics sink for quiet-skip notes (shikimori
 	// binding etc.); nil degrades to slog.Default().
 	Log *slog.Logger

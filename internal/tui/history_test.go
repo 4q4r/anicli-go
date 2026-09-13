@@ -183,7 +183,7 @@ func TestHistoryListRendering(t *testing.T) {
 func TestHistoryItemActions(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
-	list.list.Jump(1) // Ванпанчмен
+	list.list.Jump(0) // Ванпанчмен
 	next, cmd := list.Update(enter())
 	if cmd == nil {
 		t.Fatalf("pick must navigate")
@@ -205,7 +205,7 @@ func TestHistoryItemActions(t *testing.T) {
 func TestHistoryNeedsCorrection(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
-	list.list.Jump(2) // Bleach (needs_correction)
+	list.list.Jump(1) // Bleach (needs_correction)
 	_, cmd := list.Update(enter())
 	msg := cmd()
 	pm, ok := msg.(pushMsg)
@@ -347,7 +347,7 @@ func TestHistoryResumeAutoEntersSession(t *testing.T) {
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Ванпанчмен", URL: "u1", SourceID: "animego"}},
 		},
-		queries: map[string]string{}}
+		queries: map[string][]string{}}
 	ep := &fakeEpisode{
 		episodes: testEpisodeSet(),
 		streams: map[string]contracts.MediaStream{
@@ -403,7 +403,7 @@ func TestHistoryResumeNoMatchFallsToManualGrouping(t *testing.T) {
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Совсем Другое Аниме", URL: "u9", SourceID: "animego"}},
 		},
-		queries: map[string]string{}}
+		queries: map[string][]string{}}
 	deps := &Deps{Search: fs, Episode: &fakeEpisode{episodes: testEpisodeSet()}, Log: testLogger()}
 	rec := historyItems()[0]
 	rec.SourceURL = "u-changed"

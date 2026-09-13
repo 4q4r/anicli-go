@@ -65,8 +65,12 @@ type General struct {
 type Network struct {
 	ConnectTimeout time.Duration `toml:"connect_timeout"`
 	RequestTimeout time.Duration `toml:"request_timeout"`
-	MaxParallel    int           `toml:"max_parallel"`
-	UserAgent      string        `toml:"user_agent"`
+	// SearchTimeout bounds ONE provider's whole participation in a
+	// search fan-out or doctor check (all its query variants) — the
+	// PR24 slow-provider ceiling. Default 30s.
+	SearchTimeout time.Duration `toml:"search_timeout"`
+	MaxParallel   int           `toml:"max_parallel"`
+	UserAgent     string        `toml:"user_agent"`
 	// ProxyURL is the global proxy (http/https/socks5); empty = direct.
 	ProxyURL string `toml:"proxy_url"`
 }
@@ -204,6 +208,7 @@ func Default() Settings {
 		Network: Network{
 			ConnectTimeout: 10 * time.Second,
 			RequestTimeout: 30 * time.Second,
+			SearchTimeout:  30 * time.Second,
 			MaxParallel:    4,
 			UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 				"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

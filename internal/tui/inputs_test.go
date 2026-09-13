@@ -74,7 +74,8 @@ func TestCheckboxMultiSelect(t *testing.T) {
 
 	t.Run("space toggles the item under the cursor", func(t *testing.T) {
 		cb := NewCheckList("Группировка", items)
-		cb.MoveDown() // to r1
+		// Cursor starts on r1 (PR24: first body item, no Back row on
+		// top to skip past).
 		cb.Toggle()
 		if !cb.Checked(0) {
 			t.Fatalf("r1 must be checked after toggle")
@@ -87,11 +88,10 @@ func TestCheckboxMultiSelect(t *testing.T) {
 
 	t.Run("enter returns the checked subset in order", func(t *testing.T) {
 		cb := NewCheckList("Группировка", items)
+		cb.Toggle() // r1 (cursor starts there)
 		cb.MoveDown()
-		cb.Toggle() // r1
-		cb.MoveDown()
-		cb.Toggle() // r3... wait cursor is now r2 -> toggling r2
-		cb.Toggle() // untoggle
+		cb.Toggle() // r2
+		cb.Toggle() // untoggle r2
 		cb.MoveDown()
 		cb.Toggle() // r3
 		got := cb.CheckedItems()
@@ -168,7 +168,7 @@ func TestCheckListSelectAllToggle(t *testing.T) {
 	}
 
 	// space toggles one off, then 'i' restores
-	cl.MoveDown() // cursor on item 0
+	cl.MoveDown() // cursor on item 1
 	cl.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace})
 	if got := len(cl.CheckedItems()); got != 2 {
 		t.Fatalf("space: got %d, want 2", got)

@@ -15,6 +15,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/player"
 	"github.com/an0nx/anicli-go/internal/providers"
@@ -52,6 +53,10 @@ func NewRealDeps(settings config.Settings, store *storage.Store) (*RealDeps, err
 		return nil, fmt.Errorf("build shikimori transport: %w", err)
 	}
 
+	// The hybrid search's alias source (PR24): metadata providers over
+	// the shikimori transport (AniList/Kitsu/anisearch/anidb).
+	metaManager := metadata.NewManager(metadata.DefaultProviders(shikiNet), nil, nil)
+
 	real := &realCore{
 		registry: registry,
 		store:    store,
@@ -76,8 +81,21 @@ func NewRealDeps(settings config.Settings, store *storage.Store) (*RealDeps, err
 		Health:   &realHealth{registry: registry, timeout: settings.Network.ConnectTimeout},
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
 		Download: &realDownload{manager: manager, core: real},
+		Metadata: realMetadata{manager: metaManager},
+		// The per-provider fan-out ceiling (network.search_timeout,
+		// default 30s — PR24).
+		SearchTimeout: settings.Network.SearchTimeout,
 	}
 	return &RealDeps{Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet, registry: registry}, nil
+}
+
+// realMetadata adapts the metadata manager onto the TUI service
+// interface.
+type realMetadata struct{ manager *metadata.Manager }
+
+// SearchAlternativeTitles resolves the alias set of one query.
+func (m realMetadata) SearchAlternativeTitles(ctx context.Context, query string) ([]string, error) {
+	return m.manager.SearchAlternativeTitles(ctx, query)
 }
 
 // Close releases the background resources. The netclient needs no
@@ -115,6 +133,11 @@ func (s *realSearch) Providers() []ProviderMeta {
 		out = append(out, ProviderMeta{ID: p.ID(), Name: p.Name()})
 	}
 	return out
+}
+
+// DisabledProviders surfaces the startup exclusion set (PR24).
+func (s *realSearch) DisabledProviders() []providers.DisabledProvider {
+	return s.registry.Disabled()
 }
 
 func (s *realSearch) Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error) {

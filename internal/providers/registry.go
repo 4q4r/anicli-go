@@ -20,6 +20,10 @@ const statWriteTimeout = 5 * time.Second
 type Registry struct {
 	order []contracts.Provider
 	byID  map[string]contracts.Provider
+	// disabled records providers excluded at startup because they
+	// cannot run without user configuration (PR24); the health and
+	// doctor surfaces render them as ОТКЛЮЧЁН.
+	disabled []DisabledProvider
 	// cfClose releases the shared CF-bypass stack (browser session +
 	// updater ticker) when the registry was built with [cf].enabled;
 	// nil otherwise.
@@ -51,6 +55,12 @@ func (r *Registry) Register(p contracts.Provider) error {
 	r.byID[id] = p
 	r.order = append(r.order, p)
 	return nil
+}
+
+// Disabled returns the providers excluded at startup for missing
+// configuration, with their user-facing reasons (PR24).
+func (r *Registry) Disabled() []DisabledProvider {
+	return append([]DisabledProvider(nil), r.disabled...)
 }
 
 // Get returns the provider registered under id.

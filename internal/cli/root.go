@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -121,11 +120,17 @@ func newVersionCommand() *cobra.Command {
 
 // runTUI is the default face: loads settings, wires the real service
 // set and runs the bubbletea v2 application until quit; SIGINT/SIGTERM
-// cancel the app context for a graceful exit.
-func runTUI(ctx context.Context, _ io.Writer, settingsPath string) error {
+// cancel the app context for a graceful exit. Providers disabled for
+// missing configuration print a red startup notice before the
+// alt-screen takes over (PR24).
+func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	settings, err := loadSettingsOrFail(settingsPath)
 	if err != nil {
 		return err
+	}
+
+	for _, notice := range startupNotices(*settings) {
+		startupRed(out, notice)
 	}
 
 	dbPath, err := settings.DBPath()
@@ -204,36 +209,7 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 	return app.ServeBind(signalCtx)
 }
 
-// runDoctor prints environment diagnostics. For now it enumerates the
-// registered providers: registry construction only builds clients, no
-// network egress happens. Providers excluded via [providers].exclude
-// keep a slot marked [excluded] so their omission from the fan-out is
-// visible (PR23). Real health checks land at G6.
-func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
-	_, _ = fmt.Fprintln(out, "anicli doctor")
-
-	settings, err := loadSettingsOrFail(settingsPath)
-	if err != nil {
-		return err
-	}
-
-	reg, err := providers.NewRegistry(*settings, nil)
-	if err != nil {
-		return fmt.Errorf("build provider registry: %w", err)
-	}
-	defer func() { _ = reg.Close() }()
-
-	ids := make([]string, 0, len(reg.List())+len(settings.Providers.Exclude))
-	for _, p := range reg.List() {
-		ids = append(ids, p.ID())
-	}
-	for _, id := range settings.Providers.Exclude {
-		ids = append(ids, id+" [excluded]")
-	}
-	_, _ = fmt.Fprintf(out, "providers (%d): %s\n", len(ids), strings.Join(ids, ", "))
-	_, _ = fmt.Fprintln(out, "health checks: not implemented yet")
-	return nil
-}
+// runDoctor lives in doctor.go (PR24 search-based diagnostics).
 
 // loadSettingsOrFail resolves the effective settings for a command,
 // failing loudly on a broken settings file (config.Load already treats a

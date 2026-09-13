@@ -5,6 +5,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -19,11 +20,25 @@ type ProviderMeta struct {
 // resolves independently into a live status row (python
 // search_provider_task port).
 type SearchService interface {
-	// Providers lists the registered providers in registry order.
+	// Providers lists the registered (searchable) providers in
+	// registry order — the fan-out roster.
 	Providers() []ProviderMeta
+	// DisabledProviders lists providers excluded at startup for
+	// missing configuration (PR24): they never join the fan-out and
+	// the health surface renders them as ОТКЛЮЧЁН.
+	DisabledProviders() []providers.DisabledProvider
 	// Search queries one provider. Errors mark the provider's row as
 	// failed but never abort the fan-out.
 	Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error)
+}
+
+// MetadataService resolves alternative titles for the hybrid search
+// (PR24): the Shikimori-matched title expands into aliases from the
+// metadata providers (AniList/Kitsu/anisearch/anidb).
+type MetadataService interface {
+	// SearchAlternativeTitles returns normalized unique aliases for a
+	// query. Errors mean "no enrichment"; callers fall back.
+	SearchAlternativeTitles(ctx context.Context, query string) ([]string, error)
 }
 
 // EpisodeService lists episodes and resolves streams for one source.

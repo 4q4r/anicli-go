@@ -5,20 +5,29 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // fakeSearch implements SearchService with per-provider behavior.
+// Queries are recorded per provider in call order (the hybrid fan-out
+// may issue several variants); variantResults keys per-QUERY fixtures
+// (presence matters: a nil slice is a legit empty answer); block makes
+// a provider sleep to exercise timeout budgets.
 type fakeSearch struct {
-	providers []ProviderMeta
-	results   map[string][]contracts.SearchResult
-	errs      map[string]error
-	panics    map[string]bool
-	queries   map[string]string
+	providers      []ProviderMeta
+	results        map[string][]contracts.SearchResult
+	variantResults map[string][]contracts.SearchResult
+	errs           map[string]error
+	panics         map[string]bool
+	queries        map[string][]string
+	disabled       []providers.DisabledProvider
+	block          map[string]time.Duration
 }
 
 func newFakeSearch() *fakeSearch {
@@ -28,22 +37,39 @@ func newFakeSearch() *fakeSearch {
 			{ID: "anilib", Name: "AniLib"},
 			{ID: "broken", Name: "Broken"},
 		},
-		results: map[string][]contracts.SearchResult{},
-		errs:    map[string]error{},
-		panics:  map[string]bool{},
-		queries: map[string]string{},
+		results:        map[string][]contracts.SearchResult{},
+		variantResults: map[string][]contracts.SearchResult{},
+		errs:           map[string]error{},
+		panics:         map[string]bool{},
+		queries:        map[string][]string{},
+		disabled:       nil,
+		block:          map[string]time.Duration{},
 	}
 }
 
 func (f *fakeSearch) Providers() []ProviderMeta { return f.providers }
 
-func (f *fakeSearch) Search(_ context.Context, providerID, query string) ([]contracts.SearchResult, error) {
-	f.queries[providerID] = query
+func (f *fakeSearch) DisabledProviders() []providers.DisabledProvider { return f.disabled }
+
+func (f *fakeSearch) Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error) {
+	f.queries[providerID] = append(f.queries[providerID], query)
+	if d := f.block[providerID]; d > 0 {
+		// Behave like a real HTTP client: an expired context fails
+		// the request instead of sleeping past the budget.
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if f.panics[providerID] {
 		panic("provider exploded mid-search")
 	}
 	if err := f.errs[providerID]; err != nil {
 		return nil, err
+	}
+	if res, ok := f.variantResults[query]; ok {
+		return res, nil
 	}
 	return f.results[providerID], nil
 }
@@ -88,7 +114,7 @@ func TestSearchFanOutProgress(t *testing.T) {
 	if !strings.Contains(v, "Найдено") {
 		t.Fatalf("successful providers must show a found count, got:\n%s", v)
 	}
-	if !strings.Contains(v, "timeout") && !strings.Contains(v, "Ошибка") {
+	if !strings.Contains(v, "timeout") && !strings.Contains(v, "✗") {
 		t.Fatalf("failed provider must show its error, got:\n%s", v)
 	}
 
@@ -107,10 +133,12 @@ func TestSearchFanOutProgress(t *testing.T) {
 		t.Fatalf("errMsg must surface the error screen")
 	}
 
-	// All providers were queried with the same query.
+	// All providers were queried with the original query first (no
+	// shikimori in these deps → no enrichment).
 	for _, id := range []string{"animego", "anilib"} {
-		if fs.queries[id] != "наруто" {
-			t.Fatalf("provider %s must see the query, got %q", id, fs.queries[id])
+		got := fs.queries[id]
+		if len(got) == 0 || got[0] != "наруто" {
+			t.Fatalf("provider %s must see the query first, got %q", id, got)
 		}
 	}
 }
@@ -186,8 +214,8 @@ func TestSearchGroupingFlow(t *testing.T) {
 	app := searchFlowApp(fs)
 	group := NewSearchGroup(app.deps, results)
 
-	// Check the two Naruto entries (body items 0 and 1).
-	group.check.MoveDown()
+	// Check the two Naruto entries (items 0 and 1; the cursor starts
+	// on item 0).
 	group.check.Toggle()
 	group.check.MoveDown()
 	group.check.Toggle()

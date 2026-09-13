@@ -1,14 +1,35 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"image/color"
 
-// Theme is the shared dark lipgloss palette. Colors follow the dark
-// terminal defaults of the Python original's rich styling (cyan titles,
-// green success, red errors, yellow warnings, dim hints).
+	"charm.land/lipgloss/v2"
+)
+
+// richPalette is the color map of the Python original's rich markup
+// (PR24 color parity): basic ANSI-16 indexes keep the TUI
+// terminal-adaptive exactly like rich — [green] success rows, [red]
+// errors, [yellow] warnings, [dim] hints, cyan spinners/titles and
+// magenta accents render through the user's own terminal theme
+// instead of a hard-coded scheme.
+var richPalette = struct {
+	cyan, green, red, yellow, magenta, dim color.Color
+}{
+	cyan:    lipgloss.Color("6"),
+	green:   lipgloss.Color("2"),
+	red:     lipgloss.Color("1"),
+	yellow:  lipgloss.Color("3"),
+	magenta: lipgloss.Color("5"),
+	dim:     lipgloss.Color("8"),
+}
+
+// Theme is the shared dark lipgloss palette. Colors follow the Python
+// original's rich styling (cyan titles, green success, red errors,
+// yellow warnings, dim hints) through basic ANSI indexes.
 type themeSet struct {
 	// Title styles screen headers (cyan bold).
 	Title lipgloss.Style
-	// Cursor styles the highlighted row.
+	// Cursor styles the highlighted row (cyan bold arrow).
 	Cursor lipgloss.Style
 	// Item styles ordinary rows.
 	Item lipgloss.Style
@@ -22,7 +43,7 @@ type themeSet struct {
 	Warning lipgloss.Style
 	// Accent styles live values (magenta).
 	Accent lipgloss.Style
-	// Separator draws the divider under the pinned Back row.
+	// Separator draws the divider above the pinned bottom row.
 	Separator lipgloss.Style
 	// StatusLine styles the bottom status/help line.
 	StatusLine lipgloss.Style
@@ -33,32 +54,35 @@ type themeSet struct {
 // text when the environment has no color support).
 var theme = newTheme()
 
-// newTheme builds the palette. Foreground-only styles keep rendering
-// deterministic across terminal backgrounds.
+// newTheme builds the palette from the rich parity map. Foreground-only
+// styles keep rendering deterministic across terminal backgrounds.
+// Title carries a leading pad (PR24: the header never rubs against
+// the screen corner; screens add the blank line below it).
 func newTheme() themeSet {
 	return themeSet{
 		Title: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#56B6C2")),
+			PaddingLeft(1).
+			Foreground(richPalette.cyan),
 		Cursor: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FFFFFF")),
+			Foreground(richPalette.cyan),
 		Item: lipgloss.NewStyle(),
-		Dim:  lipgloss.NewStyle().Foreground(lipgloss.Color("#7F848E")),
+		Dim:  lipgloss.NewStyle().Foreground(richPalette.dim),
 		Success: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#98C379")),
+			Foreground(richPalette.green),
 		Error: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#E06C75")),
+			Foreground(richPalette.red),
 		Warning: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#E5C07B")),
+			Foreground(richPalette.yellow),
 		Accent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C678DD")),
+			Foreground(richPalette.magenta),
 		Separator: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4B5263")),
+			Foreground(richPalette.dim),
 		StatusLine: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7F848E")),
+			Foreground(richPalette.dim),
 	}
 }

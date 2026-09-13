@@ -7,10 +7,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// TestI1BackAlwaysPrependedPositionZero: invariant I1 — MenuPrompt always
-// prepends the Back entry at position 0 of the choice list.
-func TestI1BackAlwaysPrependedPositionZero(t *testing.T) {
-	t.Run("three choices get Back at index 0", func(t *testing.T) {
+// TestI1BackAlwaysAppendedLast: invariant I1 (PR24) — MenuPrompt always
+// appends the Back entry as the LAST item of the choice list; the
+// PinList renders it pinned at the bottom of the viewport.
+func TestI1BackAlwaysAppendedLast(t *testing.T) {
+	t.Run("three choices get Back at the last index", func(t *testing.T) {
 		m := NewMenu("Меню", "",
 			Choice{ID: "search", Label: "🔎 Поиск"},
 			Choice{ID: "lists", Label: "📜 Списки"},
@@ -19,21 +20,37 @@ func TestI1BackAlwaysPrependedPositionZero(t *testing.T) {
 		if len(m.Items) != 4 {
 			t.Fatalf("want 4 items (3 + Back), got %d", len(m.Items))
 		}
-		if m.Items[0].ID != BackID {
-			t.Fatalf("position 0 must be Back, got %q", m.Items[0].ID)
+		last := len(m.Items) - 1
+		if m.Items[last].ID != BackID {
+			t.Fatalf("last position must be Back, got %q", m.Items[last].ID)
 		}
-		if m.Items[1].ID != "search" || m.Items[3].ID != "exit" {
-			t.Fatalf("caller choices must keep order after Back: %+v", m.Items)
+		if m.Items[0].ID != "search" || m.Items[last-1].ID != "exit" {
+			t.Fatalf("caller choices must keep order before Back: %+v", m.Items)
 		}
 	})
 
-	t.Run("empty choices still get Back at index 0 (I3 overlap)", func(t *testing.T) {
+	t.Run("empty choices still get Back as the lone last item (I3 overlap)", func(t *testing.T) {
 		m := NewMenu("Пусто", "Ничего не найдено")
 		if len(m.Items) != 1 {
 			t.Fatalf("want exactly Back, got %d items", len(m.Items))
 		}
 		if m.Items[0].ID != BackID {
 			t.Fatalf("lone item must be Back, got %q", m.Items[0].ID)
+		}
+	})
+
+	t.Run("backless menu (root) has no Back entry at all", func(t *testing.T) {
+		m := NewMenuWithoutBack("Корень", "",
+			Choice{ID: "search", Label: "🔎 Поиск"},
+			Choice{ID: "exit", Label: "🚪 Выход"},
+		)
+		if len(m.Items) != 2 {
+			t.Fatalf("backless menu keeps exactly the caller choices, got %d", len(m.Items))
+		}
+		for i, item := range m.Items {
+			if item.ID == BackID {
+				t.Fatalf("backless menu must not contain Back (item %d)", i)
+			}
 		}
 	})
 }
@@ -59,6 +76,9 @@ func TestI3EmptyChoiceListLegal(t *testing.T) {
 		}
 		if !strings.Contains(r, "Список пуст") {
 			t.Fatalf("empty-state message must render alongside Back, got %q", r)
+		}
+		if strings.Index(r, "Список пуст") > strings.Index(r, BackLabel) {
+			t.Fatalf("empty-state message renders above the trailing Back row, got %q", r)
 		}
 	})
 
@@ -111,14 +131,14 @@ func TestI2CancelNormalizesToBack(t *testing.T) {
 		}
 	})
 
-	t.Run("enter on position 0 returns Back", func(t *testing.T) {
-		if got := ResolveKey(menu, 0, enter()); got != Back {
+	t.Run("enter on the trailing Back row returns Back", func(t *testing.T) {
+		if got := ResolveKey(menu, len(menu.Items)-1, enter()); got != Back {
 			t.Fatalf("picking Back must return the sentinel, got %#v", got)
 		}
 	})
 
 	t.Run("enter on real choice returns its value", func(t *testing.T) {
-		if got := ResolveKey(menu, 2, enter()); got != 2 {
+		if got := ResolveKey(menu, 1, enter()); got != 2 {
 			t.Fatalf("want choice value 2, got %#v", got)
 		}
 	})
@@ -136,7 +156,7 @@ func TestI4SingleSentinelIdentityCompare(t *testing.T) {
 	t.Run("cancel and explicit Back pick are the same value", func(t *testing.T) {
 		menu := NewMenu("М", "", Choice{ID: "x", Label: "X", Value: "x"})
 		byEsc := ResolveKey(menu, 1, esc())
-		byEnter := ResolveKey(menu, 0, enter())
+		byEnter := ResolveKey(menu, len(menu.Items)-1, enter())
 		byEmptyText := ResolveText(enter(), "")
 		if byEsc != Back || byEnter != Back || byEmptyText != Back {
 			t.Fatalf("all back paths must be the same sentinel: %v %v %v want %v",

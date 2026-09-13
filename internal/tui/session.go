@@ -493,9 +493,6 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 	}
 	s.state = state
 	s.dubList = NewPinList(NewMenu(title, "Нет доступных потоков", choices...), defaultListHeight)
-	if len(choices) > 0 {
-		s.dubList.Jump(1)
-	}
 	return s, nil
 }
 
@@ -568,7 +565,6 @@ func (s *sessionScreen) buildQualityList() {
 		choices = append(choices, Choice{ID: q, Label: q + "p", Value: q})
 	}
 	s.qualityList = NewPinList(NewMenu("Выберите качество:", "", choices...), defaultListHeight)
-	s.qualityList.Jump(1)
 }
 
 // handleQualityKey resolves the quality pick and launches playback.
@@ -1104,7 +1100,7 @@ func (s *sessionScreen) buildEpisodeList() {
 	s.episodeList = NewPinList(NewMenu("Выберите серию:", "Нет серий", choices...), defaultListHeight)
 	for i, num := range s.order {
 		if s.localCounts[num] > 0 {
-			s.episodeList.SetMarker(i+1, "★")
+			s.episodeList.SetMarker(i, "★")
 		}
 	}
 }
@@ -1181,9 +1177,9 @@ func (s *sessionScreen) renderHeader() string {
 func (s *sessionScreen) renderEpisodeList() string {
 	for i, num := range s.order {
 		if s.localCounts[num] > 0 {
-			s.episodeList.SetMarker(i+1, "★")
+			s.episodeList.SetMarker(i, "★")
 		} else {
-			s.episodeList.SetMarker(i+1, "")
+			s.episodeList.SetMarker(i, "")
 		}
 	}
 	return s.episodeList.Render()
@@ -1194,7 +1190,16 @@ func (s *sessionScreen) renderInfoMenu() string {
 	if s.infoList == nil {
 		s.buildInfoList()
 	}
-	return theme.Title.Render("Что изменить?") + "\n" + s.infoList.Render()
+	return theme.Title.Render("Что изменить?") + "\n\n" + s.infoList.Render()
+}
+
+// themedList renders one PinList surface with its padded title and a
+// blank separator line (PR24 title padding) — the picker substates.
+func themedList(list *PinList) string {
+	if list == nil {
+		return ""
+	}
+	return theme.Title.Render(list.Menu().Title) + "\n\n" + list.Render()
 }
 
 // View implements Screen.
@@ -1202,16 +1207,16 @@ func (s *sessionScreen) View() tea.View {
 	var body string
 	switch s.state {
 	case sessionStateLoading:
-		body = theme.Title.Render("Сбор ссылок со всех источников…") + "\n" +
+		body = theme.Title.Render("Сбор ссылок со всех источников…") + "\n\n" +
 			theme.Dim.Render("ожидание провайдеров")
 	case sessionStateMenu:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + s.list.Render()
+		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.list.Render()
 	case sessionStateEpisodeList:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + s.episodeList.Render()
+		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.episodeList.Render()
 	case sessionStateDubVideo, sessionStateDubAudio:
-		body = s.dubList.Render()
+		body = themedList(s.dubList)
 	case sessionStateQuality:
-		body = s.qualityList.Render()
+		body = themedList(s.qualityList)
 	case sessionStatePlaying:
 		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
 	case sessionStateInfoMenu:
@@ -1220,7 +1225,7 @@ func (s *sessionScreen) View() tea.View {
 		if s.statusList == nil {
 			s.buildStatusList()
 		}
-		body = theme.Title.Render("Выберите статус:") + "\n" + s.statusList.Render()
+		body = theme.Title.Render("Выберите статус:") + "\n\n" + s.statusList.Render()
 	case sessionStateInfoScore, sessionStateInfoRewatches:
 		body = s.infoPrompt.View().Content
 	case sessionStateDownloadRange:
@@ -1236,7 +1241,7 @@ func (s *sessionScreen) View() tea.View {
 		if banner != "" {
 			banner = theme.StatusLine.Render(banner) + "\n"
 		}
-		body = theme.Title.Render("Режим загрузки:") + "\n" + banner + s.modeList.Render()
+		body = theme.Title.Render("Режим загрузки:") + "\n\n" + banner + s.modeList.Render()
 	default:
 		body = s.list.Render()
 	}

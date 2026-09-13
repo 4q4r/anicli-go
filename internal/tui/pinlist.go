@@ -8,30 +8,32 @@ import (
 )
 
 // PinList is the menu list component enforcing the viewport half of
-// invariant I1: menu position 0 (the Back entry) is PINNED — rendered
-// above the scrolling body on every page — while items 1..n scroll in
-// a window that follows the cursor. The cursor indexes the full menu
-// (0 = Back), so up-arrow from the first body item lands on Back.
+// invariant I1 (PR24 layout): the LAST menu item (the Back entry — or
+// «🚪 Выход» on the backless root menu) is PINNED — rendered below the
+// scrolling body on every page — while items 0..n-1 scroll in a window
+// that follows the cursor. The cursor indexes the full menu (last
+// index = pinned row), so down-arrow from the last body item lands on
+// the pinned row.
 //
 // It is deliberately hand-rolled instead of reusing the bubbles list:
-// the §5 semantics (pinned position 0, cursor domain including Back,
+// the §5 semantics (pinned last row, cursor domain including Back,
 // guaranteed visibility) are exactly the contract under test, and a
 // pure-logic component keeps them provable without a terminal.
 type PinList struct {
 	menu    Menu
-	height  int // body rows available for items 1..n
-	cursor  int // index into menu.Items (0 = pinned Back)
-	offset  int // first visible body index (into Items, >= 1)
+	height  int // body rows available for items 0..n-2
+	cursor  int // index into menu.Items (last index = pinned row)
+	offset  int // first visible body index (into Items, < len-1)
 	markers map[int]string
 }
 
 // NewPinList builds the list. height is the number of body rows
-// (excluding the pinned Back row); <= 0 behaves as 1.
+// (excluding the pinned bottom row); <= 0 behaves as 1.
 func NewPinList(menu Menu, height int) *PinList {
 	if height < 1 {
 		height = 1
 	}
-	return &PinList{menu: menu, height: height, cursor: 0, offset: 1}
+	return &PinList{menu: menu, height: height, cursor: 0, offset: 0}
 }
 
 // SetMarker attaches a marker string (e.g. "★", "✔") to one item index.
@@ -49,16 +51,24 @@ func (l *PinList) Menu() Menu { return l.menu }
 func (l *PinList) Cursor() int { return l.cursor }
 
 // VisibleBody returns the half-open [lo, hi) window of body indices
-// currently rendered (indices are into menu.Items).
+// currently rendered (indices are into menu.Items; the pinned last row
+// is never part of the window).
 func (l *PinList) VisibleBody() (int, int) {
-	last := len(l.menu.Items)
+	last := len(l.menu.Items) - 1 // pinned row
+	if last < 0 {
+		last = 0
+	}
 	hi := min(l.offset+l.height, last)
 	lo := min(l.offset, last)
 	return lo, hi
 }
 
-// MoveDown moves the cursor one item down, clamping at the end and
-// keeping the cursor inside the visible window.
+// bodyEnd is the exclusive end of the scrolling body (the pinned row
+// index).
+func (l *PinList) bodyEnd() int { return max(len(l.menu.Items)-1, 0) }
+
+// MoveDown moves the cursor one item down, clamping at the pinned
+// bottom row and keeping the cursor inside the visible window.
 func (l *PinList) MoveDown() {
 	if l.cursor < len(l.menu.Items)-1 {
 		l.cursor++
@@ -66,8 +76,8 @@ func (l *PinList) MoveDown() {
 	l.follow()
 }
 
-// MoveUp moves the cursor one item up, clamping at the pinned Back
-// row (position 0).
+// MoveUp moves the cursor one item up, clamping at the first body
+// item (position 0).
 func (l *PinList) MoveUp() {
 	if l.cursor > 0 {
 		l.cursor--
@@ -95,18 +105,19 @@ func (l *PinList) Jump(index int) {
 }
 
 // follow adjusts the body offset so the cursor stays visible: the
-// pinned row guarantees cursor 0; the window must contain any cursor
-// >= 1.
+// pinned row guarantees the LAST cursor; the window [offset,
+// offset+height) must contain any cursor inside the body.
 func (l *PinList) follow() {
-	if l.cursor <= 0 {
+	end := l.bodyEnd()
+	if l.cursor >= end {
 		return
 	}
-	// Body indices run [1, len). Keep [offset, offset+height)
+	// Body indices run [0, end). Keep [offset, offset+height)
 	// covering the cursor with minimal movement.
 	for l.cursor >= l.offset+l.height {
 		l.offset++
 	}
-	for l.cursor < l.offset && l.offset > 1 {
+	for l.cursor < l.offset && l.offset > 0 {
 		l.offset--
 	}
 }
@@ -136,17 +147,17 @@ func (l *PinList) HandleKey(key tea.KeyPressMsg) bool {
 	return true
 }
 
-// Render draws the pinned Back row, then the visible body window with
-// a cursor pointer and optional per-item markers. Rendering is plain
-// text; the screen layer applies lipgloss styles around it.
+// Render draws the visible body window with a cursor pointer and
+// optional per-item markers, then the separator and the pinned bottom
+// row (I1: the Back/Exit entry is always the last rendered line).
+// Rendering is plain text; the screen layer applies lipgloss styles
+// around it.
 func (l *PinList) Render() string {
 	var b strings.Builder
 
-	// Pinned Back row: always visible (I1).
-	b.WriteString(renderRow(l.menu.Items[0], 0, l.cursor, l.markers[0]))
-	b.WriteString(theme.Separator.Render(strings.Repeat("─", 40)) + "\n")
-
-	if len(l.menu.Items) == 1 {
+	if len(l.menu.Items) == 0 {
+		// Defensive: a backless menu built from zero choices. Nothing
+		// is selectable — the empty-state message (if any) alone.
 		if l.menu.EmptyMessage != "" {
 			b.WriteString(theme.Dim.Render(l.menu.EmptyMessage))
 			b.WriteString("\n")
@@ -154,17 +165,29 @@ func (l *PinList) Render() string {
 		return b.String()
 	}
 
-	lo, hi := l.VisibleBody()
-	if lo < 1 {
-		lo = 1
+	if len(l.menu.Items) == 1 {
+		// Lone pinned row (empty menu, I3): the empty-state message
+		// renders above it.
+		if l.menu.EmptyMessage != "" {
+			b.WriteString(theme.Dim.Render(l.menu.EmptyMessage))
+			b.WriteString("\n")
+		}
+		b.WriteString(renderRow(l.menu.Items[0], 0, l.cursor, ""))
+		return b.String()
 	}
+
+	lo, hi := l.VisibleBody()
 	for i := lo; i < hi; i++ {
 		b.WriteString(renderRow(l.menu.Items[i], i, l.cursor, l.markers[i]))
 	}
-	if hi < len(l.menu.Items) {
-		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", len(l.menu.Items)-hi)))
+	if hi < l.bodyEnd() {
+		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", l.bodyEnd()-hi)))
 		b.WriteString("\n")
 	}
+
+	// Pinned bottom row: always visible (I1).
+	b.WriteString(theme.Separator.Render(strings.Repeat("─", 40)) + "\n")
+	b.WriteString(renderRow(l.menu.Items[len(l.menu.Items)-1], len(l.menu.Items)-1, l.cursor, l.markers[len(l.menu.Items)-1]))
 	return b.String()
 }
 

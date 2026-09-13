@@ -20,23 +20,26 @@ type MenuScreenConfig struct {
 	Title string
 	// EmptyMsg is the I3 empty-state message for empty choice lists.
 	EmptyMsg string
-	// Choices are the caller's entries; Back is prepended (I1).
+	// Choices are the caller's entries; Back is appended LAST (I1).
 	Choices []Choice
 	// OnPick consumes resolutions; nil means "pop on any pick".
 	OnPick PickHandler
-	// Root enables the I2 root exception: Ctrl-C quits the app.
+	// Root enables the I2 root exception: Ctrl-C quits the app AND
+	// drops the Back entry entirely — the root menu is backless, its
+	// last item («🚪 Выход») occupies the pinned bottom slot.
 	Root bool
 	// Status is an optional bottom hint line.
 	Status string
 	// Height overrides the body height (0 = default).
 	Height int
-	// Markers attaches per-item markers (index into Choices+Back).
+	// Markers attaches per-item markers (index into Items: choices
+	// first, the trailing Back row last).
 	Markers map[int]string
 }
 
 // MenuScreen is the generic §5-compliant menu: a PinList over a Menu
-// with Back prepended, cancel keys normalized, and picks delegated to
-// the flow handler.
+// with Back appended last, cancel keys normalized, and picks delegated
+// to the flow handler.
 type MenuScreen struct {
 	id     string
 	title  string
@@ -48,7 +51,12 @@ type MenuScreen struct {
 
 // NewMenuScreen builds the screen from cfg.
 func NewMenuScreen(cfg MenuScreenConfig) *MenuScreen {
-	menu := NewMenu(cfg.Title, cfg.EmptyMsg, cfg.Choices...)
+	var menu Menu
+	if cfg.Root {
+		menu = NewMenuWithoutBack(cfg.Title, cfg.EmptyMsg, cfg.Choices...)
+	} else {
+		menu = NewMenu(cfg.Title, cfg.EmptyMsg, cfg.Choices...)
+	}
 	height := cfg.Height
 	if height <= 0 {
 		height = defaultListHeight
@@ -109,11 +117,12 @@ func (m *MenuScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return m, m.onPick(resolved)
 }
 
-// View implements Screen.
+// View implements Screen. The title renders with a leading pad and a
+// blank line before the list (PR24 title padding).
 func (m *MenuScreen) View() tea.View {
 	var b []byte
 	b = append(b, theme.Title.Render(m.title)...)
-	b = append(b, '\n')
+	b = append(b, '\n', '\n')
 	b = append(b, m.list.Render()...)
 	if m.status != "" {
 		b = append(b, '\n')
@@ -131,11 +140,13 @@ const (
 	rootDBLabel      = "🗄️ Управление БД"
 	rootHealthLabel  = "🛠 Проверка"
 	rootExitLabel    = "🚪 Выход"
-	rootBackHint     = "Esc/пусто — назад · для выхода выберите «Выход»"
+	rootBackHint     = "enter — выбрать · ctrl+c — выход"
 )
 
-// NewRootScreen builds the root menu: six entries plus the pinned
-// Back row; only here does Ctrl-C exit the app (I2 exception).
+// NewRootScreen builds the root menu: six entries with «🚪 Выход» as
+// the pinned BOTTOM row and NO «Назад» entry (there is nothing above
+// root to go back to, PR24); only here does Ctrl-C exit the app (I2
+// exception).
 func NewRootScreen(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
 		ID:    rootScreenID,
@@ -153,7 +164,8 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 		OnPick: func(pick any) tea.Cmd {
 			switch pick {
 			case Back:
-				// Back at root means "stay" (I2: never an app exit).
+				// Esc at root normalizes to Back, which at root means
+				// "stay" (I2: never an app exit).
 				return nil
 			case "search":
 				return push(NewSearchInput(deps))

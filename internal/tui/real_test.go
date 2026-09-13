@@ -22,7 +22,8 @@ func TestRealDepsConstruction(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	settings := config.Default()
-	settings.Download.Dir = t.TempDir() // isolate the offline scan
+	settings.Download.Dir = t.TempDir()           // isolate the offline scan
+	settings.Providers.Kodik.Token = "test-token" // keep kodik registered (PR24)
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)
@@ -32,8 +33,12 @@ func TestRealDepsConstruction(t *testing.T) {
 	if real.Deps == nil || real.Deps.Search == nil || real.Deps.Episode == nil ||
 		real.Deps.Playback == nil || real.Deps.History == nil || real.Deps.Offline == nil ||
 		real.Deps.Database == nil || real.Deps.Health == nil || real.Deps.Shiki == nil ||
-		real.Deps.Download == nil {
-		t.Fatalf("all services must be wired")
+		real.Deps.Download == nil || real.Deps.Metadata == nil {
+		t.Fatalf("all services must be wired (incl. metadata, PR24)")
+	}
+	if real.Deps.SearchTimeout != settings.Network.SearchTimeout {
+		t.Fatalf("SearchTimeout must propagate from settings: got %v want %v",
+			real.Deps.SearchTimeout, settings.Network.SearchTimeout)
 	}
 
 	providers := real.Deps.Search.Providers()
@@ -55,6 +60,34 @@ func TestRealDepsConstruction(t *testing.T) {
 	titles, err := real.Deps.Offline.Titles()
 	if err != nil || len(titles) != 0 {
 		t.Fatalf("fresh offline library must be empty, got %v (%v)", titles, err)
+	}
+}
+
+// TestRealDepsDisabledProviders (PR24): a tokenless kodik lands in the
+// disabled set and is absent from the searchable roster.
+func TestRealDepsDisabledProviders(t *testing.T) {
+	store, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	settings := config.Default()
+	settings.Download.Dir = t.TempDir()
+	real, err := NewRealDeps(settings, store)
+	if err != nil {
+		t.Fatalf("NewRealDeps: %v", err)
+	}
+	defer real.Close()
+
+	for _, p := range real.Deps.Search.Providers() {
+		if p.ID == "kodik" {
+			t.Fatalf("tokenless kodik must not be searchable")
+		}
+	}
+	disabled := real.Deps.Search.DisabledProviders()
+	if len(disabled) != 1 || disabled[0].ID != "kodik" || disabled[0].Reason == "" {
+		t.Fatalf("kodik must be reported disabled with a reason, got %+v", disabled)
 	}
 }
 

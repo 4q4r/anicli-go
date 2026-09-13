@@ -12,21 +12,27 @@ import (
 )
 
 // mustDefaultSettings returns the default settings without proxy:
-// registry construction in tests must never route egress anywhere.
+// registry construction in tests must never route egress anywhere. The
+// kodik token keeps the full 11-provider roster registered (PR24: a
+// tokenless kodik is disabled at startup).
 func mustDefaultSettings(t *testing.T) config.Settings {
 	t.Helper()
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
+	cfg.Providers.Kodik.Token = "test-token"
 	return cfg
 }
 
 func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: doctorProbe is a global seam (see TestStubOutputs).
+	stub := &stubProbe{results: 5}
+	origProbe := doctorProbe
+	doctorProbe = stub.probe
+	t.Cleanup(func() { doctorProbe = origProbe })
 
-	// The doctor enumeration must match the registry exactly and must
-	// not touch the network: building the registry only initializes
-	// clients.
+	// The doctor enumeration must match the registry exactly; the
+	// probe is stubbed so no network egress happens.
 	cfg := mustDefaultSettings(t)
 	reg, err := providers.NewRegistry(cfg, nil)
 	if err != nil {
@@ -81,7 +87,14 @@ func TestNewRootCommandShape(t *testing.T) {
 }
 
 func TestStubOutputs(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: doctorProbe is a global seam; concurrent doctor
+	// tests would race the swap (PR24).
+	// The doctor case performs real searches — stub the probe so the
+	// table renders deterministically without network egress.
+	stub := &stubProbe{results: 7}
+	origProbe := doctorProbe
+	doctorProbe = stub.probe
+	t.Cleanup(func() { doctorProbe = origProbe })
 
 	tests := []struct {
 		name        string
@@ -235,11 +248,15 @@ func TestConfigPathFrom(t *testing.T) {
 }
 
 // TestDoctorMarksExcludedProviders pins the PR23 [providers].exclude
-// surface: excluded providers keep a slot in the doctor provider
-// list, suffixed [excluded], so their omission from the active
-// fan-out is visible instead of silent.
+// surface (PR24 rendering): excluded providers keep a doctor row
+// marked ОТКЛЮЧЁН with the exclusion reason, so their omission from
+// the active fan-out is visible instead of silent.
 func TestDoctorMarksExcludedProviders(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: doctorProbe is a global seam (see TestStubOutputs).
+	stub := &stubProbe{results: 0}
+	origProbe := doctorProbe
+	doctorProbe = stub.probe
+	t.Cleanup(func() { doctorProbe = origProbe })
 
 	path := filepath.Join(t.TempDir(), "settings.toml")
 	if err := os.WriteFile(path, []byte(`
@@ -258,13 +275,17 @@ exclude = ["animepahe", "kodik"]
 		t.Fatalf("Execute doctor: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "animepahe [excluded]") {
-		t.Errorf("doctor output %q must mark animepahe as excluded", out)
+	for _, want := range []string{"animepahe", "kodik", "ОТКЛЮЧЁН", "providers.exclude"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output %q must contain %q", out, want)
+		}
 	}
-	if !strings.Contains(out, "kodik [excluded]") {
-		t.Errorf("doctor output %q must mark kodik as excluded", out)
+	if strings.Contains(out, "animepahe OK") {
+		t.Errorf("excluded animepahe must not render OK: %q", out)
 	}
-	if strings.Contains(out, "animego [excluded]") {
-		t.Errorf("active providers must not carry the excluded marker: %q", out)
+	for _, id := range stub.seen {
+		if id == "animepahe" || id == "kodik" {
+			t.Errorf("excluded providers must not be probed, saw %v", stub.seen)
+		}
 	}
 }

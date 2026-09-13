@@ -12,7 +12,8 @@ import (
 func newTestDeps() *Deps { return &Deps{} }
 
 // TestRootMenuContents: the root menu shows the six RU entries from
-// the Python original (including 📂 Скачанное).
+// the Python original (including 📂 Скачанное). Root shows NO «Назад»
+// row: «🚪 Выход» takes its place as the pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
@@ -23,11 +24,29 @@ func TestRootMenuContents(t *testing.T) {
 		"🗄️ Управление БД",
 		"🛠 Проверка",
 		"🚪 Выход",
-		BackLabel,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("root view must contain %q, got:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, BackLabel) {
+		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel, view)
+	}
+	// Выход is the LAST item, rendered below every other entry.
+	exitIdx := strings.LastIndex(view, "🚪 Выход")
+	searchIdx := strings.LastIndex(view, "🔎 Поиск")
+	if exitIdx < searchIdx {
+		t.Fatalf("Выход must render below the other root entries, got:\n%s", view)
+	}
+}
+
+// TestRootExitIsLastItem: the exit entry is the trailing menu item and
+// is reachable at the list's end.
+func TestRootExitIsLastItem(t *testing.T) {
+	root := NewRootScreen(newTestDeps())
+	items := root.list.Menu().Items
+	if len(items) == 0 || items[len(items)-1].ID != "exit" {
+		t.Fatalf("root menu must end with the exit item, got %+v", items)
 	}
 }
 
@@ -67,10 +86,13 @@ func TestRootExitAndInterrupts(t *testing.T) {
 
 	t.Run("back pick at root stays", func(t *testing.T) {
 		root := newRoot()
-		root.list.Jump(0)
-		_, cmd := root.Update(enter())
+		// Esc resolves the Back sentinel; at root Back means "stay".
+		next, cmd := root.Update(esc())
 		if isQuitCmd(cmd) {
 			t.Fatalf("Back at root must not quit")
+		}
+		if next.ID() != rootScreenID {
+			t.Fatalf("Back at root must stay on root, got %q", next.ID())
 		}
 	})
 }

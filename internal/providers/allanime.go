@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,36 +30,95 @@ const (
 	// URLs resolve against (the /clock.json embeds); unchanged by the
 	// rotation.
 	AllAnimeInternalBase = "https://allanime.day"
+	// aaContentLane is the episode content lane — the k field of the
+	// bootstrap and aaReq payloads. [LIVE-VERIFIED 2026-09-13] (live
+	// ap() picks k7 for /episode\s*\(/ queries).
+	aaContentLane = "k7"
 )
 
-// GraphQL documents ported verbatim from anicli-py
-// anicli/providers/allanime.py:16-63.
-const (
-	aaSearchQuery = `
-    query( $search: SearchInput
-           $limit: Int
-           $page: Int
-           $translationType: VaildTranslationTypeEnumType
-           $countryOrigin: VaildCountryOriginEnumType )
-    {
-        shows( search: $search
-                limit: $limit
-                page: $page
-                translationType: $translationType
-                countryOrigin: $countryOrigin )
-        {
-            edges
-            {
-                _id,
-                name,
-                thumbnail,
-                availableEpisodes
-            }
-        }
-    }
-`
+// aaSearchQuery is the site's search document (live o7(false) builder
+// with the Ri selection resolved), byte-for-byte as POSTed by the real
+// player — including englishName/nativeName, which the pre-rotation
+// document lacked. [LIVE-VERIFIED 2026-09-13]: this exact text returned
+// ROAD OF NARUTO from POST /api.
+const aaSearchQuery = `
+query(
+$search: SearchInput
+$limit: Int
+$page: Int
+$translationType: VaildTranslationTypeEnumType
+$countryOrigin: VaildCountryOriginEnumType
+) {
+shows(
+search: $search
+limit: $limit
+page: $page
+translationType: $translationType
+countryOrigin: $countryOrigin
+) {
+pageInfo {
+total
+}
+edges {
 
-	aaEpisodesQuery = `
+
+_id
+name
+englishName
+nativeName
+slugTime
+thumbnail
+
+tbObj {
+  u
+  sm
+  md
+  ts
+}
+lastEpisodeInfo
+lastEpisodeDate
+type
+season
+score
+airedStart
+availableEpisodes
+episodeDuration
+episodeCount
+# lastUpdateStart
+lastUpdateEnd
+characterCount
+playlistCount
+tierListCount
+worldMapCount
+caseFileCount
+
+siteRanks {
+  entries {
+    key
+    label
+    position
+    delta
+    sortOrder
+    score
+    windowDays
+  }
+  weekly { score windowDays }
+  monthly { score windowDays }
+  overall { score windowDays }
+  bookmarked { score windowDays }
+  bookmarkedOverall { score windowDays }
+  boostedMonthly { score windowDays }
+  boosted { score windowDays }
+}
+
+
+}
+}
+}`
+
+// aaEpisodesQuery lists available episodes per translation.
+// [LIVE-VERIFIED 2026-09-13] via POST.
+const aaEpisodesQuery = `
     query ($showId: String!) {
         show(
             _id: $showId
@@ -68,26 +129,27 @@ const (
     }
 `
 
-	aaStreamQuery = `
-    query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-        episode(
-            showId: $showId
-            translationType: $translationType
-            episodeString: $episodeString
-        ) {
-            episodeString,
-            sourceUrls
-        }
-    }
-`
-)
+// aaEpisodeQuery is the episode-sources document, byte-identical to
+// the one POSTed during the live characterization (its SHA-256 equals
+// the live persisted-query hash 2654f89a…, pinned in
+// TestAAQueryDocsMatchLive). The show{_id} subselection is REQUIRED:
+// without it the live episode resolver crashes server-side ("Cannot
+// set properties of undefined (setting 'countryOfOrigin')") — bisected
+// live on 2026-09-13. [LIVE-VERIFIED 2026-09-13].
+const aaEpisodeQuery = "\nquery( $showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String! ) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls show { _id } } }"
 
-// aaEpisodeQueryHash is the persisted-query hash for the episode-sources
-// document, captured from a live ani-cli request trace (ani-cli issue
-// #1823, 2026-07). [UNVERIFIED-live]: if the server has re-registered
-// the document, the PersistedQueryNotFound fallback re-sends the full
-// query with the aaReq extension kept.
-const aaEpisodeQueryHash = "f4662f4b7510b26795dd53ef824a0bf1740fbbc5d1273fab18222ac831bca8d0"
+// aaEpisodeQueryHash is SHA-256 of aaEpisodeQuery — the persisted-query
+// hash the site computes client-side over the exact document text
+// (live bl() is plain SHA-256; the server accepts any document paired
+// with its own hash). [LIVE-VERIFIED 2026-09-13].
+var aaEpisodeQueryHash = func() string {
+	sum := sha256.Sum256([]byte(aaEpisodeQuery))
+	return hex.EncodeToString(sum[:])
+}()
+
+// aaSearchLimit is the search page size the live player uses.
+// [LIVE-VERIFIED 2026-09-13].
+const aaSearchLimit = 40
 
 // aaPreferredProviders is the ani-cli provider priority (dispatch
 // ruling): sources are processed in this order first, everything else
@@ -98,29 +160,42 @@ var aaPreferredProviders = []string{"Default", "S-mp4", "Luf-Mp4", "Yt-mp4"}
 // aaResolutionRe extracts the height from a RESOLUTION=WxH attribute.
 var aaResolutionRe = regexp.MustCompile(`RESOLUTION=(\d+)[xX](\d+)`)
 
-// AllAnime is the port of anicli-py anicli/providers/allanime.py with
-// the new-protocol transport: GraphQL GETs against api.mkissa.net with
-// the mkissa.to Referer/Origin, a per-epoch AES key (mask XOR partB),
-// an aaReq token on episode-source queries and AES-256-GCM tobeparsed
-// decryption (see allanime_key.go).
+// AllAnime is the mkissa.to provider speaking the v3 protocol:
+// GraphQL POSTs against api.mkissa.net with the mkissa.to
+// Referer/Origin, per-epoch AES material from the client-crypto
+// bootstrap (allanime_bootstrap.go), an aaReq proof token on
+// episode-source queries and AES-256-GCM tobeparsed decryption
+// (allanime_proto.go). Resolution falls back to a live browser-bridge
+// (allanime_bridge.go) when the pure-Go crypto fails.
 type AllAnime struct {
 	Base
 
 	// apiBase is the GraphQL endpoint root.
 	apiBase string
+	// bootstrapBase is the client-crypto bootstrap endpoint root,
+	// derived from apiBase (…/client-crypto/v1/bootstrap).
+	bootstrapBase string
 	// internalBase absolutizes decoded "--" URLs.
 	internalBase string
 	// referer is the Referer/Origin value sent on every request.
 	referer string
-	// keys derives and caches the per-epoch AES key material.
-	keys *allAnimeKeyManager
+	// refererHost feeds the x-aa-boot key-group folding (gT).
+	refererHost string
+	// material derives and caches the per-epoch AES key.
+	material *aaMaterialManager
+	// buildIDs persists bridge-discovered buildIds.
+	buildIDs *aaBuildIDCache
+	// bridge re-derives crypto material in a real browser when the
+	// pure-Go path fails (nil = disabled; typed errors then).
+	bridge aaBridgeSource
 }
 
 // newAllAnime builds the provider against the API base, the referer
 // page origin and the internal-URL base. The bases are injectable so
-// tests run the full protocol against fake servers (Python hardcoded
-// them; production values are the package constants).
-func newAllAnime(apiBase, referer, internalBase string, http *netclient.Client) *AllAnime {
+// tests run the full protocol against fake servers (production values
+// are the package constants). bridge may be nil (no fallback);
+// cacheDir persists the bridge-discovered buildId ("" = memory only).
+func newAllAnime(apiBase, referer, internalBase string, http *netclient.Client, bridge aaBridgeSource, cacheDir string) *AllAnime {
 	p := &AllAnime{
 		Base: Base{
 			id:         "allanime",
@@ -133,40 +208,81 @@ func newAllAnime(apiBase, referer, internalBase string, http *netclient.Client) 
 			},
 			http: http,
 		},
-		apiBase:      apiBase,
-		internalBase: internalBase,
-		referer:      referer,
+		apiBase:       apiBase,
+		bootstrapBase: strings.TrimSuffix(apiBase, "/api") + "/client-crypto/v1/bootstrap",
+		internalBase:  internalBase,
+		referer:       referer,
+		refererHost:   refererHostOf(referer),
+		bridge:        bridge,
+		buildIDs:      newAABuildIDCache(cacheDir),
 	}
-	p.keys = newAllAnimeKeyManager(func(ctx context.Context) (*aaKeys, error) {
-		return aaFetchKeys(ctx, p.referer, p.fetchText)
-	}, time.Now)
+	p.material = newAAMaterialManager(aaMaterialDeps{
+		BootstrapBase: p.bootstrapBase,
+		Referer:       referer,
+		RefererHost:   p.refererHost,
+		Lane:          aaContentLane,
+		BuildID: func() (string, error) {
+			return p.buildIDs.Load(), nil
+		},
+		HTTP: http,
+		Now:  time.Now,
+	})
 	return p
 }
 
-// fetchText GETs url with the provider headers and returns the body
-// (the derivation transport; Python had none of this — new protocol).
-func (p *AllAnime) fetchText(ctx context.Context, url string) (string, error) {
-	resp, err := p.http.Get(ctx, url, p.headers)
+// refererHostOf extracts the host of an origin URL (empty on parse
+// failure).
+func refererHostOf(origin string) string {
+	u, err := url.Parse(origin)
 	if err != nil {
-		return "", err
+		return ""
 	}
-	return string(resp.Body), nil
+	return u.Hostname()
+}
+
+// graphqlPost issues the GraphQL POST with the provider headers.
+// [LIVE-VERIFIED 2026-09-13]: the live player POSTs every query
+// (GET is refused by the API since the v3 rotation).
+func (p *AllAnime) graphqlPost(ctx context.Context, payload any, extra map[string]string) ([]byte, error) {
+	hdrs := map[string]string{"Content-Type": "application/json"}
+	for k, v := range p.headers {
+		hdrs[k] = v
+	}
+	for k, v := range extra {
+		hdrs[k] = v
+	}
+	resp, err := p.http.PostJSON(ctx, p.apiBase, payload, hdrs)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
+// aaGraphqlRequest is the POST body {query, variables, extensions?}.
+type aaGraphqlRequest struct {
+	Query      string         `json:"query"`
+	Variables  map[string]any `json:"variables"`
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 // Search runs the shows(search:) query and sorts by difflib similarity
 // (port of allanime.py:80-117). Transport and decode failures return an
 // empty set (the Python except boundary).
 func (p *AllAnime) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	variables := map[string]any{
-		"search":        map[string]any{"query": query, "countryOrigin": "ALL"},
-		"limit":         26,
-		"page":          1,
-		"countryOrigin": "ALL",
-	}
-	body, err := p.graphqlGet(ctx, map[string]string{
-		"variables": mustJSON(variables),
-		"query":     aaSearchQuery,
-	})
+	body, err := p.graphqlPost(ctx, aaGraphqlRequest{
+		Query: aaSearchQuery,
+		Variables: map[string]any{
+			"search": map[string]any{
+				"allowAdult":   false,
+				"allowUnknown": false,
+				"query":        query,
+			},
+			"limit":           aaSearchLimit,
+			"page":            1,
+			"translationType": "sub",
+			"countryOrigin":   "ALL",
+		},
+	}, nil)
 	if err != nil {
 		return []contracts.SearchResult{}, nil
 	}
@@ -204,10 +320,10 @@ func (p *AllAnime) Search(ctx context.Context, query string) ([]contracts.Search
 // allanime.py:119-166). Transport and decode failures return an empty
 // list (the Python except boundary).
 func (p *AllAnime) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	body, err := p.graphqlGet(ctx, map[string]string{
-		"variables": mustJSON(map[string]any{"showId": animeURL}),
-		"query":     aaEpisodesQuery,
-	})
+	body, err := p.graphqlPost(ctx, aaGraphqlRequest{
+		Query:     aaEpisodesQuery,
+		Variables: map[string]any{"showId": animeURL},
+	}, nil)
 	if err != nil {
 		return []contracts.Episode{}, nil
 	}
@@ -258,12 +374,12 @@ func (p *AllAnime) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 	return episodes, nil
 }
 
-// ResolveStream runs the episode(showId:) query with the aaReq token,
-// decrypts tobeparsed, decodes the "--" source URLs and expands them
-// through the clock.json flow (port of allanime.py:168-271 with the
-// new-protocol transport). Per-source failures skip the source (the
-// Python inner try/except); key-derivation and decrypt failures are
-// loud typed errors (repo no-silent-failure policy).
+// ResolveStream runs the episode query with the aaReq token, decrypts
+// tobeparsed, decodes the "--" source URLs and expands them through the
+// clock.json flow (port of allanime.py:168-271 on the v3 transport).
+// The crypto ladder: pure-Go derivation → on a typed rotation failure
+// one bridge handoff + one retry → loud typed error. Per-source
+// expansion failures skip the source (the Python inner try/except).
 func (p *AllAnime) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
@@ -272,23 +388,41 @@ func (p *AllAnime) ResolveStream(ctx context.Context, episode contracts.Episode,
 
 	sources, err := p.fetchEpisodeSources(ctx, episode, dubID)
 	if err != nil {
+		// Crypto failures never collapse to an empty stream — the
+		// no-silent-failure policy; search/episodes keep their []
+		// boundary, resolve is loud.
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
 			fmt.Errorf("%w: %w", contracts.ErrExtractFailed, err))
 	}
 
 	for _, src := range sources {
+		// Decode once [M7]; the classification then only decides where
+		// the decoded URL goes.
 		raw, ok := decodeAllAnimeSourceURL(src.URL, p.internalBase)
 		if !ok {
 			continue
 		}
-		// Direct media (allanime.py:211-213).
-		if strings.Contains(raw, ".mp4") || strings.Contains(raw, ".m3u8") {
+		// Direct-media entries: live type=="player" sources (and any
+		// URL that names a media file) become links without a clock
+		// fetch. [LIVE-VERIFIED 2026-09-13]: the Yt-mp4 source carries
+		// type "player" / fallBack "mp4".
+		if aaIsDirectMedia(src) {
 			stream.Links["1080"] = contracts.VideoSource{URL: raw, Quality: "1080"}
 			continue
 		}
 		p.expandClockLinks(ctx, &stream, raw)
 	}
 	return stream, nil
+}
+
+// aaIsDirectMedia reports whether a decoded source is a playable media
+// file rather than a player-page embed: live type "player" entries, or
+// URLs containing .mp4/.m3u8 (allanime.py:211-213).
+func aaIsDirectMedia(src aaSource) bool {
+	if src.Type == "player" || strings.EqualFold(src.FallBack, "mp4") {
+		return true
+	}
+	return strings.Contains(src.URL, ".mp4") || strings.Contains(src.URL, ".m3u8")
 }
 
 // expandClockLinks fetches one decoded clock URL and folds its links
@@ -349,75 +483,83 @@ func (p *AllAnime) expandClockLinks(ctx context.Context, stream *contracts.Media
 	}
 }
 
-// fetchEpisodeSources runs the episode GraphQL query with protocol
-// retries: PersistedQueryNotFound falls back to the full query;
-// AA_CRYPTO_MISSING and tobeparsed GCM failures force one key refresh
-// (fresh token on the next attempt). The loop is bounded by the
-// once-flags — at most one extra round per condition.
+// fetchEpisodeSources runs the episode query with protocol retries:
+// AA_CRYPTO errors force one material refresh (fresh token on the next
+// attempt — live XL retry parity); a still-failing rotation escalates
+// to one bridge handoff and one final attempt; GCM failures force one
+// refresh too. The loop is bounded by the once-flags.
 func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Episode, dubID string) ([]aaSource, error) {
-	variables := mustJSON(map[string]any{
+	variables := map[string]any{
 		"showId":          episode.RawID,
 		"translationType": dubID,
 		"episodeString":   episode.Num,
-	})
+	}
 
-	keys, err := p.keys.get(ctx)
+	mat, err := p.material.get(ctx)
 	if err != nil {
+		if p.bridge != nil && errors.Is(err, errAABuildUnknown) {
+			return p.resolveViaBridge(ctx, variables)
+		}
 		return nil, err
 	}
 
 	var (
-		usedFullQuery bool
-		refreshed     bool
+		refreshed bool
+		bridged   bool
 	)
 	for range 4 {
-		token, err := aaBuildAAReqAt(aaEpisodeQueryHash, keys.key, keys.epoch, time.Now().UnixMilli())
+		token, err := aaBuildAAReqAt(aaEpisodeQueryHash, mat.Key, mat.Epoch, mat.BuildID, aaContentLane, time.Now().UnixMilli())
 		if err != nil {
 			return nil, err
 		}
-
-		ext := map[string]any{"aaReq": token}
-		if !usedFullQuery {
-			ext["persistedQuery"] = map[string]any{
+		extensions := map[string]any{
+			"persistedQuery": map[string]any{
 				"version":    1,
 				"sha256Hash": aaEpisodeQueryHash,
-			}
+			},
+			"k":     aaContentLane,
+			"aaReq": token,
 		}
-		params := map[string]string{
-			"variables":  variables,
-			"extensions": mustJSON(ext),
-		}
-		if usedFullQuery {
-			params["query"] = aaStreamQuery
-		}
-
-		body, err := p.graphqlGet(ctx, params)
+		// The x-build-id header is mandatory: without it the server
+		// answers AA_CRYPTO_MISSING_BUILD (bisected live).
+		body, err := p.graphqlPost(ctx, aaGraphqlRequest{
+			Query:      aaEpisodeQuery,
+			Variables:  variables,
+			Extensions: extensions,
+		}, map[string]string{"x-build-id": mat.BuildID})
 		if err != nil {
-			// Transport failure: the Python resolve boundary swallowed
-			// it into an empty stream.
-			return nil, nil
+			return nil, fmt.Errorf("allanime: episode query transport: %w", err)
 		}
 
-		if aaHasErrorMessage(body, "PersistedQueryNotFound") && !usedFullQuery {
-			usedFullQuery = true
-			continue
-		}
-		if aaHasAACryptoError(body) && !refreshed {
+		if aaHasAACryptoError(body) {
+			if refreshed {
+				if !bridged && p.bridge != nil {
+					bridged = true
+					return p.resolveViaBridge(ctx, variables)
+				}
+				return nil, errAACryptoRotated
+			}
 			refreshed = true
-			if keys, err = p.keys.refresh(ctx); err != nil {
+			if mat, err = p.material.refresh(ctx); err != nil {
+				if errors.Is(err, errAABuildUnknown) && p.bridge != nil {
+					return p.resolveViaBridge(ctx, variables)
+				}
 				return nil, err
 			}
 			continue
 		}
 
 		if blob := aaExtractToBeParsedBlob(body); blob != "" {
-			sources, derr := decodeToBeParsed(blob, keys.key)
+			sources, derr := aaDecryptToBeParsed(blob, mat.Key)
 			if errors.Is(derr, errAAGCMAuth) && !refreshed {
 				refreshed = true
-				if keys, err = p.keys.refresh(ctx); err != nil {
+				if mat, err = p.material.refresh(ctx); err != nil {
+					if errors.Is(err, errAABuildUnknown) && p.bridge != nil {
+						return p.resolveViaBridge(ctx, variables)
+					}
 					return nil, err
 				}
-				sources, derr = decodeToBeParsed(blob, keys.key)
+				sources, derr = aaDecryptToBeParsed(blob, mat.Key)
 			}
 			if derr != nil {
 				if errors.Is(derr, errAAGCMAuth) {
@@ -429,65 +571,153 @@ func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Ep
 		}
 
 		// Unencrypted response: accept sourceUrls directly.
-		var parsed struct {
-			Data struct {
-				Episode struct {
-					SourceUrls []struct {
-						SourceURL  string `json:"sourceUrl"`
-						SourceName string `json:"sourceName"`
-					} `json:"sourceUrls"`
-				} `json:"episode"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(body, &parsed); err == nil {
-			sources := make([]aaSource, 0, len(parsed.Data.Episode.SourceUrls))
-			for _, su := range parsed.Data.Episode.SourceUrls {
-				sources = append(sources, aaSource{
-					Name: su.SourceName,
-					URL:  strings.TrimPrefix(su.SourceURL, "--"),
-				})
+		return aaDecodePlainSources(body)
+	}
+	return nil, errAACryptoRotated
+}
+
+// resolveViaBridge runs the browser-bridge handoff and one final
+// attempt with the live-derived material.
+func (p *AllAnime) resolveViaBridge(ctx context.Context, variables map[string]any) ([]aaSource, error) {
+	bm, err := p.bridge.ExtractCrypto(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("allanime: bridge: %w", err)
+	}
+	if err := p.buildIDs.Store(bm.BuildID); err == nil {
+		p.material.setBuildID(bm.BuildID)
+	}
+	if err := p.material.adoptBridge(ctx, bm); err != nil {
+		return nil, fmt.Errorf("allanime: bridge adopt: %w", err)
+	}
+	mat, err := p.material.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	token, err := aaBuildAAReqAt(aaEpisodeQueryHash, mat.Key, mat.Epoch, mat.BuildID, aaContentLane, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.graphqlPost(ctx, aaGraphqlRequest{
+		Query:     aaEpisodeQuery,
+		Variables: variables,
+		Extensions: map[string]any{
+			"persistedQuery": map[string]any{
+				"version":    1,
+				"sha256Hash": aaEpisodeQueryHash,
+			},
+			"k":     aaContentLane,
+			"aaReq": token,
+		},
+	}, map[string]string{"x-build-id": mat.BuildID})
+	if err != nil {
+		return nil, fmt.Errorf("allanime: episode query transport: %w", err)
+	}
+	if aaHasAACryptoError(body) {
+		return nil, errAACryptoRotated
+	}
+	if blob := aaExtractToBeParsedBlob(body); blob != "" {
+		sources, derr := aaDecryptToBeParsed(blob, mat.Key)
+		if derr != nil {
+			if errors.Is(derr, errAAGCMAuth) {
+				return nil, fmt.Errorf("%w: %w", errAADecryptFailed, derr)
 			}
-			return aaPrioritizeSources(sources), nil
+			return nil, derr
 		}
-		return nil, nil
+		return aaPrioritizeSources(sources), nil
+	}
+	return aaDecodePlainSources(body)
+}
+
+// aaGraphQLErrorMessages collects the GraphQL errors[] messages and
+// extension codes of a response body (deduped, response order) — ""
+// entries skipped. AA_CRYPTO signals are intentionally included; the
+// caller has already ruled them out by the time it asks.
+func aaGraphQLErrorMessages(body []byte) []string {
+	var parsed struct {
+		Errors []struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	var msgs []string
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, dup := seen[s]; dup {
+			return
+		}
+		seen[s] = struct{}{}
+		msgs = append(msgs, s)
+	}
+	for _, e := range parsed.Errors {
+		add(e.Message)
+		add(e.Extensions.Code)
+	}
+	return msgs
+}
+
+// aaDecodePlainSources decodes an unencrypted episode response [I3].
+// A body carrying episode data (even with zero sources) is the
+// deliberate empty passthrough — null episode WITHOUT errors stays
+// (nil, nil). A body WITHOUT episode data but WITH GraphQL errors[]
+// never collapses to a silent empty stream: NEED_CAPTCHA surfaces the
+// typed errAACaptcha, any other error surfaces a descriptive error
+// (wrapped into the contracts family by ResolveStream).
+func aaDecodePlainSources(body []byte) ([]aaSource, error) {
+	var parsed struct {
+		Data struct {
+			Episode *struct {
+				SourceUrls []aaSourceEntry `json:"sourceUrls"`
+			} `json:"episode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Data.Episode != nil {
+		entries := parsed.Data.Episode.SourceUrls
+		if len(entries) == 0 {
+			return nil, nil
+		}
+		sources := make([]aaSource, 0, len(entries))
+		for _, su := range entries {
+			sources = append(sources, aaSource{
+				Name:     su.SourceName,
+				URL:      strings.TrimPrefix(su.SourceURL, "--"),
+				Type:     su.Type,
+				FallBack: su.FallBack,
+			})
+		}
+		return aaPrioritizeSources(sources), nil
+	}
+	msgs := aaGraphQLErrorMessages(body)
+	for _, msg := range msgs {
+		if strings.HasPrefix(msg, "NEED_CAPTCHA") {
+			return nil, fmt.Errorf("%w: %s", errAACaptcha, msg)
+		}
+	}
+	if len(msgs) > 0 {
+		return nil, fmt.Errorf("allanime: graphql error response: %s", strings.Join(msgs, "; "))
 	}
 	return nil, nil
 }
 
-// graphqlGet issues the GraphQL GET with the provider headers.
-func (p *AllAnime) graphqlGet(ctx context.Context, params map[string]string) ([]byte, error) {
-	q := url.Values{}
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	resp, err := p.http.Get(ctx, p.apiBase+"?"+q.Encode(), p.headers)
+// fetchText GETs url with the provider headers and returns the body.
+func (p *AllAnime) fetchText(ctx context.Context, url string) (string, error) {
+	resp, err := p.http.Get(ctx, url, p.headers)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return resp.Body, nil
+	return string(resp.Body), nil
 }
 
-// aaHasErrorMessage reports whether the GraphQL error array carries a
-// message containing needle.
-func aaHasErrorMessage(body []byte, needle string) bool {
-	var parsed struct {
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return false
-	}
-	for _, e := range parsed.Errors {
-		if strings.Contains(e.Message, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-// aaHasAACryptoError reports the server-side stale-key signals
-// (AA_CRYPTO_MISSING, AA_CRYPTO_MISSING_BUILD — ani-cli #1823 traces).
+// aaHasAACryptoError reports the server-side crypto error signals:
+// AA_CRYPTO_MISSING / _LANE / _BUILD / _MISMATCH / _EXPIRED / _STALE
+// (live kT error set; ani-cli #1823 traces).
 func aaHasAACryptoError(body []byte) bool {
 	var parsed struct {
 		Errors []struct {
@@ -618,14 +848,4 @@ func pyTruthy(v any) bool {
 	default:
 		return true
 	}
-}
-
-// mustJSON marshals v or panics — used on internally-built payloads
-// that cannot fail to encode.
-func mustJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("allanime: marshal internal payload: %v", err))
-	}
-	return string(b)
 }

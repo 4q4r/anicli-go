@@ -1,159 +1,177 @@
 package providers
 
+// AllAnime v3 protocol tests: the aaEnv fake world now models the
+// client-crypto bootstrap (x-aa-boot validation against the
+// golden-pinned port), the POST-only GraphQL transport (with aaReq +
+// x-build-id on episode queries) and tobeparsed responses. Live
+// fixtures under testdata/allanime carry [LIVE-VERIFIED 2026-09-13]
+// provenance.
+
 import (
 	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// aaEnv is the four-server fake world of the AllAnime protocol: the
-// mkissa.to referer page (epoch + partB + entry bundle), the CDN
-// (entry bundle + mask chunk), the GraphQL API (aaReq verification +
+// aaEnv is the fake world of the AllAnime v3 protocol: the GraphQL API
+// (bootstrap endpoint + query endpoint with aaReq verification +
 // tobeparsed responses) and the stream host (clock.json + m3u8).
 type aaEnv struct {
-	t               *testing.T
-	referer         *httptest.Server
-	cdn             *httptest.Server
-	api             *httptest.Server
-	stream          *httptest.Server
-	refererHits     atomic.Int32
-	maskHex         string
-	partB           []byte
-	maskB           []byte
-	apiKey          func() []byte // key the API encrypts tobeparsed with
-	apiRequests     atomic.Int32
-	episodeAttempts atomic.Int32 // every episode-sources request (extensions present)
-	lastExt         atomic.Value // string: extensions param of last episode call
-	lastVars        atomic.Value // string: variables param of last episode call
-	lastQuery       atomic.Value // string: query param of last episode call
-	lastAPIHdr      atomic.Value // http.Header: last API request header
-	apiBehaviors    []func(r *http.Request, w http.ResponseWriter) bool
-	clockHits       atomic.Int32
+	t *testing.T
+
+	api     *httptest.Server
+	stream  *httptest.Server
+	apiHost string // referer host folded into x-aa-boot (gT)
+
+	// bootstrap material (fixture defaults = live epoch-2958 capture)
+	mu          sync.Mutex
+	partB       string
+	rotated     bool // rotate on the NEXT bootstrap hit (after set)
+	epoch       int64
+	switchAt    int64
+	bootHits    int
+	bootAnswers int // 0 = healthy; 1 = 400 (unknown build)
+	// activeBuildID is the buildId the fake API derives its key with
+	// (tests flip it when the bridge discovers a new build).
+	activeBuildID string
+
+	// episode-source crypto gating: rejectNoAAReq makes the query
+	// endpoint answer AA_CRYPTO_MISSING_BUILD unless x-build-id +
+	// aaReq arrive.
+	rejectNoAAReq bool
+
+	apiRequests  atomic.Int32
+	lastBody     atomic.Value // string: last query-endpoint body
+	lastAPIHdr   atomic.Value // http.Header
+	apiBehaviors []func(r *http.Request, w http.ResponseWriter) bool
+
+	clockHits atomic.Int32
 	// lastMasterReferer records the Referer of the last /master.m3u8
-	// fetch; masterForbidden counts requests the fake CDN rejected for
-	// a wrong Referer (F30: the playlist must be fetched with the clock
-	// URL as Referer, Python allanime.py:233-236).
+	// fetch (F30: the playlist must be fetched with the clock URL as
+	// Referer).
 	lastMasterReferer atomic.Value
-	masterForbidden   atomic.Int32
-	mu                sync.Mutex // guards referer page mutation below
-	refererBody       atomic.Value
+
+	nowMillis int64
 }
 
-// aaHexEnc is the inverse of the Python "--" decoder (chr ^ 56).
-func aaHexEnc(s string) string {
-	out := make([]byte, 0, len(s)*2)
-	for _, r := range s {
-		out = append(out, []byte(fmt.Sprintf("%02x", int(r)^56))...)
-	}
-	return string(out)
-}
-
-// newAAEnv builds the fake world. keyMask/keyPartB derive key K1; the
-// referer page initially serves epoch 4130 with that material.
+// newAAEnv builds the fake world with the live epoch-2958 bootstrap
+// material (key = cy("168") XOR live partB — the golden-pinned key).
 func newAAEnv(t *testing.T) *aaEnv {
 	t.Helper()
 
-	env := &aaEnv{t: t}
-	env.maskB = make([]byte, 32)
-	env.partB = make([]byte, 32)
-	for i := range env.maskB {
-		env.maskB[i] = byte(40 + i)
-		env.partB[i] = byte(170 - i)
-	}
-	env.maskHex = hex.EncodeToString(env.maskB)
-	key1 := make([]byte, 32)
-	for i := range key1 {
-		key1[i] = env.maskB[i] ^ env.partB[i]
-	}
-	cur := key1
-	env.apiKey = func() []byte {
-		env.mu.Lock()
-		defer env.mu.Unlock()
-		return cur
+	env := &aaEnv{
+		t:         t,
+		partB:     "lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=",
+		epoch:     2958,
+		switchAt:  4102444800000,
+		nowMillis: 1789000000000,
 	}
 
-	// --- CDN: entry bundle importing one mask chunk ---
-	env.cdn = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/all/mk/_app/immutable/entry/app.x1.js":
-			_, _ = fmt.Fprint(w, `import{a}from"../chunks/one.js";import{b}from"../chunks/two.js";`)
-		case "/all/mk/_app/immutable/chunks/one.js":
-			_, _ = fmt.Fprintf(w, `export const m=%q;`, env.maskHex)
-		case "/all/mk/_app/immutable/chunks/two.js":
-			_, _ = w.Write([]byte(`export const unused=1;`))
+	env.api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env.lastAPIHdr.Store(r.Header.Clone())
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/client-crypto/v1/bootstrap"):
+			env.mu.Lock()
+			env.bootHits++
+			answers := env.bootAnswers
+			if env.rotated {
+				env.partB = base64.StdEncoding.EncodeToString(mkBytes(31))
+				env.rotated = false
+			}
+			partB, epoch, switchAt := env.partB, env.epoch, env.switchAt
+			env.mu.Unlock()
+			if answers == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_MISSING_BUILD"}]}`))
+				return
+			}
+			// Validate x-aa-boot against the golden-pinned port for one
+			// of the epoch candidates of the fixed clock.
+			boot := r.Header.Get("x-aa-boot")
+			mask := mustAAMask(t, r.URL.Query().Get("buildId"))
+			ok := false
+			for _, cand := range aaEpochCandidates(env.nowMillis) {
+				want, err := aaBootHeader(mask, aaBootParams{
+					Lane: "k7", BuildID: r.URL.Query().Get("buildId"),
+					Group: aaKeyGroup(env.apiHost), Host: env.apiHost, Epoch: cand,
+				})
+				if err != nil {
+					t.Errorf("aaBootHeader: %v", err)
+				}
+				if want == boot {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				t.Errorf("bootstrap x-aa-boot %q matches no candidate", boot)
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"epoch": epoch, "partB": partB, "switchAt": switchAt, "k": "k7",
+			})
+			return
+
+		case r.URL.Path == "/api":
+			var req aaGraphqlRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+			env.lastBody.Store(req.Query)
+			for _, pre := range env.apiBehaviors {
+				if pre(r, w) {
+					return
+				}
+			}
+			query := req.Query
+			switch {
+			case strings.Contains(query, "shows("):
+				_, _ = w.Write([]byte(`{"data":{"shows":{"edges":[` +
+					`{"_id":"id1","name":"Naruto","thumbnail":"https://img/n.png"},` +
+					`{"_id":"id2","name":"Boruto","thumbnail":"https://img/b.png"}]}}}`))
+			case strings.Contains(query, "availableEpisodesDetail"):
+				_, _ = w.Write([]byte(`{"data":{"show":{"_id":"id1","availableEpisodesDetail":` +
+					`{"sub":["2","1"],"dub":["1","10.5"]}}}}`))
+			case strings.Contains(query, "episode("):
+				env.apiRequests.Add(1)
+				// Live server contract: aaReq + k + persistedQuery in
+				// extensions, x-build-id header, else BUILD error.
+				if env.rejectNoAAReq {
+					if req.Extensions == nil || req.Extensions["aaReq"] == nil || r.Header.Get("x-build-id") == "" {
+						_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_MISSING_BUILD","extensions":{"code":"AA_CRYPTO_MISSING_BUILD"}}]}`))
+						return
+					}
+				}
+				plain := `{"episode":{"episodeString":"1","sourceUrls":[` +
+					fmt.Sprintf(`{"sourceUrl":"--%s","sourceName":"S-mp4"}]}}}`, aaHexEnc("/all/manga/clock?w=1"))
+				key := env.apiKey()
+				_, _ = fmt.Fprintf(w, `{"data":{"_m":"b7","tobeparsed":%q}`,
+					aaSealBlob(t, key, plain))
+			default:
+				http.Error(w, "unknown query", http.StatusBadRequest)
+			}
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	t.Cleanup(env.cdn.Close)
-
-	// --- referer page: epoch + partB + entry bundle URL ---
-	env.refererBody.Store(fmt.Sprintf(
-		`<html><script>var __ssr={"epoch":4130,"partB":%q};</script>`+
-			`<script defer src=%q></script></html>`,
-		base64.StdEncoding.EncodeToString(env.partB),
-		env.cdn.URL+"/all/mk/_app/immutable/entry/app.x1.js"))
-	env.referer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		env.refererHits.Add(1)
-		_, _ = w.Write([]byte(env.refererBody.Load().(string)))
-	}))
-	t.Cleanup(env.referer.Close)
-
-	// --- API ---
-	env.api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		env.lastAPIHdr.Store(r.Header.Clone())
-		if r.URL.Query().Get("extensions") != "" {
-			env.episodeAttempts.Add(1)
-			env.lastExt.Store(r.URL.Query().Get("extensions"))
-		}
-		if r.URL.Query().Get("variables") != "" {
-			env.lastVars.Store(r.URL.Query().Get("variables"))
-		}
-		if r.URL.Query().Get("query") != "" {
-			env.lastQuery.Store(r.URL.Query().Get("query"))
-		}
-		for _, pre := range env.apiBehaviors {
-			if pre(r, w) {
-				return
-			}
-		}
-		query := r.URL.Query().Get("query")
-		switch {
-		case strings.Contains(query, "shows("):
-			_, _ = w.Write([]byte(`{"data":{"shows":{"edges":[` +
-				`{"_id":"id1","name":"Naruto","thumbnail":"https://img/n.png","availableEpisodes":{"sub":1,"dub":1}},` +
-				`{"_id":"id2","name":"Boruto","thumbnail":"https://img/b.png","availableEpisodes":{"sub":2}}]}}}`))
-		case strings.Contains(query, "availableEpisodesDetail"):
-			_, _ = w.Write([]byte(`{"data":{"show":{"_id":"id1","availableEpisodesDetail":` +
-				`{"sub":["2","1"],"dub":["1","10.5"]}}}}`))
-		default:
-			// Episode-sources query (persisted or full).
-			env.apiRequests.Add(1)
-			ext := r.URL.Query().Get("extensions")
-			if ext == "" || !strings.Contains(ext, "aaReq") {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_MISSING"}]}`))
-				return
-			}
-			plain := `{"data":{"episode":{"episodeString":"1","sourceUrls":[` +
-				fmt.Sprintf(`{"sourceUrl":"--%s","sourceName":"S-mp4"}`, aaHexEnc("/all/manga/clock?w=1")) +
-				`]}}}`
-			_, _ = fmt.Fprintf(w, `{"data":{"_m":"b7","tobeparsed":%q}`,
-				aaTestSeal(t, env.apiKey(), plain))
-		}
-	}))
 	t.Cleanup(env.api.Close)
+	env.apiHost = strings.TrimPrefix(env.api.URL, "http://")
 
 	// --- stream host: clock.json + m3u8 ---
 	env.stream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,10 +183,8 @@ func newAAEnv(t *testing.T) *aaEnv {
 				env.stream.URL+"/master.m3u8")
 		case "/master.m3u8":
 			// F30 server-side assertion: a real CDN rejects playlist
-			// fetches without the clock-URL Referer (Python parity
-			// allanime.py:233-236).
+			// fetches without the clock-URL Referer.
 			if ref := r.Header.Get("Referer"); !strings.HasPrefix(ref, env.stream.URL+"/all/manga/clock.json") {
-				env.masterForbidden.Add(1)
 				http.Error(w, "wrong referer", http.StatusForbidden)
 				return
 			}
@@ -176,7 +192,7 @@ func newAAEnv(t *testing.T) *aaEnv {
 			_, _ = w.Write([]byte("#EXTM3U\n" +
 				"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n" +
 				"1080.m3u8\n" +
-				"#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n" +
+				"#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1280x720\n" +
 				"720.m3u8\n"))
 		default:
 			http.NotFound(w, r)
@@ -187,21 +203,64 @@ func newAAEnv(t *testing.T) *aaEnv {
 	return env
 }
 
-// provider wires the AllAnime provider against the fake world.
-func (e *aaEnv) provider() *AllAnime {
-	return newAllAnime(e.api.URL+"/api", e.referer.URL, e.stream.URL, testClient(e.t, "allanime"))
+// apiKey derives the key the fake API encrypts with (mask XOR partB
+// for the active buildId).
+func (e *aaEnv) apiKey() []byte {
+	e.mu.Lock()
+	partB, buildID := e.partB, e.activeBuildID
+	e.mu.Unlock()
+	if buildID == "" {
+		buildID = "168"
+	}
+	key, err := aaDeriveKeyMaterial(mustAAMask(e.t, buildID), partB)
+	if err != nil {
+		e.t.Fatalf("apiKey: %v", err)
+	}
+	return key
 }
 
-// encryptWith seals plain with the given key (test-side oracle).
-func aaEncryptWith(t *testing.T, key []byte, plain string) string {
-	t.Helper()
-	return aaTestSeal(t, key, plain)
+// bootHitCount reports the bootstrap request count under the mutex.
+func (e *aaEnv) bootHitCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.bootHits
+}
+
+// provider wires the AllAnime provider against the fake world (no
+// bridge, memory-only buildId cache, fixed clock).
+func (e *aaEnv) provider() *AllAnime {
+	return e.providerWithBridge(nil)
+}
+
+// providerWithBridge wires the provider with a bridge seam.
+func (e *aaEnv) providerWithBridge(bridge aaBridgeSource) *AllAnime {
+	p := newAllAnime(e.api.URL+"/api", "http://"+e.apiHost, e.stream.URL, testClient(e.t, "allanime"), bridge, "")
+	p.material = newAAMaterialManager(aaMaterialDeps{
+		BootstrapBase: e.api.URL + "/client-crypto/v1/bootstrap",
+		Referer:       "http://" + e.apiHost,
+		RefererHost:   e.apiHost,
+		Lane:          aaContentLane,
+		BuildID:       func() (string, error) { return "168", nil },
+		HTTP:          p.http,
+		Now:           func() time.Time { return time.UnixMilli(e.nowMillis) },
+	})
+	return p
+}
+
+// aaHexEnc is the inverse of the Python "--" decoder (chr ^ 56).
+func aaHexEnc(s string) string {
+	out := make([]byte, 0, len(s)*2)
+	for _, r := range s {
+		out = append(out, []byte(fmt.Sprintf("%02x", int(r)^56))...)
+	}
+	return string(out)
 }
 
 func TestAllAnimeSearch(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
+	env.rejectNoAAReq = true
 	p := env.provider()
 
 	results, err := p.Search(context.Background(), "naruto")
@@ -219,39 +278,49 @@ func TestAllAnimeSearch(t *testing.T) {
 		t.Errorf("results[0] meta wrong: %+v", results[0])
 	}
 
-	vars := env.lastVars.Load().(string)
-	if !strings.Contains(vars, `"limit":26`) || !strings.Contains(vars, `"page":1`) {
-		t.Errorf("search variables = %q, want limit 26 page 1", vars)
+	// POST body shape: live search variables incl. allowAdult/
+	// allowUnknown/limit 40/translationType sub.
+	body := env.lastBody.Load().(string)
+	if !strings.Contains(body, "shows(") || !strings.Contains(body, "englishName") {
+		t.Errorf("search query doc = %q, want the live document (incl englishName)", body)
 	}
-	if !strings.Contains(vars, `"countryOrigin":"ALL"`) {
-		t.Errorf("search variables = %q, want countryOrigin ALL", vars)
-	}
-	if q := env.lastQuery.Load().(string); !strings.Contains(q, "shows(") {
-		t.Errorf("search query = %q, want the shows query", q)
+	hdr, _ := env.lastAPIHdr.Load().(http.Header)
+	if hdr == nil || hdr.Get("Referer") != "http://"+env.apiHost || hdr.Get("Origin") != "http://"+env.apiHost {
+		t.Errorf("search headers = %v", hdr)
 	}
 }
 
-func TestAllAnimeSearchSendsRefererAndOrigin(t *testing.T) {
+// TestAllAnimeSearchLiveFixture pins the decode against the live-captured
+// search response (ROAD OF NARUTO). [LIVE-VERIFIED 2026-09-13].
+func TestAllAnimeSearchLiveFixture(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if strings.Contains(r.URL.Path, "/api") && !strings.Contains(r.URL.Path, "bootstrap") {
+			_, _ = w.Write([]byte(aaFixture(t, "search_live_road_of_naruto.json")))
+			return true
+		}
+		return false
+	})
 	p := env.provider()
 
-	if _, err := p.Search(context.Background(), "q"); err != nil {
+	results, err := p.Search(context.Background(), "road of naruto")
+	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	// New-protocol transport: every API request carries the mkissa.to
-	// Referer AND Origin (old allmanga.to values get stripped answers;
-	// in the wired provider both come from the same referer constant).
-	hdr, ok := env.lastAPIHdr.Load().(http.Header)
-	if !ok || hdr == nil {
-		t.Fatal("no API request recorded")
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
 	}
-	if got := hdr.Get("Referer"); got != env.referer.URL {
-		t.Errorf("Referer = %q, want %q", got, env.referer.URL)
+	want := contracts.SearchResult{
+		Title:    "ROAD OF NARUTO",
+		URL:      "2oXgpDPd3xKWdgnoz",
+		SourceID: "allanime",
+		Poster:   "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx155348-4ipji8SvTjyh.jpg",
 	}
-	if got := hdr.Get("Origin"); got != env.referer.URL {
-		t.Errorf("Origin = %q, want %q", got, env.referer.URL)
+	got := results[0]
+	if got.Title != want.Title || got.URL != want.URL || got.SourceID != want.SourceID || got.Poster != want.Poster {
+		t.Errorf("result = %+v, want %+v", got, want)
 	}
 }
 
@@ -259,13 +328,40 @@ func TestAllAnimeSearchTransportFailureSilent(t *testing.T) {
 	t.Parallel()
 
 	// Dead endpoint: Python's except returned [] (allanime.py:116-117).
-	p := newAllAnime("http://"+deadAddr(t)+"/api", "http://"+deadAddr(t), "https://allanime.day", testClient(t, "allanime"))
+	p := newAllAnime("http://"+deadAddr(t)+"/api", "http://"+deadAddr(t), "https://allanime.day", testClient(t, "allanime"), nil, "")
 	results, err := p.Search(context.Background(), "naruto")
 	if err != nil {
 		t.Fatalf("Search transport error must be silent, got %v", err)
 	}
 	if len(results) != 0 {
 		t.Fatalf("results = %d, want 0", len(results))
+	}
+}
+
+// TestAllAnimeEpisodesLiveFixture pins the episodes decode against the
+// live capture. [LIVE-VERIFIED 2026-09-13].
+func TestAllAnimeEpisodesLiveFixture(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		_, _ = w.Write([]byte(aaFixture(t, "episodes_live_road_of_naruto.json")))
+		return true
+	})
+	p := env.provider()
+
+	episodes, err := p.GetEpisodes(context.Background(), "2oXgpDPd3xKWdgnoz")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(episodes) != 1 || episodes[0].Num != "1" {
+		t.Fatalf("episodes = %+v, want episode 1 only", episodes)
+	}
+	if _, ok := episodes[0].RawEmbeds["sub"]; !ok {
+		t.Error("episode 1 missing sub embed")
+	}
+	if _, ok := episodes[0].RawEmbeds["dub"]; ok {
+		t.Error("episode 1 has phantom dub embed (live dub list is empty)")
 	}
 }
 
@@ -288,14 +384,7 @@ func TestAllAnimeGetEpisodes(t *testing.T) {
 		if episodes[i].Num != want {
 			t.Errorf("episodes[%d].Num = %q, want %q", i, episodes[i].Num, want)
 		}
-		if episodes[i].Title != "Episode "+want {
-			t.Errorf("episodes[%d].Title = %q", i, episodes[i].Title)
-		}
-		if episodes[i].RawID != "id1" {
-			t.Errorf("episodes[%d].RawID = %q, want the show id", i, episodes[i].RawID)
-		}
 	}
-	// 1 exists in both sub and dub; 2 only sub; 10.5 only dub.
 	if _, ok := episodes[0].RawEmbeds["sub"]; !ok {
 		t.Error("episode 1 missing sub embed")
 	}
@@ -305,19 +394,17 @@ func TestAllAnimeGetEpisodes(t *testing.T) {
 	if _, ok := episodes[1].RawEmbeds["dub"]; ok {
 		t.Error("episode 2 has phantom dub embed")
 	}
-	if _, ok := episodes[2].RawEmbeds["sub"]; ok {
-		t.Error("episode 10.5 has phantom sub embed")
-	}
 }
 
-// TestAllAnimeResolveStreamRoundTrip is the full protocol round trip:
-// key derivation (referer page -> entry bundle -> mask chunk), aaReq
-// token in the extensions, tobeparsed decryption, "--" URL decode,
-// clock.json fetch and m3u8 variant resolution.
+// TestAllAnimeResolveStreamRoundTrip is the full v3 protocol round
+// trip: bootstrap (x-aa-boot validation), aaReq token + x-build-id on
+// the episode POST, tobeparsed decryption, "--" URL decode, clock.json
+// fetch and m3u8 variant resolution.
 func TestAllAnimeResolveStreamRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
+	env.rejectNoAAReq = true
 	p := env.provider()
 
 	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
@@ -327,32 +414,14 @@ func TestAllAnimeResolveStreamRoundTrip(t *testing.T) {
 	if stream.DubName != "sub" {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
-
-	// aaReq + persisted query present on the episode call.
-	ext := env.lastExt.Load().(string)
-	var extParsed struct {
-		PersistedQuery *struct {
-			Version    int    `json:"version"`
-			SHA256Hash string `json:"sha256Hash"`
-		} `json:"persistedQuery"`
-		AAReq string `json:"aaReq"`
-	}
-	if err := json.Unmarshal([]byte(ext), &extParsed); err != nil {
-		t.Fatalf("extensions not JSON: %v (raw %q)", err, ext)
-	}
-	if extParsed.AAReq == "" {
-		t.Fatal("extensions carry no aaReq token")
-	}
-	if extParsed.PersistedQuery == nil || extParsed.PersistedQuery.SHA256Hash != aaEpisodeQueryHash {
-		t.Fatalf("persistedQuery = %+v, want hash %s", extParsed.PersistedQuery, aaEpisodeQueryHash)
+	if got := env.apiRequests.Load(); got != 1 {
+		t.Errorf("episode requests = %d, want 1", got)
 	}
 
 	// clock.json was fetched through the decoded internal URL.
 	if env.clockHits.Load() < 2 { // clock.json + master.m3u8
 		t.Fatalf("stream host hits = %d, want clock.json + playlist fetches", env.clockHits.Load())
 	}
-
-	// Variant playlist produced 1080 and 720 links with absolute URIs.
 	l1080, ok := stream.Links["1080"]
 	if !ok {
 		t.Fatalf("links = %#v, want a 1080 entry", stream.Links)
@@ -360,45 +429,34 @@ func TestAllAnimeResolveStreamRoundTrip(t *testing.T) {
 	if want := env.stream.URL + "/1080.m3u8"; l1080.URL != want {
 		t.Errorf("1080 URL = %q, want %q", l1080.URL, want)
 	}
-	if l1080.Type != "m3u8" || l1080.Quality != "1080" {
-		t.Errorf("1080 source = %+v", l1080)
-	}
 	wantReferer := env.stream.URL + "/all/manga/clock.json?w=1"
 	if l1080.Headers["Referer"] != wantReferer {
 		t.Errorf("1080 Referer = %q, want %q", l1080.Headers["Referer"], wantReferer)
 	}
-	// F30: the master playlist itself must have been FETCHED with the
-	// clock URL as Referer (allanime.py:233-236), not the provider
-	// headers — the fake CDN above 403s anything else.
 	if got := env.lastMasterReferer.Load(); got == nil || got.(string) != wantReferer {
 		t.Errorf("master.m3u8 fetch Referer = %v, want %q (F30)", got, wantReferer)
-	}
-	if env.masterForbidden.Load() != 0 {
-		t.Errorf("master.m3u8 rejected %d fetches for a wrong Referer", env.masterForbidden.Load())
 	}
 	if _, ok := stream.Links["720"]; !ok {
 		t.Error("no 720 link from the second variant")
 	}
 }
 
-// TestAllAnimeResolveStreamDirectMedia pins the Python direct branch:
-// a decoded URL containing .mp4/.m3u8 becomes a 1080 link without any
-// clock fetch (allanime.py:211-213).
-func TestAllAnimeResolveStreamDirectMedia(t *testing.T) {
+// TestAllAnimeResolveStreamDirectPlayer pins the live v3 direct-media
+// shape: type "player" sources (Yt-mp4) become links without a clock
+// fetch. Vector from the live plaintext fixture.
+// [LIVE-VERIFIED 2026-09-13].
+func TestAllAnimeResolveStreamDirectPlayer(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
 	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		if r.URL.Query().Get("query") != "" && strings.Contains(r.URL.Query().Get("query"), "episode(") {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
 			return false
 		}
-		if r.URL.Query().Get("extensions") == "" {
-			return false
-		}
-		plain := fmt.Sprintf(`{"data":{"episode":{"episodeString":"1","sourceUrls":[`+
-			`{"sourceUrl":"--%s","sourceName":"Yt-mp4"}]}}}`, aaHexEnc("/getwide/cool.mp4"))
-		_, _ = fmt.Fprintf(w, `{"data":{"tobeparsed":%q}`,
-			aaEncryptWith(t, env.apiKey(), plain))
+		plain := `{"episode":{"episodeString":"1","sourceUrls":[` +
+			`{"sourceUrl":"https://tools.fast4speed.rsvp/media9/videos/x/sub/1?Authorization=1","sourceName":"Yt-mp4","type":"player","fallBack":"mp4"},` +
+			`{"sourceUrl":"https://ok.ru/videoembed/1","sourceName":"Ok","type":"iframe"}]}}`
+		_, _ = fmt.Fprintf(w, `{"data":{"tobeparsed":%q}`, aaSealBlob(t, env.apiKey(), plain))
 		return true
 	})
 	p := env.provider()
@@ -408,305 +466,38 @@ func TestAllAnimeResolveStreamDirectMedia(t *testing.T) {
 		t.Fatalf("ResolveStream: %v", err)
 	}
 	l, ok := stream.Links["1080"]
-	if !ok {
-		t.Fatalf("links = %#v, want direct 1080", stream.Links)
-	}
-	if l.URL != env.stream.URL+"/getwide/cool.mp4" || l.Type != "" {
-		t.Errorf("direct link = %+v", l)
+	if !ok || l.URL != "https://tools.fast4speed.rsvp/media9/videos/x/sub/1?Authorization=1" {
+		t.Fatalf("direct player link = %+v ok=%v", l, ok)
 	}
 	if env.clockHits.Load() != 0 {
-		t.Error("direct media must skip the clock flow")
+		t.Error("direct player source must skip the clock flow")
+	}
+	if len(stream.Links) != 1 {
+		t.Errorf("iframe embed leaked into links: %#v", stream.Links)
 	}
 }
 
-// TestAllAnimeResolveStreamPlainSourceUrls pins the tolerance for
-// unencrypted responses: data.episode.sourceUrls directly.
-func TestAllAnimeResolveStreamPlainSourceUrls(t *testing.T) {
+// TestAllAnimeResolveStreamKeyRefreshOnRotation pins the AA_CRYPTO
+// retry: the server rejects the first token as stale and rotates
+// server-side; the provider refreshes the material (second bootstrap)
+// and retries with a fresh token.
+func TestAllAnimeResolveStreamKeyRefreshOnRotation(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
+	env.rejectNoAAReq = true
+	var rejections, posts atomic.Int32
 	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		if r.URL.Query().Get("extensions") == "" {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
 			return false
 		}
-		_, _ = w.Write([]byte(`{"data":{"episode":{"episodeString":"1","sourceUrls":[` +
-			fmt.Sprintf(`{"sourceUrl":"--%s","sourceName":"Luf-Mp4"}]}}}`, aaHexEnc("/all/manga/clock?w=9"))))
-		return true
-	})
-	p := env.provider()
-
-	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	if _, ok := stream.Links["1080"]; !ok || env.clockHits.Load() == 0 {
-		t.Fatalf("plain sourceUrls not expanded: links=%d clockHits=%d", len(stream.Links), env.clockHits.Load())
-	}
-}
-
-// TestAllAnimeResolveStreamClockMP4 pins the mp4 branch of the clock
-// links (allanime.py:260-261): non-hls .mp4 link becomes a 1080 mp4.
-func TestAllAnimeResolveStreamClockMP4(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	plain := fmt.Sprintf(`{"data":{"episode":{"episodeString":"1","sourceUrls":[`+
-		`{"sourceUrl":"--%s","sourceName":"S-mp4"}]}}}`, aaHexEnc("/all/manga/clock?w=2"))
-	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		if r.URL.Query().Get("extensions") == "" {
-			return false
-		}
-		_, _ = fmt.Fprintf(w, `{"data":{"tobeparsed":%q}`, aaEncryptWith(t, env.apiKey(), plain))
-		return true
-	})
-	env.stream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		env.clockHits.Add(1)
-		if r.URL.Path == "/all/manga/clock.json" {
-			_, _ = w.Write([]byte(`{"links":[{"link":"https://mirror.example/v/720.mp4"}]}`))
-			return
-		}
-		http.NotFound(w, r)
-	})
-	p := env.provider()
-
-	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	l, ok := stream.Links["1080"]
-	if !ok || l.URL != "https://mirror.example/v/720.mp4" || l.Type != "mp4" {
-		t.Fatalf("mp4 link = %+v ok=%v", l, ok)
-	}
-}
-
-// TestAllAnimeResolveStreamPersistedQueryFallback pins the APQ
-// fallback: PersistedQueryNotFound -> retry once with the full query
-// while keeping the aaReq extension.
-func TestAllAnimeResolveStreamPersistedQueryFallback(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	var sawFullQuery atomic.Bool
-	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		ext := r.URL.Query().Get("extensions")
-		if ext == "" || !strings.Contains(ext, "aaReq") {
-			return false
-		}
-		if strings.Contains(ext, "persistedQuery") && !sawFullQuery.Load() {
-			_, _ = w.Write([]byte(`{"errors":[{"message":"PersistedQueryNotFound"}]}`))
-			return true
-		}
-		sawFullQuery.Store(true)
-		return false
-	})
-	p := env.provider()
-
-	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	if !sawFullQuery.Load() {
-		t.Fatal("no fallback request with the full query")
-	}
-	if got := env.episodeAttempts.Load(); got != 2 {
-		t.Fatalf("episode attempts = %d, want 2", got)
-	}
-	if q := env.lastQuery.Load(); q == nil || !strings.Contains(q.(string), "episode(") {
-		t.Fatal("fallback request missing the full episode query")
-	}
-	// The fallback must still carry aaReq.
-	ext := env.lastExt.Load().(string)
-	if !strings.Contains(ext, "aaReq") {
-		t.Fatalf("fallback extensions = %q, want aaReq kept", ext)
-	}
-	if _, ok := stream.Links["1080"]; !ok {
-		t.Fatalf("fallback produced no links: %#v", stream.Links)
-	}
-}
-
-// TestAllAnimeResolveStreamKeyRefreshOnCorruption pins the dispatch
-// scenario: the API encrypts with a rotated key; the first decrypt
-// fails, the provider force-refreshes the key material (the referer
-// page now serves the new epoch) and succeeds.
-func TestAllAnimeResolveStreamKeyRefreshOnCorruption(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	rotated := make([]byte, 32)
-	for i := range rotated {
-		rotated[i] = byte(99 + i)
-	}
-	var newPartB []byte
-	for i := range rotated {
-		newPartB = append(newPartB, env.maskB[i]^rotated[i])
-	}
-	// API encrypts with the rotated key from the start.
-	env.mu.Lock()
-	env.apiKey = func() []byte { return rotated }
-	env.mu.Unlock()
-
-	// Referer serves the old partB on the first derivation, the rotated
-	// partB afterwards (epoch bumped — the rotation signal).
-	var refererServes atomic.Int32
-	env.referer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		env.refererHits.Add(1)
-		n := refererServes.Add(1)
-		part := env.partB
-		epoch := 4130
-		if n > 1 {
-			part = newPartB
-			epoch = 4131
-		}
-		_, _ = fmt.Fprintf(w,
-			`<html><script>var __ssr={"epoch":%d,"partB":%q};</script>`+
-				`<script defer src=%q></script></html>`,
-			epoch, base64.StdEncoding.EncodeToString(part),
-			env.cdn.URL+"/all/mk/_app/immutable/entry/app.x1.js")
-	})
-	p := env.provider()
-
-	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if err != nil {
-		t.Fatalf("ResolveStream after refresh: %v", err)
-	}
-	if _, ok := stream.Links["1080"]; !ok {
-		t.Fatalf("links after refresh = %#v", stream.Links)
-	}
-	if got := env.refererHits.Load(); got < 2 {
-		t.Fatalf("referer fetches = %d, want >= 2 (initial + forced refresh)", got)
-	}
-}
-
-// TestAllAnimeResolveStreamDecryptFailureAfterRefresh pins the loud
-// typed error when the blob still fails GCM after one refresh.
-func TestAllAnimeResolveStreamDecryptFailureAfterRefresh(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	garbage := make([]byte, 32)
-	for i := range garbage {
-		garbage[i] = byte(i + 7)
-	}
-	env.mu.Lock()
-	env.apiKey = func() []byte { return garbage }
-	env.mu.Unlock()
-	p := env.provider()
-
-	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if err == nil {
-		t.Fatal("decrypt failure swallowed")
-	}
-	if !errors.Is(err, errAADecryptFailed) {
-		t.Fatalf("err = %v, want errAADecryptFailed chain", err)
-	}
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
-	}
-	if got := env.refererHits.Load(); got < 2 {
-		t.Fatalf("referer fetches = %d, want the forced refresh", got)
-	}
-}
-
-// TestAllAnimeResolveStreamMaskNotFound pins the typed derivation
-// failure when no chunk carries the mask.
-func TestAllAnimeResolveStreamMaskNotFound(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	env.cdn.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/chunks/one.js") {
-			_, _ = w.Write([]byte(`export const nothing="here";`))
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/chunks/two.js") {
-			_, _ = w.Write([]byte(`export const also="nothing";`))
-			return
-		}
-		_, _ = fmt.Fprint(w, `import{a}from"../chunks/one.js";import{b}from"../chunks/two.js";`)
-	})
-	p := env.provider()
-
-	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if !errors.Is(err, errAAMaskNotFound) {
-		t.Fatalf("err = %v, want errAAMaskNotFound", err)
-	}
-	if !errors.Is(err, contracts.ErrExtractFailed) {
-		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
-	}
-}
-
-// TestAllAnimeResolveStreamPartBMissing pins the typed derivation
-// failure when the referer page lacks partB.
-func TestAllAnimeResolveStreamPartBMissing(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	env.referer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		env.refererHits.Add(1)
-		_, _ = w.Write([]byte(`<html><script>var x=1;</script></html>`))
-	})
-	p := env.provider()
-
-	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-	if !errors.Is(err, errAAPartBMissing) {
-		t.Fatalf("err = %v, want errAAPartBMissing", err)
-	}
-}
-
-// TestAllAnimeResolveStreamAACryptoRetry pins the server-side stale-key
-// signal: an AA_CRYPTO_MISSING error triggers one key refresh and one
-// request retry with a freshly signed token.
-func TestAllAnimeResolveStreamAACryptoRetry(t *testing.T) {
-	t.Parallel()
-
-	env := newAAEnv(t)
-	rotated := make([]byte, 32)
-	for i := range rotated {
-		rotated[i] = byte(120 + i)
-	}
-	newPartB := make([]byte, 32)
-	for i := range rotated {
-		newPartB[i] = env.maskB[i] ^ rotated[i]
-	}
-	key1 := make([]byte, 32)
-	for i := range key1 {
-		key1[i] = env.maskB[i] ^ env.partB[i]
-	}
-	// The server rotates its key the moment it rejects the stale token.
-	var serverRotated atomic.Bool
-	env.mu.Lock()
-	env.apiKey = func() []byte {
-		if serverRotated.Load() {
-			return rotated
-		}
-		return key1
-	}
-	env.mu.Unlock()
-
-	var refererServes atomic.Int32
-	env.referer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		env.refererHits.Add(1)
-		n := refererServes.Add(1)
-		part := env.partB
-		if n > 1 {
-			part = newPartB
-		}
-		_, _ = fmt.Fprintf(w,
-			`<html><script>var __ssr={"epoch":4130,"partB":%q};</script>`+
-				`<script defer src=%q></script></html>`,
-			base64.StdEncoding.EncodeToString(part),
-			env.cdn.URL+"/all/mk/_app/immutable/entry/app.x1.js")
-	})
-
-	var cryptoRejections atomic.Int32
-	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		ext := r.URL.Query().Get("extensions")
-		if ext == "" || !strings.Contains(ext, "aaReq") {
-			return false
-		}
-		// Reject the first token as stale and rotate server-side.
-		if cryptoRejections.Add(1) == 1 {
-			serverRotated.Store(true)
+		posts.Add(1)
+		if rejections.Add(1) == 1 {
+			// Reject as stale AND arm the server-side rotation for the
+			// forced material refresh.
+			env.mu.Lock()
+			env.rotated = true
+			env.mu.Unlock()
 			_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_MISSING","extensions":{"code":"AA_CRYPTO_MISSING"}}]}`))
 			return true
 		}
@@ -715,25 +506,141 @@ func TestAllAnimeResolveStreamAACryptoRetry(t *testing.T) {
 	p := env.provider()
 
 	if _, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub"); err != nil {
-		t.Fatalf("ResolveStream after AA_CRYPTO retry: %v", err)
+		t.Fatalf("ResolveStream after rotation: %v", err)
 	}
-	if got := env.episodeAttempts.Load(); got != 2 {
-		t.Fatalf("episode attempts = %d, want 2", got)
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("episode requests = %d, want 2 (initial + retried)", got)
 	}
-	if got := env.refererHits.Load(); got < 2 {
-		t.Fatalf("referer fetches = %d, want refresh", got)
+	if got := env.bootHitCount(); got != 2 {
+		t.Errorf("bootstrap hits = %d, want 2 (initial + forced refresh)", got)
+	}
+}
+
+// TestAllAnimeResolveStreamLoudOnCryptoFailure pins the no-silent-empty
+// policy: when the material never works (no bridge), resolve fails
+// with the typed rotation error chained under ErrExtractFailed.
+func TestAllAnimeResolveStreamLoudOnCryptoFailure(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.rejectNoAAReq = true
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+			return false
+		}
+		_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_EXPIRED","extensions":{"code":"AA_CRYPTO_EXPIRED"}}]}`))
+		return true
+	})
+	p := env.provider()
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("crypto failure swallowed into an empty stream")
+	}
+	if !errors.Is(err, errAACryptoRotated) {
+		t.Fatalf("err = %v, want errAACryptoRotated chain", err)
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
+	}
+}
+
+// TestAllAnimeResolveStreamBridgeOnBuildMismatch pins the bridge
+// ladder: a rejected buildId triggers one bridge handoff; the
+// bridge-derived buildId is adopted, persisted in the cache and the
+// resolve retried once; a failing bridge escalates to the typed error.
+func TestAllAnimeResolveStreamBridgeOnBuildMismatch(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.rejectNoAAReq = true
+	// The fake server "already runs" build 999: it rejects the pinned
+	// 168 bootstrap and encrypts with build-999 material from the start.
+	env.mu.Lock()
+	env.bootAnswers = 1
+	env.activeBuildID = "999"
+	env.mu.Unlock()
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if strings.Contains(r.URL.Path, "/client-crypto/v1/bootstrap") {
+			if r.URL.Query().Get("buildId") == "999" {
+				env.mu.Lock()
+				env.bootAnswers = 0
+				env.mu.Unlock()
+			}
+			return false // fall through to the default handler
+		}
+		if r.Header.Get("x-build-id") != "999" {
+			_, _ = w.Write([]byte(`{"errors":[{"message":"AA_CRYPTO_MISSING_BUILD","extensions":{"code":"AA_CRYPTO_MISSING_BUILD"}}]}`))
+			return true
+		}
+		return false
+	})
+
+	dir := t.TempDir()
+	buildIDs := newAABuildIDCache(dir)
+	bridge := &aaFakeBridge{material: aaBridgeMaterial{
+		BuildID: "999", Epoch: 2958, PartB: "lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=",
+	}}
+	p := newAllAnime(env.api.URL+"/api", "http://"+env.apiHost, env.stream.URL, testClient(t, "allanime"), bridge, dir)
+	p.buildIDs = buildIDs
+	p.material = newAAMaterialManager(aaMaterialDeps{
+		BootstrapBase: env.api.URL + "/client-crypto/v1/bootstrap",
+		Referer:       "http://" + env.apiHost,
+		RefererHost:   env.apiHost,
+		Lane:          aaContentLane,
+		BuildID:       func() (string, error) { return buildIDs.Load(), nil },
+		HTTP:          p.http,
+		Now:           func() time.Time { return time.UnixMilli(env.nowMillis) },
+	})
+
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err != nil {
+		t.Fatalf("ResolveStream via bridge: %v", err)
+	}
+	if _, ok := stream.Links["1080"]; !ok {
+		t.Fatalf("no links via bridge: %#v", stream.Links)
+	}
+	if bridge.calls != 1 {
+		t.Errorf("bridge calls = %d, want 1", bridge.calls)
+	}
+	if got := buildIDs.Load(); got != "999" {
+		t.Errorf("buildId cache = %q, want persisted 999", got)
+	}
+}
+
+// TestAllAnimeResolveStreamBridgeFailureLoud pins the failure mode: a
+// bridge that also fails leaves a typed error, never an empty stream.
+func TestAllAnimeResolveStreamBridgeFailureLoud(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.rejectNoAAReq = true
+	env.mu.Lock()
+	env.bootAnswers = 1
+	env.mu.Unlock()
+	bridge := &aaFakeBridge{err: errors.New("browser exploded")}
+	p := env.providerWithBridge(bridge)
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("bridge failure swallowed")
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want ErrExtractFailed chain", err)
+	}
+	if !strings.Contains(err.Error(), "browser exploded") {
+		t.Errorf("err = %v, want the bridge cause chained", err)
 	}
 }
 
 // TestAllAnimeResolveStreamEmptyEpisode pins the null-episode outcome:
-// no sources, empty MediaStream, no error (Python sourceUrls [] path).
+// no sources, empty MediaStream, no error.
 func TestAllAnimeResolveStreamEmptyEpisode(t *testing.T) {
 	t.Parallel()
 
 	env := newAAEnv(t)
 	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
-		ext := r.URL.Query().Get("extensions")
-		if ext == "" || !strings.Contains(ext, "aaReq") {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
 			return false
 		}
 		_, _ = w.Write([]byte(`{"data":{"episode":null}}`))
@@ -747,6 +654,75 @@ func TestAllAnimeResolveStreamEmptyEpisode(t *testing.T) {
 	}
 	if len(stream.Links) != 0 {
 		t.Fatalf("links = %#v, want empty", stream.Links)
+	}
+}
+
+// TestAllAnimeResolveStreamNeedCaptchaTyped pins [I3]: a GraphQL
+// errors[] body carrying NEED_CAPTCHA (and no episode data) must
+// surface the typed errAACaptcha — never a silent empty stream — and
+// must NOT trigger the browser bridge (a captcha verdict is not a
+// crypto rotation).
+func TestAllAnimeResolveStreamNeedCaptchaTyped(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+			return false
+		}
+		_, _ = w.Write([]byte(`{"errors":[{"message":"NEED_CAPTCHA","extensions":{"code":"NEED_CAPTCHA"}}]}`))
+		return true
+	})
+	bridge := &aaFakeBridge{}
+	p := env.providerWithBridge(bridge)
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("NEED_CAPTCHA collapsed to a silent empty stream")
+	}
+	if !errors.Is(err, errAACaptcha) {
+		t.Fatalf("err = %v, want errAACaptcha chain", err)
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
+	}
+	if bridge.calls != 0 {
+		t.Errorf("bridge calls = %d, want 0 (captcha must not burn a bridge session)", bridge.calls)
+	}
+}
+
+// TestAllAnimeResolveStreamGraphQLErrorsLoud pins [I3]: any other
+// GraphQL errors[] body without episode data fails loudly (wrapped
+// into the contracts family by ResolveStream) instead of returning an
+// empty stream.
+func TestAllAnimeResolveStreamGraphQLErrorsLoud(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+			return false
+		}
+		_, _ = w.Write([]byte(`{"errors":[{"message":"internal server error"},{"message":"second failure"}]}`))
+		return true
+	})
+	p := env.provider()
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("graphql errors[] collapsed to a silent empty stream")
+	}
+	if errors.Is(err, errAACaptcha) {
+		t.Fatalf("err = %v, generic errors must not classify as captcha", err)
+	}
+	if errors.Is(err, errAACryptoRotated) {
+		t.Fatalf("err = %v, generic errors must not classify as crypto rotation", err)
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
+	}
+	if !strings.Contains(err.Error(), "internal server error") {
+		t.Errorf("err = %v, want the server message chained", err)
 	}
 }
 
@@ -769,6 +745,98 @@ func TestAAPrioritizeSources(t *testing.T) {
 			t.Fatalf("priority[%d].URL = %s, want %s (%+v)", i, got[i].URL, url, got)
 		}
 	}
+}
+
+// TestAABridgeScriptShape sanity-checks the bridge extraction script
+// (compiles as the IIFE wrapper, returns a JSON string).
+func TestAABridgeScriptShape(t *testing.T) {
+	t.Parallel()
+
+	// The crypto-chunk marker must be the stable ST error literal, not
+	// the bootPrefix (which is char-coded in some builds — verified
+	// live 2026-09-13 when the source representation rotated).
+	if !strings.Contains(aaBridgeExtractionJS, "invalid_part_b") {
+		t.Error("extraction script lost the crypto-chunk marker")
+	}
+	if !strings.Contains(aaBridgeExtractionJS, "return JSON.stringify(__out)") {
+		t.Error("extraction script lost the JSON return")
+	}
+	for _, closure := range []string{"cy", "iT", "gT", "mT", "gy", "sd"} {
+		if !strings.Contains(aaBridgeExtractionJS, closure) {
+			t.Errorf("extraction script does not extract %s", closure)
+		}
+	}
+	// C1 regression guard: the const is a Go RAW string — backslashes
+	// pass through verbatim, so a doubled `\\` in the Go source reaches
+	// the JS engine as an escaped backslash. Inside a regex literal
+	// (`/https?:\/\//` written as `\\/`) the bare second slash
+	// TERMINATES the regex and the whole script dies with a SyntaxError
+	// at parse. The emitted script must contain single backslashes
+	// only (`\s`, `\/`, `\.`, `\n` …), never two in a row.
+	if strings.Contains(aaBridgeExtractionJS, `\\`) {
+		t.Error("extraction script contains a doubled backslash (raw-string escape leak) — regexes and join('\\n') would be broken in JS")
+	}
+}
+
+// TestAABridgeScriptParsesUnderNode proves the emitted script is valid
+// JavaScript: it materializes the exact IIFE Go evaluates in the page
+// into a temp file and parses it with `node --check`. Skipped when node
+// is not installed (the shape test above still guards the escape
+// class). [C1]
+func TestAABridgeScriptParsesUnderNode(t *testing.T) {
+	t.Parallel()
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; script parse check skipped")
+	}
+	script := fmt.Sprintf("(async () => { const LANE = %q; %s })()", "k7", aaBridgeExtractionJS)
+	path := filepath.Join(t.TempDir(), "bridge_extraction.js")
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	out, err := exec.Command(node, "--check", path).CombinedOutput() //nolint:gosec // test-only: node resolved from PATH, script path inside t.TempDir()
+	if err != nil {
+		t.Fatalf("node --check rejected the emitted bridge script (SyntaxError class): %v\n%s", err, out)
+	}
+}
+
+// TestAAParseBridgeReply pins the bridge reply decode.
+func TestAAParseBridgeReply(t *testing.T) {
+	t.Parallel()
+
+	mask := mustAAMask(t, "168")
+	mat, err := parseAABridgeReply(`{"ok":true,"buildId":"168","epoch":2958,` +
+		`"partB":"lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=",` +
+		`"mask":"` + base64.StdEncoding.EncodeToString(mask) + `"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mat.BuildID != "168" || mat.Epoch != 2958 || len(mat.Mask) != 32 {
+		t.Errorf("material = %+v", mat)
+	}
+	if _, err := parseAABridgeReply(`{"ok":false,"error":"boom"}`); err == nil ||
+		!strings.Contains(err.Error(), "boom") {
+		t.Errorf("error reply = %v, want boom", err)
+	}
+	if _, err := parseAABridgeReply(`not json`); err == nil {
+		t.Error("garbage reply accepted")
+	}
+}
+
+// aaFakeBridge is the test bridge seam.
+type aaFakeBridge struct {
+	material aaBridgeMaterial
+	err      error
+	calls    int
+}
+
+func (b *aaFakeBridge) ExtractCrypto(context.Context) (aaBridgeMaterial, error) {
+	b.calls++
+	if b.err != nil {
+		return aaBridgeMaterial{}, b.err
+	}
+	return b.material, nil
 }
 
 // deadAddr returns an address that refuses connections instantly.

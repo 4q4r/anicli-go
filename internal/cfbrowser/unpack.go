@@ -185,6 +185,7 @@ func writeFile(src io.Reader, path string, mode os.FileMode) error {
 func locateExecutable(root, execName string) (string, error) {
 	want := filepath.FromSlash(execName)
 	var found string
+	//nolint:gosec // G703 taint: root is an app-constructed cache path; any pinned-version segment passed validateVersion (decimal dots only)
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err

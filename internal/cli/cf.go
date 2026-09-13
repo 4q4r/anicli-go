@@ -32,6 +32,8 @@ func newCFCommand() *cobra.Command {
 		newCFStatusCommand(),
 		newCFSolveCommand(),
 		newCFClearCommand(),
+		newCFLoginCommand(),
+		newCFLogoutCommand(),
 	)
 	return cf
 }
@@ -53,9 +55,15 @@ func newCFInstallCommand() *cobra.Command {
 }
 
 // runCFInstall resolves-or-downloads the stealth binary with progress
-// logged to stderr.
+// logged to stderr. A valid license routes the download through the
+// pro channel and prints the key's plan.
 func runCFInstall(ctx context.Context, out io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{})
+	if repErr == nil && rep != nil && rep.Status.Valid {
+		_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
+			orDash(rep.Status.Plan), orDash(rep.Status.Expires))
+	}
 	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{Logger: logger})
 	if err != nil {
 		return fmt.Errorf("cf install: %w", err)
@@ -77,7 +85,8 @@ func newCFStatusCommand() *cobra.Command {
 	}
 }
 
-// runCFStatus prints the binary, license tier and update bookkeeping.
+// runCFStatus prints the binary, license tier/plan/expiry and update
+// bookkeeping.
 func runCFStatus(out io.Writer) error {
 	cacheDir, err := cfbrowser.ResolveCacheDir("")
 	if err != nil {
@@ -90,7 +99,16 @@ func runCFStatus(out io.Writer) error {
 	} else {
 		printCFBinary(out, bin)
 	}
-	_, _ = fmt.Fprintf(out, "лицензия:       %s\n", cfbrowser.LicenseTier(cacheDir))
+
+	tier, plan, expires, note := cfbrowser.StatusLicenseReport(context.Background(), cfbrowser.LicenseOptions{})
+	line := "лицензия:       " + tier
+	if tier == "pro" {
+		line += fmt.Sprintf(" (план %s, до %s)", orDash(plan), orDash(expires))
+	}
+	_, _ = fmt.Fprintf(out, "%s\n", line)
+	if note != "" {
+		_, _ = fmt.Fprintf(out, "                %s\n", note)
+	}
 
 	if st, ok := cfbrowser.ReadUpdateStatus(cacheDir); ok {
 		switch {
@@ -212,6 +230,74 @@ func newCFClearCommand() *cobra.Command {
 				return fmt.Errorf("cf clear: %w", err)
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "clearance-куки очищены")
+			return nil
+		},
+	}
+}
+
+// newCFLoginCommand builds `anicli cf login [ключ]`.
+func newCFLoginCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "login [ключ]",
+		Short: "Сохранить лицензионный ключ (канал Pro)",
+		Long: "Проверяет лицензионный ключ CloakBrowser через API и при успехе " +
+			"сохраняет его в ~/.cloakbrowser/license.key — бинарники дальше " +
+			"скачиваются и обновляются по каналу Pro. Без аргумента печатает " +
+			"инструкцию по получению ключа.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			if len(args) == 0 {
+				printCFLoginInstructions(cmd.OutOrStdout())
+				return nil
+			}
+			return runCFLogin(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	}
+}
+
+// printCFLoginInstructions renders the no-argument help text.
+func printCFLoginInstructions(out io.Writer) {
+	_, _ = fmt.Fprintln(out, "Лицензионный ключ не указан.")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "Получите бесплатный ключ на https://cloakbrowser.dev/free")
+	_, _ = fmt.Fprintln(out, "и выполните: anicli cf login <ключ>")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "Ключ сохраняется в ~/.cloakbrowser/license.key; переменная окружения")
+	_, _ = fmt.Fprintln(out, "CLOAKBROWSER_LICENSE_KEY имеет приоритет над файлом.")
+}
+
+// runCFLogin validates and saves the license key.
+func runCFLogin(ctx context.Context, out io.Writer, key string) error {
+	st, err := cfbrowser.Login(ctx, key, cfbrowser.LicenseOptions{})
+	if err != nil {
+		return fmt.Errorf("cf login: %w", err)
+	}
+	cacheDir, err := cfbrowser.ResolveCacheDir("")
+	if err != nil {
+		return fmt.Errorf("cf login: %w", err)
+	}
+	_, _ = fmt.Fprintf(out, "лицензия действительна: план %s, действует до %s\n",
+		orDash(st.Plan), orDash(st.Expires))
+	_, _ = fmt.Fprintf(out, "ключ сохранён: %s\n", filepath.Join(cacheDir, "license.key"))
+	_, _ = fmt.Fprintln(out, "бинарники будут скачиваться по каналу Pro (anicli cf install)")
+	return nil
+}
+
+// newCFLogoutCommand builds `anicli cf logout`.
+func newCFLogoutCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout",
+		Short: "Удалить сохранённый лицензионный ключ",
+		Long: "Удаляет ~/.cloakbrowser/license.key и кэш проверки лицензии — " +
+			"загрузки возвращаются на канал free.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			if err := cfbrowser.Logout(cfbrowser.LicenseOptions{}); err != nil {
+				return fmt.Errorf("cf logout: %w", err)
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "лицензионный ключ и кэш проверки удалены — канал free")
 			return nil
 		},
 	}

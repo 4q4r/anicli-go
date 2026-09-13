@@ -39,11 +39,14 @@ type ResolveOptions struct {
 }
 
 // ResolveCurrentBinary resolves the browser binary WITHOUT network
-// access: $CLOAKBROWSER_BINARY_PATH > newest complete cache
-// chromium-*/ directory. It is the registry-build-time check and the
-// solver's lazy-launch resolution, so auto-updated binaries are
-// picked up on the next solve. A missing binary fails with
-// BinaryMissingError (carrying the `anicli cf install` hint).
+// access: $CLOAKBROWSER_BINARY_PATH > pinned $CLOAKBROWSER_VERSION
+// (cache only) > newest complete cache chromium-*/ directory. The
+// reported channel reflects the CACHED license state (a valid
+// .license_cache entry upgrades the reported tier — no network). It
+// is the registry-build-time check and the solver's lazy-launch
+// resolution, so auto-updated binaries are picked up on the next
+// solve. A missing binary fails with BinaryMissingError (carrying
+// the `anicli cf install` hint).
 func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	override := opts.BinaryPath
 	if override == "" {
@@ -60,10 +63,33 @@ func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	channel := tierChannel(cachedLicenseValid(cacheDir))
+	if pinned := os.Getenv(EnvVersion); pinned != "" {
+		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
+			bin.Channel = channel
+			return bin, nil
+		}
+		return nil, &BinaryMissingError{
+			Cause: fmt.Errorf("pinned version %s is not installed ($%s)", pinned, EnvVersion),
+		}
+	}
 	if bin, ok := scanCache(cacheDir, spec); ok {
+		bin.Channel = channel
 		return bin, nil
 	}
 	return nil, &BinaryMissingError{}
+}
+
+// cachedLicenseValid reports the offline license state: a cache
+// entry matching the configured key whose effective status is valid
+// (fresh or stale — no network either way).
+func cachedLicenseValid(cacheDir string) bool {
+	key := ResolveLicenseKey(cacheDir)
+	if key == "" {
+		return false
+	}
+	entry, ok := readLicenseCache(cacheDir, key)
+	return ok && entry.effectiveStatus().Valid
 }
 
 // defaultProfileDir resolves DataDir()/cfprofile — the persistent

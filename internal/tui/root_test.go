@@ -1,0 +1,153 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// newTestDeps builds empty deps (screens must tolerate nil services
+// until a flow actually calls one).
+func newTestDeps() *Deps { return &Deps{} }
+
+// TestRootMenuContents: the root menu shows the six RU entries from
+// the Python original (including 📂 Скачанное).
+func TestRootMenuContents(t *testing.T) {
+	root := NewRootScreen(newTestDeps())
+	view := root.View().Content
+	for _, want := range []string{
+		"🔎 Поиск",
+		"📜 Списки",
+		"📂 Скачанное",
+		"🗄️ Управление БД",
+		"🛠 Проверка",
+		"🚪 Выход",
+		BackLabel,
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("root view must contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+// TestRootExitAndInterrupts: I2 root exception — Выход quits, Ctrl-C
+// quits, Esc stays.
+func TestRootExitAndInterrupts(t *testing.T) {
+	newRoot := func() *MenuScreen { return NewRootScreen(newTestDeps()) }
+
+	t.Run("enter on Выход quits", func(t *testing.T) {
+		root := newRoot()
+		idx := indexOfChoice(root, "exit")
+		root.list.Jump(idx)
+		_, cmd := root.Update(enter())
+		if !isQuitCmd(cmd) {
+			t.Fatalf("Выход must quit, got %v", cmd)
+		}
+	})
+
+	t.Run("ctrl+c at root quits (I2 exception)", func(t *testing.T) {
+		root := newRoot()
+		_, cmd := root.Update(ctrlC())
+		if !isQuitCmd(cmd) {
+			t.Fatalf("ctrl+c at root must quit")
+		}
+	})
+
+	t.Run("esc at root stays (no quit, no crash)", func(t *testing.T) {
+		root := newRoot()
+		next, cmd := root.Update(esc())
+		if isQuitCmd(cmd) {
+			t.Fatalf("esc at root must not quit")
+		}
+		if next.ID() != rootScreenID {
+			t.Fatalf("esc at root must stay on root, got %q", next.ID())
+		}
+	})
+
+	t.Run("back pick at root stays", func(t *testing.T) {
+		root := newRoot()
+		root.list.Jump(0)
+		_, cmd := root.Update(enter())
+		if isQuitCmd(cmd) {
+			t.Fatalf("Back at root must not quit")
+		}
+	})
+}
+
+// TestRootNavigation: root menu entries push their flow screens.
+func TestRootNavigation(t *testing.T) {
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"search", searchInputID},
+		{"lists", historyFilterID},
+		{"downloads", offlineTitlesID},
+		{"db", dbMenuID},
+		{"check", healthID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id+" pushes "+tc.want, func(t *testing.T) {
+			root := NewRootScreen(newTestDeps())
+			idx := indexOfChoice(root, tc.id)
+			root.list.Jump(idx)
+			_, cmd := root.Update(enter())
+			if cmd == nil {
+				t.Fatalf("%s must schedule navigation", tc.id)
+			}
+			msg := cmd()
+			pm, ok := msg.(pushMsg)
+			if !ok {
+				t.Fatalf("%s must push a screen, got %#v", tc.id, msg)
+			}
+			if pm.screen.ID() != tc.want {
+				t.Fatalf("want screen %q, got %q", tc.want, pm.screen.ID())
+			}
+		})
+	}
+}
+
+// TestMenuScreenBackPops: a generic submenu resolves Back into a pop.
+func TestMenuScreenBackPops(t *testing.T) {
+	m := NewMenuScreen(MenuScreenConfig{
+		ID:       "submenu",
+		Title:    "Подменю",
+		EmptyMsg: "пусто",
+		Choices:  []Choice{{ID: "a", Label: "A"}},
+	})
+	next, cmd := m.Update(esc())
+	if next.ID() != "submenu" {
+		t.Fatalf("esc keeps the screen until pop lands, got %q", next.ID())
+	}
+	if cmd == nil {
+		t.Fatalf("esc must schedule a pop")
+	}
+	msg := cmd()
+	if _, ok := msg.(popMsg); !ok {
+		t.Fatalf("esc on submenu must pop, got %#v", msg)
+	}
+}
+
+// helpers
+
+func indexOfChoice(m *MenuScreen, id string) int {
+	for i, c := range m.list.Menu().Items {
+		if c.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func isQuitCmd(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch cmd().(type) {
+	case tea.QuitMsg, quitMsg:
+		return true
+	default:
+		return false
+	}
+}

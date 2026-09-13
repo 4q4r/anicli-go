@@ -87,11 +87,6 @@ func TestStubOutputs(t *testing.T) {
 		errContains string // non-empty: Execute must fail containing this
 	}{
 		{
-			name:     "bare invocation runs tui stub",
-			args:     nil,
-			contains: []string{"tui", "not implemented"},
-		},
-		{
 			name: "serve requires api.enabled",
 			args: []string{"serve"},
 			// The default settings keep the API off; serve must refuse
@@ -140,6 +135,30 @@ func TestStubOutputs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBareInvocationLaunchesTUI: running the root command without a
+// subcommand launches the real bubbletea TUI. Test sandboxes have no
+// controlling terminal, so the launch surfaces the TTY error instead
+// of the old stub banner — proving the wiring is live. The data dir
+// is isolated so the storage open never touches the real library.
+func TestBareInvocationLaunchesTUI(t *testing.T) {
+	// Uses t.Setenv: no t.Parallel here.
+	t.Setenv("ANICLI_DATA", t.TempDir())
+
+	var buf bytes.Buffer
+	root := NewRootCommand()
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs(nil)
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "TTY") {
+		t.Fatalf("bare invocation without a terminal must fail with the TTY error, got %v", err)
+	}
+	if strings.Contains(buf.String(), "not implemented") {
+		t.Fatalf("the TUI stub banner must be gone, got %q", buf.String())
 	}
 }
 

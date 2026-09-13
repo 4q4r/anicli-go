@@ -21,6 +21,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/input"
@@ -94,6 +95,7 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 		ctx:         ctx,
 		cancelCtx:   cancelCtx,
 		cancelAlloc: cancelAlloc,
+		run:         chromedp.Run,
 	}, nil
 }
 
@@ -102,24 +104,36 @@ type chromedpNav struct {
 	ctx         context.Context
 	cancelCtx   context.CancelFunc
 	cancelAlloc context.CancelFunc
+	// run executes chromedp actions; the seam exists so tests can
+	// verify the per-navigation bounding without a real browser.
+	run func(ctx context.Context, actions ...chromedp.Action) error
 }
 
 // Navigate loads rawURL, waits for the document to settle and
 // snapshots the NavState (title, body snippet, cookies, UA, language,
 // turnstile target).
+//
+// The browser session lives on n.ctx (created by NewContext, parented
+// on Background — it must outlive individual solves), so the caller's
+// context cannot parent it directly. Instead every navigation derives
+// a bounded context from the session via navContext: the caller's
+// solve budget as a hard deadline plus caller-cancellation bridging,
+// so a hung page load can never pin the singleflighted solve past its
+// 90s timeout.
 func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, error) {
-	// The browser session lives on n.ctx (created by NewContext);
-	// the caller's ctx only gates entry — the solver's outer timeout
-	// cancels the poll loop, which stops issuing navigations.
+	// Entry gate: an already-expired caller fails fast.
 	if err := ctx.Err(); err != nil {
 		return NavState{}, err
 	}
+	nctx, cancel := n.navContext(ctx)
+	defer cancel()
+
 	var st NavState
 	var bodySnippet string
 	var ua, lang string
 	var click []float64
 
-	err := chromedp.Run(n.ctx,
+	err := n.run(nctx,
 		chromedp.Navigate(rawURL),
 		// Challenge interstitials replace the document on solve;
 		// WaitReady('body') + a short settle covers both states.
@@ -144,8 +158,9 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 		st.ClickX, st.ClickY = click[0], click[1]
 	}
 
-	// Cookie harvest via CDP (network.GetCookies).
-	ncookies, err := network.GetCookies().Do(n.ctx)
+	// Cookie harvest via CDP (network.GetCookies) under the same
+	// bounded navigation context.
+	ncookies, err := network.GetCookies().Do(nctx)
 	if err == nil {
 		st.Cookies = make([]Cookie, 0, len(ncookies))
 		for _, ck := range ncookies {
@@ -163,6 +178,46 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 // solveSettle is the fixed post-load settle delay giving challenge
 // scripts time to run/redirect before fingerprinting.
 const solveSettle = 1500 * time.Millisecond
+
+// navContext derives the per-navigation context: chromedp actions run
+// against the session (a context derived from n.ctx inherits the
+// session values) under the caller's solve budget — the caller's
+// remaining deadline when it carries one, DefaultSolveTimeout
+// otherwise — and abort as soon as the caller is cancelled. Without
+// this bound a hung page load (server that never finishes responding,
+// interstitial that never settles) would outlive the solver's outer
+// timeout and pin the singleflighted solve indefinitely.
+func (n *chromedpNav) navContext(caller context.Context) (context.Context, context.CancelFunc) {
+	budget := DefaultSolveTimeout
+	if dl, ok := caller.Deadline(); ok {
+		if rem := time.Until(dl); rem > 0 {
+			budget = rem
+		}
+	}
+	nctx, cancel := context.WithTimeout(n.ctx, budget)
+	if caller.Done() == nil {
+		// The caller can never be cancelled: no bridge needed.
+		return nctx, cancel
+	}
+	// Bridge the caller's cancellation into the session-derived
+	// context (the session parents on Background, so this is the only
+	// place the two lifetimes can meet).
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-caller.Done():
+			cancel()
+		case <-stop:
+		}
+	}()
+	var once sync.Once
+	return nctx, func() {
+		once.Do(func() {
+			cancel()
+			close(stop)
+		})
+	}
+}
 
 // Click dispatches one left-button click at viewport CSS coordinates
 // (the best-effort Turnstile interaction).

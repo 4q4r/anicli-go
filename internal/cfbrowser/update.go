@@ -28,6 +28,9 @@ const (
 	probeTimeout = 3 * time.Second
 	// updateCheckTimeout bounds one full CheckAndMaybeInstall cycle.
 	updateCheckTimeout = 15 * time.Minute
+	// closeGrace bounds how long Close waits for an in-flight periodic
+	// check to wind down after its context was cancelled.
+	closeGrace = 5 * time.Second
 )
 
 // UpdaterConfig parameterizes the auto-updater; zero values resolve
@@ -143,9 +146,11 @@ func (u *Updater) Start() {
 	})
 }
 
-// Close stops the ticker and waits for the loop (not for an in-flight
-// check — that keeps running against its own context and lands in the
-// status file when done). Close before Start is legal.
+// Close stops the ticker, cancels an in-flight periodic check and
+// waits a bounded grace (5s) for it to wind down; a check overrunning
+// the grace keeps running against its cancelled context in the
+// background and still lands its outcome in the status file. Close
+// before Start is legal.
 func (u *Updater) Close() {
 	u.stopOnce.Do(func() {
 		// Synchronize with a concurrent Start: the startOnce noop
@@ -156,26 +161,63 @@ func (u *Updater) Close() {
 			close(u.done)
 			return
 		}
-		<-u.done
+		select {
+		case <-u.done:
+		case <-time.After(closeGrace):
+			// Bounded join: abandon the wind-down rather than stall
+			// the caller — the check's context is already cancelled.
+		}
 	})
 }
 
 // loop ticks until stopped (defer close(done) on every exit path).
+// Tick checks run detached from the loop goroutine with a context
+// derived from the loop lifetime: stopping cancels an in-flight check
+// (bounded by closeGrace on both sides) instead of letting it pin
+// Close open for its full 15m budget.
 func (u *Updater) loop() {
 	defer close(u.done)
 	if !u.cfg.Enabled {
 		return
 	}
+	lctx, lcancel := context.WithCancel(context.Background())
+	defer lcancel()
 	ticker := time.NewTicker(u.cfg.interval())
 	defer ticker.Stop()
+
+	// checkDone is non-nil while a tick check runs; the nil-channel
+	// select case below is simply ignored while idle.
+	var checkDone chan struct{}
 	for {
 		select {
 		case <-u.stop:
+			lcancel() // abort an in-flight tick check
+			if checkDone != nil {
+				select {
+				case <-checkDone:
+				case <-time.After(closeGrace):
+					// Abandoned but bounded: the check keeps winding
+					// down against its cancelled context.
+				}
+			}
 			return
+		case <-checkDone:
+			checkDone = nil
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
-			_ = u.CheckAndMaybeInstall(ctx)
-			cancel()
+			if checkDone != nil {
+				// Previous tick still in flight: skip — the next tick
+				// retries (singleflight would fold us into the running
+				// check anyway).
+				continue
+			}
+			done := make(chan struct{})
+			checkDone = done
+			go func() {
+				defer close(done)
+				ctx, cancel := context.WithTimeout(lctx, updateCheckTimeout)
+				defer cancel()
+				_ = u.CheckAndMaybeInstall(ctx)
+			}()
 		}
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	stdhttp "net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +20,7 @@ import (
 
 // challengeHandler answers with a Cloudflare challenge exactly
 // `challenges` times, then 200; every response is recorded with the
-// request's Cookie and User-Agent headers.
+// request's Cookie, User-Agent and body.
 type challengeHandler struct {
 	mu         sync.Mutex
 	challenges atomic.Int64
@@ -28,6 +30,7 @@ type challengeHandler struct {
 type servedRequest struct {
 	cookies string
 	ua      string
+	body    string
 }
 
 func (h *challengeHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -37,8 +40,9 @@ func (h *challengeHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Reques
 			cookieHdr = c.Value
 		}
 	}
+	body, _ := io.ReadAll(r.Body)
 	h.mu.Lock()
-	h.served = append(h.served, servedRequest{cookies: cookieHdr, ua: r.Header.Get("User-Agent")})
+	h.served = append(h.served, servedRequest{cookies: cookieHdr, ua: r.Header.Get("User-Agent"), body: string(body)})
 	h.mu.Unlock()
 
 	if h.challenges.Add(-1) >= 0 {
@@ -146,6 +150,12 @@ func TestChallengeWithoutSolverTypedError(t *testing.T) {
 	if !errors.As(err, &cfErr) {
 		t.Fatalf("want *CFChallengeError, got %T: %v", err, err)
 	}
+	// Deliberate delta from the pre-solver code: a genuine challenge
+	// page must NOT surface as the old generic ErrProvider403 mapping —
+	// it is an actionable failure (enable [cf], install the solver).
+	if errors.Is(err, contracts.ErrProvider403) {
+		t.Errorf("challenge with no solver must be CFChallengeError, not ErrProvider403: %v", err)
+	}
 	// Provider context must survive the taxonomy wrap.
 	var perr *contracts.ProviderError
 	if !errors.As(err, &perr) {
@@ -241,6 +251,36 @@ func TestDetectCFChallenge(t *testing.T) {
 				t.Errorf("detectCFChallenge = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestChallengeRetryPreservesPOSTBody(t *testing.T) {
+	handler := &challengeHandler{}
+	handler.challenges.Store(1) // challenge once, then clear
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	solver := &fakeCFSolver{}
+	client := newCFTestClient(t, solver)
+
+	form := url.Values{"q": {"naruto"}, "page": {"3"}}
+	resp, err := client.PostForm(context.Background(), srv.URL+"/search", form, nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != stdhttp.StatusOK {
+		t.Fatalf("status = %d, want 200 after solve", resp.StatusCode)
+	}
+
+	reqs := handler.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("exactly two requests (challenge + retried) expected, got %d", len(reqs))
+	}
+	want := form.Encode()
+	for i, r := range reqs {
+		if r.body != want {
+			t.Errorf("request %d body = %q, want the identical buffered form body %q", i, r.body, want)
+		}
 	}
 }
 

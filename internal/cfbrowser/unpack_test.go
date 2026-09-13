@@ -134,6 +134,37 @@ func TestUnpackZipRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUnpackZipFromFileStreamsFromDisk(t *testing.T) {
+	// The install path hands unzip the on-disk archive file; it must
+	// stream via ReaderAt (windows assets run ~562 MB) instead of
+	// buffering the archive in memory.
+	archive := buildZip(t, map[string]string{
+		"chromium-1.2.3/chrome.exe":    "MZ...",
+		"chromium-1.2.3/resources.pak": "pak-bytes",
+	})
+	path := filepath.Join(t.TempDir(), "asset.zip")
+	if err := os.WriteFile(path, archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path) //nolint:gosec // test-owned temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dest := t.TempDir()
+	if err := unpackArchive(archiveZip, f, dest); err != nil {
+		t.Fatalf("unpack from file: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "chromium-1.2.3", "resources.pak")) //nolint:gosec // test-owned temp path
+	if err != nil {
+		t.Fatalf("read resources.pak: %v", err)
+	}
+	if string(data) != "pak-bytes" {
+		t.Errorf("resources.pak content mismatch: %q", data)
+	}
+}
+
 func TestUnpackRejectsPathTraversal(t *testing.T) {
 	evil := buildTarGz(t, map[string]struct {
 		mode os.FileMode

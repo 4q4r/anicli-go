@@ -42,6 +42,24 @@ func (e *OfflineError) Error() string {
 // Unwrap exposes the transport error for errors.Is/As.
 func (e *OfflineError) Unwrap() error { return e.Cause }
 
+// MissingDigestError reports a release asset that carries no SHA-256
+// digest — neither the API digest nor the SHA256SUMS fallback — so its
+// bytes cannot be verified. Installing them anyway is refused.
+type MissingDigestError struct {
+	// TagName is the release whose asset is unverifiable.
+	TagName string
+	// AssetName is the asset that carried no digest.
+	AssetName string
+}
+
+// Error implements error with the manual-download hint.
+func (e *MissingDigestError) Error() string {
+	return fmt.Sprintf("cfbrowser: release %s asset %s provides no SHA-256 digest "+
+		"(API digest absent, SHA256SUMS fallback empty) — refusing to install unverified bytes; "+
+		"retry later, download manually from %s, or set $%s",
+		e.TagName, e.AssetName, ManualReleasesURL, EnvBinaryPath)
+}
+
 // BinaryInfo describes the resolved browser binary.
 type BinaryInfo struct {
 	// Path is the absolute executable path.
@@ -245,8 +263,13 @@ func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease,
 		return nil, fmt.Errorf("cfbrowser: close archive file: %w", closeErr)
 	}
 
-	// SHA-256 gate: mismatch deletes and fails loud.
-	if rel.Asset.Digest != "" && !strings.EqualFold(digest, rel.Asset.Digest) {
+	// SHA-256 gate: an unverifiable archive (no digest from the API
+	// or the SHA256SUMS fallback) is refused as loudly as a mismatch —
+	// empty must never mean "skip verification".
+	if rel.Asset.Digest == "" {
+		return nil, &MissingDigestError{TagName: rel.TagName, AssetName: rel.Asset.Name}
+	}
+	if !strings.EqualFold(digest, rel.Asset.Digest) {
 		return nil, fmt.Errorf("cfbrowser: SHA-256 mismatch for %s: downloaded %s, release says %s — "+
 			"archive discarded (retry, or fetch manually from %s)",
 			rel.Asset.Name, digest, rel.Asset.Digest, ManualReleasesURL)

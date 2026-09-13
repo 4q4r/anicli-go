@@ -122,9 +122,12 @@ type Client struct {
 	// sleep pauses between retries; swapped by tests for determinism.
 	sleep func(context.Context, time.Duration) error
 
-	// cfSolver clears Cloudflare challenges when attached (nil keeps
-	// the pre-CF behavior for plain responses: only the typed
-	// CFChallengeError classification changes).
+	// cfSolver clears Cloudflare challenges when attached. nil keeps
+	// the pre-CF behavior for plain responses, with one deliberate
+	// delta: a genuine challenge page (403/503 carrying challenge
+	// markers) now maps onto the typed CFChallengeError instead of the
+	// old ErrProvider403/StatusError — a challenge is actionable
+	// (enable [cf], install the solver), a plain 403 is not.
 	cfSolver CFSolver
 
 	// mu guards the clearance UA/language overrides set after a solve.
@@ -214,7 +217,7 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 		// generic retry loop entirely (a challenge never clears by
 		// waiting) and either solve-and-retry-once or fail typed.
 		if detectCFChallenge(resp) {
-			return c.solveChallenge(ctx, op, req, resp)
+			return c.solveChallenge(ctx, op, req, payload, resp)
 		}
 
 		if resp.StatusCode < http.StatusBadRequest {

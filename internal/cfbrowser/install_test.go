@@ -232,6 +232,54 @@ func TestInstallOfflineTypedError(t *testing.T) {
 	}
 }
 
+func TestInstallMissingDigestFailsLoud(t *testing.T) {
+	archive := buildTarGz(t, map[string]struct {
+		mode os.FileMode
+		data string
+	}{
+		"chromium-146.0.7680.177.5/chrome": {0o755, "ELF"},
+	})
+	// No API digest and no SHA256SUMS asset: nothing may install.
+	srv := newFixtureServer(t,
+		[]string{"chromium-v146.0.7680.177.5"},
+		map[string][]ghAsset{
+			"chromium-v146.0.7680.177.5": {{linuxX64Asset, int64(len(archive)), "", ""}},
+		},
+		map[string]string{linuxX64Asset: string(archive)},
+	)
+
+	cache := t.TempDir()
+	_, err := Install(context.Background(), InstallOptions{
+		CacheDir: cache,
+		APIBase:  srv.URL,
+		Platform: linuxSpec(t),
+		Logger:   testLogger(t),
+	})
+	if err == nil {
+		t.Fatal("expected missing-digest failure — an unverifiable archive must not install")
+	}
+	var missing *MissingDigestError
+	if !errors.As(err, &missing) {
+		t.Fatalf("want *MissingDigestError, got %T: %v", err, err)
+	}
+	if missing.TagName != "chromium-v146.0.7680.177.5" || missing.AssetName != linuxX64Asset {
+		t.Errorf("error must name release+asset: %+v", missing)
+	}
+	if !strings.Contains(missing.Error(), ManualReleasesURL) {
+		t.Errorf("error must carry the manual URL hint: %v", missing)
+	}
+	// Nothing unpacked: no chromium- dir and no work dir residue.
+	entries, err := os.ReadDir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "chromium-") || strings.HasPrefix(e.Name(), ".install-") {
+			t.Errorf("residue %q must not survive a missing-digest failure", e.Name())
+		}
+	}
+}
+
 func TestResolveCacheDirEnv(t *testing.T) {
 	t.Setenv("CLOAKBROWSER_CACHE_DIR", "/tmp/cf-env-cache")
 	got, err := ResolveCacheDir("")

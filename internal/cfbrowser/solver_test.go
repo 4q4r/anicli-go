@@ -307,4 +307,16 @@ func TestSolveNotBlockedBySlowUpdater(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("slow update must not block solve, took %v", elapsed)
 	}
+
+	// Join the background update before teardown: the kick goroutine
+	// writes into cache (work dirs, status file) and races t.TempDir
+	// cleanup otherwise (pre-existing flake). Also asserts the
+	// deferred update lands while the solve stayed unblocked.
+	joinDeadline := time.Now().Add(15 * time.Second)
+	for u.Status().InstalledVersion != "146.0.7680.177.5" {
+		if time.Now().After(joinDeadline) {
+			t.Fatalf("background update never landed, status %+v", u.Status())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

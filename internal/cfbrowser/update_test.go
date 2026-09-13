@@ -57,6 +57,9 @@ func newUpdateFixture(t *testing.T, tags []string, assets map[string][]ghAsset, 
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(fx.srv.Close)
+	// Asset downloads from this fixture must pass the host allowlist
+	// through the documented override.
+	t.Setenv(EnvDownloadURL, fx.srv.URL)
 	return fx
 }
 
@@ -345,6 +348,64 @@ func TestUpdaterTickerRetriesAndCloseStops(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if now := fx.hits.Load(); now > settled {
 		t.Errorf("ticker must stop after Close: %d -> %d hits", settled, now)
+	}
+}
+
+func TestUpdaterCloseCancelsInFlightCheck(t *testing.T) {
+	cache := t.TempDir()
+	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
+
+	// Probe answers instantly; the releases listing blocks until its
+	// request context dies (client disconnect), proving cancellation.
+	listingStarted := make(chan struct{})
+	listingAborted := make(chan struct{})
+	release := make(chan struct{}) // teardown escape hatch (see below)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/CloakHQ/cloakbrowser/releases" {
+			close(listingStarted)
+			select {
+			case <-r.Context().Done():
+				close(listingAborted) // genuine cancellation signal
+			case <-release:
+				// Test teardown only: lets the pre-fix (blocking) run
+				// fail cleanly instead of wedging Server.Close.
+			}
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	// Registered after srv.Close: LIFO runs it first at teardown.
+	t.Cleanup(func() { close(release) })
+
+	u := NewUpdater(UpdaterConfig{
+		Enabled: true, Interval: 10 * time.Millisecond,
+		APIBase: srv.URL, ProbeURL: srv.URL,
+		CacheDir: cache, Logger: testLogger(t),
+	})
+	u.Start()
+	// No deferred Close: with the pre-fix synchronous loop a second
+	// Close would block the test body on stopOnce; the asserted Close
+	// below is the only one needed (and returns promptly post-fix).
+
+	select {
+	case <-listingStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tick check never started")
+	}
+
+	closed := make(chan struct{})
+	go func() { u.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(7 * time.Second):
+		t.Fatal("Close must cancel an in-flight check instead of waiting out its 15m budget")
+	}
+	// The stalled listing must have been aborted by the cancellation.
+	select {
+	case <-listingAborted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight check context was never cancelled")
 	}
 }
 

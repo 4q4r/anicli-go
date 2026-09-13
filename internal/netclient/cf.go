@@ -70,7 +70,11 @@ type CFSolver interface {
 // WithCFSolver attaches a Cloudflare-challenge solver: a detected
 // challenge is solved once, the cookies plus the clearance UA are
 // applied and the request retried a single time. Without a solver a
-// detected challenge maps onto the typed CFChallengeError.
+// detected challenge maps onto the typed CFChallengeError — a
+// deliberate delta from the pre-CF code, where such responses
+// surfaced as the generic ErrProvider403/StatusError mapping: an
+// unsolved challenge is a distinct, actionable failure (enable [cf],
+// run `anicli cf install`), not a plain status.
 func WithCFSolver(solver CFSolver) Option {
 	return func(c *Client) { c.cfSolver = solver }
 }
@@ -80,6 +84,17 @@ func WithCFSolver(solver CFSolver) Option {
 // this client's UA override (per-client: each provider client must
 // replay the UA its clearance was solved with), and the language
 // override when provided.
+//
+// Ordering rationale (two stores, no shared critical section): the
+// tls-client cookie jar locks itself, so the jar write and the UA
+// override cannot be committed under one mutex. Cookies go first
+// deliberately: the jar write is inert until the matching UA lands
+// (Cloudflare binds a clearance to the fingerprint that solved it),
+// which makes the UA write the commit point of the pair. solveChallenge
+// issues its single retry strictly after both steps complete, and a
+// concurrent request racing the window at worst draws one more
+// challenge that re-enters the ladder (the store short-circuits the
+// re-solve) — no torn state outlives this call.
 func (c *Client) applyClearance(target string, clearance CFClearance) error {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -125,9 +140,11 @@ func (c *Client) effectiveUA() (ua, lang string) {
 
 // solveChallenge runs the ladder step for a detected challenge:
 // invalidate the host's stale clearance (refresh-on-403), solve,
-// apply, retry once. Returns the retried response or the typed
+// apply, retry once. payload is the request body buffered by Do — the
+// retried POST must carry the identical body, exactly like the
+// generic retry path. Returns the retried response or the typed
 // challenge error.
-func (c *Client) solveChallenge(ctx context.Context, op string, req Request, challenged *Response) (*Response, error) {
+func (c *Client) solveChallenge(ctx context.Context, op string, req Request, payload []byte, challenged *Response) (*Response, error) {
 	challengeErr := &CFChallengeError{URL: req.URL}
 	if c.cfSolver == nil {
 		return nil, c.wrap(op, challenged.StatusCode, challengeErr)
@@ -150,7 +167,7 @@ func (c *Client) solveChallenge(ctx context.Context, op string, req Request, cha
 		return nil, c.wrap(op, challenged.StatusCode, challengeErr)
 	}
 
-	retried, retryErr := c.attempt(ctx, req, nil)
+	retried, retryErr := c.attempt(ctx, req, payload)
 	if retryErr != nil {
 		return nil, c.wrap(op, 0, fmt.Errorf("retry after cf solve: %w", retryErr))
 	}

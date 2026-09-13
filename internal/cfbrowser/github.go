@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -23,7 +25,88 @@ const (
 	ManualReleasesURL = "https://github.com/CloakHQ/cloakbrowser/releases"
 	releasesPerPage   = 100
 	sumsAssetName     = "SHA256SUMS"
+
+	// EnvDownloadURL overrides the asset download base URL
+	// ($CLOAKBROWSER_DOWNLOAD_URL). When set, every asset download is
+	// rewritten onto that base (path and query kept) — the documented
+	// escape hatch for mirrors and tests; the override host is allowed
+	// by construction.
+	EnvDownloadURL = "CLOAKBROWSER_DOWNLOAD_URL"
 )
+
+// allowedDownloadHosts is the closed set of hosts asset downloads may
+// stream from: github.com plus the CDN/API hosts its release assets
+// are served through. Matched by exact host or subdomain suffix.
+var allowedDownloadHosts = []string{
+	"github.com",
+	"objects.githubusercontent.com",
+	"api.github.com",
+	"release-assets.githubusercontent.com",
+}
+
+// DownloadHostError reports an asset download URL whose host is not on
+// the GitHub allowlist (hostile or unexpected API data): nothing is
+// fetched from it.
+type DownloadHostError struct {
+	// Asset names the asset whose URL was rejected.
+	Asset string
+	// Host is the rejected host.
+	Host string
+}
+
+// Error implements error with the override hint.
+func (e *DownloadHostError) Error() string {
+	return fmt.Sprintf("cfbrowser: asset %q download host %q is not allowed "+
+		"(expected github.com or its asset CDNs; set $%s to override)", e.Asset, e.Host, EnvDownloadURL)
+}
+
+// hostAllowedBy suffix-matches host against the allowlist (exact host
+// or a dot-separated subdomain of an entry; lookalike suffixes like
+// "github.com.evil.example" never match).
+func hostAllowedBy(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, allowed := range allowedDownloadHosts {
+		if h == allowed || strings.HasSuffix(h, "."+allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// downloadAssetURL resolves the URL asset bytes stream from. The
+// $CLOAKBROWSER_DOWNLOAD_URL override rewrites the URL onto its base
+// first (its host is allowed by construction); otherwise asset.URL is
+// validated against the GitHub host allowlist so hostile or malformed
+// API data fails typed instead of streaming from an attacker-chosen
+// host.
+func downloadAssetURL(asset ghAsset) (string, error) {
+	if asset.URL == "" {
+		return "", fmt.Errorf("cfbrowser: asset %q has no download URL", asset.Name)
+	}
+	au, err := url.Parse(asset.URL)
+	if err != nil {
+		return "", fmt.Errorf("cfbrowser: asset %q has malformed download URL %q: %w", asset.Name, asset.URL, err)
+	}
+	if (au.Scheme != "http" && au.Scheme != "https") || au.Host == "" {
+		return "", fmt.Errorf("cfbrowser: asset %q has non-http download URL %q", asset.Name, asset.URL)
+	}
+	if base := os.Getenv(EnvDownloadURL); base != "" {
+		bu, err := url.Parse(base)
+		if err != nil {
+			return "", fmt.Errorf("cfbrowser: $%s %q: %w", EnvDownloadURL, base, err)
+		}
+		if (bu.Scheme != "http" && bu.Scheme != "https") || bu.Host == "" {
+			return "", fmt.Errorf("cfbrowser: $%s %q is not an absolute http(s) URL", EnvDownloadURL, base)
+		}
+		bu.Path = strings.TrimSuffix(bu.Path, "/") + au.Path
+		bu.RawQuery = au.RawQuery
+		return bu.String(), nil
+	}
+	if !hostAllowedBy(au.Hostname()) {
+		return "", &DownloadHostError{Asset: asset.Name, Host: au.Hostname()}
+	}
+	return asset.URL, nil
+}
 
 // ghAsset mirrors the GitHub release-asset fields the installer needs.
 type ghAsset struct {
@@ -154,12 +237,15 @@ func (g *GitHubClient) digestFromSums(ctx context.Context, rel *ghRelease, name 
 // DownloadAsset streams asset bytes into w while hashing (SHA-256) and
 // reporting progress as integer percent (5% granularity is the
 // caller's concern; this reports every chunk crossing a percent).
-// progress may be nil. The returned digest is "sha256:<hex>".
+// progress may be nil. The returned digest is "sha256:<hex>". The
+// download URL passes through downloadAssetURL (host allowlist /
+// $CLOAKBROWSER_DOWNLOAD_URL override) before anything is fetched.
 func (g *GitHubClient) DownloadAsset(ctx context.Context, asset ghAsset, progress func(pct int), w io.Writer) (string, error) {
-	if asset.URL == "" {
-		return "", fmt.Errorf("cfbrowser: asset %q has no download URL", asset.Name)
+	dlURL, err := downloadAssetURL(asset)
+	if err != nil {
+		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("cfbrowser: build download request %s: %w", asset.Name, err)
 	}

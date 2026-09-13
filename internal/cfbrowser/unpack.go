@@ -101,16 +101,29 @@ func untar(r io.Reader, dest string) error {
 
 // unzip extracts a zip stream into dest.
 func unzip(r io.Reader, dest string) error {
-	// archive/zip needs ReaderAt + size: buffer the stream (install
-	// already buffered the verified archive on disk; callers pass a
-	// bytes reader in tests).
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("cfbrowser: read zip: %w", err)
-	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return fmt.Errorf("cfbrowser: open zip: %w", err)
+	// archive/zip needs ReaderAt + size. *os.File (the install path:
+	// the ~562 MB windows asset) streams straight from disk through
+	// the ReaderAt interface; any other reader (tests) falls back to
+	// an in-memory buffer.
+	var zr *zip.Reader
+	if f, ok := r.(*os.File); ok {
+		fi, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("cfbrowser: stat zip: %w", err)
+		}
+		zr, err = zip.NewReader(f, fi.Size())
+		if err != nil {
+			return fmt.Errorf("cfbrowser: open zip: %w", err)
+		}
+	} else {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return fmt.Errorf("cfbrowser: read zip: %w", err)
+		}
+		zr, err = zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return fmt.Errorf("cfbrowser: open zip: %w", err)
+		}
 	}
 	for _, f := range zr.File {
 		target, err := safeJoin(dest, f.Name)

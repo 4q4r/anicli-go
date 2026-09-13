@@ -103,8 +103,11 @@ type anilibEpisode struct {
 	} `json:"data"`
 }
 
-// Search queries /anime with the browser-shaped parameter list (anicli-py
-// anilib.py:43-84). The Python original wraps the whole call in
+// Search queries /anime [LIVE-VERIFIED 2026-09-13: q, limit=20, site_id=5].
+// The API now REJECTS the legacy browser parameter list — site_id[]=1 and
+// the fields[] selectors — with HTTP 422 ("The selected value for fields.N
+// is incorrect"); the flat site_id=5 form answers with the plain data
+// array. The Python original wraps the whole call in
 // `except Exception: return []`: HTTP and decode failures surface as an
 // empty result set here, verbatim (documented quirk, see also the test).
 //
@@ -124,10 +127,7 @@ func (p *Anilib) Search(ctx context.Context, query string) ([]contracts.SearchRe
 	params := url.Values{}
 	params.Set("q", decoded)
 	params.Set("limit", "20")
-	params.Add("site_id[]", "1") // site_ids = [1] (anilib.py:21)
-	for _, field := range []string{"rate", "rate_avg", "releaseDate", "cover"} {
-		params.Add("fields[]", field)
-	}
+	params.Set("site_id", "5") // [LIVE-VERIFIED 2026-09-13] was site_id[]=1
 
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method:  "GET",

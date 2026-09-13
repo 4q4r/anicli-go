@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 
@@ -22,7 +21,7 @@ func TestAnilibSearch(t *testing.T) {
 	})
 	p := newAnilib(srv.URL, testClient(t, "anilib"))
 
-	results, err := p.Search(context.Background(), "bleach")
+	results, err := p.Search(context.Background(), "naruto")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -30,52 +29,56 @@ func TestAnilibSearch(t *testing.T) {
 	if rec.Path != "/anime" {
 		t.Errorf("request path = %q, want /anime", rec.Path)
 	}
-	// Query parameters mimic the browser request structure (anicli-py
-	// anilib.py:49-62): q, limit=20, site_id[]=1 and four fields[]
-	// entries. url.Values.Encode() percent-encodes and orders keys the
-	// same way requests does.
+	// [LIVE-VERIFIED 2026-09-13] the browser-shaped parameter list the API
+	// accepts: q, limit=20 and site_id=5. The legacy fields[] entries and
+	// the site_id[] array form are REJECTED with HTTP 422 ("The selected
+	// value for fields.N is incorrect") — verified against
+	// api.cdnlibs.org/api/anime.
 	params, err := url.ParseQuery(rec.Query)
 	if err != nil {
 		t.Fatalf("ParseQuery(%q): %v", rec.Query, err)
 	}
-	if got := params["q"]; len(got) != 1 || got[0] != "bleach" {
-		t.Errorf("q = %v", got)
+	if got := params["q"]; len(got) != 1 || got[0] != "naruto" {
+		t.Errorf("q = %v, got", got)
 	}
 	if got := params["limit"]; len(got) != 1 || got[0] != "20" {
 		t.Errorf("limit = %v, want 20", got)
 	}
-	if got := params["site_id[]"]; len(got) != 1 || got[0] != "1" {
-		t.Errorf("site_id[] = %v, want [1]", got)
+	if got := params["site_id"]; len(got) != 1 || got[0] != "5" {
+		t.Errorf("site_id = %v, want [5]", got)
 	}
-	if got := params["fields[]"]; len(got) != 4 {
-		t.Errorf("fields[] = %v, want 4 entries", got)
+	if _, ok := params["site_id[]"]; ok {
+		t.Error("site_id[] must not be sent (API rejects the array form)")
 	}
-	for _, f := range []string{"rate", "rate_avg", "releaseDate", "cover"} {
-		if !slices.Contains(params["fields[]"], f) {
-			t.Errorf("fields[] missing %q", f)
-		}
+	if _, ok := params["fields[]"]; ok {
+		t.Error("fields[] must not be sent (API rejects the field selector)")
 	}
 
-	if len(results) != 3 {
-		t.Fatalf("results = %d, want 3", len(results))
+	// Fixture: three real entries from GET /anime?q=naruto&limit=20&site_id=5
+	// [LIVE-VERIFIED 2026-09-13] plus one modeled null-chain entry.
+	if len(results) != 4 {
+		t.Fatalf("results = %d, want 4", len(results))
 	}
-	if results[0].Title != "Блич: Тысячелетняя кровавая война" {
+	if results[0].Title != "Наруто" {
 		t.Errorf("Title = %q, want rus_name preference", results[0].Title)
 	}
-	if results[0].URL != "16488--bleach-sennen-kessen-hen" {
+	if results[0].URL != "11--naruto-anime" {
 		t.Errorf("URL = %q, want slug_url", results[0].URL)
 	}
 	if results[0].SourceID != "anilib" {
 		t.Errorf("SourceID = %q", results[0].SourceID)
 	}
-	if results[1].Title != "Yofukashi no Uta" {
-		t.Errorf("Title = %q, want name fallback when rus_name null", results[1].Title)
+	if results[0].Poster != "https://cover.cdnlibs.org/uploads/anime/11/cover/bbf77bf3-26e9-40ad-b21b-57a6b90a4b0d.jpg" {
+		t.Errorf("Poster = %q, want live cover.default", results[0].Poster)
 	}
-	if results[2].Title != "Eng Only Title" {
-		t.Errorf("Title = %q, want eng_name fallback", results[2].Title)
+	if results[1].Title != "Наруто: Ураганные хроники" {
+		t.Errorf("Title = %q, want second live rus_name", results[1].Title)
 	}
-	if results[2].Poster != "" {
-		t.Errorf("Poster = %q, want empty when cover.default missing", results[2].Poster)
+	if results[3].Title != "Eng Only Title" {
+		t.Errorf("Title = %q, want eng_name fallback", results[3].Title)
+	}
+	if results[3].Poster != "" {
+		t.Errorf("Poster = %q, want empty when cover.default missing", results[3].Poster)
 	}
 }
 

@@ -53,8 +53,11 @@ func newUpdateFixture(t *testing.T, tags []string, assets map[string][]ghAsset, 
 			_, _ = w.Write([]byte(body))
 			return
 		}
-		// Probe endpoint.
-		w.WriteHeader(http.StatusOK)
+		// Unknown paths 404 (the reachability probe treats any HTTP
+		// response — including 404 — as online). A catch-all 200
+		// would poison the signed-manifest probing: empty SUMS/sig
+		// bodies would "verify" as fetchable origins.
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(fx.srv.Close)
 	// Asset downloads from this fixture must pass the host allowlist

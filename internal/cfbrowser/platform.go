@@ -11,11 +11,15 @@
 //	  chromium-<version>/chrome          linux layout (+chromedriver)
 //	  chromium-<version>/chrome.exe      windows layout
 //	  chromium-<ver>/Chromium.app/...    darwin layout
-//	  license.key                        pro license (absent = free tier)
+//	  license.key                        pro license key (trimmed text)
+//	  .license_cache                     last validation (sha256(key)-keyed)
+//	  .last_pro_version_check_<tag>      pro version marker cache
 //	  update-status.json                 auto-update bookkeeping
 //
 // $CLOAKBROWSER_BINARY_PATH overrides resolution with a user-supplied
-// binary; $CLOAKBROWSER_AUTO_UPDATE=false disables the auto-updater.
+// binary; $CLOAKBROWSER_VERSION pins an exact version;
+// $CLOAKBROWSER_LICENSE_KEY overrides license.key;
+// $CLOAKBROWSER_AUTO_UPDATE=false disables the auto-updater.
 package cfbrowser
 
 import (
@@ -83,4 +87,15 @@ func platformAssetFor(goos, goarch string) (PlatformSpec, error) {
 // CurrentPlatform resolves the spec for the running binary's platform.
 func CurrentPlatform() (PlatformSpec, error) {
 	return platformAssetFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// Tag returns the upstream download-API platform tag (X-Platform
+// header, marker-cache key): linux-x64, linux-arm64, windows-x64,
+// darwin-arm64, darwin-x64.
+func (s PlatformSpec) Tag() string {
+	arch := s.GOARCH
+	if s.GOARCH == "amd64" {
+		arch = "x64"
+	}
+	return s.GOOS + "-" + arch
 }

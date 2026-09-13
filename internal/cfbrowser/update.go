@@ -47,6 +47,11 @@ type UpdaterConfig struct {
 	ProbeURL string
 	// APIBase overrides the GitHub API base URL (tests).
 	APIBase string
+	// DownloadBase overrides the pro download API + manifest origin-1
+	// base (tests; empty = env > cloakbrowser.dev).
+	DownloadBase string
+	// LicenseAPIBase overrides the license-validate API base (tests).
+	LicenseAPIBase string
 	// CacheDir overrides the cache directory (tests).
 	CacheDir string
 	// BinaryPath mirrors $CLOAKBROWSER_BINARY_PATH (an explicit user
@@ -270,6 +275,11 @@ func (u *Updater) CheckAndMaybeInstall(ctx context.Context) error {
 	if u.cfg.BinaryPath != "" {
 		return nil
 	}
+	// A pinned $CLOAKBROWSER_VERSION owns the channel exactly the
+	// same way: the updater must not move off the user's pin.
+	if os.Getenv(EnvVersion) != "" {
+		return nil
+	}
 	_, err, _ := u.flight.Do("check", func() (any, error) {
 		return nil, u.check(ctx)
 	})
@@ -277,7 +287,10 @@ func (u *Updater) CheckAndMaybeInstall(ctx context.Context) error {
 }
 
 // check performs the gated cycle; the singleflight wrapper already
-// serialized concurrent callers.
+// serialized concurrent callers. The channel follows the SAME
+// precedence as Install: a valid license updates within the pro
+// channel (failures defer, never downgrade to free); no license
+// keeps the classic free GitHub flow.
 func (u *Updater) check(ctx context.Context) error {
 	logger := u.cfg.logger()
 	cacheDir, err := ResolveCacheDir(u.cfg.CacheDir)
@@ -307,6 +320,29 @@ func (u *Updater) check(ctx context.Context) error {
 		return nil
 	}
 
+	licRep, licErr := CheckLicense(ctx, LicenseOptions{
+		CacheDir:   u.cfg.CacheDir,
+		APIBase:    u.cfg.LicenseAPIBase,
+		HTTPClient: u.cfg.HTTPClient,
+	})
+	if licErr != nil {
+		// License unprovable after the probe said "online": treat as
+		// a transient failure and defer (no free downgrade while a
+		// key is configured — the user's tier is unknown, not free).
+		if ResolveLicenseKey(cacheDir) != "" {
+			u.record(cacheDir, UpdateStatus{
+				InstalledVersion: installedVersion, Deferred: true,
+				LastError: licErr.Error(),
+			})
+			return nil
+		}
+		licRep = nil // key-less: the free channel proceeds
+	}
+	if licRep != nil && licRep.Status.Valid {
+		return u.checkPro(ctx, cacheDir, spec, installedVersion, licRep, logger)
+	}
+
+	// Free channel: unchanged semantics.
 	rel, err := u.gh.LatestFreeRelease(ctx, spec)
 	if err != nil {
 		// Asset gaps (darwin on some tags) are terminal for this
@@ -327,7 +363,7 @@ func (u *Updater) check(ctx context.Context) error {
 
 	// Newer release: forced install of exactly this release (the
 	// generic Install ladder would reuse the cached older binary).
-	info, err := downloadAndInstall(ctx, u.gh, rel, spec, cacheDir, logger)
+	info, err := downloadAndInstall(ctx, u.gh, rel, spec, cacheDir, resolveDownloadBase(u.cfg.DownloadBase), logger)
 	if err != nil {
 		u.record(cacheDir, UpdateStatus{
 			LatestVersion: rel.Version, InstalledVersion: installedVersion,
@@ -341,7 +377,59 @@ func (u *Updater) check(ctx context.Context) error {
 		UpdatedTo: info.Version,
 	})
 	logger.Info("cfbrowser: stealth chromium updated",
-		"from", installedVersion, "to", info.Version, "path", info.Path)
+		"from", installedVersion, "to", info.Version, "path", info.Path, "channel", channelFree)
+	return nil
+}
+
+// checkPro runs the pro-channel update cycle: marker-gated latest
+// version, comparison against the installed cache, verified pro
+// install. Failures defer (the network-gated retry semantics are
+// identical to the free channel); a free download is NEVER
+// substituted.
+func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, installedVersion string, licRep *LicenseReport, logger *slog.Logger) error {
+	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
+		CacheDir:     u.cfg.CacheDir,
+		DownloadBase: u.cfg.DownloadBase,
+		HTTPClient:   u.cfg.HTTPClient,
+	})
+	if err != nil {
+		// Mirrors the free channel's listing-failure posture: record
+		// without re-defer (the next cycle retries anyway).
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: installedVersion, InstalledVersion: installedVersion,
+			LastError: err.Error(),
+		})
+		return err
+	}
+	if CompareVersions(version, installedVersion) <= 0 {
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: version, InstalledVersion: installedVersion,
+		})
+		return nil
+	}
+
+	info, err := installProVersion(ctx, InstallOptions{
+		CacheDir:       u.cfg.CacheDir,
+		DownloadBase:   u.cfg.DownloadBase,
+		LicenseAPIBase: u.cfg.LicenseAPIBase,
+		Platform:       spec,
+		Logger:         logger,
+		HTTPClient:     u.cfg.HTTPClient,
+	}, spec, cacheDir, version, licRep, logger)
+	if err != nil {
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: version, InstalledVersion: installedVersion,
+			Deferred: true, LastError: err.Error(),
+		})
+		return fmt.Errorf("cfbrowser: auto-update install %s (pro): %w", version, err)
+	}
+	pruneCacheDirs(cacheDir, 2) // newest + rollback
+	u.record(cacheDir, UpdateStatus{
+		LatestVersion: version, InstalledVersion: info.Version,
+		UpdatedTo: info.Version,
+	})
+	logger.Info("cfbrowser: stealth chromium updated",
+		"from", installedVersion, "to", info.Version, "path", info.Path, "channel", channelPro)
 	return nil
 }
 

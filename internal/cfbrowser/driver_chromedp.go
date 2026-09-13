@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
@@ -169,6 +170,49 @@ func allocatorOptions(opts LaunchOptions) []chromedp.ExecAllocatorOption {
 	return out
 }
 
+// withSessionExecutor derives a context carrying the chromedp
+// target-session CDP executor. CRITICAL chromedp semantics (the PR15
+// "invalid context" bug): chromedp.Run executes its actions on
+// cdp.WithExecutor(ctx, c.Target) — a DERIVED context — while the
+// context NewContext returned never carries the executor, so every
+// direct cdproto Do(ctx) call on it (fetch.Enable,
+// network.GetCookies, input.DispatchMouseEvent…) failed with
+// cdp.ErrInvalidContext. A context that already carries an executor
+// (tests inject fakes; derived navigation contexts inherit one)
+// passes through unchanged; a targetless chromedp context passes
+// through too (the caller's warn-only posture applies).
+func withSessionExecutor(ctx context.Context) context.Context {
+	if cdpExecutorFrom(ctx) != nil {
+		return ctx
+	}
+	if c := chromedp.FromContext(ctx); c != nil && c.Target != nil {
+		return cdp.WithExecutor(ctx, c.Target)
+	}
+	return ctx
+}
+
+// cdpExecutorFrom reads the cdp executor without ExecutorFromContext's
+// absent-key panic.
+func cdpExecutorFrom(ctx context.Context) cdp.Executor {
+	defer func() { _ = recover() }() // absent key: typed-nil assertion panics
+	return cdp.ExecutorFromContext(ctx)
+}
+
+// enableResourceDiet arms fetch-domain interception on the solve
+// session: the listener attaches FIRST (no paused request may slip
+// through unanswered), then Fetch.enable scopes the pauses to the
+// blocked resource types. ctx must be a session-executor context —
+// on a bare chromedp context Fetch.enable fails with
+// "invalid context" and the factory degrades warn-only.
+func enableResourceDiet(ctx context.Context) error {
+	chromedp.ListenTarget(ctx, func(ev any) {
+		if paused, ok := ev.(*fetch.EventRequestPaused); ok {
+			handlePausedRequest(ctx, paused)
+		}
+	})
+	return fetch.Enable().WithPatterns(fetchBlockPatterns()).Do(ctx)
+}
+
 // chromedpDriver is the production DriverFactory (headless-only).
 func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 	// The browser's exec.Cmd is captured at spawn time via
@@ -211,13 +255,10 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 
 	// Resource diet (session-scoped, applies to every solve page):
 	// the listener is attached BEFORE Fetch.enable so no paused
-	// request can slip through unanswered.
-	chromedp.ListenTarget(ctx, func(ev any) {
-		if paused, ok := ev.(*fetch.EventRequestPaused); ok {
-			handlePausedRequest(ctx, paused)
-		}
-	})
-	if err := fetch.Enable().WithPatterns(fetchBlockPatterns()).Do(ctx); err != nil {
+	// request can slip through unanswered. Both run on the
+	// session-executor context — the bare chromedp context fails
+	// Fetch.enable with "invalid context".
+	if err := enableResourceDiet(withSessionExecutor(ctx)); err != nil {
 		// Best-effort diet: a full-resource solve still works, just
 		// fatter. Warn, do not fail the session over it.
 		slog.Warn("cfbrowser: resource blocking unavailable", "error", err)
@@ -268,13 +309,18 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 	}
 	nctx, cancel := n.navContext(ctx)
 	defer cancel()
+	// Session-executor context: chromedp actions run through Run's
+	// own executor wrapping anyway, but the direct cdproto calls
+	// below (GetCookies) need the executor explicitly — the bare
+	// session context fails them with "invalid context".
+	tctx := withSessionExecutor(nctx)
 
 	var st NavState
 	var bodySnippet string
 	var ua, lang string
 	var click []float64
 
-	err := n.run(nctx,
+	err := n.run(tctx,
 		chromedp.Navigate(rawURL),
 		// Challenge interstitials replace the document on solve;
 		// WaitReady('body') + a short settle covers both states.
@@ -301,7 +347,7 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 
 	// Cookie harvest via CDP (network.GetCookies) under the same
 	// bounded navigation context.
-	ncookies, err := network.GetCookies().Do(nctx)
+	ncookies, err := network.GetCookies().Do(tctx)
 	if err == nil {
 		st.Cookies = make([]Cookie, 0, len(ncookies))
 		for _, ck := range ncookies {
@@ -368,14 +414,18 @@ func (n *chromedpNav) navContext(caller context.Context) (context.Context, conte
 func (n *chromedpNav) Click(ctx context.Context, x, y float64) error {
 	nctx, cancel := n.navContext(ctx)
 	defer cancel()
+	// Session-executor context: direct input dispatch on the bare
+	// session context fails with "invalid context" (same class as
+	// the F-fetch bug — the click could never land before PR15).
+	tctx := withSessionExecutor(nctx)
 	press := input.DispatchMouseEvent(input.MousePressed, x, y).
 		WithButton(input.Left).WithClickCount(1)
 	release := input.DispatchMouseEvent(input.MouseReleased, x, y).
 		WithButton(input.Left).WithClickCount(1)
-	if err := press.Do(nctx); err != nil {
+	if err := press.Do(tctx); err != nil {
 		return err
 	}
-	return release.Do(nctx)
+	return release.Do(tctx)
 }
 
 // Close tears the browser session down: the whole process group dies

@@ -1,23 +1,11 @@
 package cfbrowser
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 )
-
-// licenseKeyFile is the upstream pro-license marker inside the cache
-// directory; its presence upgrades the reported tier.
-const licenseKeyFile = "license.key"
-
-// LicenseTier reports the cache's license tier: "pro" when
-// license.key exists, "free" otherwise.
-func LicenseTier(cacheDir string) string {
-	if fi, err := os.Stat(filepath.Join(cacheDir, licenseKeyFile)); err == nil && !fi.IsDir() {
-		return "pro"
-	}
-	return "free"
-}
 
 // ReadUpdateStatus loads the persisted update bookkeeping (absent or
 // unreadable → ok=false, never an error: status display is advisory).
@@ -31,4 +19,26 @@ func ReadUpdateStatus(cacheDir string) (UpdateStatus, bool) {
 		return UpdateStatus{}, false
 	}
 	return st, true
+}
+
+// StatusLicenseReport resolves the license tier for `cf status`:
+// tier "pro" requires an effectively-valid license (cache-backed,
+// stale fallback on network failure); anything else is "free" with a
+// diagnostic note. It never fails: status display is advisory.
+func StatusLicenseReport(ctx context.Context, opts LicenseOptions) (tier, plan, expires, note string) {
+	rep, err := CheckLicense(ctx, opts)
+	if err != nil {
+		return "free", "", "", "лицензия не проверена: " + err.Error()
+	}
+	if rep == nil {
+		return "free", "", "", ""
+	}
+	if rep.Status.Valid {
+		note = ""
+		if rep.Stale {
+			note = "офлайн: данные из кэша"
+		}
+		return "pro", rep.Status.Plan, rep.Status.Expires, note
+	}
+	return "free", rep.Status.Plan, rep.Status.Expires, "ключ недействителен или истёк"
 }

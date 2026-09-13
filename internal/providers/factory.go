@@ -51,6 +51,9 @@ var allFactories = []struct {
 	{"allanime", func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider {
 		return newAllAnime(AllAnimeAPIBase, AllAnimeReferer, AllAnimeInternalBase, http, buildAABridge(cf), cacheDirFor(cfg))
 	}},
+	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnidub(AnidubBase, http)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

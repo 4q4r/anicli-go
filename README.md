@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 10 провайдеров"]
+    subgraph sources["Источники — 11 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -117,6 +117,7 @@ graph TD
         P9[sameband]
         P10[kodik]
         P11[allanime]
+        P12[anidub]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -239,6 +240,7 @@ max_concurrency = 2     # одновременные фоновые загруз
 | sameband | sameband.studio | видео | ⚠️ нестабильный |
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
 | allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
+| anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
 
 Не портированы / удалены (мёртвые):
 

@@ -37,7 +37,7 @@ func TestRealDepsConstruction(t *testing.T) {
 	}
 
 	providers := real.Deps.Search.Providers()
-	if len(providers) < 10 {
+	if len(providers) < 11 {
 		t.Fatalf("expected the full provider wave, got %d", len(providers))
 	}
 	ids := make([]string, 0, len(providers))

@@ -14,7 +14,8 @@ import (
 // meta-test fails when a provider is silently dropped, renamed,
 // duplicated or re-ordered, and when a roster member loses its
 // dedicated fixture→DTO shape test. sovetromantica was removed in PR22
-// (domain hijacked off the anime project, frozen 2025).
+// (domain hijacked off the anime project, frozen 2025); anidub (no
+// frozen Python original) joined the roster the same PR.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -26,6 +27,7 @@ var expectedProviderOrder = []string{
 	"sameband",
 	"kodik",
 	"allanime",
+	"anidub",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

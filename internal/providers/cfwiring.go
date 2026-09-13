@@ -62,6 +62,7 @@ var baseURLs = map[string]string{
 	"sameband":  SameBandBase,
 	"kodik":     KodikAPIBase,
 	"allanime":  AllAnimeAPIBase,
+	"anidub":    AnidubBase,
 }
 
 // BaseURLFor returns the primary base URL for a provider ID (ok is

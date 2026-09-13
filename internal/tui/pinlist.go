@@ -155,14 +155,24 @@ func (l *PinList) HandleKey(key tea.KeyPressMsg) bool {
 func (l *PinList) Render() string {
 	var b strings.Builder
 
-	if len(l.menu.Items) <= 1 {
-		// Lone pinned row (empty menu, I3): the empty-state message
-		// renders above it.
-		if len(l.menu.Items) == 1 && l.menu.EmptyMessage != "" {
+	if len(l.menu.Items) == 0 {
+		// Defensive: a backless menu built from zero choices. Nothing
+		// is selectable — the empty-state message (if any) alone.
+		if l.menu.EmptyMessage != "" {
 			b.WriteString(theme.Dim.Render(l.menu.EmptyMessage))
 			b.WriteString("\n")
 		}
-		b.WriteString(renderRow(l.menu.Items[len(l.menu.Items)-1], len(l.menu.Items)-1, l.cursor, ""))
+		return b.String()
+	}
+
+	if len(l.menu.Items) == 1 {
+		// Lone pinned row (empty menu, I3): the empty-state message
+		// renders above it.
+		if l.menu.EmptyMessage != "" {
+			b.WriteString(theme.Dim.Render(l.menu.EmptyMessage))
+			b.WriteString("\n")
+		}
+		b.WriteString(renderRow(l.menu.Items[0], 0, l.cursor, ""))
 		return b.String()
 	}
 

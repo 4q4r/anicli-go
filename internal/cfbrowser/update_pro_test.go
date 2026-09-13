@@ -51,6 +51,9 @@ func TestUpdaterProChannelInstallsProVersion(t *testing.T) {
 }
 
 func TestUpdaterProChannelStaysCurrent(t *testing.T) {
+	// A PRO-installed current version: no download. (The fixture must
+	// be pro-marked — an unmarked dir is a free-line install and may
+	// never satisfy a pro update check.)
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true
 	fx.mu.Lock()
@@ -61,6 +64,9 @@ func TestUpdaterProChannelStaysCurrent(t *testing.T) {
 	t.Setenv(EnvLicenseKey, "KEY-1")
 	t.Setenv(EnvCacheDir, cache)
 	fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+	if err := os.WriteFile(filepath.Join(cache, VersionDirName("146.0.7680.177.5"), ".channel"), []byte("pro"), 0o644); err != nil { //nolint:gosec // test-owned temp path
+		t.Fatal(err)
+	}
 
 	up := NewUpdater(UpdaterConfig{
 		Enabled:        true,
@@ -79,6 +85,63 @@ func TestUpdaterProChannelStaysCurrent(t *testing.T) {
 	}
 	if fx.proDownloadHits != 0 {
 		t.Errorf("current version must not re-download (hits=%d)", fx.proDownloadHits)
+	}
+}
+
+func TestUpdaterProOnlyFreeCachedSameVersionTriggersProDownload(t *testing.T) {
+	// The sharpest edge of the bug class: the free cache holds the
+	// SAME version the pro channel resolves to. A free dir must not
+	// satisfy a pro update check — the pro build of that exact
+	// version must be downloaded, replacing the free dir (and
+	// marking it pro).
+	pub, priv := manifestTestKey(t)
+	swapManifestKey(t, pub)
+	fx := newProInstallFixture(t)
+	fx.licenseValid = true
+	archive := buildTarGz(t, map[string]struct {
+		mode os.FileMode
+		data string
+	}{
+		"chromium-146.0.7680.177.5/chrome": {0o755, "ELF-PRO"},
+	})
+	fx.mu.Lock()
+	fx.proVersion = "146.0.7680.177.5"
+	fx.proArchives["146.0.7680.177.5"] = archive
+	fx.mu.Unlock()
+	fx.signWithProManifest("146.0.7680.177.5", linuxX64Asset, archive, priv)
+
+	cache := t.TempDir()
+	t.Setenv(EnvLicenseKey, "KEY-1")
+	t.Setenv(EnvCacheDir, cache)
+	fakeInstalledBinary(t, cache, "146.0.7680.177.5") // free-line, same version
+
+	up := NewUpdater(UpdaterConfig{
+		Enabled:        true,
+		CacheDir:       cache,
+		APIBase:        fx.srv.URL,
+		DownloadBase:   fx.srv.URL,
+		LicenseAPIBase: fx.srv.URL,
+		ProbeURL:       fx.srv.URL + "/api/license/validate",
+		Logger:         testLogger(t),
+	})
+	if err := up.CheckAndMaybeInstall(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if fx.proDownloadHits == 0 {
+		t.Fatalf("a free-cached dir must not satisfy the pro update check (hits=%d)", fx.proDownloadHits)
+	}
+	st := up.Status()
+	if st.UpdatedTo != "146.0.7680.177.5" {
+		t.Errorf("status = %+v, want the pro build of the same version installed", st)
+	}
+	dir := filepath.Join(cache, VersionDirName("146.0.7680.177.5"))
+	marker, err := os.ReadFile(filepath.Join(dir, ".channel")) //nolint:gosec // test-owned temp path
+	if err != nil || string(marker) != "pro" {
+		t.Errorf(".channel = %q, %v — the dir must be re-stamped pro after replacement", marker, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "chrome")) //nolint:gosec // test-owned temp path
+	if err != nil || string(data) != "ELF-PRO" {
+		t.Errorf("chrome = %q, %v — the free payload must be replaced by the pro build", data, err)
 	}
 }
 

@@ -235,6 +235,46 @@ func TestCFStatusShowsLicenseTierFromCache(t *testing.T) {
 	}
 }
 
+func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
+	// The tier display reflects what actually launches: a valid key
+	// with only a free-line binary cached shows the free binary plus
+	// an explicit "pro not installed" gap note — never "канал pro" on
+	// a free binary's path.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "chromium-146.0.7680.177.5", "chrome")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOAKBROWSER_CACHE_DIR", dir)
+	t.Setenv("CLOAKBROWSER_BINARY_PATH", "")
+
+	entry := `{"key_sha256":"` + sha256HexRaw("KEY-1") + `","valid":true,"plan":"pro","expires":"2099-01-01","fetched_at":"` +
+		time.Now().UTC().Format(time.RFC3339) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, ".license_cache"), []byte(entry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "license.key"), []byte("KEY-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeCF(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v (out: %s)", err, out)
+	}
+	if want := "(канал free)"; !strings.Contains(out, want) {
+		t.Errorf("the free-line binary must render its factual channel %q:\n%s", want, out)
+	}
+	if !strings.Contains(out, "не установлен") {
+		t.Errorf("a pro license over a free-only cache must show the pro-not-installed gap:\n%s", out)
+	}
+	if !strings.Contains(out, "anicli cf install") {
+		t.Errorf("the gap note must carry the install hint:\n%s", out)
+	}
+}
+
 // sha256HexRaw renders the bare hex sha256 of s.
 func sha256HexRaw(s string) string {
 	sum := sha256.Sum256([]byte(s))

@@ -106,6 +106,12 @@ func runCFStatus(out io.Writer) error {
 		line += fmt.Sprintf(" (план %s, до %s)", orDash(plan), orDash(expires))
 	}
 	_, _ = fmt.Fprintf(out, "%s\n", line)
+	// Tier display mirrors what actually launches: a pro license over
+	// a free-only cache shows the gap explicitly instead of letting a
+	// "pro" license line imply a pro binary.
+	if tier == "pro" && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
+		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен — выполните: %s\n", cfbrowser.InstallHint)
+	}
 	if note != "" {
 		_, _ = fmt.Fprintf(out, "                %s\n", note)
 	}

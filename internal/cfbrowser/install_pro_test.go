@@ -330,12 +330,60 @@ func TestInstallPinnedVersionDownloadsFreeTagWithoutLicense(t *testing.T) {
 	}
 }
 
-func TestInstallProReportsCachedBinaryAsPro(t *testing.T) {
+func TestInstallProValidLicenseFreeCachedDownloadsPro(t *testing.T) {
+	// The live-verified bug: a valid license must NOT reuse the
+	// newest cached dir merely because it exists — that dir came from
+	// the FREE line. Pro-cached activation means "the pro-resolved
+	// version matches an installed dir", so with only a free 146
+	// cached the install must resolve pro latest (151) and download
+	// it, leaving the free dir untouched and unused.
+	pub, priv := manifestTestKey(t)
+	swapManifestKey(t, pub)
+	fx := newProInstallFixture(t)
+	fx.licenseValid = true
+	t.Setenv(EnvLicenseKey, "KEY-1")
+	archive := proArchive(t)
+	fx.mu.Lock()
+	fx.proVersion = "151.0.7922.108.6"
+	fx.proArchives["151.0.7922.108.6"] = archive
+	fx.mu.Unlock()
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
+
+	cache := t.TempDir()
+	freePath := fakeInstalledBinary(t, cache, "146.0.7680.177.5") // free-line cache
+
+	info, err := Install(context.Background(), fx.opts(t, cache))
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if info.Version != "151.0.7922.108.6" || info.Channel != channelPro {
+		t.Errorf("info = %+v, want pro 151.0.7922.108.6 (free cache must not satisfy the pro tier)", info)
+	}
+	if info.Path == freePath {
+		t.Errorf("path = %q: the free 146 binary must not be returned to a pro user", info.Path)
+	}
+	if fx.proDownloadHits == 0 {
+		t.Errorf("the pro archive must have been fetched (hits=%d)", fx.proDownloadHits)
+	}
+	if data, rerr := os.ReadFile(freePath); rerr != nil || string(data) != "fake-elf" { //nolint:gosec // test-owned temp path
+		t.Errorf("the free cache dir must stay untouched: %q, %v", data, rerr)
+	}
+}
+
+func TestInstallProProCachedExactVersionReusesWithoutDownload(t *testing.T) {
+	// Corrected reuse semantics: the pro-resolved version matches a
+	// PRO-installed dir → activate it, zero archive traffic.
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true
 	t.Setenv(EnvLicenseKey, "KEY-1")
 	cache := t.TempDir()
 	existing := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+	if err := os.WriteFile(filepath.Join(cache, VersionDirName("146.0.7680.177.5"), ".channel"), []byte("pro"), 0o644); err != nil { //nolint:gosec // test-owned temp path
+		t.Fatal(err)
+	}
+	fx.mu.Lock()
+	fx.proVersion = "146.0.7680.177.5"
+	fx.mu.Unlock()
 
 	info, err := Install(context.Background(), fx.opts(t, cache))
 	if err != nil {
@@ -345,7 +393,31 @@ func TestInstallProReportsCachedBinaryAsPro(t *testing.T) {
 		t.Errorf("path = %q, want cached %q", info.Path, existing)
 	}
 	if info.Channel != channelPro {
-		t.Errorf("channel = %q, want pro (valid license upgrades the cached tier)", info.Channel)
+		t.Errorf("channel = %q, want pro (pro-resolved exact version is pro-installed)", info.Channel)
+	}
+	if fx.proDownloadHits != 0 {
+		t.Errorf("pro-cached activation must not re-download (hits=%d)", fx.proDownloadHits)
+	}
+}
+
+func TestInstallInvalidLicenseReusesFreeCache(t *testing.T) {
+	// An invalid key keeps the classic free semantics: the newest
+	// cached binary is reused, reported as the free line.
+	fx := newProInstallFixture(t)
+	fx.licenseValid = false
+	t.Setenv(EnvLicenseKey, "KEY-REJECTED")
+	cache := t.TempDir()
+	existing := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+
+	info, err := Install(context.Background(), fx.opts(t, cache))
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if info.Path != existing || info.Channel != channelFree {
+		t.Errorf("info = %+v, want the cached binary labeled free", info)
+	}
+	if fx.proDownloadHits != 0 {
+		t.Errorf("an invalid key must never fetch pro archives (hits=%d)", fx.proDownloadHits)
 	}
 }
 

@@ -240,10 +240,10 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 	var cmd *exec.Cmd
 	allocOpts := []chromedp.ExecAllocatorOption{
 		chromedp.ExecPath(opts.BinaryPath),
-		// Own process group: group-scoped kills on close, and (linux)
-		// Pdeathsig so a crashed anicli cannot orphan the browser.
-		// This override displaces chromedp's default command setup —
-		// prockill_linux.go replicates the Pdeathsig part of it.
+		// Own process group: group-scoped kills on close. No
+		// Pdeathsig — it is thread-scoped (prctl(2)) and the Go
+		// runtime's thread retirement makes it SIGKILL healthy
+		// browsers nondeterministically; see prockill_unix.go.
 		chromedp.ModifyCmdFunc(func(c *exec.Cmd) {
 			setNewProcessGroup(c)
 			cmd = c

@@ -59,6 +59,38 @@ func (r *Registry) Get(id string) (contracts.Provider, bool) {
 	return p, ok
 }
 
+// ContentLanguage reports the content language the provider under id
+// declares for its dubs ("ru", "ja", …); "" when the provider or its
+// language is unknown. The lookup peels the wrapper layers NewRegistry
+// puts around providers (SearchDelegator, the dub stream filter) down
+// to the concrete provider.
+func (r *Registry) ContentLanguage(id string) string {
+	p, ok := r.byID[id]
+	if !ok {
+		return ""
+	}
+	lc, ok := bareProvider(p).(interface{ ContentLanguage() string })
+	if !ok {
+		return ""
+	}
+	return lc.ContentLanguage()
+}
+
+// bareProvider peels the registry wrapper layers (SearchDelegator, the
+// dub stream filter) down to the concrete provider they serve.
+func bareProvider(p contracts.Provider) contracts.Provider {
+	for {
+		switch w := p.(type) {
+		case SearchDelegator:
+			p = w.Provider
+		case dubFilteredProvider:
+			p = w.Provider
+		default:
+			return p
+		}
+	}
+}
+
 // List returns every registered provider in registration order.
 func (r *Registry) List() []contracts.Provider {
 	return append([]contracts.Provider(nil), r.order...)

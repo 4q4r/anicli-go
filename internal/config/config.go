@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -129,9 +130,17 @@ type WebUser struct {
 	PasswordHash string `toml:"password_hash"`
 }
 
-// Providers holds per-provider settings. Only providers that need
-// user-supplied credentials appear here; the rest run credential-free.
+// Providers holds provider-set settings: search exclusions plus the
+// per-provider credentials (only providers that need user-supplied
+// credentials appear here; the rest run credential-free).
 type Providers struct {
+	// Exclude drops providers from the search fan-out by id (e.g.
+	// ["animepahe", "kodik"]). Default: nothing excluded.
+	Exclude []string `toml:"exclude"`
+	// ExcludeStreams drops dub streams whose name matches any of
+	// these regular expressions (e.g. ["трейлер", "реклама"] discards
+	// trash streams). Patterns are validated (fail-loud) at load.
+	ExcludeStreams []string `toml:"exclude_streams"`
 	// Kodik configures the Kodik API source.
 	Kodik ProvidersKodik `toml:"kodik"`
 }
@@ -330,6 +339,13 @@ func (s *Settings) Validate() error {
 		default:
 			return fmt.Errorf("network.proxy_url %q: unsupported scheme %q (want http, https or socks5)",
 				s.Network.ProxyURL, u.Scheme)
+		}
+	}
+	// Invalid exclude_streams regexes fail here, at startup, instead
+	// of being silently skipped when the filter compiles them.
+	for _, pattern := range s.Providers.ExcludeStreams {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("providers.exclude_streams %q: %w", pattern, err)
 		}
 	}
 	return nil

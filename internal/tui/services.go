@@ -34,6 +34,10 @@ type EpisodeService interface {
 	// ResolveStream resolves playable quality links for one episode
 	// and dub.
 	ResolveStream(ctx context.Context, providerID string, episode contracts.Episode, dubID string) (contracts.MediaStream, error)
+	// ContentLanguage reports the provider's primary content language
+	// ("ru", "ja", …) used to tag its dubs in the pickers; "" when
+	// unknown (PR23).
+	ContentLanguage(providerID string) string
 }
 
 // PlaybackService plays a resolved stream through mpv with skip

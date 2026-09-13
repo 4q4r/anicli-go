@@ -31,11 +31,12 @@ type AniDUB struct {
 // are sent.
 func newAnidub(baseURL string, http *netclient.Client) *AniDUB {
 	return &AniDUB{Base: Base{
-		id:         "anidub",
-		name:       "AniDUB",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeVideo,
-		http:       http,
+		id:          "anidub",
+		name:        "AniDUB",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		http:        http,
 	}}
 }
 

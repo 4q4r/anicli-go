@@ -206,7 +206,9 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 
 // runDoctor prints environment diagnostics. For now it enumerates the
 // registered providers: registry construction only builds clients, no
-// network egress happens. Real health checks land at G6.
+// network egress happens. Providers excluded via [providers].exclude
+// keep a slot marked [excluded] so their omission from the fan-out is
+// visible (PR23). Real health checks land at G6.
 func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
 	_, _ = fmt.Fprintln(out, "anicli doctor")
 
@@ -221,9 +223,12 @@ func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
 	}
 	defer func() { _ = reg.Close() }()
 
-	ids := make([]string, 0, len(reg.List()))
+	ids := make([]string, 0, len(reg.List())+len(settings.Providers.Exclude))
 	for _, p := range reg.List() {
 		ids = append(ids, p.ID())
+	}
+	for _, id := range settings.Providers.Exclude {
+		ids = append(ids, id+" [excluded]")
 	}
 	_, _ = fmt.Fprintf(out, "providers (%d): %s\n", len(ids), strings.Join(ids, ", "))
 	_, _ = fmt.Fprintln(out, "health checks: not implemented yet")

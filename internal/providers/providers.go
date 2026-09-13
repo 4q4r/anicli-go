@@ -18,17 +18,22 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// Base carries the fields every provider shares: identity, site root and
-// the per-provider HTTP headers applied on every request. Providers embed
-// it and implement the three operations themselves (port of the
-// BaseSource attributes in anicli-py anicli/core/base.py:8-33).
+// Base carries the fields every provider shares: identity, site root,
+// content language and the per-provider HTTP headers applied on every
+// request. Providers embed it and implement the three operations
+// themselves (port of the BaseSource attributes in anicli-py
+// anicli/core/base.py:8-33).
 type Base struct {
 	id         string
 	name       string
 	baseURL    string
 	sourceType contracts.SourceType
-	headers    map[string]string
-	http       *netclient.Client
+	// contentLang is the provider's primary content language ("ru",
+	// "ja", …): the tag every dub the service emits carries. It is a
+	// service-level declaration, not per-dub introspection (PR23).
+	contentLang string
+	headers     map[string]string
+	http        *netclient.Client
 }
 
 // ID returns the stable provider identifier (Python source_id).
@@ -43,6 +48,12 @@ func (b Base) BaseURL() string { return b.baseURL }
 // SourceType reports what kind of content the provider serves (Python
 // source_type / SourceCapability).
 func (b Base) SourceType() contracts.SourceType { return b.sourceType }
+
+// ContentLanguage returns the provider's primary content language tag
+// ("ru", "ja", …); "" when undeclared. Every dub the service emits is
+// tagged with it (see contracts.DubOption.Language). Providers that
+// differentiate sub and dub tracks (allanime) tag those individually.
+func (b Base) ContentLanguage() string { return b.contentLang }
 
 // pythonStr ports Python's str() over a JSON number field: the wire
 // literal is preserved ("1" stays "1", "1.5" stays "1.5"), and a missing

@@ -2,9 +2,13 @@ package providers
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -146,4 +150,206 @@ func TestNewRegistryPropagatesClientError(t *testing.T) {
 	if _, err := NewRegistry(cfg, nil); err == nil {
 		t.Fatal("NewRegistry with invalid proxy must fail")
 	}
+}
+
+// TestAllProvidersSourceTypeBoth pins the corrected SourceType
+// semantics (PR23): SourceType describes content SUITABILITY for the
+// user's wanted audio languages (EN/JA/RU), and every current roster
+// member serves wanted-language audio with acceptable video — so the
+// whole roster is BOTH. VIDEO is for unwanted/absent audio (future
+// providers), AUDIO for catalog-wide hardsubs/unwatchable video.
+func TestAllProvidersSourceTypeBoth(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(bare) != 11 {
+		t.Fatalf("All() = %d providers, want 11", len(bare))
+	}
+	for _, p := range bare {
+		if got := p.SourceType(); got != contracts.SourceTypeBoth {
+			t.Errorf("provider %s SourceType() = %q, want %q", p.ID(), got, contracts.SourceTypeBoth)
+		}
+	}
+}
+
+// TestContentLanguageRoster pins each provider's declared primary
+// content language (PR23): Russian-dub sites tag their dubs "ru",
+// Japanese-audio sites with English subtitles "ja". The language is a
+// service-level property — every dub a provider emits carries it, no
+// per-dub introspection.
+func TestContentLanguageRoster(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"anilibria": "ru",
+		"animevost": "ru",
+		"anilib":    "ru",
+		"animego":   "ru",
+		"gogoanime": "ja",
+		"animepahe": "ja",
+		"dreamcast": "ru",
+		"sameband":  "ru",
+		"kodik":     "ru",
+		"allanime":  "ja", // primary sub track is Japanese; dub→"en"
+		"anidub":    "ru",
+	}
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, p := range bare {
+		lc, ok := p.(interface{ ContentLanguage() string })
+		if !ok {
+			t.Errorf("provider %s (%T) does not expose ContentLanguage", p.ID(), p)
+			continue
+		}
+		if got := lc.ContentLanguage(); got != want[p.ID()] {
+			t.Errorf("provider %s ContentLanguage() = %q, want %q", p.ID(), got, want[p.ID()])
+		}
+	}
+}
+
+// TestAllSkipsExcludedProviders pins [providers].exclude (PR23):
+// excluded ids never get a client or a registry slot, the rest of the
+// roster order is untouched.
+func TestAllSkipsExcludedProviders(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.Exclude = []string{"animepahe", "kodik"}
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(bare) != 9 {
+		t.Fatalf("All() = %d providers, want 9", len(bare))
+	}
+	for _, p := range bare {
+		if p.ID() == "animepahe" || p.ID() == "kodik" {
+			t.Errorf("excluded provider %s must not be built", p.ID())
+		}
+	}
+}
+
+// TestNewRegistryStreamFilterWiring pins the exclude_streams wiring
+// (PR23): with patterns configured, every registry entry keeps its
+// SearchDelegator shell (roster pin) over a dub stream filter, and
+// the provider-level language lookup still sees through both layers.
+func TestNewRegistryStreamFilterWiring(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.ExcludeStreams = []string{"трейлер"}
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	for _, p := range reg.List() {
+		del, ok := p.(SearchDelegator)
+		if !ok {
+			t.Fatalf("registry entry %s (%T) is not a SearchDelegator", p.ID(), p)
+		}
+		if _, ok := del.Provider.(dubFilteredProvider); !ok {
+			t.Fatalf("registry entry %s: SearchDelegator wraps %T, want dubFilteredProvider",
+				p.ID(), del.Provider)
+		}
+	}
+	if got := reg.ContentLanguage("animego"); got != "ru" {
+		t.Errorf("ContentLanguage(animego) through the filter wrap = %q, want ru", got)
+	}
+}
+
+// TestNewRegistryWithoutStreamFilterKeepsBareComposition guards the
+// zero-config path: no exclude_streams means no filter layer — the
+// registry composition is exactly the pre-PR23 SearchDelegator shape.
+func TestNewRegistryWithoutStreamFilterKeepsBareComposition(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	del, ok := reg.Get("anilibria")
+	if !ok {
+		t.Fatal("Get(anilibria) not found")
+	}
+	sd, ok := del.(SearchDelegator)
+	if !ok {
+		t.Fatal("registry entry is not a SearchDelegator")
+	}
+	if _, isFiltered := sd.Provider.(dubFilteredProvider); isFiltered {
+		t.Fatal("no exclude_streams configured: SearchDelegator must wrap the bare provider")
+	}
+}
+
+// TestNewRegistryInvalidStreamRegexFailsLoud: NewRegistry receives
+// Settings directly (config.Load's Validate does not run in between),
+// so the filter compile must fail loud here too.
+func TestNewRegistryInvalidStreamRegexFailsLoud(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.ExcludeStreams = []string{"([unclosed"}
+
+	if _, err := NewRegistry(cfg, nil); err == nil {
+		t.Fatal("NewRegistry with an invalid exclude_streams regex must fail")
+	}
+}
+
+// TestNewRegistryLogsExcludedProviders pins the startup log line so
+// silent exclusion can never regress. Not parallel: swaps the default
+// slog handler for the capture and restores it.
+func TestNewRegistryLogsExcludedProviders(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.Exclude = []string{"animepahe"}
+
+	var buf lockedBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(previous)
+
+	if _, err := NewRegistry(cfg, nil); err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "provider excluded: animepahe") {
+		t.Fatalf("startup log must name the excluded provider, got:\n%s", got)
+	}
+}
+
+// lockedBuffer is a mutex-guarded buffer: slog handlers write from
+// whatever goroutine logs.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

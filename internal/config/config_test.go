@@ -502,3 +502,56 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestProvidersExclusionSettings pins the [providers] exclusion keys
+// (PR23): exclude drops providers from the search fan-out by id,
+// exclude_streams drops dub streams by name regex. Defaults exclude
+// nothing; an invalid exclude_streams regex fails Load loud at startup
+// instead of being ignored at request time.
+func TestProvidersExclusionSettings(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, `
+[providers]
+exclude = ["animepahe", "kodik"]
+exclude_streams = ["трейлер", "реклама"]
+
+[providers.kodik]
+token = "file-kodik-token"
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Providers.Exclude) != 2 ||
+		got.Providers.Exclude[0] != "animepahe" || got.Providers.Exclude[1] != "kodik" {
+		t.Errorf("Providers.Exclude = %v, want [animepahe kodik]", got.Providers.Exclude)
+	}
+	if len(got.Providers.ExcludeStreams) != 2 ||
+		got.Providers.ExcludeStreams[0] != "трейлер" || got.Providers.ExcludeStreams[1] != "реклама" {
+		t.Errorf("Providers.ExcludeStreams = %v, want [трейлер реклама]", got.Providers.ExcludeStreams)
+	}
+	// The kodik sub-table must keep parsing beside the scalar keys.
+	if got.Providers.Kodik.Token != "file-kodik-token" {
+		t.Errorf("Providers.Kodik.Token = %q, want file value", got.Providers.Kodik.Token)
+	}
+
+	// Defaults: nothing excluded.
+	def, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("Load defaults: %v", err)
+	}
+	if len(def.Providers.Exclude) != 0 || len(def.Providers.ExcludeStreams) != 0 {
+		t.Errorf("defaults must exclude nothing, got %v / %v",
+			def.Providers.Exclude, def.Providers.ExcludeStreams)
+	}
+
+	// Invalid regex fails loud, naming the pattern.
+	bad := writeTOML(t, `
+[providers]
+exclude_streams = ["([unclosed"]
+`)
+	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "exclude_streams") {
+		t.Fatalf("invalid exclude_streams regex must fail loud naming the key, got %v", err)
+	}
+}

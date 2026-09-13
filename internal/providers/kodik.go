@@ -54,11 +54,12 @@ type Kodik struct {
 // headers; none are added.
 func newKodik(apiBase, token string, http *netclient.Client) *Kodik {
 	return &Kodik{Base: Base{
-		id:         "kodik",
-		name:       "Kodik",
-		baseURL:    apiBase,
-		sourceType: contracts.SourceTypeBoth,
-		http:       http,
+		id:          "kodik",
+		name:        "Kodik",
+		baseURL:     apiBase,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		http:        http,
 	},
 		token: token}
 }

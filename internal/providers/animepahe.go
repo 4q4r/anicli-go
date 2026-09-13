@@ -43,12 +43,13 @@ type AnimePahe struct {
 // applied by the netclient on every request).
 func newAnimePahe(baseURL string, http *netclient.Client) *AnimePahe {
 	return &AnimePahe{Base: Base{
-		id:         "animepahe",
-		name:       "AnimePahe",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeVideo,
-		headers:    map[string]string{"Referer": baseURL},
-		http:       http,
+		id:          "animepahe",
+		name:        "AnimePahe",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ja",
+		headers:     map[string]string{"Referer": baseURL},
+		http:        http,
 	}}
 }
 

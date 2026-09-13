@@ -1,9 +1,11 @@
 package cfbrowser
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,9 +29,11 @@ type proInstallFixture struct {
 	mu  sync.Mutex
 
 	licenseValid bool
+	licensePlan  string                  // "" → defaults to "pro" in the validate answer
 	proVersion   string                  // "" → /api/download/version 404s
 	proArchives  map[string][]byte       // version → archive bytes
-	manifests    map[string]manifestPair // tag → origin-1 manifest
+	manifests    map[string]manifestPair // tag → free-line manifest ({base}/chromium-v{tag}/…)
+	proManifests map[string]manifestPair // version → pro-line manifest ({base}/releases/pro/chromium-v{v}/…)
 	githubTags   []string
 	githubAssets map[string][]ghAsset
 	githubBodies map[string]string
@@ -37,6 +41,7 @@ type proInstallFixture struct {
 	proVersionHits  int
 	proDownloadHits int
 	licenseHits     int
+	freeLineHits    int // probes against the FREE manifest line (/chromium-v*/SHA256SUMS*)
 }
 
 func newProInstallFixture(t *testing.T) *proInstallFixture {
@@ -44,6 +49,7 @@ func newProInstallFixture(t *testing.T) *proInstallFixture {
 	fx := &proInstallFixture{
 		proArchives:  map[string][]byte{},
 		manifests:    map[string]manifestPair{},
+		proManifests: map[string]manifestPair{},
 		githubAssets: map[string][]ghAsset{},
 		githubBodies: map[string]string{},
 	}
@@ -54,7 +60,11 @@ func newProInstallFixture(t *testing.T) *proInstallFixture {
 		case r.URL.Path == "/api/license/validate":
 			fx.licenseHits++
 			if fx.licenseValid {
-				_, _ = w.Write([]byte(`{"valid":true,"plan":"pro","expires":"2099-01-01"}`))
+				plan := fx.licensePlan
+				if plan == "" {
+					plan = "pro"
+				}
+				_, _ = w.Write([]byte(`{"valid":true,"plan":"` + plan + `","expires":"2099-01-01"}`))
 			} else {
 				_, _ = w.Write([]byte(`{"valid":false,"plan":"","expires":""}`))
 			}
@@ -74,7 +84,20 @@ func newProInstallFixture(t *testing.T) *proInstallFixture {
 				return
 			}
 			_, _ = w.Write(archive)
+		case isProManifestPath(r.URL.Path):
+			version := proManifestVersion(r.URL.Path)
+			pair, ok := fx.proManifests[version]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, ".sig") {
+				_, _ = w.Write([]byte(pair.sig))
+			} else {
+				_, _ = w.Write(pair.sums)
+			}
 		case isOrigin1ManifestPath(r.URL.Path):
+			fx.freeLineHits++
 			tag := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]
 			pair, ok := fx.manifests[tag]
 			if !ok {
@@ -111,6 +134,19 @@ func isOrigin1ManifestPath(p string) bool {
 		(strings.HasSuffix(p, "/"+sumsAssetName) || strings.HasSuffix(p, "/"+sumsAssetName+".sig"))
 }
 
+// isProManifestPath matches the distinct pro release line the
+// upstream pro verifier fetches ({base}/releases/pro/chromium-v{v}/…).
+func isProManifestPath(p string) bool {
+	return strings.HasPrefix(p, "/releases/pro/"+tagPrefix) &&
+		(strings.HasSuffix(p, "/"+sumsAssetName) || strings.HasSuffix(p, "/"+sumsAssetName+".sig"))
+}
+
+// proManifestVersion extracts {v} from /releases/pro/chromium-v{v}/SHA256SUMS[.sig].
+func proManifestVersion(p string) string {
+	v := strings.TrimPrefix(p, "/releases/pro/"+tagPrefix)
+	return strings.TrimSuffix(strings.TrimSuffix(v, "/"+sumsAssetName+".sig"), "/"+sumsAssetName)
+}
+
 func (fx *proInstallFixture) opts(t *testing.T, cacheDir string) InstallOptions {
 	t.Helper()
 	return InstallOptions{
@@ -125,16 +161,34 @@ func (fx *proInstallFixture) opts(t *testing.T, cacheDir string) InstallOptions 
 
 // signWithManifest registers an origin-1 manifest for tag, signed by
 // the given key over the archive's true digest (nil signer → empty
-// sig bytes).
+// sig bytes). The version= binding line carries the tag's version.
 func (fx *proInstallFixture) signWithManifest(tag, archiveName string, archive []byte, priv ed25519.PrivateKey) {
 	fx.mu.Lock()
 	defer fx.mu.Unlock()
-	sums := manifestBody(archiveName, digestHexOf(archive))
+	version, err := ParseVersionFromTag(tag)
+	if err != nil {
+		panic("signWithManifest: bad tag " + tag + ": " + err.Error())
+	}
+	sums := manifestBody(version, archiveName, digestHexOf(archive))
 	sig := ""
 	if priv != nil {
 		sig = signManifest(priv, sums)
 	}
 	fx.manifests[tag] = manifestPair{sums: sums, sig: sig}
+}
+
+// signWithProManifest registers a manifest on the pro release line
+// ({base}/releases/pro/chromium-v{version}/…), signed over the
+// archive's true digest with the version binding line.
+func (fx *proInstallFixture) signWithProManifest(version, archiveName string, archive []byte, priv ed25519.PrivateKey) {
+	fx.mu.Lock()
+	defer fx.mu.Unlock()
+	sums := manifestBody(version, archiveName, digestHexOf(archive))
+	sig := ""
+	if priv != nil {
+		sig = signManifest(priv, sums)
+	}
+	fx.proManifests[version] = manifestPair{sums: sums, sig: sig}
 }
 
 func (fx *proInstallFixture) addFreeRelease(tag, version string, archive []byte) {
@@ -179,7 +233,7 @@ func TestInstallProDownloadVerifiesAndInstalls(t *testing.T) {
 	fx.proVersion = "151.0.7922.108.6"
 	fx.proArchives["151.0.7922.108.6"] = archive
 	fx.mu.Unlock()
-	fx.signWithManifest("chromium-v151.0.7922.108.6", linuxX64Asset, archive, priv)
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
 
 	cache := t.TempDir()
 	info, err := Install(context.Background(), fx.opts(t, cache))
@@ -194,6 +248,36 @@ func TestInstallProDownloadVerifiesAndInstalls(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cache, proMarkerName("linux-x64"))); err != nil {
 		t.Errorf("pro version marker must be written: %v", err)
+	}
+}
+
+func TestInstallProVerifiesAgainstProManifestOrigin(t *testing.T) {
+	// Production reality (upstream download.py:584): pro manifests
+	// live ONLY on the distinct pro release line. With the pro line
+	// as the sole manifest source, the pro install must verify — and
+	// the FREE manifest line must never be probed for a pro archive.
+	pub, priv := manifestTestKey(t)
+	swapManifestKey(t, pub)
+	fx := newProInstallFixture(t)
+	fx.licenseValid = true
+	t.Setenv(EnvLicenseKey, "KEY-1")
+	archive := proArchive(t)
+	fx.mu.Lock()
+	fx.proVersion = "151.0.7922.108.6"
+	fx.proArchives["151.0.7922.108.6"] = archive
+	fx.mu.Unlock()
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
+
+	cache := t.TempDir()
+	info, err := Install(context.Background(), fx.opts(t, cache))
+	if err != nil {
+		t.Fatalf("pro install must verify against the pro manifest origin: %v", err)
+	}
+	if info.Version != "151.0.7922.108.6" || info.Channel != channelPro {
+		t.Errorf("info = %+v, want pro 151.0.7922.108.6", info)
+	}
+	if fx.freeLineHits != 0 {
+		t.Errorf("the pro channel must never probe the free manifest line (hits=%d)", fx.freeLineHits)
 	}
 }
 
@@ -277,7 +361,7 @@ func TestInstallProNonPinnedManifestFailsVerification(t *testing.T) {
 	fx.proVersion = "151.0.7922.108.6"
 	fx.proArchives["151.0.7922.108.6"] = archive
 	fx.mu.Unlock()
-	fx.signWithManifest("chromium-v151.0.7922.108.6", linuxX64Asset, archive, priv)
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
 
 	cache := t.TempDir()
 	_, err := Install(context.Background(), fx.opts(t, cache))
@@ -443,4 +527,82 @@ func TestInstallPinnedVersionPro404FallsToFreeTag(t *testing.T) {
 	if fx.proDownloadHits == 0 {
 		t.Errorf("the pro channel must have been tried before the free fallback")
 	}
+}
+
+func TestInstallFreePlanDropsVersionPin(t *testing.T) {
+	// Upstream parity (download.py): a VALID license on plan "free"
+	// has its version pin dropped — the server force-serves the
+	// latest build to free keys, so fetching the pinned version's
+	// manifest would mismatch the served bytes. The install must
+	// resolve pro LATEST, never the pin.
+	pub, priv := manifestTestKey(t)
+	swapManifestKey(t, pub)
+	fx := newProInstallFixture(t)
+	fx.licenseValid = true
+	fx.licensePlan = "free"
+	t.Setenv(EnvLicenseKey, "KEY-1")
+	archive := proArchive(t)
+	fx.mu.Lock()
+	fx.proVersion = "151.0.7922.108.6"
+	fx.proArchives["151.0.7922.108.6"] = archive
+	fx.mu.Unlock()
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
+	t.Setenv(EnvVersion, "150.0.0.0.1") // pin ≠ the served latest
+
+	cache := t.TempDir()
+	info, err := Install(context.Background(), fx.opts(t, cache))
+	if err != nil {
+		t.Fatalf("free-plan license must install the force-served latest, not the pin: %v", err)
+	}
+	if info.Version != "151.0.7922.108.6" || info.Channel != channelPro {
+		t.Errorf("info = %+v, want pro 151.0.7922.108.6 (pin dropped)", info)
+	}
+	if fx.proDownloadHits == 0 {
+		t.Errorf("the pro download must have run (via latest resolution)")
+	}
+}
+
+func TestInstallRejectedLicenseKeyWarnsAndFallsToFree(t *testing.T) {
+	// A definitively rejected key (valid:false) resolves as the free
+	// tier — loudly. The never-downgrade rule guards VERIFICATION
+	// failures; an invalid key is a configuration signal the user
+	// must see in the logs.
+	fx := newProInstallFixture(t)
+	fx.licenseValid = false
+	t.Setenv(EnvLicenseKey, "KEY-REJECTED")
+	archive := freeArchive(t, "146.0.7680.177.5")
+	fx.addFreeRelease("chromium-v146.0.7680.177.5", "146.0.7680.177.5", archive)
+
+	var logs lockedBuffer
+	cache := t.TempDir()
+	opts := fx.opts(t, cache)
+	opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	info, err := Install(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if info.Channel != channelFree {
+		t.Errorf("channel = %q, want free (rejected key)", info.Channel)
+	}
+	if !strings.Contains(logs.String(), "rejected") {
+		t.Errorf("a rejected key must be logged loudly before free resolution; logs:\n%s", logs.String())
+	}
+}
+
+// lockedBuffer is a concurrency-safe io.Writer for slog capture.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

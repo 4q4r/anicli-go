@@ -5,13 +5,15 @@ package cfbrowser
 // SHA256SUMS manifest before it may install. The public key is
 // PINNED in the binary (no configuration, environment or API data
 // can replace or disable it): a signature that does not verify is a
-// BinaryVerificationError and nothing installs. Manifests are tried
-// in order from two origins — the download base mirror and the
-// GitHub release line; an origin counts as available only when BOTH
-// SHA256SUMS and SHA256SUMS.sig fetch (HTTP-level absence at every
-// origin is unavailability, NOT a verification failure — callers
-// apply their channel policy: free falls back to the API digest
-// field, pro fails loud).
+// BinaryVerificationError and nothing installs. The free channel
+// tries manifests in order from two origins — the download base
+// mirror and the GitHub release line — while the pro channel probes
+// the distinct pro release line ({base}/releases/pro/…, no GitHub
+// mirror); an origin counts as available only when BOTH SHA256SUMS
+// and SHA256SUMS.sig fetch (HTTP-level absence at every origin is
+// unavailability, NOT a verification failure — callers apply their
+// channel policy: free falls back to the API digest field, pro
+// fails loud).
 
 import (
 	"context"
@@ -22,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // PinnedManifestPubKeyB64 is the pinned Ed25519 public key verifying
@@ -74,14 +77,34 @@ type manifestOrigin struct {
 	sigURL  string
 }
 
-// manifestOrigins lists the manifest fetch origins in order:
+// manifestOrigins lists the manifest fetch origins for a channel.
+//
+// Free channel (upstream _fetch_signed_manifest parity):
 //  1. the download-base mirror: {base}/chromium-v{version}/…
 //  2. the GitHub release line:
 //     github.com/CloakHQ/cloakbrowser/releases/download/chromium-v{version}/…
+//     (passed through the $CLOAKBROWSER_DOWNLOAD_URL rewrite at
+//     fetch time — a no-op when the env is unset).
 //
-// The GitHub URL is passed through the $CLOAKBROWSER_DOWNLOAD_URL
-// rewrite at fetch time (unchanged when the env is unset).
-func manifestOrigins(downloadBase, version string) []manifestOrigin {
+// Pro channel (upstream _verify_pro_download parity, download.py:584):
+// ONE origin on the DISTINCT pro release line —
+// {base}/releases/pro/chromium-v{version}/… — pro archives have no
+// GitHub free mirror.
+//
+// Deliberate divergence from upstream (documented for reviewers):
+// upstream disables the Pro channel entirely when
+// CLOAKBROWSER_DOWNLOAD_URL is set (download.py drops the license key
+// under a custom download base, degrading to a skippable same-origin
+// checksum). This port keeps the Pro channel live through the mirror
+// AND keeps the pinned-key signed-manifest verification mandatory on
+// every origin — a strictly stronger posture: the license unlocks
+// the channel, never the checks.
+func manifestOrigins(downloadBase, version, channel string) []manifestOrigin {
+	if channel == channelPro {
+		path := "/releases/pro/" + tagPrefix + version + "/" + sumsAssetName
+		base := strings.TrimSuffix(downloadBase, "/")
+		return []manifestOrigin{{sumsURL: base + path, sigURL: base + path + ".sig"}}
+	}
 	tag := tagPrefix + version
 	path := "/" + tag + "/" + sumsAssetName
 	base := strings.TrimSuffix(downloadBase, "/")
@@ -98,46 +121,46 @@ type VerifyManifestsRequest struct {
 	// DownloadBase is origin 1's base URL (default resolution: env
 	// CLOAKBROWSER_DOWNLOAD_URL > https://cloakbrowser.dev).
 	DownloadBase string
-	// Version is the dotted browser version.
+	// Version is the dotted browser version; the signed manifest's
+	// version= line MUST declare exactly this version.
 	Version string
+	// Channel selects the manifest origin line: channelPro probes
+	// the distinct pro release line; anything else (including the
+	// channelFree zero value) probes the free origins.
+	Channel string
 	// ArchiveName is the archive file name the manifest must cover.
 	ArchiveName string
 	// ArchiveDigest is the downloaded archive's digest
 	// ("sha256:<hex>", the download pipeline's format).
 	ArchiveDigest string
-	// PublicKey verifies the signature; nil = the pinned key.
-	PublicKey ed25519.PublicKey
 }
 
 // VerifyArchiveWithSignedManifests fetches SHA256SUMS+SHA256SUMS.sig
-// from the origins in order and, at the first origin that yields
-// both files, verifies the Ed25519 signature over the raw manifest
-// bytes, locates the archive's line and compares digests.
+// from the origins of the request's channel, in order, and at the
+// first origin that yields both files verifies the Ed25519 signature
+// over the raw manifest bytes, the version= binding, the archive's
+// line and the digest comparison.
 //
 //   - verified=true, err=nil: the archive is verified.
 //   - verified=false, err=nil: manifests unavailable at every origin
 //     (fetch-level failure — a caller policy decision, not a
 //     verification failure).
 //   - err != nil (*BinaryVerificationError): fetched manifests that
-//     do not verify — bad signature, malformed base64, missing
-//     archive line, digest mismatch.
+//     do not verify — bad signature, malformed base64, version
+//     mismatch, missing archive line, digest mismatch.
 func VerifyArchiveWithSignedManifests(ctx context.Context, req VerifyManifestsRequest, hc *http.Client) (bool, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: manifestFetchTimeout}
 	}
-	pub := req.PublicKey
-	if pub == nil {
-		pub = manifestPublicKey
-	}
 	if err := validateVersion(req.Version); err != nil {
 		return false, fmt.Errorf("cfbrowser: manifest version: %w", err)
 	}
-	for _, origin := range manifestOrigins(req.DownloadBase, req.Version) {
+	for _, origin := range manifestOrigins(req.DownloadBase, req.Version, req.Channel) {
 		sums, sig, err := fetchManifestPair(ctx, origin, hc)
 		if err != nil {
 			continue // origin unavailable: try the next one
 		}
-		return true, verifySignedManifest(sums, sig, pub, req.ArchiveName, req.ArchiveDigest)
+		return true, verifySignedManifest(sums, sig, manifestPublicKey, req.Version, req.ArchiveName, req.ArchiveDigest)
 	}
 	return false, nil
 }
@@ -192,10 +215,23 @@ func fetchManifestFile(ctx context.Context, rawURL string, hc *http.Client) ([]b
 }
 
 // verifySignedManifest runs the full verification chain over one
-// fetched origin: signature first, then the archive line, then the
-// digest comparison.
-func verifySignedManifest(sums, sigB64 []byte, pub ed25519.PublicKey, archiveName, archiveDigest string) error {
-	sig, err := base64.StdEncoding.DecodeString(string(sigB64))
+// fetched origin: signature first, then the version binding, then
+// the archive line, then the digest comparison.
+func verifySignedManifest(sums, sigB64 []byte, pub ed25519.PublicKey, version, archiveName, archiveDigest string) error {
+	// Upstream parity (download.py _verify_signature): surrounding
+	// whitespace is stripped before the strict base64 decode — real
+	// .sig files carry a trailing newline — while whitespace (or any
+	// other junk) INSIDE the payload stays a verification failure.
+	// Go's StdEncoding would silently ignore \r/\n anywhere, so inner
+	// whitespace is rejected explicitly (validate=True semantics).
+	sigStr := strings.TrimSpace(string(sigB64))
+	if i := strings.IndexFunc(sigStr, unicode.IsSpace); i >= 0 {
+		return &BinaryVerificationError{
+			Archive: archiveName,
+			Detail:  fmt.Sprintf("malformed base64 signature: whitespace inside payload at offset %d", i),
+		}
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigStr)
 	if err != nil {
 		return &BinaryVerificationError{
 			Archive: archiveName,
@@ -204,6 +240,19 @@ func verifySignedManifest(sums, sigB64 []byte, pub ed25519.PublicKey, archiveNam
 	}
 	if !ed25519.Verify(pub, sums, sig) {
 		return &BinaryVerificationError{Archive: archiveName, Detail: "Ed25519 signature mismatch"}
+	}
+	// Version binding (upstream parity, both channels): the
+	// signature proves "we made this manifest", not "this is the
+	// version you requested" — without this check a mirror could
+	// serve a genuinely-signed older release in place of the
+	// requested one (forced downgrade). A manifest with no version=
+	// line declares nothing and is refused the same way.
+	if declared := manifestVersion(sums); declared != version {
+		return &BinaryVerificationError{
+			Archive: archiveName,
+			Detail: fmt.Sprintf("version mismatch in signed SHA256SUMS: requested %s, manifest declares %q — refusing (possible downgrade)",
+				version, declared),
+		}
 	}
 	wantHex, ok := sumsDigestFor(sums, archiveName)
 	if !ok {
@@ -220,6 +269,20 @@ func verifySignedManifest(sums, sigB64 []byte, pub ed25519.PublicKey, archiveNam
 		}
 	}
 	return nil
+}
+
+// manifestVersion reads the "version=<v>" line from a manifest (""
+// when absent) — mirrors upstream _parse_manifest_version: the line
+// has no internal whitespace, so older two-field SHA256SUMS parsers
+// ignore it.
+func manifestVersion(sums []byte) string {
+	for _, line := range strings.Split(string(sums), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "version="); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // sumsDigestFor parses "<hex>  <name>" lines and returns the bare

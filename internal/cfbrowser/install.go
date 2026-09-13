@@ -27,6 +27,11 @@ const (
 	// channelPro marks a binary resolved through the license-keyed
 	// pro channel (downloaded or cached under a valid license).
 	channelPro = "pro"
+
+	// planFree is the server-reported plan name for free-tier
+	// license keys: valid keys whose plan is "free" are force-served
+	// the latest build (upstream drops their version pin).
+	planFree = "free"
 )
 
 // OfflineError reports that installation needs the network but none
@@ -196,10 +201,26 @@ func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 	channel := tierChannel(licenseValid)
 	if licenseValid {
 		logger.Info("cfbrowser: license valid — pro channel", "plan", licRep.Status.Plan, "expires", licRep.Status.Expires)
+	} else if licRep != nil {
+		// A definitively rejected key resolves as the free tier —
+		// loudly. The never-downgrade rule guards VERIFICATION
+		// failures; an invalid key is a configuration signal the
+		// user must see, not a silent tier switch.
+		logger.Warn("cfbrowser: license key rejected — resolving as free tier", "plan", licRep.Status.Plan)
 	}
 
 	// 2. Pinned version.
-	if pinned := opts.pinnedVersion(); pinned != "" {
+	pinned := opts.pinnedVersion()
+	if pinned != "" && licenseValid && licRep.Status.Plan == planFree {
+		// Upstream parity: the server force-serves the latest build
+		// to free-plan keys, so fetching the pinned version's signed
+		// manifest would mismatch the served bytes. Drop the pin and
+		// resolve latest (paid keys keep pinning/rollback).
+		logger.Warn("cfbrowser: free-plan license ignores the version pin — the server force-serves the latest build",
+			"pinned", pinned)
+		pinned = ""
+	}
+	if pinned != "" {
 		if err := validateVersion(pinned); err != nil {
 			return nil, err
 		}
@@ -350,13 +371,15 @@ func installProVersion(ctx context.Context, opts InstallOptions, spec PlatformSp
 		return nil, fmt.Errorf("cfbrowser: close archive file: %w", closeErr)
 	}
 
-	// The pro channel verifies against the signed manifests — no
-	// digest fallback, no downgrade. Manifest unavailability is a
-	// fetch failure (loud, retryable), distinct from verification
-	// failure (BinaryVerificationError).
+	// The pro channel verifies against the signed manifests on the
+	// DISTINCT pro release line ({base}/releases/pro/…) — no digest
+	// fallback, no downgrade, no GitHub free mirror. Manifest
+	// unavailability is a fetch failure (loud, retryable), distinct
+	// from verification failure (BinaryVerificationError).
 	verified, err := VerifyArchiveWithSignedManifests(ctx, VerifyManifestsRequest{
 		DownloadBase:  opts.downloadBase(),
 		Version:       version,
+		Channel:       channelPro,
 		ArchiveName:   spec.Asset,
 		ArchiveDigest: digest,
 	}, opts.HTTPClient)
@@ -475,12 +498,13 @@ func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease,
 	}
 
 	// Verification gate. The Ed25519-signed manifest is primary and
-	// non-bypassable; only when no manifests exist at either origin
-	// does the GitHub API digest field verify the bytes. An empty
-	// digest never means "skip verification".
+	// non-bypassable; only when no manifests exist at either free
+	// origin does the GitHub API digest field verify the bytes. An
+	// empty digest never means "skip verification".
 	verified, err := VerifyArchiveWithSignedManifests(ctx, VerifyManifestsRequest{
 		DownloadBase:  downloadBase,
 		Version:       rel.Version,
+		Channel:       channelFree,
 		ArchiveName:   rel.Asset.Name,
 		ArchiveDigest: digest,
 	}, gh.hc)

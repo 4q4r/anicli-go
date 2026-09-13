@@ -19,7 +19,7 @@ func TestUpdaterProChannelInstallsProVersion(t *testing.T) {
 	fx.proVersion = "151.0.7922.108.6"
 	fx.proArchives["151.0.7922.108.6"] = archive
 	fx.mu.Unlock()
-	fx.signWithManifest("chromium-v151.0.7922.108.6", linuxX64Asset, archive, priv)
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, priv)
 
 	cache := t.TempDir()
 	t.Setenv(EnvLicenseKey, "KEY-1")
@@ -94,7 +94,7 @@ func TestUpdaterProVerificationFailureDefersNoFreeDowngrade(t *testing.T) {
 	fx.proVersion = "151.0.7922.108.6"
 	fx.proArchives["151.0.7922.108.6"] = archive
 	fx.mu.Unlock()
-	fx.signWithManifest("chromium-v151.0.7922.108.6", linuxX64Asset, archive, wrongSigner)
+	fx.signWithProManifest("151.0.7922.108.6", linuxX64Asset, archive, wrongSigner)
 	fx.addFreeRelease("chromium-v146.0.7680.177.5", "146.0.7680.177.5", freeArchive(t, "146.0.7680.177.5"))
 
 	cache := t.TempDir()

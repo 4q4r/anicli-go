@@ -153,7 +153,7 @@ func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 // resolveOverride stats the user-supplied binary path, failing loud
 // when it does not exist.
 func resolveOverride(path string) (*BinaryInfo, error) {
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(path) //nolint:gosec // the path IS the explicit user override
 	if err != nil {
 		return nil, fmt.Errorf("cfbrowser: $%s %q: %w", EnvBinaryPath, path, err)
 	}
@@ -217,9 +217,16 @@ func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease,
 		"version", rel.Version, "asset", rel.Asset.Name,
 		"bytes", rel.Asset.Size, "dir", cacheDir)
 
+	// The local archive name must stay inside the work directory:
+	// reject asset names carrying path separators (hostile/malformed
+	// API data) instead of joining them blindly.
+	if name := filepath.Base(rel.Asset.Name); name != rel.Asset.Name || name == "." || name == ".." {
+		return nil, fmt.Errorf("cfbrowser: unsafe asset name %q", rel.Asset.Name)
+	}
+
 	// Stream to disk with progress at 5% granularity.
 	archivePath := filepath.Join(work, rel.Asset.Name)
-	f, err := os.Create(archivePath)
+	f, err := os.Create(archivePath) //nolint:gosec // work dir + separator-validated asset name
 	if err != nil {
 		return nil, fmt.Errorf("cfbrowser: create archive file: %w", err)
 	}
@@ -249,7 +256,7 @@ func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease,
 	if err := os.MkdirAll(unpacked, 0o750); err != nil {
 		return nil, fmt.Errorf("cfbrowser: create unpack dir: %w", err)
 	}
-	archiveFile, err := os.Open(archivePath) //nolint:gosec // path built from cache dir + asset name
+	archiveFile, err := os.Open(archivePath) //nolint:gosec // path = work dir + separator-validated asset name
 	if err != nil {
 		return nil, fmt.Errorf("cfbrowser: reopen archive: %w", err)
 	}

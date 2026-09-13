@@ -87,7 +87,7 @@ func TestUnpackTarGzRoundTrip(t *testing.T) {
 		"chromium-1.2.3/resources.pak":     "pak-bytes",
 		"chromium-1.2.3/locales/en-US.pak": "locale",
 	} {
-		data, err := os.ReadFile(filepath.Join(dest, filepath.FromSlash(name)))
+		data, err := os.ReadFile(filepath.Join(dest, filepath.FromSlash(name))) //nolint:gosec // test-owned temp path
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
@@ -114,7 +114,7 @@ func TestUnpackZipRoundTrip(t *testing.T) {
 	if err := unpackArchive(archiveZip, bytes.NewReader(archive), dest); err != nil {
 		t.Fatalf("unpack: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dest, "chromium-1.2.3", "chrome.exe"))
+	data, err := os.ReadFile(filepath.Join(dest, "chromium-1.2.3", "chrome.exe")) //nolint:gosec // test-owned temp path
 	if err != nil {
 		t.Fatalf("read chrome.exe: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestLocateExecutable(t *testing.T) {
 	if err := os.MkdirAll(flat, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(flat, "chrome"), []byte("x"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(flat, "chrome"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := locateExecutable(root, "chrome")
@@ -184,7 +184,7 @@ func TestLocateExecutable(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nested, "Chromium"), []byte("x"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(nested, "Chromium"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err = locateExecutable(appRoot, "Chromium.app/Contents/MacOS/Chromium")

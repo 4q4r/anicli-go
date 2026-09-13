@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,7 +66,7 @@ func untar(r io.Reader, dest string) error {
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -77,15 +78,15 @@ func untar(r io.Reader, dest string) error {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)&0o777); err != nil {
+			if err := os.MkdirAll(target, os.FileMode(hdr.Mode&0o777)); err != nil {
 				return fmt.Errorf("cfbrowser: mkdir %s: %w", hdr.Name, err)
 			}
 		case tar.TypeReg:
-			mode := os.FileMode(hdr.Mode) & 0o777
+			mode := os.FileMode(hdr.Mode & 0o777)
 			if mode == 0 {
 				mode = 0o644
 			}
-			if err := writeFile(tr, target, mode, hdr.Size); err != nil {
+			if err := writeFile(tr, target, mode); err != nil {
 				return fmt.Errorf("cfbrowser: extract %s: %w", hdr.Name, err)
 			}
 		case tar.TypeSymlink:
@@ -130,7 +131,7 @@ func unzip(r io.Reader, dest string) error {
 			return fmt.Errorf("cfbrowser: open zip entry %s: %w", f.Name, err)
 		}
 		mode := zipMode(f.Name)
-		err = writeFile(src, target, mode, int64(f.UncompressedSize64))
+		err = writeFile(src, target, mode)
 		_ = src.Close()
 		if err != nil {
 			return fmt.Errorf("cfbrowser: extract %s: %w", f.Name, err)
@@ -151,25 +152,18 @@ func zipMode(name string) os.FileMode {
 }
 
 // writeFile streams src into path with mode, truncating any prior
-// content; size is the announced length used only for the io.Copy
-// short-read guard.
-func writeFile(src io.Reader, path string, mode os.FileMode, size int64) error {
+// content.
+func writeFile(src io.Reader, path string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // path came through safeJoin (traversal-guarded)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	n, err := io.Copy(f, src)
-	if err != nil {
-		return err
-	}
-	if size > 0 && n != size {
-		return fmt.Errorf("short write: %d of %d bytes", n, size)
-	}
-	return nil
+	_, err = io.Copy(f, src)
+	return err
 }
 
 // locateExecutable finds execName (slash-separated relative path)

@@ -84,7 +84,9 @@ func TestClearanceDeleteAndClear(t *testing.T) {
 	if err := store.Put("b.two", sampleClearance()); err != nil {
 		t.Fatal(err)
 	}
-	store.Delete("a.one")
+	if err := store.Delete("a.one"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
 	if _, ok := store.Get("a.one"); ok {
 		t.Fatal("deleted host must not resolve")
 	}

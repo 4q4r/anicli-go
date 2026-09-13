@@ -10,6 +10,8 @@ require (
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/bogdanfinn/fhttp v0.6.9
 	github.com/bogdanfinn/tls-client v1.16.0
+	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
+	github.com/chromedp/chromedp v0.16.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
@@ -32,8 +34,6 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f // indirect
-	github.com/chromedp/chromedp v0.16.0 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect

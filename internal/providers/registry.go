@@ -20,11 +20,25 @@ const statWriteTimeout = 5 * time.Second
 type Registry struct {
 	order []contracts.Provider
 	byID  map[string]contracts.Provider
+	// cfClose releases the shared CF-bypass stack (browser session +
+	// updater ticker) when the registry was built with [cf].enabled;
+	// nil otherwise.
+	cfClose func()
 }
 
 // NewEmptyRegistry builds a registry with no providers registered.
 func NewEmptyRegistry() *Registry {
 	return &Registry{byID: make(map[string]contracts.Provider)}
+}
+
+// Close releases the shared CF-bypass resources when present. Safe on
+// disabled registries and idempotent.
+func (r *Registry) Close() error {
+	if r.cfClose != nil {
+		r.cfClose()
+		r.cfClose = nil
+	}
+	return nil
 }
 
 // Register adds p to the registry; a duplicate ID fails loudly with

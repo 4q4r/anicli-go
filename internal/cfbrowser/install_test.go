@@ -44,7 +44,7 @@ func fakeInstalledBinary(t *testing.T, cacheDir, version string) string {
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, "x")), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "chrome"), []byte("fake-elf"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "chrome"), []byte("fake-elf"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(dir, "chrome")
@@ -91,7 +91,7 @@ func TestInstallReusesExistingBinary(t *testing.T) {
 func TestInstallBinaryPathOverrideWins(t *testing.T) {
 	cache := t.TempDir()
 	override := filepath.Join(cache, "custom-chrome")
-	if err := os.WriteFile(override, []byte("x"), 0o755); err != nil {
+	if err := os.WriteFile(override, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Cache also holds a discoverable binary that must be ignored.
@@ -160,7 +160,7 @@ func TestInstallDownloadsAndVerifies(t *testing.T) {
 	if info.Version != "146.0.7680.177.5" || info.Dir != wantDir || info.Channel != channelFree {
 		t.Errorf("info = %+v", info)
 	}
-	if data, err := os.ReadFile(filepath.Join(wantDir, "resources.pak")); err != nil || string(data) != "pak" {
+	if data, err := os.ReadFile(filepath.Join(wantDir, "resources.pak")); err != nil || string(data) != "pak" { //nolint:gosec // test-owned temp path
 		t.Errorf("resources.pak round-trip: %v", err)
 	}
 	// Work directory must be cleaned up.

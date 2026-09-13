@@ -34,6 +34,9 @@ type RealDeps struct {
 	// ShikiNet is the netclient shared by the skip manager and the
 	// shikimori client.
 	ShikiNet *netclient.Client
+	// registry is the provider set (closed on Close: releases the CF
+	// bypass stack when [cf] is enabled).
+	registry *providers.Registry
 }
 
 // NewRealDeps wires the production core: registry, storage, player,
@@ -74,15 +77,18 @@ func NewRealDeps(settings config.Settings, store *storage.Store) (*RealDeps, err
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
 		Download: &realDownload{manager: manager, core: real},
 	}
-	return &RealDeps{Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet}, nil
+	return &RealDeps{Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet, registry: registry}, nil
 }
 
 // Close releases the background resources. The netclient needs no
-// teardown (it owns no goroutines), so only the download manager and
-// the store are settled.
+// teardown (it owns no goroutines), so only the download manager, the
+// registry (CF bypass stack) and the store are settled.
 func (r *RealDeps) Close() {
 	if r.Downloads != nil {
 		_ = r.Downloads.Close()
+	}
+	if r.registry != nil {
+		_ = r.registry.Close()
 	}
 }
 

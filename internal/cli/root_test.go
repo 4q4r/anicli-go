@@ -61,12 +61,13 @@ func TestNewRootCommandShape(t *testing.T) {
 		t.Error("root must define RunE (default behavior = tui)")
 	}
 
-	want := map[string]bool{"serve": false, "doctor": false, "version": false}
+	want := map[string]bool{"serve": false, "doctor": false, "version": false, "cf": false}
 	for _, sub := range root.Commands() {
 		if _, ok := want[sub.Name()]; ok {
 			want[sub.Name()] = true
 		}
-		if sub.RunE == nil {
+		// Group commands (cf) own subcommands instead of a RunE.
+		if sub.RunE == nil && len(sub.Commands()) == 0 {
 			t.Errorf("subcommand %q must define RunE", sub.Name())
 		}
 	}

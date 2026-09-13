@@ -67,6 +67,7 @@ func NewRootCommand() *cobra.Command {
 		newServeCommand(),
 		newDoctorCommand(),
 		newVersionCommand(),
+		newCFCommand(),
 	)
 	return root
 }
@@ -176,6 +177,7 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 	if err != nil {
 		return fmt.Errorf("build provider registry: %w", err)
 	}
+	defer func() { _ = reg.Close() }()
 
 	shikiNet, err := netclient.New(settings.Network, netclient.WithProvider("shikimori"))
 	if err != nil {
@@ -217,6 +219,7 @@ func runDoctor(_ context.Context, settingsPath string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("build provider registry: %w", err)
 	}
+	defer func() { _ = reg.Close() }()
 
 	ids := make([]string, 0, len(reg.List()))
 	for _, p := range reg.List() {

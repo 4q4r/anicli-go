@@ -41,7 +41,7 @@ func NewClearanceStore(path string, ttl time.Duration) *ClearanceStore {
 		hosts: make(map[string]Clearance),
 		now:   time.Now,
 	}
-	if raw, err := os.ReadFile(path); err == nil {
+	if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // app-owned data-dir path
 		var hosts map[string]Clearance
 		if json.Unmarshal(raw, &hosts) == nil && hosts != nil {
 			s.hosts = hosts

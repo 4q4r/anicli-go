@@ -60,12 +60,6 @@ func newUpdateFixture(t *testing.T, tags []string, assets map[string][]ghAsset, 
 	return fx
 }
 
-func (fx *updateFixture) setTags(tags []string, assets map[string][]ghAsset, bodies map[string]string) {
-	fx.mu.Lock()
-	defer fx.mu.Unlock()
-	fx.tags, fx.assets, fx.bodies = tags, assets, bodies
-}
-
 func releaseWith(asset string, archive []byte) ([]string, map[string][]ghAsset, map[string]string) {
 	return []string{"chromium-v146.0.7680.177.5"},
 		map[string][]ghAsset{
@@ -122,7 +116,7 @@ func TestUpdaterInstallsNewerKeepsPreviousPrunesThird(t *testing.T) {
 		t.Error("update must not be deferred when online")
 	}
 	// Status file persisted.
-	raw, err := os.ReadFile(filepath.Join(cache, updateStatusFile))
+	raw, err := os.ReadFile(filepath.Join(cache, updateStatusFile)) //nolint:gosec // test-owned temp path
 	if err != nil {
 		t.Fatalf("status file: %v", err)
 	}
@@ -278,7 +272,7 @@ func TestUpdaterEnvDisables(t *testing.T) {
 func TestUpdaterBinaryOverrideSkipsUpdates(t *testing.T) {
 	cache := t.TempDir()
 	override := filepath.Join(cache, "my-chrome")
-	if err := os.WriteFile(override, []byte("x"), 0o755); err != nil {
+	if err := os.WriteFile(override, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	newArchive := buildTarGz(t, map[string]struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,10 +20,9 @@ import (
 // `challenges` times, then 200; every response is recorded with the
 // request's Cookie and User-Agent headers.
 type challengeHandler struct {
-	mu          sync.Mutex
-	challenges  atomic.Int64
-	served      []servedRequest
-	uaOnSuccess string
+	mu         sync.Mutex
+	challenges atomic.Int64
+	served     []servedRequest
 }
 
 type servedRequest struct {
@@ -32,7 +30,7 @@ type servedRequest struct {
 	ua      string
 }
 
-func (h *challengeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *challengeHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	cookieHdr := ""
 	for _, c := range r.Cookies() {
 		if c.Name == "cf_clearance" {
@@ -46,13 +44,13 @@ func (h *challengeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.challenges.Add(-1) >= 0 {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("cf-mitigated", "challenge")
-		w.WriteHeader(http.StatusForbidden)
+		w.WriteHeader(stdhttp.StatusForbidden)
 		_, _ = w.Write([]byte(`<html><head><title>Just a moment...</title>
 <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script></head>`))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(stdhttp.StatusOK)
 	_, _ = w.Write([]byte("<html><body>real content</body></html>"))
 }
 
@@ -109,7 +107,7 @@ func TestChallengeSolvedOnceCookiesAndUAApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != stdhttp.StatusOK {
 		t.Fatalf("status = %d, want 200 after solve", resp.StatusCode)
 	}
 	if got := solver.solves.Load(); got != 1 {
@@ -156,9 +154,9 @@ func TestChallengeWithoutSolverTypedError(t *testing.T) {
 }
 
 func TestPlain403PassesThroughUnchanged(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusForbidden)
+		w.WriteHeader(stdhttp.StatusForbidden)
 		_, _ = w.Write([]byte("<html><body>boring access denied</body></html>"))
 	}))
 	defer srv.Close()
@@ -176,10 +174,10 @@ func TestPlain403PassesThroughUnchanged(t *testing.T) {
 
 func TestChallenge503BodyDetected(t *testing.T) {
 	var hits atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		if hits.Add(1) == 1 {
 			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(stdhttp.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`<title>Just a moment...</title>
 <div class="cf-turnstile" data-sitekey="x"></div>`))
 			return
@@ -194,7 +192,7 @@ func TestChallenge503BodyDetected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != stdhttp.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	if solver.solves.Load() != 1 {

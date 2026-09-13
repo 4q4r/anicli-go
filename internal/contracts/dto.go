@@ -6,15 +6,29 @@
 // (snake_case) so captured fixtures and API payloads stay interchangeable.
 package contracts
 
-// SourceType classifies what kind of content a source provides.
+// SourceType classifies how suitable a source's content is for the
+// user's language preferences — NOT what the provider literally
+// offers on the wire. The wanted audio languages are EN/JA/RU.
+//
+// The types are a catalog-wide assessment: they describe the provider
+// as a whole, not individual titles. A provider stays BOTH even when
+// a few of its titles have bad video or hardcoded subtitles.
 type SourceType string
 
 const (
-	// SourceTypeVideo marks sources providing video streams only.
+	// SourceTypeVideo marks sources whose audio track is in an
+	// UNWANTED language (not EN/JA/RU) or absent: the video stream is
+	// the value, the audio does not match the user's preferences.
 	SourceTypeVideo SourceType = "video"
-	// SourceTypeAudio marks sources providing audio streams only.
+	// SourceTypeAudio marks sources where ONLY the audio track is
+	// suitable: the video consistently has hardcoded text/subtitles in
+	// an unwanted language across the provider's catalog, or the video
+	// quality is consistently unwatchable — both verified
+	// statistically on ≥10 different titles from different years.
 	SourceTypeAudio SourceType = "audio"
-	// SourceTypeBoth marks sources providing video and audio streams.
+	// SourceTypeBoth marks sources whose audio track is in a wanted
+	// language (EN/JA/RU) AND whose video is present and acceptable
+	// quality: the user can consume both tracks.
 	SourceTypeBoth SourceType = "both"
 )
 
@@ -75,4 +89,11 @@ type DubOption struct {
 	ID string `json:"id"`
 	// Name is the human-readable dub name.
 	Name string `json:"name"`
+	// Language is the BCP-47-ish primary language tag of the dub's
+	// audio track ("ru", "ja", "en"); empty when unknown. It comes
+	// from the provider's declared content language, not per-dub
+	// introspection — every dub a provider emits carries its primary
+	// tag. A provider that differentiates sub and dub tracks (like
+	// allanime) tags them individually: sub→"ja", dub→"en".
+	Language string `json:"language,omitempty"`
 }

@@ -35,11 +35,12 @@ type AniLibria struct {
 func newAnilibria(apiBase, hostURL string, http *netclient.Client) *AniLibria {
 	return &AniLibria{
 		Base: Base{
-			id:         "anilibria",
-			name:       "AniLibria",
-			baseURL:    apiBase,
-			sourceType: contracts.SourceTypeBoth,
-			http:       http,
+			id:          "anilibria",
+			name:        "AniLibria",
+			baseURL:     apiBase,
+			sourceType:  contracts.SourceTypeBoth,
+			contentLang: "ru",
+			http:        http,
 		},
 		hostURL: hostURL,
 	}

@@ -42,12 +42,13 @@ type GogoAnime struct {
 func newGogoAnime(baseURL string, http *netclient.Client) *GogoAnime {
 	return &GogoAnime{
 		Base: Base{
-			id:         "gogoanime",
-			name:       "GogoAnime",
-			baseURL:    baseURL,
-			sourceType: contracts.SourceTypeVideo,
-			headers:    map[string]string{"Referer": baseURL},
-			http:       http,
+			id:          "gogoanime",
+			name:        "GogoAnime",
+			baseURL:     baseURL,
+			sourceType:  contracts.SourceTypeBoth,
+			contentLang: "ja",
+			headers:     map[string]string{"Referer": baseURL},
+			http:        http,
 		},
 	}
 }

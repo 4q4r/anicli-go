@@ -30,11 +30,12 @@ type AnimeVost struct {
 // newAnimevost builds the provider against baseURL.
 func newAnimevost(baseURL string, http *netclient.Client) *AnimeVost {
 	return &AnimeVost{Base: Base{
-		id:         "animevost",
-		name:       "AnimeVost",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeBoth,
-		http:       http,
+		id:          "animevost",
+		name:        "AnimeVost",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		http:        http,
 	}}
 }
 

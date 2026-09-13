@@ -53,12 +53,13 @@ func newAnilib(baseURL string, http *netclient.Client) *Anilib {
 		"Sec-Fetch-Site":     "cross-site",
 	}
 	return &Anilib{Base: Base{
-		id:         "anilib",
-		name:       "AnimeLib",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeBoth,
-		headers:    headers,
-		http:       http,
+		id:          "anilib",
+		name:        "AnimeLib",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		headers:     headers,
+		http:        http,
 	}}
 }
 

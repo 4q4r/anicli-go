@@ -255,8 +255,13 @@ func TestAnidubProviderMeta(t *testing.T) {
 	if p.ID() != "anidub" || p.Name() != "AniDUB" || p.BaseURL() != AnidubBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
-	// Russian dub = video streams with the dub audio track.
-	if p.SourceType() != contracts.SourceTypeVideo {
-		t.Errorf("SourceType = %q, want video", p.SourceType())
+	// Russian dub = wanted-language audio + video (PR23 semantics:
+	// SourceType describes content suitability, and anidub's RU dub
+	// audio makes it BOTH).
+	if p.SourceType() != contracts.SourceTypeBoth {
+		t.Errorf("SourceType = %q, want both", p.SourceType())
+	}
+	if p.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
 	}
 }

@@ -198,10 +198,11 @@ type AllAnime struct {
 func newAllAnime(apiBase, referer, internalBase string, http *netclient.Client, bridge aaBridgeSource, cacheDir string) *AllAnime {
 	p := &AllAnime{
 		Base: Base{
-			id:         "allanime",
-			name:       "AllAnime",
-			baseURL:    referer,
-			sourceType: contracts.SourceTypeVideo,
+			id:          "allanime",
+			name:        "AllAnime",
+			baseURL:     referer,
+			sourceType:  contracts.SourceTypeBoth,
+			contentLang: "ja", // primary sub track; the dub track is "en"
 			headers: map[string]string{
 				"Referer": referer,
 				"Origin":  referer,

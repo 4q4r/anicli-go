@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -196,5 +197,42 @@ func TestSearchDelegatorPassesThroughProviderErrors(t *testing.T) {
 	// double wrapping).
 	if !errors.Is(err, innerErr) {
 		t.Fatalf("error %v must be the original ProviderError instance", err)
+	}
+}
+
+// TestRegistryContentLanguage pins the provider-level language lookup
+// through the registry (PR23): the answer must survive the wrapper
+// layers NewRegistry puts around every provider (SearchDelegator, and
+// the dub stream filter when exclude_streams is configured) and stay
+// "" for unknown providers.
+func TestRegistryContentLanguage(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	for id, want := range map[string]string{
+		"animego":   "ru",
+		"anidub":    "ru",
+		"gogoanime": "ja",
+		"allanime":  "ja",
+		"nope":      "",
+	} {
+		if got := reg.ContentLanguage(id); got != want {
+			t.Errorf("ContentLanguage(%q) = %q, want %q", id, got, want)
+		}
+	}
+
+	// A registered provider without ContentLanguage degrades to "".
+	plain := NewEmptyRegistry()
+	if err := plain.Register(&stubProvider{id: "stub"}); err != nil {
+		t.Fatalf("register stub: %v", err)
+	}
+	if got := plain.ContentLanguage("stub"); got != "" {
+		t.Errorf("stub ContentLanguage = %q, want \"\"", got)
 	}
 }

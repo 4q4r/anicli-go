@@ -321,7 +321,11 @@ func TestAnimePaheProviderMeta(t *testing.T) {
 	if p.ID() != "animepahe" || p.Name() != "AnimePahe" || p.BaseURL() != AnimePaheBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
-	if p.SourceType() != contracts.SourceTypeVideo {
-		t.Errorf("SourceType = %q, want video", p.SourceType())
+	// JA audio + EN subs + video (PR23: wanted-language audio → BOTH).
+	if p.SourceType() != contracts.SourceTypeBoth {
+		t.Errorf("SourceType = %q, want both", p.SourceType())
+	}
+	if p.ContentLanguage() != "ja" {
+		t.Errorf("ContentLanguage = %q, want ja", p.ContentLanguage())
 	}
 }

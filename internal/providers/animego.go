@@ -37,12 +37,13 @@ func newAnimego(baseURL string, http *netclient.Client) *AnimeGo {
 		"Accept-Language":  "ru-RU",
 	}
 	return &AnimeGo{Base: Base{
-		id:         "animego",
-		name:       "AnimeGo",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeBoth,
-		headers:    headers,
-		http:       http,
+		id:          "animego",
+		name:        "AnimeGo",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		headers:     headers,
+		http:        http,
 	}}
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -145,5 +146,72 @@ func TestNewRegistryPropagatesClientError(t *testing.T) {
 
 	if _, err := NewRegistry(cfg, nil); err == nil {
 		t.Fatal("NewRegistry with invalid proxy must fail")
+	}
+}
+
+// TestAllProvidersSourceTypeBoth pins the corrected SourceType
+// semantics (PR23): SourceType describes content SUITABILITY for the
+// user's wanted audio languages (EN/JA/RU), and every current roster
+// member serves wanted-language audio with acceptable video — so the
+// whole roster is BOTH. VIDEO is for unwanted/absent audio (future
+// providers), AUDIO for catalog-wide hardsubs/unwatchable video.
+func TestAllProvidersSourceTypeBoth(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(bare) != 11 {
+		t.Fatalf("All() = %d providers, want 11", len(bare))
+	}
+	for _, p := range bare {
+		if got := p.SourceType(); got != contracts.SourceTypeBoth {
+			t.Errorf("provider %s SourceType() = %q, want %q", p.ID(), got, contracts.SourceTypeBoth)
+		}
+	}
+}
+
+// TestContentLanguageRoster pins each provider's declared primary
+// content language (PR23): Russian-dub sites tag their dubs "ru",
+// Japanese-audio sites with English subtitles "ja". The language is a
+// service-level property — every dub a provider emits carries it, no
+// per-dub introspection.
+func TestContentLanguageRoster(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"anilibria": "ru",
+		"animevost": "ru",
+		"anilib":    "ru",
+		"animego":   "ru",
+		"gogoanime": "ja",
+		"animepahe": "ja",
+		"dreamcast": "ru",
+		"sameband":  "ru",
+		"kodik":     "ru",
+		"allanime":  "ja", // primary sub track is Japanese; dub→"en"
+		"anidub":    "ru",
+	}
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, p := range bare {
+		lc, ok := p.(interface{ ContentLanguage() string })
+		if !ok {
+			t.Errorf("provider %s (%T) does not expose ContentLanguage", p.ID(), p)
+			continue
+		}
+		if got := lc.ContentLanguage(); got != want[p.ID()] {
+			t.Errorf("provider %s ContentLanguage() = %q, want %q", p.ID(), got, want[p.ID()])
+		}
 	}
 }

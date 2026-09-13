@@ -39,11 +39,12 @@ type SameBand struct {
 // sends no extra headers (sameband.py defines none).
 func newSameBand(baseURL string, http *netclient.Client) *SameBand {
 	return &SameBand{Base: Base{
-		id:         "sameband",
-		name:       "SameBand",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeBoth,
-		http:       http,
+		id:          "sameband",
+		name:        "SameBand",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		http:        http,
 	}}
 }
 

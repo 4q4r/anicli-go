@@ -64,11 +64,12 @@ type DreamCast struct {
 // sends no extra headers (dreamcast.py defines none).
 func newDreamCast(baseURL string, http *netclient.Client) *DreamCast {
 	return &DreamCast{Base: Base{
-		id:         "dreamcast",
-		name:       "DreamCast",
-		baseURL:    baseURL,
-		sourceType: contracts.SourceTypeBoth,
-		http:       http,
+		id:          "dreamcast",
+		name:        "DreamCast",
+		baseURL:     baseURL,
+		sourceType:  contracts.SourceTypeBoth,
+		contentLang: "ru",
+		http:        http,
 	}}
 }
 

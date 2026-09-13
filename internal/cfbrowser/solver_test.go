@@ -32,10 +32,16 @@ type fakeNav struct {
 	noClearanceCookie bool // solved page without cf_clearance
 }
 
-func (f *fakeNav) Navigate(_ context.Context, _ string) (NavState, error) {
+func (f *fakeNav) Navigate(ctx context.Context, _ string) (NavState, error) {
 	f.navigates.Add(1)
 	if f.blockNavigate > 0 {
-		time.Sleep(f.blockNavigate)
+		// Context-aware latency: cancellation must abort blocked
+		// navigations (session Close cancels in-flight solves).
+		select {
+		case <-ctx.Done():
+			return NavState{}, ctx.Err()
+		case <-time.After(f.blockNavigate):
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -91,11 +97,11 @@ func newSolverHarness(t *testing.T, nav *fakeNav) *solverHarness {
 	t.Helper()
 	store := NewClearanceStore(filepath.Join(t.TempDir(), "cfstore.json"), time.Minute)
 	cfg := SolverConfig{
-		Headed:       false,
-		SolveTimeout: 2 * time.Second,
-		PollInterval: 10 * time.Millisecond,
-		Store:        store,
-		Logger:       testLogger(t),
+		SolveTimeout:       2 * time.Second,
+		PollInterval:       10 * time.Millisecond,
+		BrowserIdleTimeout: time.Hour, // sessions survive until Close in these tests
+		Store:              store,
+		Logger:             testLogger(t),
 		DriverFactory: func(LaunchOptions) (Naviger, error) {
 			if nav.launchErr != nil {
 				return nil, nav.launchErr

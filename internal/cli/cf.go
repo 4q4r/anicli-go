@@ -131,11 +131,11 @@ func orDash(s string) string {
 func newCFSolveCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "solve <provider-id>",
-		Short: "Решить challenge источника в видимом браузере",
-		Long: "Открывает стелс-браузер (по умолчанию в видимом режиме) на базовом URL " +
-			"источника, ждёт прохождения Cloudflare challenge, сохраняет clearance-куки " +
-			"и User-Agent в хранилище. Интерактивный Turnstile может потребовать " +
-			"ручного клика — окно останется открытым до решения.",
+		Short: "Решить challenge источника (headless-браузер)",
+		Long: "Открывает стелс-браузер в headless-режиме на базовом URL источника, " +
+			"ждёт прохождения Cloudflare challenge (для интерактивного Turnstile " +
+			"выполняется автоматический клик — best-effort), сохраняет clearance-куки " +
+			"и User-Agent в хранилище, после чего браузер закрывается.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true

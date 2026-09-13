@@ -139,15 +139,19 @@ type Providers struct {
 // CF configures the embedded Cloudflare bypass (CloakBrowser stealth
 // Chromium + clearance ladder). Entirely opt-in: disabled by default,
 // every provider request behaves exactly as before unless enabled.
+// Headless-only by design ruling: the solve browser always runs
+// headless (no window, no display dependency).
 type CF struct {
 	// Enabled turns the challenge ladder on for all provider clients.
 	Enabled bool `toml:"enabled"`
-	// Headed runs the solve browser with a visible window — the
-	// fallback for interactive Turnstile challenges (linux without a
-	// display fails loud with an xvfb-run hint).
-	Headed bool `toml:"headed"`
 	// SolveTimeout bounds one challenge solve.
 	SolveTimeout time.Duration `toml:"solve_timeout"`
+	// BrowserIdleTimeout is how long an idle browser session survives
+	// after the last solve finishes before it is torn down (default
+	// 15s; "0s" closes the browser immediately — sessions are
+	// ephemeral so the ~300-600 MB RSS stays resident only while
+	// actually solving).
+	BrowserIdleTimeout time.Duration `toml:"browser_idle_timeout"`
 	// AutoUpdate keeps the cached stealth Chromium current
 	// (network-gated, never blocks solves; $CLOAKBROWSER_AUTO_UPDATE
 	// can force it off).
@@ -223,11 +227,11 @@ func Default() Settings {
 		},
 		Web: Web{Users: map[string]WebUser{}},
 		CF: CF{
-			Enabled:        false,
-			Headed:         true,
-			SolveTimeout:   90 * time.Second,
-			AutoUpdate:     true,
-			UpdateInterval: 30 * time.Minute,
+			Enabled:            false,
+			SolveTimeout:       90 * time.Second,
+			BrowserIdleTimeout: 15 * time.Second,
+			AutoUpdate:         true,
+			UpdateInterval:     30 * time.Minute,
 		},
 	}
 }

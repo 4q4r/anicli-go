@@ -12,11 +12,11 @@ func TestCFDefaults(t *testing.T) {
 	if s.CF.Enabled {
 		t.Error("cf.enabled must default to false (opt-in, zero behavior change)")
 	}
-	if !s.CF.Headed {
-		t.Error("cf.headed must default to true (interactive challenges need a visible browser)")
-	}
 	if s.CF.SolveTimeout != 90*time.Second {
 		t.Errorf("cf.solve_timeout default = %v, want 90s", s.CF.SolveTimeout)
+	}
+	if s.CF.BrowserIdleTimeout != 15*time.Second {
+		t.Errorf("cf.browser_idle_timeout default = %v, want 15s", s.CF.BrowserIdleTimeout)
 	}
 	if !s.CF.AutoUpdate {
 		t.Error("cf.auto_update must default to true")
@@ -32,8 +32,8 @@ func TestCFFileOverrides(t *testing.T) {
 	content := `
 [cf]
 enabled = true
-headed = false
 solve_timeout = "2m"
+browser_idle_timeout = "5s"
 auto_update = false
 update_interval = "1h"
 `
@@ -44,17 +44,54 @@ update_interval = "1h"
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !s.CF.Enabled || s.CF.Headed {
-		t.Errorf("cf flags: %+v", s.CF)
+	if !s.CF.Enabled {
+		t.Errorf("cf.enabled: %+v", s.CF)
 	}
 	if s.CF.SolveTimeout != 2*time.Minute {
 		t.Errorf("solve_timeout = %v", s.CF.SolveTimeout)
+	}
+	if s.CF.BrowserIdleTimeout != 5*time.Second {
+		t.Errorf("browser_idle_timeout = %v", s.CF.BrowserIdleTimeout)
 	}
 	if s.CF.AutoUpdate {
 		t.Error("auto_update = true, want file value false")
 	}
 	if s.CF.UpdateInterval != time.Hour {
 		t.Errorf("update_interval = %v", s.CF.UpdateInterval)
+	}
+}
+
+// TestCFZeroIdleTimeoutIsImmediate pins the "0s = close right after
+// the last solve" contract: the value must round-trip as zero, not be
+// reinterpreted as "unset".
+func TestCFZeroIdleTimeoutIsImmediate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.toml")
+	if err := os.WriteFile(path, []byte("[cf]\nbrowser_idle_timeout = \"0s\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if s.CF.BrowserIdleTimeout != 0 {
+		t.Errorf("browser_idle_timeout = %v, want 0 (immediate close)", s.CF.BrowserIdleTimeout)
+	}
+}
+
+// TestCFHeadedKeyRejected guards the headless-only ruling: the headed
+// key shipped in-repo for hours and is gone; leftovers in user files
+// must fail loud under the strict unknown-key contract, not silently
+// keep a dead toggle alive.
+func TestCFHeadedKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.toml")
+	if err := os.WriteFile(path, []byte("[cf]\nheaded = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("cf.headed must fail loud as an unknown key (headless-only)")
 	}
 }
 

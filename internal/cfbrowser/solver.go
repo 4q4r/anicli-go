@@ -24,11 +24,10 @@ type SolveTimeoutError struct {
 	Host string
 }
 
-// Error implements error with the fallback hint: real interactive
-// challenges need a headed browser and a human click.
+// Error implements error with the fallback hint.
 func (e *SolveTimeoutError) Error() string {
 	return fmt.Sprintf("cfbrowser: challenge on %s did not clear in time; "+
-		"retry headed (cf.headed = true, needs a display or xvfb-run) or run `anicli cf solve`", e.Host)
+		"retry the request or run `anicli cf solve`", e.Host)
 }
 
 // NavState is the settled page state one navigation yields — the
@@ -66,12 +65,11 @@ type Naviger interface {
 }
 
 // LaunchOptions are the browser launch parameters handed to a driver
-// factory.
+// factory. Headless-only by design ruling: no field can reintroduce
+// a windowed mode.
 type LaunchOptions struct {
 	// BinaryPath is the stealth-Chromium executable.
 	BinaryPath string
-	// Headed runs with a visible window (challenge fallback).
-	Headed bool
 	// ProxyURL routes the browser through the same proxy as netclient.
 	ProxyURL string
 	// Timezone/Locale align the fingerprint (geoip).
@@ -85,9 +83,6 @@ type DriverFactory func(LaunchOptions) (Naviger, error)
 
 // SolverConfig parameterizes the Solver.
 type SolverConfig struct {
-	// Headed launches a visible browser (default true for solves —
-	// interactive challenges need it).
-	Headed bool
 	// ProxyURL is netclient's proxy, replayed into the browser.
 	ProxyURL string
 	// Timezone/Locale fingerprint alignment (geoip-resolved upstream
@@ -99,6 +94,10 @@ type SolverConfig struct {
 	SolveTimeout time.Duration
 	// PollInterval paces the solve poll loop (default 2s).
 	PollInterval time.Duration
+	// BrowserIdleTimeout is how long an idle session survives after
+	// the last solve before teardown (default DefaultBrowserIdleTimeout
+	// = 15s; 0 closes immediately; negative selects the default).
+	BrowserIdleTimeout time.Duration
 	// Store persists clearances; required.
 	Store *ClearanceStore
 	// Logger receives solve diagnostics (nil = slog.Default()).
@@ -136,16 +135,19 @@ func (c SolverConfig) logger() *slog.Logger {
 
 // Solver harvests Cloudflare clearances: store-first, then a
 // single-flighted per-host browser solve driven through a Naviger.
-// Launch is lazy and non-sticky (a failed launch — binary missing,
-// no display — is retried on the next solve).
+// The browser session is EPHEMERAL (session.go): launched on the
+// first unserved solve, shared under a refcount, torn down when idle
+// for BrowserIdleTimeout — the ~300-600 MB RSS is resident only
+// while actually solving. Launch stays lazy and non-sticky (a failed
+// launch — binary missing — is retried on the next solve; a crashed
+// session is discarded and relaunched the same way).
 type Solver struct {
 	cfg SolverConfig
 
 	updaterMu sync.RWMutex
 	updater   *Updater
 
-	mu  sync.Mutex
-	nav Naviger
+	pool *sessionPool
 
 	flight singleflight.Group
 }
@@ -153,7 +155,7 @@ type Solver struct {
 // NewSolver builds an idle Solver; the browser launches on first
 // unserved solve.
 func NewSolver(cfg SolverConfig) *Solver {
-	return &Solver{cfg: cfg}
+	return &Solver{cfg: cfg, pool: newSessionPool(cfg)}
 }
 
 // SetUpdater attaches the auto-updater whose PreSolveKick fires
@@ -194,7 +196,8 @@ func (s *Solver) SolveChallenge(ctx context.Context, targetURL string, timeout t
 	return v.(Clearance), nil
 }
 
-// solveHost runs the poll loop against the driver.
+// solveHost runs the poll loop against the driver inside one
+// acquired ephemeral session slot.
 func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout time.Duration) (Clearance, error) {
 	logger := s.cfg.logger()
 
@@ -207,15 +210,16 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 		updater.PreSolveKick()
 	}
 
-	nav, err := s.launch()
+	nav, sctx, release, err := s.pool.acquire(ctx)
 	if err != nil {
 		return Clearance{}, err
 	}
+	defer release()
 
 	if timeout <= 0 {
 		timeout = s.cfg.solveTimeout()
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(sctx, timeout)
 	defer cancel()
 
 	logger.Info("cfbrowser: solving challenge", "host", host, "timeout", timeout)
@@ -224,6 +228,10 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 	clicked := false
 	for {
 		if navErr != nil {
+			// A crashed browser must not poison the next solve:
+			// dead sessions are torn down now, the next solve
+			// relaunches (lazy retry).
+			s.pool.discardIfDead(nav)
 			return Clearance{}, fmt.Errorf("cfbrowser: navigate %s: %w", host, navErr)
 		}
 		if SolvedState(state.Title, state.Body, cookiesHaveCFClearance(state.Cookies)) {
@@ -242,8 +250,9 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 		}
 
 		// One best-effort interactive click on the Turnstile
-		// checkbox. Non-fatal by design: the real fallback for
-		// interactive challenges is a headed browser and a human.
+		// checkbox. Non-fatal by design: solving is headless-only, so an
+		// interactive challenge that resists the scripted click simply
+		// runs to the solve budget and reports a typed timeout.
 		if !clicked && state.HasClickTarget {
 			clicked = true
 			logger.Info("cfbrowser: attempting turnstile click", "host", host,
@@ -263,80 +272,11 @@ func (s *Solver) solveHost(ctx context.Context, targetURL, host string, timeout 
 	}
 }
 
-// launch lazily builds the driver, preferring the newest complete
-// cache binary at launch time (auto-updated binaries take effect on
-// the next solve).
-func (s *Solver) launch() (Naviger, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.nav != nil {
-		return s.nav, nil
-	}
-
-	info := s.cfg.Binary
-	if info == nil {
-		resolved, err := ResolveCurrentBinary(ResolveOptions{})
-		if err != nil {
-			return nil, err
-		}
-		info = resolved
-	}
-	userDataDir := s.cfg.UserDataDir
-	if userDataDir == "" {
-		base, err := defaultProfileDir()
-		if err != nil {
-			return nil, err
-		}
-		userDataDir = base
-	}
-
-	// Geoip alignment (proxy solves): the browser fingerprint must
-	// match the egress IP. Direct solves keep system defaults.
-	timezone, locale := s.cfg.Timezone, s.cfg.Locale
-	if s.cfg.ProxyURL != "" && (timezone == "" || locale == "") {
-		info, err := resolveGeo(context.Background(), s.cfg.ProxyURL, s.cfg.GeoEndpoint, nil)
-		if err != nil {
-			// Strictly best-effort: slog-only, solve continues.
-			s.cfg.logger().Warn("cfbrowser: geoip alignment failed", "error", err)
-		} else {
-			if timezone == "" {
-				timezone = info.Timezone
-			}
-			if locale == "" {
-				locale = LocaleForCountry(info.CountryCode)
-			}
-		}
-	}
-
-	factory := s.cfg.DriverFactory
-	if factory == nil {
-		factory = chromedpDriver
-	}
-	nav, err := factory(LaunchOptions{
-		BinaryPath:  info.Path,
-		Headed:      s.cfg.Headed,
-		ProxyURL:    s.cfg.ProxyURL,
-		Timezone:    timezone,
-		Locale:      locale,
-		UserDataDir: userDataDir,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cfbrowser: launch stealth chromium %s: %w", info.Path, err)
-	}
-	s.nav = nav
-	return nav, nil
-}
-
-// Close releases the browser session (idempotent).
+// Close releases the browser session (idempotent). It CANCELS
+// in-flight solves — it does not wait for them — and kills the
+// browser process group synchronously.
 func (s *Solver) Close() error {
-	s.mu.Lock()
-	nav := s.nav
-	s.nav = nil
-	s.mu.Unlock()
-	if nav != nil {
-		return nav.Close()
-	}
-	return nil
+	return s.pool.Close()
 }
 
 // cookiesHaveCFClearance scans a cookie slice for cf_clearance.

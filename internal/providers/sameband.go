@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,22 +53,22 @@ type samebandPlaylist []struct {
 	File  string  `json:"file"`
 }
 
-// Search POSTs the DLE search form (anicli-py sameband.py:23-46).
-// Posters are the site root glued onto the swiper img src — even when
-// the src is already absolute, verbatim like the Python original (a
-// documented quirk of sameband.py:44).
+// Search GETs the /anime catalog and filters client-side [LIVE-VERIFIED
+// 2026-09-13: GET /anime → HTTP 200, 94 article.shortstory entries, no
+// pagination]. The DLE POST search form the Python original used
+// (sameband.py:23-46) is dead server-side: the endpoint answers 200 with
+// an empty fastsearch_results shell because the site's search became
+// AJAX-only. Card parsing keeps the same selectors the DLE results page
+// used (.col-auto / .image[href] / .poster[title] / img.swiper-lazy) —
+// the catalog renders the identical shortstory template. Matching is a
+// case-insensitive substring test on the card title. Posters stay the
+// site root glued onto the swiper img src — even when the src is already
+// absolute, verbatim like the Python original (sameband.py:44).
 func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
-	form := url.Values{}
-	form.Set("do", "search")
-	form.Set("subaction", "search")
-	form.Set("story", query)
-
 	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "POST",
-		URL:     p.baseURL + "/index.php?do=search",
-		Headers: formContentType,
-		Body:    strings.NewReader(form.Encode()),
-		Op:      contracts.OpSearch,
+		Method: "GET",
+		URL:    p.baseURL + "/anime",
+		Op:     contracts.OpSearch,
 	})
 	if err != nil {
 		return nil, err
@@ -78,9 +77,10 @@ func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.Search
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
 	if err != nil {
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
-			fmt.Errorf("parse search page: %w", err))
+			fmt.Errorf("parse catalog page: %w", err))
 	}
 
+	needle := strings.ToLower(query)
 	var results []contracts.SearchResult
 	doc.Find(".col-auto").Each(func(_ int, item *goquery.Selection) {
 		linkNode := item.Find(".image[href]").First()
@@ -91,6 +91,10 @@ func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.Search
 
 		link, _ := linkNode.Attr("href")
 		title, _ := titleNode.Attr("title")
+
+		if !strings.Contains(strings.ToLower(title), needle) {
+			return
+		}
 
 		poster := ""
 		if img := item.Find("img.swiper-lazy").First(); img.Length() > 0 {

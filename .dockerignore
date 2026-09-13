@@ -1,0 +1,16 @@
+# Go build context hygiene.
+.git
+.golangci.yml
+.goreleaser.yaml
+.dockerignore
+Dockerfile
+.sdd/
+dist/
+*.db
+*.db.backup.*
+anicli-go
+parity
+spike
+cmd/spike
+internal/*/testdata/golden
+internal/*/testdata/parity

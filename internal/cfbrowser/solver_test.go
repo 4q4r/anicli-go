@@ -30,7 +30,22 @@ type fakeNav struct {
 	acceptLanguage    string
 	extraCookies      []Cookie
 	noClearanceCookie bool // solved page without cf_clearance
+	// script replays exact per-navigation results (state + error)
+	// before the legacy challenge/solved behavior takes over; used
+	// to script PR19 capped-navigation (ErrNavDeadline) ticks.
+	script []scriptedNav
+	// dead marks the session dead for liveness (crash discard).
+	dead atomic.Bool
 }
+
+// scriptedNav is one scripted Navigate result.
+type scriptedNav struct {
+	state NavState
+	err   error
+}
+
+// Alive implements liveness (crash-discard semantics).
+func (f *fakeNav) Alive() bool { return !f.dead.Load() }
 
 func (f *fakeNav) Navigate(ctx context.Context, _ string) (NavState, error) {
 	f.navigates.Add(1)
@@ -45,6 +60,11 @@ func (f *fakeNav) Navigate(ctx context.Context, _ string) (NavState, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.script) > 0 {
+		sn := f.script[0]
+		f.script = f.script[1:]
+		return sn.state, sn.err
+	}
 	if f.navErr != nil {
 		return NavState{}, f.navErr
 	}
@@ -228,6 +248,146 @@ func TestSolveChallengeCleanPageWithoutClearanceCookie(t *testing.T) {
 	}
 	if c.HasCFClearance() {
 		t.Errorf("no clearance cookie was scripted, got %+v", c.Cookies)
+	}
+}
+
+// --- PR19: capped-navigation (ErrNavDeadline) poll semantics ---
+
+// cappedChallengeState is a challenge page state as a capped navigation
+// may harvest it mid-solve (with a visible Turnstile target).
+func cappedChallengeState() NavState {
+	return NavState{
+		Title:          "Just a moment...",
+		Body:           `<script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>`,
+		HasClickTarget: true,
+		ClickX:         150,
+		ClickY:         30,
+	}
+}
+
+// TestSolveChallengeDeadlineWithSolvedStateReturnsClearance: a capped
+// navigation whose PARTIAL state already shows the solved page must
+// return the clearance — the deadline error must not fail the solve.
+func TestSolveChallengeDeadlineWithSolvedStateReturnsClearance(t *testing.T) {
+	nav := &fakeNav{userAgent: "UA/146", script: []scriptedNav{{
+		state: NavState{
+			Title: "AnimeGo — аниме",
+			Body:  "<html><body>content</body></html>",
+			Cookies: []Cookie{
+				{Name: "cf_clearance", Value: "cl-42", Domain: "animego.one", Path: "/"},
+			},
+			UserAgent: "UA/146",
+		},
+		err: ErrNavDeadline,
+	}}}
+	h := newSolverHarness(t, nav)
+	c, err := h.solver.SolveChallenge(context.Background(), "https://animego.one/", 2*time.Second)
+	if err != nil {
+		t.Fatalf("solved partial state must win over the deadline error: %v", err)
+	}
+	if !c.HasCFClearance() || c.UserAgent != "UA/146" {
+		t.Errorf("clearance = %+v", c)
+	}
+	if nav.closeCount.Load() != 0 {
+		t.Errorf("capped navigation must not discard the session, closes = %d", nav.closeCount.Load())
+	}
+}
+
+// TestSolveChallengeDeadlinePartialStateClicksAndContinues: capped
+// ticks carrying challenge state behave as NORMAL poll ticks — the
+// Turnstile click fires (once) and the loop keeps polling until the
+// page solves.
+func TestSolveChallengeDeadlinePartialStateClicksAndContinues(t *testing.T) {
+	nav := &fakeNav{
+		userAgent:  "UA/146",
+		needsClick: true, // legacy behavior solves after the click
+		script: []scriptedNav{
+			{state: cappedChallengeState(), err: ErrNavDeadline},
+			{state: cappedChallengeState(), err: ErrNavDeadline},
+		},
+	}
+	h := newSolverHarness(t, nav)
+	c, err := h.solver.SolveChallenge(context.Background(), "https://animego.one/", 2*time.Second)
+	if err != nil {
+		t.Fatalf("solve must continue past capped ticks: %v", err)
+	}
+	if !c.HasCFClearance() {
+		t.Errorf("clearance = %+v", c)
+	}
+	if got := nav.clicks.Load(); got != 1 {
+		t.Errorf("exactly ONE click across capped ticks expected, got %d", got)
+	}
+	if got := nav.navigates.Load(); got != 3 {
+		t.Errorf("navigates = %d, want 3 (2 capped + 1 solved)", got)
+	}
+	if nav.closeCount.Load() != 0 {
+		t.Errorf("capped navigation must not discard the session, closes = %d", nav.closeCount.Load())
+	}
+}
+
+// TestSolveChallengeDeadlineEmptyStateKeepsPolling: a capped navigation
+// that harvested NOTHING must not fail the solve, not discard the
+// session, and — critically — must not be mistaken for a solved clean
+// page (SolvedState on an empty state is true by fingerprinting rules;
+// the loop must re-poll instead of returning a phantom cookie-less
+// clearance).
+func TestSolveChallengeDeadlineEmptyStateKeepsPolling(t *testing.T) {
+	nav := &fakeNav{
+		userAgent:      "UA/146",
+		reloadsToSolve: 1, // legacy behavior solves on the 3rd navigation
+		script: []scriptedNav{
+			{state: NavState{}, err: ErrNavDeadline},
+			{state: NavState{}, err: ErrNavDeadline},
+		},
+	}
+	h := newSolverHarness(t, nav)
+	c, err := h.solver.SolveChallenge(context.Background(), "https://animego.one/", 2*time.Second)
+	if err != nil {
+		t.Fatalf("empty capped ticks must not fail the solve: %v", err)
+	}
+	// The phantom-clearance guard: only the real solved page carries
+	// the clearance cookie and the user agent.
+	if !c.HasCFClearance() || c.UserAgent != "UA/146" {
+		t.Errorf("clearance must come from the solved page, got %+v", c)
+	}
+	if got := nav.navigates.Load(); got < 3 {
+		t.Errorf("navigates = %d, want ≥3 (the loop must keep polling past empty capped ticks)", got)
+	}
+	if nav.closeCount.Load() != 0 {
+		t.Errorf("empty capped tick must not discard the session, closes = %d", nav.closeCount.Load())
+	}
+}
+
+// TestSolveChallengeRealNavigateErrorStillDiscards: non-deadline
+// navigation failures keep the old semantics — dead sessions are
+// discarded (crash teardown) and the error wraps through.
+func TestSolveChallengeRealNavigateErrorStillDiscards(t *testing.T) {
+	nav := &fakeNav{navErr: errors.New("cdp exploded")}
+	nav.dead.Store(true) // the session died with the error
+	h := newSolverHarness(t, nav)
+	_, err := h.solver.SolveChallenge(context.Background(), "https://animego.one/", time.Second)
+	if err == nil || !errors.Is(err, nav.navErr) {
+		t.Fatalf("navigate failure must wrap through: %v", err)
+	}
+	if nav.closeCount.Load() == 0 {
+		t.Fatal("a dead session must be discarded (torn down) on a real navigate error")
+	}
+}
+
+// TestSolveChallengeBudgetExpiryMidNavigateReportsTypedTimeout: when
+// the solve budget itself expires mid-navigation, the resulting
+// cancellation error must surface as the typed SolveTimeoutError (the
+// actionable contract), not as a navigate failure.
+func TestSolveChallengeBudgetExpiryMidNavigateReportsTypedTimeout(t *testing.T) {
+	nav := &fakeNav{reloadsToSolve: 1 << 30, blockNavigate: 200 * time.Millisecond}
+	h := newSolverHarness(t, nav)
+	_, err := h.solver.SolveChallenge(context.Background(), "https://animego.one/", 60*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected a timeout")
+	}
+	var timeout *SolveTimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("want *SolveTimeoutError when the budget expires mid-navigation, got %T: %v", err, err)
 	}
 }
 

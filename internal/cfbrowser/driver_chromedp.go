@@ -28,6 +28,7 @@ package cfbrowser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -39,6 +40,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -309,17 +311,59 @@ func (n *chromedpNav) Alive() bool {
 	return n.ctx.Err() == nil
 }
 
-// Navigate loads rawURL, waits for the document to settle and
-// snapshots the NavState (title, body snippet, cookies, UA, language,
-// turnstile target).
+// solveSettle is the fixed post-load settle delay giving challenge
+// scripts time to run/redirect before fingerprinting.
+const solveSettle = 1500 * time.Millisecond
+
+// PR19 bounding constants.
+const (
+	// navPollCap bounds ONE navigation (Navigate and Click alike) so
+	// the solve poll loop always ticks: a challenge interstitial
+	// must never be allowed to eat the whole solve budget in a
+	// single Navigate (live-verified: the first Navigate alone hung
+	// a 90s probe; the solver saw zero states in 120s).
+	navPollCap = 20 * time.Second
+	// navBodyWait bounds the best-effort body-readiness wait that
+	// replaces chromedp's implicit load-event wait.
+	navBodyWait = 10 * time.Second
+)
+
+// ErrNavDeadline reports a navigation whose bounded per-poll budget
+// expired mid-flight. It wraps context.DeadlineExceeded and rides
+// alongside whatever partial NavState the completed actions harvested;
+// the solve poll loop treats it as a normal tick, never a session
+// failure (the session itself is healthy — only this poll was slow).
+var ErrNavDeadline = fmt.Errorf("cfbrowser: navigation budget expired: %w", context.DeadlineExceeded)
+
+// navBudgetExpired reports whether the per-navigation context died by
+// its own deadline (the per-poll cap or the caller's remaining budget)
+// — as opposed to a caller cancellation arriving through the bridge.
+func navBudgetExpired(nctx context.Context) bool {
+	return errors.Is(nctx.Err(), context.DeadlineExceeded)
+}
+
+// Navigate loads rawURL and snapshots the NavState (title, body
+// snippet, cookies, UA, language, turnstile target).
 //
 // The browser session lives on n.ctx (created by NewContext, parented
 // on Background — it must outlive individual solves), so the caller's
 // context cannot parent it directly. Instead every navigation derives
 // a bounded context from the session via navContext: the caller's
-// solve budget as a hard deadline plus caller-cancellation bridging,
-// so a hung page load can never pin the singleflighted solve past its
-// 90s timeout.
+// remaining solve budget clamped to navPollCap, plus
+// caller-cancellation bridging, so the poll loop always ticks and a
+// hung page can never pin the singleflighted solve past its 90s
+// timeout.
+//
+// PR19 — no load-wait: the navigation itself is the RAW Page.navigate
+// CDP command. chromedp's Navigate action additionally blocks until
+// the top frame fires its load event, and a Cloudflare interstitial
+// with a Turnstile iframe never does, so the very first Navigate would
+// burn the whole budget. Body readiness is awaited separately,
+// best-effort, under navBodyWait (non-fatal: challenge pages have a
+// body; the state evals below read whatever document is there). When
+// the per-navigation budget expires mid-harvest, the partial state
+// completed actions gathered returns together with the typed
+// ErrNavDeadline — the cookie harvest is skipped on the dead context.
 func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, error) {
 	// Entry gate: an already-expired caller fails fast.
 	if err := ctx.Err(); err != nil {
@@ -327,22 +371,38 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 	}
 	nctx, cancel := n.navContext(ctx)
 	defer cancel()
-	// Session-executor context: chromedp actions run through Run's
-	// own executor wrapping anyway, but the direct cdproto calls
-	// below (GetCookies) need the executor explicitly — the bare
-	// session context fails them with "invalid context".
+	// Session-executor context: the direct cdproto calls below
+	// (Page.navigate, network.GetCookies) need the executor
+	// explicitly — the bare session context fails them with
+	// "invalid context".
 	tctx := withSessionExecutor(nctx)
+
+	// Raw top-frame navigation: no implicit load-wait. errorText is
+	// Chromium's net:: failure for THIS navigation (the same
+	// semantics chromedp's own Navigate action reports).
+	if _, _, errorText, _, err := page.Navigate(rawURL).Do(tctx); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && navBudgetExpired(nctx) {
+			return NavState{}, ErrNavDeadline
+		}
+		return NavState{}, err
+	} else if errorText != "" {
+		return NavState{}, fmt.Errorf("page load error %s", errorText)
+	}
+
+	// Bounded best-effort body wait (non-fatal).
+	bodyCtx, cancelBody := context.WithTimeout(tctx, navBodyWait)
+	_ = n.run(bodyCtx, chromedp.WaitReady(`body`, chromedp.ByQuery))
+	cancelBody()
 
 	var st NavState
 	var bodySnippet string
 	var ua, lang string
 	var click []float64
 
+	// State harvest as ONE action pipeline: actions completed before
+	// a mid-run deadline have already written their results, so the
+	// partial state survives together with the typed deadline error.
 	err := n.run(tctx,
-		chromedp.Navigate(rawURL),
-		// Challenge interstitials replace the document on solve;
-		// WaitReady('body') + a short settle covers both states.
-		chromedp.WaitReady(`body`, chromedp.ByQuery),
 		chromedp.Sleep(solveSettle),
 		chromedp.Title(&st.Title),
 		chromedp.Evaluate(`document.documentElement.outerHTML.slice(0, `+
@@ -351,10 +411,6 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 		chromedp.Evaluate(`navigator.languages ? navigator.languages.join(",") : navigator.language`, &lang),
 		chromedp.Evaluate(turnstileProbe, &click),
 	)
-	if err != nil {
-		return NavState{}, err
-	}
-
 	st.Body = bodySnippet
 	st.UserAgent = strings.TrimSpace(ua)
 	st.AcceptLanguage = strings.TrimSpace(lang)
@@ -362,11 +418,19 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 		st.HasClickTarget = true
 		st.ClickX, st.ClickY = click[0], click[1]
 	}
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && navBudgetExpired(nctx) {
+			// Partial state + typed deadline; no cookie harvest
+			// on the dead context.
+			return st, ErrNavDeadline
+		}
+		return NavState{}, err
+	}
 
 	// Cookie harvest via CDP (network.GetCookies) under the same
 	// bounded navigation context.
-	ncookies, err := network.GetCookies().Do(tctx)
-	if err == nil {
+	ncookies, cerr := network.GetCookies().Do(tctx)
+	if cerr == nil {
 		st.Cookies = make([]Cookie, 0, len(ncookies))
 		for _, ck := range ncookies {
 			st.Cookies = append(st.Cookies, Cookie{
@@ -380,24 +444,25 @@ func (n *chromedpNav) Navigate(ctx context.Context, rawURL string) (NavState, er
 	return st, nil
 }
 
-// solveSettle is the fixed post-load settle delay giving challenge
-// scripts time to run/redirect before fingerprinting.
-const solveSettle = 1500 * time.Millisecond
-
 // navContext derives the per-navigation context: chromedp actions run
 // against the session (a context derived from n.ctx inherits the
 // session values) under the caller's solve budget — the caller's
 // remaining deadline when it carries one, DefaultSolveTimeout
-// otherwise — and abort as soon as the caller is cancelled. Without
-// this bound a hung page load (server that never finishes responding,
-// interstitial that never settles) would outlive the solver's outer
-// timeout and pin the singleflighted solve indefinitely.
+// otherwise — CLAMPED to navPollCap so one slow navigation can never
+// eat the whole solve budget and the poll loop always ticks — and
+// aborts as soon as the caller is cancelled. Without these bounds a
+// hung page load (server that never finishes responding, interstitial
+// that never settles) would outlive the solver's outer timeout and
+// pin the singleflighted solve indefinitely.
 func (n *chromedpNav) navContext(caller context.Context) (context.Context, context.CancelFunc) {
 	budget := DefaultSolveTimeout
 	if dl, ok := caller.Deadline(); ok {
 		if rem := time.Until(dl); rem > 0 {
 			budget = rem
 		}
+	}
+	if budget > navPollCap {
+		budget = navPollCap
 	}
 	nctx, cancel := context.WithTimeout(n.ctx, budget)
 	if caller.Done() == nil {
@@ -430,6 +495,12 @@ func (n *chromedpNav) navContext(caller context.Context) (context.Context, conte
 // session context unbounded and a wedged input dispatch could
 // outlive the solve budget.
 func (n *chromedpNav) Click(ctx context.Context, x, y float64) error {
+	// Entry gate: an already-expired caller must not race the bridge
+	// into a fresh budget (navContext falls back to the default
+	// budget when the caller's remaining time is already spent).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	nctx, cancel := n.navContext(ctx)
 	defer cancel()
 	// Session-executor context: direct input dispatch on the bare

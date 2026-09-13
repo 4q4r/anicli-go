@@ -517,6 +517,31 @@ func (n *chromedpNav) Click(ctx context.Context, x, y float64) error {
 	return release.Do(tctx)
 }
 
+// Evaluator is the optional Naviger capability for page-context JS
+// evaluation (the AllAnime crypto bridge). Implemented by the
+// chromedp adapter; test fakes implement it as needed.
+type Evaluator interface {
+	// Eval evaluates expression in the current page and unmarshals the
+	// JSON-serializable result into out. Expressions returning a
+	// Promise are awaited (chromedp awaits by default).
+	Eval(ctx context.Context, expression string, out any) error
+}
+
+// Eval evaluates expression in the page under the same bounded
+// navigation budget as Navigate/Click (F55 parity). out receives the
+// JSON-serializable result (a string for the bridge's JSON replies).
+func (n *chromedpNav) Eval(ctx context.Context, expression string, out any) error {
+	// Entry gate: an already-expired caller must not race the bridge
+	// into a fresh budget.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	nctx, cancel := n.navContext(ctx)
+	defer cancel()
+	tctx := withSessionExecutor(nctx)
+	return n.run(tctx, chromedp.Evaluate(expression, out))
+}
+
 // Close tears the browser session down: the whole process group dies
 // FIRST (leader + renderer/gpu/utility children, synchronously), then
 // the chromedp contexts are cancelled to reap the process and drop

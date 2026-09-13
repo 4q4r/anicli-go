@@ -73,12 +73,15 @@ func BaseURLFor(id string) (string, bool) {
 }
 
 // buildCFOptions wires the CF ladder into provider clients when
-// [cf].enabled: builds the manager (loud error when the stealth
-// binary is missing) and returns the solver option plus its closer.
-func buildCFOptions(cfg config.Settings) (opts []netclient.Option, closer func(), err error) {
-	mgr, err := cfbrowser.NewManager(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build cf solver: %w", err)
+// [cf].enabled: receives the already-built manager (shared with the
+// AllAnime bridge — NewRegistry builds it once) and returns the solver
+// option plus its closer. mgr may be nil when [cf] is disabled.
+func buildCFOptions(cfg config.Settings, mgr *cfbrowser.Manager) (opts []netclient.Option, closer func(), err error) {
+	if mgr == nil {
+		mgr, err = cfbrowser.NewManager(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build cf solver: %w", err)
+		}
 	}
 	if mgr == nil {
 		return nil, nil, nil

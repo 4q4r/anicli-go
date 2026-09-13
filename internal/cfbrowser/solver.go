@@ -312,6 +312,22 @@ func (s *Solver) Close() error {
 	return s.pool.Close()
 }
 
+// WithSession runs fn inside one ephemeral browser session slot: the
+// session launches lazily (shared with solves), fn receives the live
+// Naviger and a session-scoped context, and the slot is released when
+// fn returns (the idle timer then tears the browser down per
+// BrowserIdleTimeout). Callers that only need page evaluation (the
+// AllAnime crypto bridge) get the same lifecycle guarantees as solves:
+// crash-discard semantics apply through the pool on the next acquire.
+func (s *Solver) WithSession(ctx context.Context, fn func(ctx context.Context, nav Naviger) error) error {
+	nav, sctx, release, err := s.pool.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn(sctx, nav)
+}
+
 // cookiesHaveCFClearance scans a cookie slice for cf_clearance.
 func cookiesHaveCFClearance(cookies []Cookie) bool {
 	for _, c := range cookies {

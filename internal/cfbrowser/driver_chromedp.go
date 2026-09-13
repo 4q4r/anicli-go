@@ -16,10 +16,11 @@ package cfbrowser
 //     see buildAllocatorArgs).
 //   - The browser runs in its own process group and Close kills the
 //     whole group synchronously (platform split in prockill_*.go).
-//   - Solve pages run on a resource diet (fetch domain): Image, Media
-//     and Font requests are denied; scripts, stylesheets, frames,
+//   - Solve pages run on a resource diet (fetch domain): Image and
+//     Media requests are denied; scripts, stylesheets, fonts, frames,
 //     XHR/fetch and websockets flow untouched — the challenge needs
-//     them (and Turnstile renders visually, so CSS is sacred).
+//     them (and Turnstile renders visually, so CSS and its webfonts
+//     are sacred).
 //
 // Fingerprint posture: CloakBrowser compiles its stealth patches into
 // the binary and auto-generates a random fingerprint seed at startup,
@@ -60,15 +61,17 @@ const turnstileProbe = `(function () {
 
 // blockedResourceTypes is the solve-page resource diet: the CDP
 // request types denied at the network layer while challenges solve.
-// Images, media and fonts dominate challenge-page weight and are
-// irrelevant to clearing; Stylesheet is deliberately NOT here —
-// Turnstile renders visually and a broken widget cannot be clicked —
-// and Script/XHR/Fetch/frames/WebSocket are the challenge machinery
+// Images and media dominate challenge-page weight and are irrelevant
+// to clearing. Stylesheet and Font are deliberately NOT here —
+// Turnstile renders visually (a broken widget cannot be clicked), the
+// widget ships its own webfonts, and fetch-domain interception is
+// armed on the browser session, so blocked types would starve the
+// challenge iframe of its fonts too; fonts are cheap next to that
+// risk. Script/XHR/Fetch/frames/WebSocket are the challenge machinery
 // itself.
 var blockedResourceTypes = map[network.ResourceType]struct{}{
 	network.ResourceTypeImage: {},
 	network.ResourceTypeMedia: {},
-	network.ResourceTypeFont:  {},
 }
 
 // blockedResourceType reports whether one CDP resource type is
@@ -117,10 +120,25 @@ func handlePausedRequest(ctx context.Context, ev *fetch.EventRequestPaused) {
 // own resolution order. --disable-dev-shm-usage stays even though it
 // trades shm for file-backed growth in long-lived browsers
 // (chromedp#1627): our sessions are ephemeral by design.
+//
+// --enable-unsafe-swiftshader: Turnstile's challenge-platform JS
+// requires WebGL to render its widget; with --disable-gpu the only
+// WebGL provider is software (SwiftShader), and Chromium >=139
+// deprecated the automatic software-WebGL fallback — without this
+// flag headless launches have NO WebGL at all, the widget never
+// renders (iframe count stays 0) and the challenge is unsolvable.
+// Verified live on the challenged page via the official MCP browser
+// console (2026-09-13): "Automatic fallback to software WebGL has
+// been deprecated. Please use the --enable-unsafe-swiftshader flag".
+// The name says "unsafe"; the exposure is bounded — this browser is
+// headless, ephemeral and only ever visits challenge pages.
 func buildAllocatorArgs(opts LaunchOptions) []string {
 	args := []string{
 		"--headless",
 		"--disable-gpu",
+		// Software WebGL so the Turnstile widget can render (see
+		// doc comment above) despite --disable-gpu.
+		"--enable-unsafe-swiftshader",
 		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-background-networking",

@@ -9,34 +9,36 @@ package cfbrowser
 // on CI (no display, ~200 MB binary, network-gated), so runtime
 // verification happens through `anicli cf solve` against live hosts.
 //
+// PR14 posture (headless-only + ephemeral low-memory session):
+//   - HEADLESS ALWAYS: there is no headed mode and no flag that could
+//     reintroduce one; the explicit argv below is the complete launch
+//     posture (chromedp.DefaultExecAllocatorOptions are NOT used —
+//     see buildAllocatorArgs).
+//   - The browser runs in its own process group and Close kills the
+//     whole group synchronously (platform split in prockill_*.go).
+//   - Solve pages run on a resource diet (fetch domain): Image, Media
+//     and Font requests are denied; scripts, stylesheets, frames,
+//     XHR/fetch and websockets flow untouched — the challenge needs
+//     them (and Turnstile renders visually, so CSS is sacred).
+//
 // Fingerprint posture: CloakBrowser compiles its stealth patches into
 // the binary and auto-generates a random fingerprint seed at startup,
-// so the launch needs no anti-detection flags — only the minimum:
-// no-first-run, user-data-dir, lang, TZ env, proxy-server and the
-// headless toggle.
+// so the launch needs no anti-detection flags.
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime"
+	"log/slog"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
-
-// DisplayError reports a headed launch on linux without $DISPLAY.
-type DisplayError struct{}
-
-// Error implements error with the xvfb-run hint.
-func (*DisplayError) Error() string {
-	return "cfbrowser: headed browser needs a display on linux — " +
-		"run under a desktop session, Xvfb (xvfb-run -a anicli …), or set cf.headed = false"
-}
 
 // bodySnippetBytes bounds the markup fetched for challenge
 // fingerprinting (IsChallengePage only needs the head scripts).
@@ -55,27 +57,137 @@ const turnstileProbe = `(function () {
   return null;
 })()`
 
-// chromedpDriver is the production DriverFactory.
-func chromedpDriver(opts LaunchOptions) (Naviger, error) {
-	if opts.Headed && runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
-		return nil, &DisplayError{}
-	}
+// blockedResourceTypes is the solve-page resource diet: the CDP
+// request types denied at the network layer while challenges solve.
+// Images, media and fonts dominate challenge-page weight and are
+// irrelevant to clearing; Stylesheet is deliberately NOT here —
+// Turnstile renders visually and a broken widget cannot be clicked —
+// and Script/XHR/Fetch/frames/WebSocket are the challenge machinery
+// itself.
+var blockedResourceTypes = map[network.ResourceType]struct{}{
+	network.ResourceTypeImage: {},
+	network.ResourceTypeMedia: {},
+	network.ResourceTypeFont:  {},
+}
 
-	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(opts.BinaryPath),
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.UserDataDir(opts.UserDataDir),
-	)
-	if !opts.Headed {
-		allocOpts = append(allocOpts, chromedp.Headless)
+// blockedResourceType reports whether one CDP resource type is
+// denied on solve pages.
+func blockedResourceType(rt network.ResourceType) bool {
+	_, ok := blockedResourceTypes[rt]
+	return ok
+}
+
+// fetchBlockPatterns scopes fetch-domain interception to exactly the
+// blocked resource types: only matching requests ever pause, so
+// everything else flows with zero interception latency.
+func fetchBlockPatterns() []*fetch.RequestPattern {
+	patterns := make([]*fetch.RequestPattern, 0, len(blockedResourceTypes))
+	for rt := range blockedResourceTypes {
+		patterns = append(patterns, &fetch.RequestPattern{
+			RequestStage: fetch.RequestStageRequest,
+			ResourceType: rt,
+		})
 	}
+	return patterns
+}
+
+// handlePausedRequest routes one paused request: blocked types fail
+// with the standard client-blocked reason; anything else continues
+// untouched (defensive — the typed patterns already scope the pauses).
+func handlePausedRequest(ctx context.Context, ev *fetch.EventRequestPaused) {
+	if blockedResourceType(ev.ResourceType) {
+		_ = fetch.FailRequest(ev.RequestID, network.ErrorReasonBlockedByClient).Do(ctx)
+		return
+	}
+	_ = fetch.ContinueRequest(ev.RequestID).Do(ctx)
+}
+
+// buildAllocatorArgs returns the FULL explicit chromium argv for one
+// launch — the single source of truth; allocatorOptions derives the
+// chromedp options from this very list and driver_launch_test.go pins
+// the exact tables. chromedp.DefaultExecAllocatorOptions are
+// deliberately replaced wholesale (they smuggle a second Headless
+// toggle, --enable-automation and friends — the PR14 bug), so this
+// list is the complete posture. chromedp itself still appends the CDP
+// mechanics on top (--remote-debugging-port=0 when absent, about:blank
+// as the first page, --no-sandbox when running as root) — allocator
+// plumbing, not posture. Timezone travels as the TZ environment
+// variable (chromedp.Env), not as an argv flag, matching Chromium's
+// own resolution order. --disable-dev-shm-usage stays even though it
+// trades shm for file-backed growth in long-lived browsers
+// (chromedp#1627): our sessions are ephemeral by design.
+func buildAllocatorArgs(opts LaunchOptions) []string {
+	args := []string{
+		"--headless",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--disable-background-networking",
+		"--mute-audio",
+		"--hide-scrollbars",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-sync",
+		"--disable-translate",
+		"--renderer-process-limit=1",
+		"--disable-component-update",
+		"--password-store=basic",
+		"--use-mock-keychain",
+	}
+	args = append(args, "--user-data-dir="+opts.UserDataDir)
 	if opts.ProxyURL != "" {
-		allocOpts = append(allocOpts, chromedp.ProxyServer(opts.ProxyURL))
+		args = append(args, "--proxy-server="+opts.ProxyURL)
 	}
 	if opts.Locale != "" {
-		allocOpts = append(allocOpts, chromedp.Flag("lang", opts.Locale))
+		args = append(args, "--lang="+opts.Locale)
 	}
+	return args
+}
+
+// flagFromArg converts one argv entry into a chromedp.Flag(name,
+// value) input, inverting chromedp's own rendering (string ->
+// --name=value, boolean true -> bare --name; see allocate.go
+// Allocate). Entries without '=' are boolean true flags.
+func flagFromArg(arg string) (string, any) {
+	s := strings.TrimPrefix(arg, "--")
+	if i := strings.IndexByte(s, '='); i >= 0 {
+		return s[:i], s[i+1:]
+	}
+	return s, true
+}
+
+// allocatorOptions derives the chromedp exec allocator options from
+// buildAllocatorArgs — one list, one truth; the round-trip mapping is
+// proven by TestFlagFromArgRoundTripMapping.
+func allocatorOptions(opts LaunchOptions) []chromedp.ExecAllocatorOption {
+	args := buildAllocatorArgs(opts)
+	out := make([]chromedp.ExecAllocatorOption, 0, len(args))
+	for _, arg := range args {
+		name, value := flagFromArg(arg)
+		out = append(out, chromedp.Flag(name, value))
+	}
+	return out
+}
+
+// chromedpDriver is the production DriverFactory (headless-only).
+func chromedpDriver(opts LaunchOptions) (Naviger, error) {
+	// The browser's exec.Cmd is captured at spawn time via
+	// ModifyCmdFunc (called synchronously inside chromedp.Run ->
+	// Allocate, before cmd.Start) and read after Run returns on this
+	// same goroutine — the ordering is linear, no lock needed.
+	var cmd *exec.Cmd
+	allocOpts := []chromedp.ExecAllocatorOption{
+		chromedp.ExecPath(opts.BinaryPath),
+		// Own process group: group-scoped kills on close, and (linux)
+		// Pdeathsig so a crashed anicli cannot orphan the browser.
+		// This override displaces chromedp's default command setup —
+		// prockill_linux.go replicates the Pdeathsig part of it.
+		chromedp.ModifyCmdFunc(func(c *exec.Cmd) {
+			setNewProcessGroup(c)
+			cmd = c
+		}),
+	}
+	allocOpts = append(allocOpts, allocatorOptions(opts)...)
 	if opts.Timezone != "" {
 		// Chromium reads TZ from the environment.
 		allocOpts = append(allocOpts, chromedp.Env("TZ="+opts.Timezone))
@@ -84,17 +196,38 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	ctx, cancelCtx := chromedp.NewContext(allocCtx)
 
-	// Force the process launch NOW so factory failures (bad binary,
-	// no display) surface at launch(), where the solver retries them.
+	// Force the process launch NOW so factory failures (bad binary)
+	// surface at launch(), where the solver retries them.
 	if err := chromedp.Run(ctx); err != nil {
 		cancelCtx()
 		cancelAlloc()
 		return nil, fmt.Errorf("start chromium: %w", err)
 	}
+	if cmd == nil || cmd.Process == nil {
+		cancelCtx()
+		cancelAlloc()
+		return nil, fmt.Errorf("start chromium: no process handle captured")
+	}
+
+	// Resource diet (session-scoped, applies to every solve page):
+	// the listener is attached BEFORE Fetch.enable so no paused
+	// request can slip through unanswered.
+	chromedp.ListenTarget(ctx, func(ev any) {
+		if paused, ok := ev.(*fetch.EventRequestPaused); ok {
+			handlePausedRequest(ctx, paused)
+		}
+	})
+	if err := fetch.Enable().WithPatterns(fetchBlockPatterns()).Do(ctx); err != nil {
+		// Best-effort diet: a full-resource solve still works, just
+		// fatter. Warn, do not fail the session over it.
+		slog.Warn("cfbrowser: resource blocking unavailable", "error", err)
+	}
+
 	return &chromedpNav{
 		ctx:         ctx,
 		cancelCtx:   cancelCtx,
 		cancelAlloc: cancelAlloc,
+		cmd:         cmd,
 		run:         chromedp.Run,
 	}, nil
 }
@@ -104,9 +237,17 @@ type chromedpNav struct {
 	ctx         context.Context
 	cancelCtx   context.CancelFunc
 	cancelAlloc context.CancelFunc
+	// cmd is the spawned browser process (group kills on close).
+	cmd *exec.Cmd
 	// run executes chromedp actions; the seam exists so tests can
 	// verify the per-navigation bounding without a real browser.
 	run func(ctx context.Context, actions ...chromedp.Action) error
+}
+
+// Alive reports whether the browser session still breathes (crash
+// detection for the session pool).
+func (n *chromedpNav) Alive() bool {
+	return n.ctx.Err() == nil
 }
 
 // Navigate loads rawURL, waits for the document to settle and
@@ -220,21 +361,33 @@ func (n *chromedpNav) navContext(caller context.Context) (context.Context, conte
 }
 
 // Click dispatches one left-button click at viewport CSS coordinates
-// (the best-effort Turnstile interaction).
+// (the best-effort Turnstile interaction). F55: the click runs under
+// the same navContext budget as Navigate — it previously rode the
+// session context unbounded and a wedged input dispatch could
+// outlive the solve budget.
 func (n *chromedpNav) Click(ctx context.Context, x, y float64) error {
+	nctx, cancel := n.navContext(ctx)
+	defer cancel()
 	press := input.DispatchMouseEvent(input.MousePressed, x, y).
 		WithButton(input.Left).WithClickCount(1)
 	release := input.DispatchMouseEvent(input.MouseReleased, x, y).
 		WithButton(input.Left).WithClickCount(1)
-	if err := press.Do(n.ctx); err != nil {
+	if err := press.Do(nctx); err != nil {
 		return err
 	}
-	return release.Do(n.ctx)
+	return release.Do(nctx)
 }
 
-// Close tears the browser session down.
+// Close tears the browser session down: the whole process group dies
+// FIRST (leader + renderer/gpu/utility children, synchronously), then
+// the chromedp contexts are cancelled to reap the process and drop
+// the DevTools connection.
 func (n *chromedpNav) Close() error {
+	err := killProcessGroup(n.cmd)
 	n.cancelCtx()
 	n.cancelAlloc()
+	if err != nil {
+		return fmt.Errorf("cfbrowser: close chromium: %w", err)
+	}
 	return nil
 }

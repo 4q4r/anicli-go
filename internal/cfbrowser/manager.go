@@ -46,11 +46,11 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 	}
 
 	solver := NewSolver(SolverConfig{
-		Headed:       cfg.CF.Headed,
-		ProxyURL:     cfg.Network.ProxyURL,
-		SolveTimeout: cfg.CF.SolveTimeout,
-		Store:        store,
-		Binary:       bin,
+		ProxyURL:           cfg.Network.ProxyURL,
+		SolveTimeout:       cfg.CF.SolveTimeout,
+		BrowserIdleTimeout: cfg.CF.BrowserIdleTimeout,
+		Store:              store,
+		Binary:             bin,
 	})
 	updater := NewUpdater(UpdaterConfig{
 		Enabled:  AutoUpdateFromConfig(cfg.CF.AutoUpdate),
@@ -62,9 +62,9 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 	return &Manager{Solver: solver, Store: store, Updater: updater}, nil
 }
 
-// Close tears the stack down: browser session first (in-flight
-// solves finish against their own contexts), then the updater ticker.
-// Idempotent.
+// Close tears the stack down: the solver first — its Close CANCELS
+// in-flight solves (it does not wait for them) and kills the browser
+// process group synchronously — then the updater ticker. Idempotent.
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil

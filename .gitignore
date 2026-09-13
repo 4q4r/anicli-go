@@ -1,5 +1,6 @@
 /anicli-go
 /parity
+/testdata/parity/
 /dist/
 /*.db
 .sdd/

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,40 @@ func TestEpisodesAudioOnlySourceType(t *testing.T) {
 	}
 }
 
+// TestEpisodesVideoOnlyMultiDubNotMixed pins the python mixed_possible
+// precedence: bool(video_keys and audio_keys and (sets differ or
+// len(video_keys) > 1)) — a video-only source has no audio keys, so
+// even multiple dubs never set mixed_possible.
+func TestEpisodesVideoOnlyMultiDubNotMixed(t *testing.T) {
+	p := &episodesProvider{
+		fakeProvider: fakeProvider{id: "videofake"},
+		sourceType:   contracts.SourceTypeVideo,
+		episodes: []contracts.Episode{{
+			Num: "1", RawID: "e1",
+			RawEmbeds: map[string][]string{
+				"Dub A": {"https://embed.example/a1"},
+				"Dub B": {"https://embed.example/b1"},
+			},
+		}},
+	}
+	app := newEpisodesApp(t, p)
+	h := app.Router()
+	auth := authHeader(t, h)
+
+	_, payload := doJSON(t, h, http.MethodGet, "/api/v1/episodes?source_id=videofake&source_url=u", "", auth)
+	items, _ := payload["items"].([]any)
+	first, _ := items[0].(map[string]any)
+	if vk, _ := first["video_keys"].([]any); len(vk) != 2 {
+		t.Fatalf("video source must emit both video keys: %v", first)
+	}
+	if ak, _ := first["audio_keys"].([]any); len(ak) != 0 {
+		t.Fatalf("video source must emit no audio keys: %v", first)
+	}
+	if mixed, _ := first["mixed_possible"].(bool); mixed {
+		t.Fatal("video-only multi-dub must not set mixed_possible (python requires non-empty audio_keys)")
+	}
+}
+
 func TestEpisodesProviderErrorContract(t *testing.T) {
 	p := &episodesProvider{fakeProvider: fakeProvider{id: "fake"}, sourceType: contracts.SourceTypeBoth}
 	app := newEpisodesApp(t, p)
@@ -179,6 +214,7 @@ func TestStreamsResolveHappyPath(t *testing.T) {
 			"Dub V": {DubName: "Dub V", Links: map[string]contracts.VideoSource{
 				"1080": {URL: "https://cdn.example/v1080.m3u8", Quality: "1080", Type: "m3u8"},
 				"720":  {URL: "https://cdn.example/v720.m3u8", Quality: "720", Type: "m3u8", Headers: map[string]string{"Referer": "https://fake.example"}},
+				"480":  {URL: "https://cdn.example/v480.mp4", Quality: "480", Type: "mp4"},
 			}},
 			"[other] Dub A": {DubName: "Dub A", Links: map[string]contracts.VideoSource{
 				"192": {URL: "https://cdn.example/a192.mp4?expires=4102444800", Quality: "192", Type: "mp4"},
@@ -208,17 +244,24 @@ func TestStreamsResolveHappyPath(t *testing.T) {
 		t.Fatalf("mux_mode = %v (differing keys must be dual_url)", payload["mux_mode"])
 	}
 	videoStreams, _ := payload["video_streams"].([]any)
-	if len(videoStreams) != 2 {
-		t.Fatalf("video_streams = %d, want 2", len(videoStreams))
+	if len(videoStreams) != 3 {
+		t.Fatalf("video_streams = %d, want 3", len(videoStreams))
+	}
+	// Python sorted(items, key=lambda item: item[0], reverse=True) is
+	// LEXICOGRAPHIC on the string keys: {"1080","720","480"} →
+	// [720, 480, 1080] — not numeric order.
+	wantOrder := []int{720, 480, 1080}
+	for i, want := range wantOrder {
+		item, _ := videoStreams[i].(map[string]any)
+		if item["quality"] != float64(want) {
+			t.Fatalf("video_streams[%d].quality = %v, want %d", i, item["quality"], want)
+		}
 	}
 	top, _ := videoStreams[0].(map[string]any)
-	if top["quality"] != float64(1080) {
-		t.Fatalf("streams must sort by quality desc, top = %v", top["quality"])
-	}
 	if top["type"] != "hls" || top["is_hls"] != true {
 		t.Fatalf("hls hint wrong: %v", top)
 	}
-	if top["url"] != "https://cdn.example/v1080.m3u8" {
+	if top["url"] != "https://cdn.example/v720.m3u8" {
 		t.Fatalf("url = %v", top["url"])
 	}
 
@@ -247,7 +290,8 @@ func TestStreamsResolveHappyPath(t *testing.T) {
 	if meta["requires_headers"] != true {
 		t.Fatal("requires_headers must be true (720 variant carries Referer)")
 	}
-	if order, _ := meta["recommended_order"].([]any); len(order) != 2 || order[0] != float64(1080) {
+	if order, _ := meta["recommended_order"].([]any); len(order) != 3 ||
+		order[0] != float64(720) || order[1] != float64(480) || order[2] != float64(1080) {
 		t.Fatalf("recommended_order = %v", meta["recommended_order"])
 	}
 
@@ -260,6 +304,35 @@ func TestStreamsResolveHappyPath(t *testing.T) {
 	_, payload = doJSON(t, h, http.MethodPost, "/api/v1/streams/resolve", bodySingle, auth)
 	if payload["mux_mode"] != "single_av" {
 		t.Fatalf("same-key audio must be single_av, got %v", payload["mux_mode"])
+	}
+}
+
+// TestSortedQualities pins the python variant ordering: sorted(items,
+// key=lambda item: item[0], reverse=True) is LEXICOGRAPHIC descending
+// on the string keys (api_server.py streams/resolve), so 3-digit and
+// 4-digit quality labels interleave in string order, not numeric.
+func TestSortedQualities(t *testing.T) {
+	cases := []struct {
+		name string
+		keys []string
+		want []string
+	}{
+		{"three keys lexicographic not numeric", []string{"1080", "720", "480"}, []string{"720", "480", "1080"}},
+		{"two keys", []string{"1080", "720"}, []string{"720", "1080"}},
+		{"lexicographic beats numeric", []string{"1000", "720"}, []string{"720", "1000"}},
+		{"single key", []string{"480"}, []string{"480"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			links := map[string]contracts.VideoSource{}
+			for _, k := range tc.keys {
+				links[k] = contracts.VideoSource{URL: "https://cdn.example/" + k + ".mp4"}
+			}
+			got := sortedQualities(links)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("sortedQualities(%v) = %v, want %v", tc.keys, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -687,6 +760,17 @@ func TestLibraryBindAndHistoryFlow(t *testing.T) {
 		t.Fatalf("patched fields = %v %v", payload["shikimori_status"], payload["score"])
 	}
 
+	// PATCH on a missing id must 404 like python (get_by_id → not_found),
+	// not 500.
+	rec, payload = doJSON(t, h, http.MethodPatch, "/api/v1/history/999999", `{"status":"watching"}`, auth)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("patch missing history = %d, want 404: %v", rec.Code, payload)
+	}
+	errObj, _ = payload["error"].(map[string]any)
+	if errObj["code"] != "not_found" || errObj["message"] != "History item not found" {
+		t.Fatalf("patch missing history error = %v", errObj)
+	}
+
 	// Progress PATCH then GET.
 	rec, payload = doJSON(t, h, http.MethodPatch, fmt.Sprintf("/api/v1/history/%d/progress", boundID),
 		`{"episode":"2","position_sec":120,"duration_sec":1440,"video_key":"Dub","quality":1080}`, auth)
@@ -695,6 +779,10 @@ func TestLibraryBindAndHistoryFlow(t *testing.T) {
 	}
 	if payload["position_sec"] != float64(120) {
 		t.Fatalf("progress = %v", payload)
+	}
+	// python returns the flat progress dict incl. top-level anime_id.
+	if payload["anime_id"] != float64(boundID) {
+		t.Fatalf("progress patch anime_id = %v, want %d", payload["anime_id"], boundID)
 	}
 	_, payload = doJSON(t, h, http.MethodGet, fmt.Sprintf("/api/v1/history/%d/progress?episode=2", boundID), "", auth)
 	progress, _ := payload["progress"].(map[string]any)
@@ -752,12 +840,15 @@ func TestReleasesCalendar(t *testing.T) {
 		authed: true,
 		rates: []shikimori.UserRate{
 			{ID: 1, TargetID: 100, TargetType: "Anime", Status: "watching"},
+			{ID: 2, TargetID: 300, TargetType: "Anime", Status: "planned"},
 		},
 		animes: []shikimori.Anime{
 			{ID: 100, Name: "Soon", Russian: "Скоро", Status: "ongoing", NextEpisode: 7,
 				NextEpisodeAt: now.Add(36 * time.Hour).Format(time.RFC3339),
 				Image:         shikimori.Image{Original: "/system/animes/original/100.jpg"}},
 			{ID: 200, Name: "Far", NextEpisodeAt: now.Add(30 * 24 * time.Hour).Format(time.RFC3339)},
+			{ID: 300, Name: "Sooner", Status: "ongoing", NextEpisode: 3,
+				NextEpisodeAt: now.Add(12 * time.Hour).Format(time.RFC3339)},
 		},
 	}
 	h := app.Router()
@@ -771,10 +862,22 @@ func TestReleasesCalendar(t *testing.T) {
 		t.Fatalf("days = %v", payload["days"])
 	}
 	items, _ := payload["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("items = %d, want 1 (36h in, 30d out): %v", len(items), payload)
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2 (36h and 12h in, 30d out): %v", len(items), payload)
 	}
-	event, _ := items[0].(map[string]any)
+	// python sorts events by release_at ascending
+	// (release_calendar_service.py events.sort(key=lambda item:
+	// item.release_at)) — the 12h event must lead even though its rate
+	// was listed after the 36h one.
+	if items[0].(map[string]any)["shikimori_id"] != float64(300) ||
+		items[1].(map[string]any)["shikimori_id"] != float64(100) {
+		t.Fatalf("calendar must sort by release_at ascending: %v", items)
+	}
+	firstEvent, _ := items[0].(map[string]any)
+	if firstEvent["user_status"] != "planned" || firstEvent["next_episode"] != float64(3) {
+		t.Fatalf("first event = %v", firstEvent)
+	}
+	event, _ := items[1].(map[string]any)
 	if event["shikimori_id"] != float64(100) || event["next_episode"] != float64(7) {
 		t.Fatalf("event = %v", event)
 	}

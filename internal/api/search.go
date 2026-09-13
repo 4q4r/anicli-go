@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,6 +124,15 @@ func (a *App) buildReleaseEvents(r *http.Request, client ShikiClient, days int) 
 	dayTo := dayFrom.AddDate(0, 0, maxInt(days, 1)-1)
 
 	var events []map[string]any
+	// python sorts events by release_at ascending before returning
+	// (release_calendar_service.py events.sort(key=lambda item:
+	// item.release_at)); the parsed timestamp is carried alongside each
+	// row so the sort compares instants, not formatted strings.
+	type keyedEvent struct {
+		at  time.Time
+		row map[string]any
+	}
+	var keyed []keyedEvent
 	for _, rate := range rates {
 		userStatus := strings.ToLower(strings.TrimSpace(rate.Status))
 		switch userStatus {
@@ -165,7 +175,7 @@ func (a *App) buildReleaseEvents(r *http.Request, client ShikiClient, days int) 
 			poster = posterFromImage(img)
 		}
 
-		events = append(events, map[string]any{
+		keyed = append(keyed, keyedEvent{at: releaseAt, row: map[string]any{
 			"shikimori_id": rate.TargetID,
 			"title":        title,
 			"artwork":      buildArtwork(poster, "release:"+strconv.FormatInt(rate.TargetID, 10)+":"+releaseAt.Format(time.RFC3339)),
@@ -173,7 +183,12 @@ func (a *App) buildReleaseEvents(r *http.Request, client ShikiClient, days int) 
 			"anime_status": animeStatus,
 			"next_episode": nextEpisode,
 			"release_at":   releaseAt.UTC().Format(time.RFC3339),
-		})
+		}})
+	}
+	sort.SliceStable(keyed, func(i, j int) bool { return keyed[i].at.Before(keyed[j].at) })
+	events = make([]map[string]any, 0, len(keyed))
+	for _, ev := range keyed {
+		events = append(events, ev.row)
 	}
 	return events
 }

@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -123,6 +125,12 @@ func (a *App) handleHistoryPatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.Progress.UpdateLocalStatus(r.Context(), id, req.Status, req.Score, req.Rewatches, req.Episodes); err != nil {
+		// python: update_local_status no-ops on a missing row and the
+		// follow-up get_by_id raises not_found → 404.
+		if errors.Is(err, contracts.ErrNotFound) {
+			writeAPIError(w, r, errNotFound("History item not found"))
+			return
+		}
 		writeAPIError(w, r, errInternal("Failed to update history"))
 		return
 	}
@@ -259,7 +267,10 @@ func (a *App) handleHistoryProgressPatch(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, r, errInternal("Failed to save progress"))
 		return
 	}
-	writeJSON(w, 200, serializeEpisodeProgress(row))
+	// python returns the flat progress dict incl. top-level anime_id.
+	payload := serializeEpisodeProgress(row)
+	payload["anime_id"] = id
+	writeJSON(w, 200, payload)
 }
 
 // handleHistoryProgressGet reads the playback position (python GET

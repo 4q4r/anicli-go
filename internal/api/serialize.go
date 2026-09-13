@@ -115,7 +115,10 @@ func trackKeysForEpisode(episode contracts.Episode, sourceType contracts.SourceT
 		video, audio = rawKeys, rawKeys
 	}
 
-	mixed = len(video) > 0 && len(audio) > 0 && !equalSets(video, audio) || len(video) > 1
+	// python precedence: bool(video_keys and audio_keys and
+	// (set(video_keys) != set(audio_keys) or len(video_keys) > 1)) —
+	// mixed requires BOTH key sets non-empty.
+	mixed = len(video) > 0 && len(audio) > 0 && (!equalSets(video, audio) || len(video) > 1)
 	return video, audio, mixed
 }
 

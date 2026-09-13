@@ -278,25 +278,19 @@ func serializeAudioStream(quality string, src contracts.VideoSource, name string
 	}
 }
 
-// sortedQualities orders link keys numerically descending (python
-// sorted(items, key=int, reverse=True); non-numeric keys sort first
-// numerically-as-zero, keeping output stable).
+// sortedQualities orders link keys LEXICOGRAPHICALLY descending,
+// exactly reproducing python api_server.py streams/resolve:
+//
+//	sorted(items, key=lambda item: item[0], reverse=True)
+//
+// The keys are plain strings, so {"1080","720","480"} emits
+// ["720","480","1080"] — string order, NOT numeric order.
 func sortedQualities(links map[string]contracts.VideoSource) []string {
 	keys := make([]string, 0, len(links))
 	for k := range links {
 		keys = append(keys, k)
 	}
-	sort.SliceStable(keys, func(i, j int) bool {
-		x, errX := strconv.Atoi(keys[i])
-		y, errY := strconv.Atoi(keys[j])
-		if errX != nil {
-			x = 0
-		}
-		if errY != nil {
-			y = 0
-		}
-		return x > y
-	})
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
 	return keys
 }
 

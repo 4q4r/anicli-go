@@ -13,12 +13,14 @@ import (
 // mapping contract between argv and ExecAllocatorOption.
 
 // fixedAllocatorFlags is the launch posture shared by every solve:
-// headless-only, memory-diet, no background churn. Order matters only
-// to the tests (chromedp stores flags in a map); the LIST is the spec.
+// headless-only, memory-diet, software WebGL (Turnstile), no
+// background churn. Order matters only to the tests (chromedp stores
+// flags in a map); the LIST is the spec.
 func fixedAllocatorFlags() []string {
 	return []string{
 		"--headless",
 		"--disable-gpu",
+		"--enable-unsafe-swiftshader",
 		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-background-networking",
@@ -168,9 +170,11 @@ func TestFlagFromArgRoundTripMapping(t *testing.T) {
 }
 
 // TestBlockedResourceTypeTable pins the solve-page resource diet:
-// Image, Media and Font are denied; everything else — most critically
+// Image and Media are denied; everything else — most critically
 // Stylesheet (Turnstile renders visually; breaking CSS breaks the
-// widget), Script, XHR/Fetch (challenge orchestration), Document,
+// widget), Font (the widget renders text with its own webfonts, and
+// the diet applies browser-session-wide, so blocked fonts leak into
+// the iframe), Script, XHR/Fetch (challenge orchestration), Document,
 // WebSocket and frames — flows untouched.
 func TestBlockedResourceTypeTable(t *testing.T) {
 	cases := map[network.ResourceType]bool{
@@ -178,7 +182,7 @@ func TestBlockedResourceTypeTable(t *testing.T) {
 		network.ResourceTypeStylesheet:         false, // NOT blocked: Turnstile renders visually
 		network.ResourceTypeImage:              true,
 		network.ResourceTypeMedia:              true,
-		network.ResourceTypeFont:               true,
+		network.ResourceTypeFont:               false, // NOT blocked: widget webfonts (session-wide CDP interception)
 		network.ResourceTypeScript:             false,
 		network.ResourceTypeTextTrack:          false,
 		network.ResourceTypeXHR:                false,

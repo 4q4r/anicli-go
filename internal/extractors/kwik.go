@@ -87,6 +87,8 @@ func (e *kwikExtractor) Extract(ctx context.Context, url string) (map[string]con
 	// 5. Token POST: the 302 Location is the media URL. The netclient
 	// follows the redirect (headers persist), so the final URL of the
 	// last response is the link (extractors.py:622-646 comments).
+	// The POST body cost is one CSRF field (tens of bytes), so the
+	// netclient's retry buffering of request bodies is effectively free (F34).
 	form := map[string][]string{"_token": {token[1]}}
 	post, err := e.http.PostForm(ctx, action[1], form, map[string]string{"Referer": kwikReferer})
 	if err != nil {

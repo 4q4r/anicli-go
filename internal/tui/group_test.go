@@ -192,3 +192,30 @@ func TestEpisodeSortKey(t *testing.T) {
 		t.Fatalf("sort keys wrong")
 	}
 }
+
+// TestGroupByTitle: the deterministic similarity grouper used by the
+// rebind flow clusters above the threshold and separates below it.
+func TestGroupByTitle(t *testing.T) {
+	results := []contracts.SearchResult{
+		{Title: "Ванпанчмен", URL: "u1", SourceID: "animego"},
+		{Title: "Ванпанчмен (TV)", URL: "u2", SourceID: "anilib"},
+		{Title: "Bleach", URL: "u3", SourceID: "animego"},
+	}
+
+	t.Run("similar titles cluster", func(t *testing.T) {
+		groups := GroupByTitle(results, 0.6)
+		if len(groups) != 2 {
+			t.Fatalf("want 2 groups (one punch cluster + bleach), got %d: %+v", len(groups), groups)
+		}
+		if len(groups[0]) != 2 || groups[0][0].URL != "u1" || groups[0][1].URL != "u2" {
+			t.Fatalf("the one punch pair must cluster together, got %+v", groups[0])
+		}
+	})
+
+	t.Run("high threshold isolates everything", func(t *testing.T) {
+		groups := GroupByTitle(results, 0.99)
+		if len(groups) != len(results) {
+			t.Fatalf("threshold 0.99 must isolate each result, got %d groups", len(groups))
+		}
+	})
+}

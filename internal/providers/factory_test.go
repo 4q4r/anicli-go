@@ -23,9 +23,9 @@ func TestAllReturnsElevenProviders(t *testing.T) {
 	}
 
 	wantIDs := []string{
-		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime",
+		"allanime", "anidub",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -83,11 +83,13 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	if len(list) != 11 {
 		t.Fatalf("List() = %d providers, want 11", len(list))
 	}
-	// Registration order follows All() (stable render/fan-out order).
+	// Registration order follows All() (stable render/fan-out order);
+	// anidub (no frozen Python original) is appended after the ported
+	// roster.
 	wantOrder := []string{
-		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime",
+		"allanime", "anidub",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {

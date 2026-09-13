@@ -52,17 +52,17 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 // baseURLs maps provider IDs onto their primary base URLs — the
 // targets `anicli cf solve` opens the browser against.
 var baseURLs = map[string]string{
-	"anilibria":      AniLibriaAPIBase,
-	"animevost":      AnimeVostBase,
-	"anilib":         AnilibAPIBase,
-	"animego":        AnimeGoBase,
-	"sovetromantica": SovetRomanticaBase,
-	"gogoanime":      GogoAnimeBase,
-	"animepahe":      AnimePaheBase,
-	"dreamcast":      DreamCastBase,
-	"sameband":       SameBandBase,
-	"kodik":          KodikAPIBase,
-	"allanime":       AllAnimeAPIBase,
+	"anilibria": AniLibriaAPIBase,
+	"animevost": AnimeVostBase,
+	"anilib":    AnilibAPIBase,
+	"animego":   AnimeGoBase,
+	"gogoanime": GogoAnimeBase,
+	"animepahe": AnimePaheBase,
+	"dreamcast": DreamCastBase,
+	"sameband":  SameBandBase,
+	"kodik":     KodikAPIBase,
+	"allanime":  AllAnimeAPIBase,
+	"anidub":    AnidubBase,
 }
 
 // BaseURLFor returns the primary base URL for a provider ID (ok is

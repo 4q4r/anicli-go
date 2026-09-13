@@ -117,14 +117,17 @@ func (f *Factory) GetSources(ctx context.Context, embedURL string) (map[string]c
 //
 //   - askor (aksor.yani.tv, extractors.py:394-406): no provider emits
 //     aksor URLs; the only site embedding the player is yummyanime,
-//     which is not among the 11 registered providers (and even
+//     which is not among the registered providers (and even
 //     yummyanime.py never places aksor URLs into raw_embeds);
 //   - csst (csst.online, extractors.py:409-423): no provider in the
 //     Python tree emits csst.online embed URLs at all;
 //   - sovetromantica_embed (sovetromantica.com/embed,
-//     extractors.py:426-438): the registered sovetromantica provider
-//     stashes episode-page URLs and resolves them inline
-//     (sovetromantica.py:84-98), never /embed URLs.
+//     extractors.py:426-438): the frozen Python sovetromantica
+//     provider stashes episode-page URLs and resolves them inline
+//     (sovetromantica.py:84-98), never /embed URLs — and the Go
+//     sovetromantica provider was removed in PR22 (site dead: domain
+//     hijacked off the anime project, frozen 2025), so nothing can
+//     produce these URLs here either.
 //
 // mp4upload needs no entry: the Python factory omits it entirely
 // (extractors.py:670 comment — disabled), so its URLs match nothing and
@@ -143,7 +146,7 @@ func (e *skippedExtractor) Matches(u string) bool { return e.matches(u) }
 // Extract explains the skip with the typed taxonomy instead of the
 // Python silent {}.
 func (e *skippedExtractor) Extract(_ context.Context, _ string) (map[string]contracts.VideoSource, error) {
-	return nil, fmt.Errorf("extractor:%s: %w: not ported: unreachable from the 11 registered providers",
+	return nil, fmt.Errorf("extractor:%s: %w: not ported: unreachable from the registered providers",
 		e.name, contracts.ErrExtractFailed)
 }
 

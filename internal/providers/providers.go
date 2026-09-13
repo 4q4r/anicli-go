@@ -79,3 +79,28 @@ func pythonFloatKey(num string) float64 {
 	}
 	return f
 }
+
+// pyQuote ports urllib.parse.quote with its default safe="/" set:
+// every byte outside the URL-unreserved set (and "/") is percent-
+// encoded uppercase, one UTF-8 byte at a time — spaces become %20, not
+// the form-style "+" of url.Values.Encode. Originally ported for
+// sovetromantica (sovetromantica.py:30); its live consumers are the
+// dreamcast base64 payload and the anidub search query.
+func pyQuote(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c == '-' || c == '_' || c == '.' || c == '~' || c == '/':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xF])
+		}
+	}
+	return b.String()
+}

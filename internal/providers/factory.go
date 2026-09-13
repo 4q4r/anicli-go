@@ -33,9 +33,6 @@ var allFactories = []struct {
 	{"animego", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimego(AnimeGoBase, http)
 	}},
-	{"sovetromantica", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSovetRomantica(SovetRomanticaBase, http)
-	}},
 	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},
@@ -53,6 +50,9 @@ var allFactories = []struct {
 	}},
 	{"allanime", func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider {
 		return newAllAnime(AllAnimeAPIBase, AllAnimeReferer, AllAnimeInternalBase, http, buildAABridge(cf), cacheDirFor(cfg))
+	}},
+	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnidub(AnidubBase, http)
 	}},
 }
 

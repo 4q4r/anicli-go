@@ -99,8 +99,9 @@ func TestStubOutputs(t *testing.T) {
 			args: []string{"doctor"},
 			contains: []string{
 				"doctor", "providers",
-				"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+				"anilibria", "animevost", "anilib", "animego",
 				"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
+				"anidub",
 			},
 		},
 		{

@@ -207,8 +207,9 @@ func runCFSolve(ctx context.Context, out io.Writer, providerID string) error {
 // providerBaseURLList renders the known provider IDs in stable order.
 func providerBaseURLList() []string {
 	return []string{
-		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik", "allanime",
+		"anidub",
 	}
 }
 

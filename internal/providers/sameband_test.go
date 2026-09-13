@@ -9,49 +9,84 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
+// [LIVE-VERIFIED 2026-09-13] The DLE POST search (do=search&subaction=search
+// &story=…) returns 200 with an EMPTY fastsearch_results shell — the site's
+// search is AJAX-only now. Search therefore GETs the /anime catalog (94
+// entries, no pagination, HTTP 200) and filters client-side.
 func TestSameBandSearch(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "sameband_search.html"))
+		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
 	})
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
-	results, err := p.Search(context.Background(), "ван")
+	results, err := p.Search(context.Background(), "дьявол")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 
-	if rec.Path != "/index.php" {
-		t.Errorf("request path = %q, rec=%+v", rec.Path, rec)
+	if rec.Method != "GET" {
+		t.Errorf("request method = %q, want GET (catalog fetch)", rec.Method)
 	}
-	formVal := func(key string) string {
-		if v, ok := rec.Form[key]; ok && len(v) > 0 {
-			return v[0]
-		}
-		return ""
-	}
-	if formVal("do") != "search" || formVal("subaction") != "search" || formVal("story") != "ван" {
-		t.Errorf("form = %v, want do/subaction=search story=ван", rec.Form)
+	if rec.Path != "/anime" {
+		t.Errorf("request path = %q, want /anime", rec.Path)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2 (third col-auto lacks the poster title)", len(results))
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1 catalog match", len(results))
 	}
-	if results[0].Title != "Ван Пис" {
+	if results[0].Title != "Дьявол Может Плакать 2" {
 		t.Errorf("Title = %q, want the .poster[title] attribute", results[0].Title)
 	}
-	// Python keeps the raw href verbatim, relative or not (sameband.py:42).
-	if results[0].URL != "/anime/van-pis" {
-		t.Errorf("URL = %q, want the raw relative href untouched", results[0].URL)
+	// The absolute catalog href is kept verbatim (sameband.py:42 quirk).
+	if results[0].URL != "https://sameband.studio/anime/122-djavol-mozhet-plakat-2.html" {
+		t.Errorf("URL = %q, want the absolute href", results[0].URL)
 	}
-	if results[1].URL != "https://mirror.example/anime/duo" {
-		t.Errorf("URL = %q, want the absolute href untouched", results[1].URL)
+	// The poster src is always prefixed with the site root, even when
+	// already absolute — sameband.py:44 quirk preserved.
+	if results[0].Poster != srv.URL+"/v/posters/IMG_26306.webp" {
+		t.Errorf("Poster = %q, want base-prefixed relative src", results[0].Poster)
 	}
-	// Python always prefixes the site root onto the img src, even when
-	// the src is already absolute (sameband.py:44) — quirk preserved.
-	if results[1].Poster != srv.URL+"/covers/duo.jpg" {
-		t.Errorf("Poster = %q, want base-prefixed relative src", results[1].Poster)
+}
+
+func TestSameBandSearchFiltersCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
+	})
+	p := newSameBand(srv.URL, testClient(t, "sameband"))
+
+	results, err := p.Search(context.Background(), "ИСТОРИЯ")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 case-insensitive matches", len(results))
+	}
+	if results[0].Title != "История о перекуре за супермаркетом" {
+		t.Errorf("Title = %q", results[0].Title)
+	}
+	if results[1].Title != "История электричества в двадцатом веке" {
+		t.Errorf("Title = %q", results[1].Title)
+	}
+}
+
+func TestSameBandSearchNoCatalogMatchIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
+	})
+	p := newSameBand(srv.URL, testClient(t, "sameband"))
+
+	results, err := p.Search(context.Background(), "naruto")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %d, want 0 for a query absent from the catalog", len(results))
 	}
 }
 

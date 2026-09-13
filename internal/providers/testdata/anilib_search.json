@@ -1,23 +1,33 @@
 {
   "data": [
     {
-      "id": 16488,
-      "rus_name": "Блич: Тысячелетняя кровавая война",
-      "name": "Bleach: Sennen Kessen-hen",
-      "eng_name": "Bleach: Thousand-Year Blood War",
-      "slug_url": "16488--bleach-sennen-kessen-hen",
+      "id": 11,
+      "rus_name": "Наруто",
+      "name": "Naruto",
+      "eng_name": "Naruto",
+      "slug_url": "11--naruto-anime",
       "cover": {
-        "default": "https://cdn-libria.info/cover/16488/default.jpg"
+        "default": "https://cover.cdnlibs.org/uploads/anime/11/cover/bbf77bf3-26e9-40ad-b21b-57a6b90a4b0d.jpg"
       }
     },
     {
-      "id": 9001,
-      "rus_name": null,
-      "name": "Yofukashi no Uta",
-      "eng_name": "Call of the Night",
-      "slug_url": "9001--yofukashi-no-uta",
+      "id": 1539,
+      "rus_name": "Наруто: Ураганные хроники",
+      "name": "Naruto: Shippuuden",
+      "eng_name": "Naruto Shippuden",
+      "slug_url": "1539--naruto-shippuuden-anime",
       "cover": {
-        "default": "https://cdn-libria.info/cover/9001/default.jpg"
+        "default": "https://cover.cdnlibs.org/uploads/anime/1539/cover/53581585-9e22-4799-addd-01062abed705.jpg"
+      }
+    },
+    {
+      "id": 7489,
+      "rus_name": "Наруто: Последний фильм",
+      "name": "The Last: Naruto the Movie",
+      "eng_name": "Naruto Shippuden the Movie 7: The Last",
+      "slug_url": "7489--the-last-naruto-the-movie-anime",
+      "cover": {
+        "default": "https://cover.cdnlibs.org/uploads/anime/7489/cover/ce3cc88d-889b-460f-b503-40e7fea53c10.jpg"
       }
     },
     {

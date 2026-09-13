@@ -1,0 +1,33 @@
+<!-- [LIVE-VERIFIED 2026-09-13] Derived from GET
+     https://megaplay.su/embed.php?sid=a1p6UHRKOGFtNnpPQjlTMVBVeDFoSTBxNEpsVUhlY1kzMCtyanMreGUwcz0
+     with Referer: https://gogoanime.by/ (HTTP 200, 1605 bytes) — the embed
+     host the gogoanime.by /player/ page serves for One Piece 1178. The
+     jwplayer setup block with its inline file URL is verbatim from the live
+     capture; styles trimmed. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MegaPlay Player</title>
+</head>
+<body>
+
+<div id="player-container"></div>
+
+<script>
+    jwplayer("player-container").setup({
+        file: "https://megaplay.su/uploads/hls/a1p6UHRKOGFtNnpPQjlTMVBVeDFoSTBxNEpsVUhlY1kzMCtyanMreGUwcz0/index.m3u8?v=1789317979",
+        image: "",
+        type:   "hls",
+        width: "100%",
+        height: "100%",
+        autostart: false,
+        mute: false,
+        stretching: "uniform",
+        controls: true,
+        tracks: [],
+        responsive: true
+    });
+</script>
+</body>
+</html>

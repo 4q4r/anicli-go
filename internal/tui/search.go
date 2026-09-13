@@ -234,6 +234,10 @@ func NewSearchProgress(deps *Deps, query string) *searchProgress {
 	}
 	for _, r := range rows {
 		m.status[r.ID] = "Ожидание…"
+		// Rows are pending from construction: the enrichment phase and
+		// the fan-out both settle them later; Enter stays blocked
+		// until every row lands.
+		m.pending[r.ID] = true
 	}
 	return m
 }
@@ -379,6 +383,10 @@ func (m *searchProgress) View() tea.View {
 		count := "—"
 		var style lipgloss.Style
 		switch {
+		case m.pending[row.ID] && m.enriching:
+			// Waiting for the Shikimori variant phase, not the
+			// provider itself yet.
+			style = theme.Dim
 		case m.pending[row.ID]:
 			state = m.spin.View() + " Поиск…"
 			style = theme.Accent
@@ -401,7 +409,7 @@ func (m *searchProgress) View() tea.View {
 	}
 	b.WriteString("\n")
 	responded := len(m.responded)
-	if responded > 0 || len(m.pending) == 0 {
+	if len(m.rows) > 0 && (responded > 0 || len(m.pending) == 0) {
 		counter := fmt.Sprintf("Ответившие: %d/%d провайдеров · Всего результатов: %d",
 			responded, len(m.rows), len(m.results))
 		b.WriteString(lipgloss.PlaceHorizontal(tableWidth, lipgloss.Center, theme.StatusLine.Render(counter)))

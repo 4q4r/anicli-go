@@ -8,6 +8,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,6 +37,10 @@ type doctorCheck struct {
 	err     error
 }
 
+// errDoctorTimeout marks a provider that blew its whole check budget
+// (both queries included) — rendered as the dedicated timeout verdict.
+var errDoctorTimeout = errors.New("таймаут")
+
 // doctorProbe runs one provider's two-query check inside the budget.
 // It is a package-level seam so tests can verify the doctor table
 // without network egress; the production implementation performs the
@@ -47,6 +52,11 @@ var doctorProbe = func(ctx context.Context, p contracts.Provider, budget time.Du
 	for _, q := range doctorQueries {
 		res, err := p.Search(ctx, q)
 		if err != nil {
+			if ctx.Err() != nil {
+				// The budget expired mid-request: report the timeout,
+				// not the downstream's mangled error text.
+				return total, fmt.Errorf("%w (%s)", errDoctorTimeout, budget)
+			}
 			return total, err
 		}
 		total += len(res)
@@ -141,6 +151,8 @@ func runDoctor(ctx context.Context, settingsPath string, out io.Writer) error {
 	for _, c := range checks {
 		switch {
 		case c.err != nil:
+			// Timeout budgets render as "ОШИБКА: таймаут (…s)" through
+			// the typed errDoctorTimeout text.
 			rows = append(rows, row{id: c.id, name: c.id, status: "ОШИБКА: " + c.err.Error(), results: "—", failed: true})
 		default:
 			// Both searches answered (0 results still means OK — the

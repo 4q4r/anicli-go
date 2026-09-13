@@ -347,7 +347,7 @@ func TestHistoryResumeAutoEntersSession(t *testing.T) {
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Ванпанчмен", URL: "u1", SourceID: "animego"}},
 		},
-		queries: map[string]string{}}
+		queries: map[string][]string{}}
 	ep := &fakeEpisode{
 		episodes: testEpisodeSet(),
 		streams: map[string]contracts.MediaStream{
@@ -403,7 +403,7 @@ func TestHistoryResumeNoMatchFallsToManualGrouping(t *testing.T) {
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Совсем Другое Аниме", URL: "u9", SourceID: "animego"}},
 		},
-		queries: map[string]string{}}
+		queries: map[string][]string{}}
 	deps := &Deps{Search: fs, Episode: &fakeEpisode{episodes: testEpisodeSet()}, Log: testLogger()}
 	rec := historyItems()[0]
 	rec.SourceURL = "u-changed"

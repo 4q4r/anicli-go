@@ -33,8 +33,12 @@ func TestRealDepsConstruction(t *testing.T) {
 	if real.Deps == nil || real.Deps.Search == nil || real.Deps.Episode == nil ||
 		real.Deps.Playback == nil || real.Deps.History == nil || real.Deps.Offline == nil ||
 		real.Deps.Database == nil || real.Deps.Health == nil || real.Deps.Shiki == nil ||
-		real.Deps.Download == nil {
-		t.Fatalf("all services must be wired")
+		real.Deps.Download == nil || real.Deps.Metadata == nil {
+		t.Fatalf("all services must be wired (incl. metadata, PR24)")
+	}
+	if real.Deps.SearchTimeout != settings.Network.SearchTimeout {
+		t.Fatalf("SearchTimeout must propagate from settings: got %v want %v",
+			real.Deps.SearchTimeout, settings.Network.SearchTimeout)
 	}
 
 	providers := real.Deps.Search.Providers()

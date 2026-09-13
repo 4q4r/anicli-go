@@ -32,6 +32,15 @@ type SearchService interface {
 	Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error)
 }
 
+// MetadataService resolves alternative titles for the hybrid search
+// (PR24): the Shikimori-matched title expands into aliases from the
+// metadata providers (AniList/Kitsu/anisearch/anidb).
+type MetadataService interface {
+	// SearchAlternativeTitles returns normalized unique aliases for a
+	// query. Errors mean "no enrichment"; callers fall back.
+	SearchAlternativeTitles(ctx context.Context, query string) ([]string, error)
+}
+
 // EpisodeService lists episodes and resolves streams for one source.
 type EpisodeService interface {
 	// GetEpisodes lists the episodes of the anime at animeURL on the

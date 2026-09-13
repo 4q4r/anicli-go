@@ -129,6 +129,34 @@ func GCMDecrypt(ciphertext, nonce, key []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
+// GCMSealFrame encrypts plaintext with AES-256-GCM and returns the
+// allanime wire framing as standard base64:
+//
+//	base64( 0x01 || nonce || ciphertext || tag )
+//
+// The nonce must be 12 bytes (the standard GCM construction); Seal
+// appends the 16-byte tag to the ciphertext, which is exactly the wire
+// layout GCMDecrypt expects after the version byte.
+func GCMSealFrame(key, nonce, plaintext []byte) (string, error) {
+	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
+		return "", ErrBadKeyLength
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("aes: new cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("aes: new gcm: %w", err)
+	}
+	sealed := gcm.Seal(nil, nonce, plaintext, nil)
+	out := make([]byte, 0, 1+len(nonce)+len(sealed))
+	out = append(out, 0x01)
+	out = append(out, nonce...)
+	out = append(out, sealed...)
+	return base64.StdEncoding.EncodeToString(out), nil
+}
+
 // ConstantTimeEqual compares two byte slices in constant time; use it
 // wherever secret-derived values are compared.
 func ConstantTimeEqual(a, b []byte) bool {

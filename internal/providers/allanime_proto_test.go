@@ -144,11 +144,6 @@ func TestAAMaskGolden(t *testing.T) {
 	if _, err := aaMask(""); err == nil {
 		t.Error("aaMask(\"\") must fail (live cy returns null)")
 	}
-	// cy("") returned null in the sandbox (the caller's destructuring
-	// turns it into a TypeError); the Go port errors loudly.
-	if _, err := aaMask(""); err == nil {
-		t.Error("aaMask(\"\") must fail (live cy returns null)")
-	}
 }
 
 // TestAAKeyGroup pins gT(host) — the referer-host to key-group map.

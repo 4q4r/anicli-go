@@ -396,18 +396,18 @@ func (p *AllAnime) ResolveStream(ctx context.Context, episode contracts.Episode,
 	}
 
 	for _, src := range sources {
+		// Decode once [M7]; the classification then only decides where
+		// the decoded URL goes.
+		raw, ok := decodeAllAnimeSourceURL(src.URL, p.internalBase)
+		if !ok {
+			continue
+		}
 		// Direct-media entries: live type=="player" sources (and any
 		// URL that names a media file) become links without a clock
 		// fetch. [LIVE-VERIFIED 2026-09-13]: the Yt-mp4 source carries
 		// type "player" / fallBack "mp4".
 		if aaIsDirectMedia(src) {
-			if raw, ok := decodeAllAnimeSourceURL(src.URL, p.internalBase); ok {
-				stream.Links["1080"] = contracts.VideoSource{URL: raw, Quality: "1080"}
-				continue
-			}
-		}
-		raw, ok := decodeAllAnimeSourceURL(src.URL, p.internalBase)
-		if !ok {
+			stream.Links["1080"] = contracts.VideoSource{URL: raw, Quality: "1080"}
 			continue
 		}
 		p.expandClockLinks(ctx, &stream, raw)
@@ -571,30 +571,7 @@ func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Ep
 		}
 
 		// Unencrypted response: accept sourceUrls directly.
-		var parsed struct {
-			Data struct {
-				Episode *struct {
-					SourceUrls []aaSourceEntry `json:"sourceUrls"`
-				} `json:"episode"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Data.Episode != nil {
-			entries := parsed.Data.Episode.SourceUrls
-			if len(entries) == 0 {
-				return nil, nil
-			}
-			sources := make([]aaSource, 0, len(entries))
-			for _, su := range entries {
-				sources = append(sources, aaSource{
-					Name:     su.SourceName,
-					URL:      strings.TrimPrefix(su.SourceURL, "--"),
-					Type:     su.Type,
-					FallBack: su.FallBack,
-				})
-			}
-			return aaPrioritizeSources(sources), nil
-		}
-		return nil, nil
+		return aaDecodePlainSources(body)
 	}
 	return nil, errAACryptoRotated
 }
@@ -647,6 +624,84 @@ func (p *AllAnime) resolveViaBridge(ctx context.Context, variables map[string]an
 			return nil, derr
 		}
 		return aaPrioritizeSources(sources), nil
+	}
+	return aaDecodePlainSources(body)
+}
+
+// aaGraphQLErrorMessages collects the GraphQL errors[] messages and
+// extension codes of a response body (deduped, response order) — ""
+// entries skipped. AA_CRYPTO signals are intentionally included; the
+// caller has already ruled them out by the time it asks.
+func aaGraphQLErrorMessages(body []byte) []string {
+	var parsed struct {
+		Errors []struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	var msgs []string
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, dup := seen[s]; dup {
+			return
+		}
+		seen[s] = struct{}{}
+		msgs = append(msgs, s)
+	}
+	for _, e := range parsed.Errors {
+		add(e.Message)
+		add(e.Extensions.Code)
+	}
+	return msgs
+}
+
+// aaDecodePlainSources decodes an unencrypted episode response [I3].
+// A body carrying episode data (even with zero sources) is the
+// deliberate empty passthrough — null episode WITHOUT errors stays
+// (nil, nil). A body WITHOUT episode data but WITH GraphQL errors[]
+// never collapses to a silent empty stream: NEED_CAPTCHA surfaces the
+// typed errAACaptcha, any other error surfaces a descriptive error
+// (wrapped into the contracts family by ResolveStream).
+func aaDecodePlainSources(body []byte) ([]aaSource, error) {
+	var parsed struct {
+		Data struct {
+			Episode *struct {
+				SourceUrls []aaSourceEntry `json:"sourceUrls"`
+			} `json:"episode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Data.Episode != nil {
+		entries := parsed.Data.Episode.SourceUrls
+		if len(entries) == 0 {
+			return nil, nil
+		}
+		sources := make([]aaSource, 0, len(entries))
+		for _, su := range entries {
+			sources = append(sources, aaSource{
+				Name:     su.SourceName,
+				URL:      strings.TrimPrefix(su.SourceURL, "--"),
+				Type:     su.Type,
+				FallBack: su.FallBack,
+			})
+		}
+		return aaPrioritizeSources(sources), nil
+	}
+	msgs := aaGraphQLErrorMessages(body)
+	for _, msg := range msgs {
+		if strings.HasPrefix(msg, "NEED_CAPTCHA") {
+			return nil, fmt.Errorf("%w: %s", errAACaptcha, msg)
+		}
+	}
+	if len(msgs) > 0 {
+		return nil, fmt.Errorf("allanime: graphql error response: %s", strings.Join(msgs, "; "))
 	}
 	return nil, nil
 }

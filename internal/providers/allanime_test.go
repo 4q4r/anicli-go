@@ -15,6 +15,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -654,6 +657,75 @@ func TestAllAnimeResolveStreamEmptyEpisode(t *testing.T) {
 	}
 }
 
+// TestAllAnimeResolveStreamNeedCaptchaTyped pins [I3]: a GraphQL
+// errors[] body carrying NEED_CAPTCHA (and no episode data) must
+// surface the typed errAACaptcha — never a silent empty stream — and
+// must NOT trigger the browser bridge (a captcha verdict is not a
+// crypto rotation).
+func TestAllAnimeResolveStreamNeedCaptchaTyped(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+			return false
+		}
+		_, _ = w.Write([]byte(`{"errors":[{"message":"NEED_CAPTCHA","extensions":{"code":"NEED_CAPTCHA"}}]}`))
+		return true
+	})
+	bridge := &aaFakeBridge{}
+	p := env.providerWithBridge(bridge)
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("NEED_CAPTCHA collapsed to a silent empty stream")
+	}
+	if !errors.Is(err, errAACaptcha) {
+		t.Fatalf("err = %v, want errAACaptcha chain", err)
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
+	}
+	if bridge.calls != 0 {
+		t.Errorf("bridge calls = %d, want 0 (captcha must not burn a bridge session)", bridge.calls)
+	}
+}
+
+// TestAllAnimeResolveStreamGraphQLErrorsLoud pins [I3]: any other
+// GraphQL errors[] body without episode data fails loudly (wrapped
+// into the contracts family by ResolveStream) instead of returning an
+// empty stream.
+func TestAllAnimeResolveStreamGraphQLErrorsLoud(t *testing.T) {
+	t.Parallel()
+
+	env := newAAEnv(t)
+	env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+		if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+			return false
+		}
+		_, _ = w.Write([]byte(`{"errors":[{"message":"internal server error"},{"message":"second failure"}]}`))
+		return true
+	})
+	p := env.provider()
+
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+	if err == nil {
+		t.Fatal("graphql errors[] collapsed to a silent empty stream")
+	}
+	if errors.Is(err, errAACaptcha) {
+		t.Fatalf("err = %v, generic errors must not classify as captcha", err)
+	}
+	if errors.Is(err, errAACryptoRotated) {
+		t.Fatalf("err = %v, generic errors must not classify as crypto rotation", err)
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want contracts.ErrExtractFailed chain", err)
+	}
+	if !strings.Contains(err.Error(), "internal server error") {
+		t.Errorf("err = %v, want the server message chained", err)
+	}
+}
+
 // TestAAPrioritizeSources pins the ani-cli provider priority
 // (Default > S-mp4 > Luf-Mp4 > Yt-mp4, then response order).
 func TestAAPrioritizeSources(t *testing.T) {
@@ -693,6 +765,39 @@ func TestAABridgeScriptShape(t *testing.T) {
 		if !strings.Contains(aaBridgeExtractionJS, closure) {
 			t.Errorf("extraction script does not extract %s", closure)
 		}
+	}
+	// C1 regression guard: the const is a Go RAW string — backslashes
+	// pass through verbatim, so a doubled `\\` in the Go source reaches
+	// the JS engine as an escaped backslash. Inside a regex literal
+	// (`/https?:\/\//` written as `\\/`) the bare second slash
+	// TERMINATES the regex and the whole script dies with a SyntaxError
+	// at parse. The emitted script must contain single backslashes
+	// only (`\s`, `\/`, `\.`, `\n` …), never two in a row.
+	if strings.Contains(aaBridgeExtractionJS, `\\`) {
+		t.Error("extraction script contains a doubled backslash (raw-string escape leak) — regexes and join('\\n') would be broken in JS")
+	}
+}
+
+// TestAABridgeScriptParsesUnderNode proves the emitted script is valid
+// JavaScript: it materializes the exact IIFE Go evaluates in the page
+// into a temp file and parses it with `node --check`. Skipped when node
+// is not installed (the shape test above still guards the escape
+// class). [C1]
+func TestAABridgeScriptParsesUnderNode(t *testing.T) {
+	t.Parallel()
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; script parse check skipped")
+	}
+	script := fmt.Sprintf("(async () => { const LANE = %q; %s })()", "k7", aaBridgeExtractionJS)
+	path := filepath.Join(t.TempDir(), "bridge_extraction.js")
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	out, err := exec.Command(node, "--check", path).CombinedOutput() //nolint:gosec // test-only: node resolved from PATH, script path inside t.TempDir()
+	if err != nil {
+		t.Fatalf("node --check rejected the emitted bridge script (SyntaxError class): %v\n%s", err, out)
 	}
 }
 

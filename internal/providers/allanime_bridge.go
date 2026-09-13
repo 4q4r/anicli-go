@@ -138,14 +138,14 @@ const __out = {ok: false, error: 'incomplete'};
 try {
   // 1. entry bundle URL from the root HTML
   const html = await (await fetch('/', {credentials: 'include'})).text();
-  const appMatch = html.match(/https?:\\/\\/[^"'\\s]+\\/entry\\/app\\.[A-Za-z0-9_.-]+\\.js/);
+  const appMatch = html.match(/https?:\/\/[^"'\s]+\/entry\/app\.[A-Za-z0-9_.-]+\.js/);
   if (!appMatch) throw new Error('entry bundle not found on root page');
   const appURL = appMatch[0];
 
   // 2. chunk list from the entry bundle (quote-delimited specifiers,
   //    resolved against the entry URL)
   const entry = await (await fetch(appURL)).text();
-  const chunkURLs = [...new Set([...entry.matchAll(/"([^"']*\\.js)"/g)].map(m => m[1]))]
+  const chunkURLs = [...new Set([...entry.matchAll(/"([^"']*\.js)"/g)].map(m => m[1]))]
     .map(s => new URL(s, appURL).href)
     .filter(u => u.includes('/chunks/'));
 
@@ -159,16 +159,16 @@ try {
 
   // 4. sandbox-eval the chunk (dossier harness)
   let body = cryptoChunk;
-  body = body.replace(/import\\s*"[^"]*"\\s*;?/g, '');
-  body = body.replace(/import\\s*\\{([^}]*)\\}\\s*from\\s*"[^"]*"\\s*;?/g, (full, names) => {
+  body = body.replace(/import\s*"[^"]*"\s*;?/g, '');
+  body = body.replace(/import\s*\{([^}]*)\}\s*from\s*"[^"]*"\s*;?/g, (full, names) => {
     return names.split(',').map(s => s.trim()).filter(Boolean).map(pair => {
-      const parts = pair.split(/\\s+as\\s+/).map(x => x.trim());
+      const parts = pair.split(/\s+as\s+/).map(x => x.trim());
       return 'const ' + (parts[1] || parts[0]) + ' = __STUB.' + parts[0] + ';';
     }).join('');
   });
-  body = body.replace(/import\\s+([A-Za-z_$][\\w$]*)\\s+from\\s*"[^"]*"\\s*;?/g, 'const $1 = __STUB.default;');
-  body = body.replace(/export\\s*\\{[\\s\\S]*\\}\\s*;?\\s*$/, '');
-  body = body.replace(/import\\.meta/g, '__IMPORT_META');
+  body = body.replace(/import\s+([A-Za-z_$][\w$]*)\s+from\s*"[^"]*"\s*;?/g, 'const $1 = __STUB.default;');
+  body = body.replace(/export\s*\{[\s\S]*\}\s*;?\s*$/, '');
+  body = body.replace(/import\.meta/g, '__IMPORT_META');
   const mkStubCode = [
     'function mkStub(path) {',
     '  const fn = function(){ return STUB; };',
@@ -190,13 +190,13 @@ try {
     '  return STUB;',
     '}',
     "const __STUB = mkStub('mod');",
-  ].join('\\n');
+  ].join('\n');
   const factory = new Function([
     "const __IMPORT_META = {url: " + JSON.stringify(appURL) + ", env: {}, glob: {}};",
     mkStubCode,
     body,
     'return {cy, iT, gT, mT, gy, sd};',
-  ].join('\\n'));
+  ].join('\n'));
   const bag = factory();
 
   // 5. buildId + mask + bootstrap over the bT epoch candidates
@@ -207,6 +207,15 @@ try {
   const host = location.hostname;
   const group = bag.gT(host);
   const candidates = [...new Set([bag.mT(), bag.gy()])];
+  // PINNED FALLBACK ORIGIN [M5]: when the entry bundle is served from
+  // a host other than the page origin, the API lives at
+  // https://api.mkissa.net (the post-2026-07-22 rotation value; the
+  // AllAnimeAPIBase Go constant mirrors it). If the site rotates the
+  // API host again, the bootstrap fetch below fails LOUDLY (non-ok
+  // status or empty partB -> lastErr -> thrown) and the error surfaces
+  // through the bridge reply to the Go path — no silent wrong-host
+  // guessing here. Update this literal together with
+  // AllAnimeAPIBase on rotation.
   const apiOrigin = new URL(appURL).origin === location.origin ? location.origin : 'https://api.mkissa.net';
   const bootstrap = new URL('/client-crypto/v1/bootstrap', apiOrigin);
   let lastErr = 'no epoch candidate accepted';

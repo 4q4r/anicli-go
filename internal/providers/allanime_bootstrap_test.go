@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -205,6 +207,153 @@ func TestAAMaterialBuildMismatchIsTyped(t *testing.T) {
 		t.Fatal("bootstrap 4xx swallowed")
 	} else if !isAACryptoFailure(err) {
 		t.Fatalf("err = %v, want a typed AA crypto failure", err)
+	}
+}
+
+// aaBootStatusWant classifies the expected bootstrap failure mode of a
+// status answer.
+type aaBootStatusWant int
+
+const (
+	wantBuildUnknown aaBootStatusWant = iota
+	wantForbidden
+	wantRateLimited
+	wantGeneric
+)
+
+// TestAAMaterialBootstrapStatusNarrowing pins [M4]: only 400/404 mean
+// the server rejected the buildId (the bridge trigger). 403/429 are
+// distinct typed endpoint-access failures, and every other status
+// stays a generic transport error — none of them may masquerade as
+// errAABuildUnknown and burn a bridge session. (netclient maps 403 to
+// ErrProvider403 and 404 to ErrNotFound, so classification must read
+// the status off the ProviderError wrapper.)
+func TestAAMaterialBootstrapStatusNarrowing(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		status int
+		want   aaBootStatusWant
+	}{
+		{status: http.StatusBadRequest, want: wantBuildUnknown},
+		{status: http.StatusNotFound, want: wantBuildUnknown},
+		{status: http.StatusForbidden, want: wantForbidden},
+		{status: http.StatusTooManyRequests, want: wantRateLimited},
+		{status: http.StatusInternalServerError, want: wantGeneric},
+		{status: http.StatusTeapot, want: wantGeneric},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("status_%d", tc.status), func(t *testing.T) {
+			t.Parallel()
+
+			env := newAABootEnv(t)
+			env.setNow(1789000000000)
+			env.serveErr = tc.status
+			m := env.manager("168")
+
+			_, err := m.get(context.Background())
+			if err == nil {
+				t.Fatal("bootstrap failure swallowed")
+			}
+			isBuildUnknown := errors.Is(err, errAABuildUnknown)
+			if tc.want == wantBuildUnknown && !isBuildUnknown {
+				t.Fatalf("status %d: err = %v, want errAABuildUnknown chain", tc.status, err)
+			}
+			if tc.want != wantBuildUnknown && isBuildUnknown {
+				t.Fatalf("status %d: generic/other failure misclassified as errAABuildUnknown: %v", tc.status, err)
+			}
+			switch tc.want {
+			case wantForbidden:
+				if !errors.Is(err, errAAForbidden) {
+					t.Fatalf("status %d: err = %v, want errAAForbidden chain", tc.status, err)
+				}
+			case wantRateLimited:
+				if !errors.Is(err, errAARateLimited) {
+					t.Fatalf("status %d: err = %v, want errAARateLimited chain", tc.status, err)
+				}
+			case wantGeneric:
+				if errors.Is(err, errAAForbidden) || errors.Is(err, errAARateLimited) {
+					t.Fatalf("status %d: generic failure misclassified as typed: %v", tc.status, err)
+				}
+			}
+		})
+	}
+}
+
+// TestAAMaterialManagerConcurrentRefreshAdoptBridge pins [I2] under
+// -race: goroutine A runs refresh() (whose detached bootstrap reads
+// buildID/maskOverride) while goroutine B hammers the concurrent
+// writers (setBuildID + mask-only adoptBridge). The reads must be
+// snapshotted under the manager mutex; the race detector flags the
+// unsynchronized read otherwise. The fake bootstrap lingers 2ms per
+// request so the interleaving is real, not incidental.
+func TestAAMaterialManagerConcurrentRefreshAdoptBridge(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 64)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		time.Sleep(2 * time.Millisecond) // widen the overlap window
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"epoch": 2958, "partB": "lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=",
+			"switchAt": 4102444800000, "k": "k7",
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	m := newAAMaterialManager(aaMaterialDeps{
+		BootstrapBase: srv.URL + "/client-crypto/v1/bootstrap",
+		Referer:       "https://mkissa.to",
+		RefererHost:   "srv.example",
+		Lane:          "k7",
+		BuildID:       func() (string, error) { return "168", nil },
+		HTTP:          testClient(t, "allanime"),
+		Now:           func() time.Time { return time.UnixMilli(1789000000000) },
+	})
+
+	// B: the concurrent writers, hammering until A is done.
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	writers.Add(1)
+	go func() {
+		defer writers.Done()
+		drifted := mkBytes(200)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			m.setBuildID("777")
+			if err := m.adoptBridge(context.Background(), aaBridgeMaterial{
+				BuildID: "777", Mask: drifted,
+			}); err != nil {
+				t.Errorf("adoptBridge: %v", err)
+				return
+			}
+		}
+	}()
+
+	// A: in-flight refreshes overlapping B's writes. A refresh whose
+	// result lands in the mask-only-adoption invalidation window fails
+	// with errAAInvalidated — the documented concurrent semantics; any
+	// other failure is a bug.
+	const refreshes = 4
+	for range refreshes {
+		if _, err := m.refresh(context.Background()); err != nil && !errors.Is(err, errAAInvalidated) {
+			t.Errorf("refresh: %v", err)
+		}
+	}
+	close(stop)
+	writers.Wait()
+
+	// The interleave really happened (A hit the slow bootstrap) and the
+	// manager settles into usable state.
+	if hits := len(entered); hits < refreshes {
+		t.Fatalf("bootstrap hits = %d, want >= %d (no real interleaving)", hits, refreshes)
+	}
+	if _, err := m.get(context.Background()); err != nil {
+		t.Fatalf("get after interleave: %v", err)
 	}
 }
 

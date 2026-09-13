@@ -16,12 +16,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
@@ -51,6 +53,22 @@ var (
 	// errAALaneMismatch marks bootstrap material served for another
 	// lane (k field check).
 	errAALaneMismatch = errors.New("allanime: bootstrap lane mismatch")
+	// errAAForbidden marks a 403 bootstrap answer — endpoint access
+	// denied. Deliberately NOT a build-unknown: a bridge session must
+	// not be burned on a wall the bridge cannot change.
+	errAAForbidden = errors.New("allanime: bootstrap forbidden")
+	// errAARateLimited marks a 429 bootstrap answer — the endpoint is
+	// throttling. Not a build verdict; retry later, never bridge.
+	errAARateLimited = errors.New("allanime: bootstrap rate limited")
+	// errAACaptcha marks a GraphQL NEED_CAPTCHA verdict on the episode
+	// query. Not a crypto failure — the bridge cannot clear it; the
+	// resolve must fail loudly instead of an empty stream.
+	errAACaptcha = errors.New("allanime: captcha required (NEED_CAPTCHA)")
+	// errAAInvalidated marks a refresh whose result was invalidated by
+	// a concurrent mask-only bridge adoption before the waiter read
+	// it (adoptBridge drops the cache mid-flight). Transient — the next
+	// get re-bootstraps with the adopted mask.
+	errAAInvalidated = errors.New("allanime: bootstrap settled without material (invalidated by concurrent bridge adoption)")
 )
 
 // isAACryptoFailure reports whether err belongs to the typed AllAnime
@@ -191,7 +209,7 @@ func (m *aaMaterialManager) await(ctx context.Context, done chan struct{}) (*aaM
 		return nil, m.err
 	}
 	if m.material == nil {
-		return nil, errors.New("allanime: bootstrap settled without material")
+		return nil, errAAInvalidated
 	}
 	return m.material, nil
 }
@@ -240,7 +258,13 @@ func (m *aaMaterialManager) adoptBridge(ctx context.Context, bm aaBridgeMaterial
 // lane key. First successful candidate wins; exhausted candidates
 // surface the last error (typed where the server said so).
 func (m *aaMaterialManager) bootstrap(ctx context.Context) (*aaMaterial, error) {
+	// Snapshot the mutable fields under the mutex [I2]: bootstrap runs
+	// on a detached goroutine (runBootstrap) while adoptBridge and
+	// setBuildID may write both fields concurrently.
+	m.mu.Lock()
 	buildID := m.buildID
+	maskOverride := m.maskOverride
+	m.mu.Unlock()
 	if buildID == "" {
 		bid, err := m.deps.BuildID()
 		if err != nil {
@@ -248,7 +272,7 @@ func (m *aaMaterialManager) bootstrap(ctx context.Context) (*aaMaterial, error) 
 		}
 		buildID = bid
 	}
-	mask := m.maskOverride
+	mask := maskOverride
 	if mask == nil {
 		ported, err := aaMask(buildID)
 		if err != nil {
@@ -307,12 +331,25 @@ func (m *aaMaterialManager) bootstrapOnce(ctx context.Context, buildID string, m
 	}
 	resp, err := m.deps.HTTP.Get(ctx, endpoint, headers)
 	if err != nil {
-		// The netclient maps final 4xx/5xx onto StatusError; a rejected
-		// bootstrap (unknown buildId/lane — the live endpoint answers
-		// 400 there) is the typed build-unknown signal for the bridge.
-		var status *netclient.StatusError
-		if errors.As(err, &status) && status.StatusCode >= 400 {
-			return nil, fmt.Errorf("%w: bootstrap status %d", errAABuildUnknown, status.StatusCode)
+		// Narrowed status classification [M4]: the netclient maps every
+		// final failure onto *contracts.ProviderError (403 additionally
+		// onto ErrProvider403, 404 onto ErrNotFound — a bare
+		// *netclient.StatusError only exists for unmapped statuses), so
+		// the code is read off the ProviderError wrapper. Only 400/404
+		// mean the server rejected the buildId (the live endpoint
+		// answers 400 there) — the bridge trigger. 403/429 are distinct
+		// endpoint-access failures whose bridge session must not be
+		// burned; everything else stays a generic transport error.
+		var perr *contracts.ProviderError
+		if errors.As(err, &perr) {
+			switch perr.StatusCode {
+			case http.StatusBadRequest, http.StatusNotFound:
+				return nil, fmt.Errorf("%w: bootstrap status %d", errAABuildUnknown, perr.StatusCode)
+			case http.StatusForbidden:
+				return nil, fmt.Errorf("%w: bootstrap status %d", errAAForbidden, perr.StatusCode)
+			case http.StatusTooManyRequests:
+				return nil, fmt.Errorf("%w: bootstrap status %d", errAARateLimited, perr.StatusCode)
+			}
 		}
 		return nil, fmt.Errorf("allanime bootstrap: %w", err)
 	}

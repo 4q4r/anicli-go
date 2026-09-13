@@ -59,9 +59,16 @@ var allFactories = []struct {
 // source needs them (kodik's token). Grow allFactories as later waves
 // land.
 func All(cfg config.Settings) ([]contracts.Provider, error) {
+	return all(cfg, nil)
+}
+
+// all is All with extra netclient options applied to every client
+// (the CF solver wiring).
+func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, error) {
 	out := make([]contracts.Provider, 0, len(allFactories))
 	for _, factory := range allFactories {
-		client, err := netclient.New(cfg.Network, netclient.WithProvider(factory.id))
+		opts := append([]netclient.Option{netclient.WithProvider(factory.id)}, extra...)
+		client, err := netclient.New(cfg.Network, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("build %s client: %w", factory.id, err)
 		}
@@ -72,9 +79,14 @@ func All(cfg config.Settings) ([]contracts.Provider, error) {
 
 // NewRegistry builds the full provider set with every provider wrapped
 // in a SearchDelegator recording into stats. stats may be nil: searches
-// then simply are not recorded.
+// then simply are not recorded. When [cf].enabled the CF challenge
+// ladder is wired into every client; Close releases it.
 func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registry, error) {
-	bare, err := All(cfg)
+	cfOpts, cfClose, err := buildCFOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	bare, err := all(cfg, cfOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -85,5 +97,6 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registr
 			return nil, err
 		}
 	}
+	reg.cfClose = cfClose
 	return reg, nil
 }

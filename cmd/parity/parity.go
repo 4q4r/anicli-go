@@ -33,6 +33,14 @@ type env struct {
 	timeout time.Duration
 }
 
+// close releases the registry's shared resources (the CF bypass stack
+// when [cf] is enabled; a no-op otherwise).
+func (e *env) close() {
+	if e.reg != nil {
+		_ = e.reg.Close()
+	}
+}
+
 // gateProviders is the G1 gate threshold: `parity all` exits non-zero
 // when fewer than this many providers answer both probe queries.
 const gateProviders = 11
@@ -207,6 +215,7 @@ func paritySearchCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobr
 			if err != nil {
 				return err
 			}
+			defer env.close()
 			p, err := provider(env.reg, args[0])
 			if err != nil {
 				return err
@@ -241,6 +250,7 @@ func parityEpisodesCommand(d deps, setup func(*cobra.Command) (*env, error)) *co
 			if err != nil {
 				return err
 			}
+			defer env.close()
 			p, err := provider(env.reg, args[0])
 			if err != nil {
 				return err
@@ -278,6 +288,7 @@ func parityResolveCommand(d deps, setup func(*cobra.Command) (*env, error)) *cob
 			if err != nil {
 				return err
 			}
+			defer env.close()
 			p, err := provider(env.reg, args[0])
 			if err != nil {
 				return err
@@ -337,6 +348,7 @@ func parityAllCommand(setup func(*cobra.Command) (*env, error)) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer env.close()
 			timeout := env.timeout
 			out := cmd.OutOrStdout()
 

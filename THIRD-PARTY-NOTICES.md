@@ -21,6 +21,7 @@ that clause requires notice reproduction in binary distributions.
 | `github.com/PuerkitoBio/goquery` | v1.13.0 | BSD-3-Clause |
 | `github.com/bogdanfinn/fhttp` | v0.6.9 | BSD-3-Clause (fork of Go `net/http`) |
 | `github.com/bogdanfinn/tls-client` | v1.16.0 | **BSD-4-Clause** (text below) |
+| `github.com/chromedp/chromedp` | v0.16.0 | MIT |
 | `github.com/go-chi/chi/v5` | v5.3.2 | MIT |
 | `github.com/jmespath/go-jmespath` | v0.4.0 | Apache-2.0 |
 | `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 |

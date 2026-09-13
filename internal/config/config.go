@@ -136,6 +136,26 @@ type Providers struct {
 	Kodik ProvidersKodik `toml:"kodik"`
 }
 
+// CF configures the embedded Cloudflare bypass (CloakBrowser stealth
+// Chromium + clearance ladder). Entirely opt-in: disabled by default,
+// every provider request behaves exactly as before unless enabled.
+type CF struct {
+	// Enabled turns the challenge ladder on for all provider clients.
+	Enabled bool `toml:"enabled"`
+	// Headed runs the solve browser with a visible window — the
+	// fallback for interactive Turnstile challenges (linux without a
+	// display fails loud with an xvfb-run hint).
+	Headed bool `toml:"headed"`
+	// SolveTimeout bounds one challenge solve.
+	SolveTimeout time.Duration `toml:"solve_timeout"`
+	// AutoUpdate keeps the cached stealth Chromium current
+	// (network-gated, never blocks solves; $CLOAKBROWSER_AUTO_UPDATE
+	// can force it off).
+	AutoUpdate bool `toml:"auto_update"`
+	// UpdateInterval is the auto-update retry ticker cadence.
+	UpdateInterval time.Duration `toml:"update_interval"`
+}
+
 // ProvidersKodik carries the Kodik API token (https://kodik-api.com
 // answers 401 without one). Empty by default: the kodik provider fails
 // loud on use, never at startup, so the credential is only demanded from
@@ -157,6 +177,7 @@ type Settings struct {
 	API       API       `toml:"api"`
 	Web       Web       `toml:"web"`
 	Providers Providers `toml:"providers"`
+	CF        CF        `toml:"cf"`
 }
 
 // Default returns the built-in settings: user-tuned timeout values carried
@@ -201,6 +222,13 @@ func Default() Settings {
 			AuthSecret:      "",
 		},
 		Web: Web{Users: map[string]WebUser{}},
+		CF: CF{
+			Enabled:        false,
+			Headed:         true,
+			SolveTimeout:   90 * time.Second,
+			AutoUpdate:     true,
+			UpdateInterval: 30 * time.Minute,
+		},
 	}
 }
 

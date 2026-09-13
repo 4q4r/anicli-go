@@ -27,7 +27,7 @@ import (
 // sentinel (I4). The nested field defeats zero-size pointer aliasing
 // so identity comparison stays meaningful even in-package.
 type backToken struct {
-	sentinel struct{}
+	_ struct{}
 }
 
 // Back is THE navigation sentinel (I4): every "go one level up"

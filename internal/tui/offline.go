@@ -78,6 +78,8 @@ type offlineSession struct {
 }
 
 // NewOfflineSession builds the offline session for one title.
+//
+//nolint:revive // internal screen type
 func NewOfflineSession(deps *Deps, title OfflineTitle) *offlineSession {
 	s := &offlineSession{deps: deps, title: title}
 	s.buildEpisodeList()

@@ -34,6 +34,8 @@ type healthScreen struct {
 }
 
 // NewHealthScreen builds the screen and schedules the checks.
+//
+//nolint:revive // internal screen type
 func NewHealthScreen(deps *Deps) *healthScreen {
 	sp := spinner.New(spinner.WithSpinner(spinner.Line))
 	var rows []ProviderMeta
@@ -61,12 +63,11 @@ func (h *healthScreen) ID() string { return healthID }
 func (h *healthScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{h.spin.Tick}
 	for _, row := range h.rows {
-		prov := row
 		cmds = append(cmds, safeCmd(healthID, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), healthCheckTimeout)
 			defer cancel()
-			err := h.deps.Health.Check(ctx, prov.ID)
-			return healthSettledMsg{providerID: prov.ID, err: err}
+			err := h.deps.Health.Check(ctx, row.ID)
+			return healthSettledMsg{providerID: row.ID, err: err}
 		}))
 	}
 	return tea.Batch(cmds...)
@@ -105,15 +106,16 @@ func (h *healthScreen) View() tea.View {
 	for _, row := range h.rows {
 		state := h.status[row.ID]
 		style := theme.Dim
-		if h.pending[row.ID] {
+		switch {
+		case h.pending[row.ID]:
 			state = h.spin.View() + " " + state
 			style = theme.Accent
-		} else if state == "OK" {
+		case state == "OK":
 			style = theme.Success
-		} else {
+		case state != "Проверка…":
 			style = theme.Error
 		}
-		b.WriteString(fmt.Sprintf("  %-16s %-6s %s\n", row.Name, "Ping", style.Render(state)))
+		fmt.Fprintf(&b, "  %-16s %-6s %s\n", row.Name, "Ping", style.Render(state))
 	}
 	if len(h.rows) == 0 {
 		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))

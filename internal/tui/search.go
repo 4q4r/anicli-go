@@ -88,6 +88,8 @@ type searchProgress struct {
 
 // NewSearchProgress builds the fan-out screen and schedules one
 // panic-safe command per provider.
+//
+//nolint:revive // internal screen type
 func NewSearchProgress(deps *Deps, query string) *searchProgress {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	rows := []ProviderMeta{}
@@ -117,11 +119,10 @@ func (m *searchProgress) ID() string { return searchProgressID }
 func (m *searchProgress) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spin.Tick}
 	for _, row := range m.rows {
-		prov := row
 		cmds = append(cmds, safeCmd(searchProgressID, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 			defer cancel()
-			return withProvider(searchOne(ctx, m.deps, prov.ID, m.query), prov)
+			return withProvider(searchOne(ctx, m.deps, row.ID, m.query), row)
 		}))
 	}
 	return tea.Batch(cmds...)
@@ -173,15 +174,16 @@ func (m *searchProgress) View() tea.View {
 	for _, row := range m.rows {
 		state := m.status[row.ID]
 		style := theme.Dim
-		if m.pending[row.ID] {
+		switch {
+		case m.pending[row.ID]:
 			state = m.spin.View() + " " + state
 			style = theme.Accent
-		} else if strings.HasPrefix(state, "Найдено") {
+		case strings.HasPrefix(state, "Найдено"):
 			style = theme.Success
-		} else if strings.HasPrefix(state, "Ошибка") {
+		case strings.HasPrefix(state, "Ошибка"):
 			style = theme.Error
 		}
-		b.WriteString(fmt.Sprintf("  %-16s %s\n", row.Name, style.Render(state)))
+		fmt.Fprintf(&b, "  %-16s %s\n", row.Name, style.Render(state))
 	}
 	if len(m.rows) == 0 {
 		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
@@ -201,12 +203,13 @@ func (m *searchProgress) View() tea.View {
 // pick (this ports the Python semantic grouper's role onto explicit
 // user action per the Go TUI spec).
 type searchGroup struct {
-	deps   *Deps
-	check  *CheckList
-	source []contracts.SearchResult
+	deps  *Deps
+	check *CheckList
 }
 
 // NewSearchGroup builds the grouping screen over the flat result set.
+//
+//nolint:revive // internal screen type
 func NewSearchGroup(deps *Deps, results []contracts.SearchResult) *searchGroup {
 	items := make([]Choice, 0, len(results))
 	for i, r := range results {
@@ -268,6 +271,8 @@ type searchSource struct {
 
 // NewSearchSource builds the source picker: each grouped result in
 // registry-stable order.
+//
+//nolint:revive // internal screen type
 func NewSearchSource(deps *Deps, group []contracts.SearchResult) *searchSource {
 	stable := append([]contracts.SearchResult(nil), group...)
 	sort.SliceStable(stable, func(i, j int) bool { return stable[i].SourceID < stable[j].SourceID })

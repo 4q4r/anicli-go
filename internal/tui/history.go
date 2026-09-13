@@ -245,7 +245,6 @@ type rebindProgress struct {
 	rec     *storage.AnimeProgress
 	query   string
 	results []contracts.SearchResult
-	settled bool
 	list    *PinList
 }
 
@@ -261,7 +260,6 @@ func (r *rebindProgress) Init() tea.Cmd {
 	providers := r.deps.Search.Providers()
 	cmds := make([]tea.Cmd, 0, len(providers))
 	for _, p := range providers {
-		p := p
 		cmds = append(cmds, safeCmd(r.ID(), func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 			defer cancel()
@@ -356,68 +354,11 @@ func (r *rebindProgress) View() tea.View {
 		theme.Dim.Render("enter — сгруппировать и выбрать · esc — назад"))
 }
 
-// newHistoryResume rehydrates the source group and opens the session
-// at the stored episode with the stored dubs (python _rehydrate_group
-// + session_loop resume).
+// newHistoryResume rehydrates the source group and opens the resume
+// fan-out (python _rehydrate_group): the standard search progress
+// surface driven by the record's bound title.
 func newHistoryResume(deps *Deps, rec *storage.AnimeProgress) *searchProgress {
 	return NewSearchProgress(deps, derefStr(rec.BoundTitle, rec.Title))
-}
-
-// historyResumeScreen adapts the rehydrate flow onto the fan-out
-// screen: it consumes providerResultMsg the same way and finalizes
-// with RehydrateGroup instead of the grouping checklist.
-type historyResumeScreen struct {
-	deps    *Deps
-	rec     *storage.AnimeProgress
-	results []contracts.SearchResult
-	status  string
-}
-
-// ID implements Screen.
-func (h *historyResumeScreen) ID() string { return historyResumeID }
-
-// Init implements Screen.
-func (h *historyResumeScreen) Init() tea.Cmd {
-	return h.fanOut()
-}
-
-func (h *historyResumeScreen) fanOut() tea.Cmd {
-	providers := h.deps.Search.Providers()
-	cmds := make([]tea.Cmd, 0, len(providers))
-	for _, p := range providers {
-		p := p
-		cmds = append(cmds, safeCmd(h.ID(), func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-			defer cancel()
-			res, err := h.deps.Search.Search(ctx, p.ID, derefStr(h.rec.BoundTitle, h.rec.Title))
-			return providerResultMsg{provider: p, results: res, err: err}
-		}))
-	}
-	return tea.Batch(cmds...)
-}
-
-// Update implements Screen.
-func (h *historyResumeScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	switch msg := msg.(type) {
-	case providerResultMsg:
-		if msg.err == nil {
-			h.results = append(h.results, msg.results...)
-		}
-		return h, nil
-	case tea.KeyPressMsg:
-		if IsCancelKey(msg) {
-			return h, pop()
-		}
-		return h, nil
-	default:
-		return h, nil
-	}
-}
-
-// View implements Screen.
-func (h *historyResumeScreen) View() tea.View {
-	return tea.NewView(theme.Title.Render("Восстановление группы источников…") + "\n" +
-		theme.Dim.Render("поиск: "+derefStr(h.rec.BoundTitle, h.rec.Title)))
 }
 
 // RehydrateGroup applies the two-strategy match over similarity

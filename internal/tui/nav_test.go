@@ -135,7 +135,7 @@ func TestI4SingleSentinelIdentityCompare(t *testing.T) {
 
 	t.Run("sentinel never equals a caller value", func(t *testing.T) {
 		var asAny any = Back
-		if asAny == any("Back") || asAny == any(0) || asAny == any(nil) {
+		if asAny == any("Back") || asAny == any(0) {
 			t.Fatalf("sentinel must not collide with ordinary values")
 		}
 	})

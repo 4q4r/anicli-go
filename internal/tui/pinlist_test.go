@@ -39,7 +39,7 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 
 	t.Run("back label still visible when scrolled to the end", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(50)...), 10)
-		for i := 0; i < 60; i++ {
+		for range 60 {
 			m.MoveDown()
 		}
 		if !strings.Contains(m.Render(), BackLabel) {
@@ -79,7 +79,7 @@ func TestPinListCursorAndPaging(t *testing.T) {
 		if m.Cursor() != 0 {
 			t.Fatalf("cursor must clamp at 0 (Back), got %d", m.Cursor())
 		}
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			m.MoveDown()
 		}
 		if m.Cursor() != 3 {
@@ -114,7 +114,7 @@ func TestPinListCursorAndPaging(t *testing.T) {
 
 	t.Run("viewport height smaller than list pages", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(40)...), 4)
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			m.MoveDown()
 		}
 		r := m.Render()
@@ -131,7 +131,7 @@ func TestPinListCursorAndPaging(t *testing.T) {
 func TestPinListVisibleRange(t *testing.T) {
 	t.Run("body window follows the cursor", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(25)...), 6)
-		for i := 0; i < 15; i++ {
+		for range 15 {
 			m.MoveDown()
 		}
 		lo, hi := m.VisibleBody()

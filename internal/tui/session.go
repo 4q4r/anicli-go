@@ -113,6 +113,8 @@ type sessionScreen struct {
 }
 
 // NewSessionScreen builds the session for one grouped title.
+//
+//nolint:revive // internal screen type; tests assert on the concrete struct
 func NewSessionScreen(deps *Deps, primary contracts.SearchResult, group []contracts.SearchResult) *sessionScreen {
 	return &sessionScreen{
 		deps:     deps,
@@ -131,7 +133,6 @@ func (s *sessionScreen) ID() string { return sessionScreenID }
 func (s *sessionScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{}
 	for _, res := range s.group {
-		res := res
 		s.pending[res.SourceID] = true
 		cmds = append(cmds, safeCmd(sessionScreenID, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
@@ -807,7 +808,6 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	case "foreground":
 		cmds := make([]tea.Cmd, 0, len(tasks))
 		for _, task := range tasks {
-			task := task
 			cmds = append(cmds, safeCmd(sessionScreenID, func() tea.Msg {
 				return downloadSettledMsg{err: s.deps.Download.Download(context.Background(), task)}
 			}))

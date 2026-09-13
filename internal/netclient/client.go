@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	http "github.com/bogdanfinn/fhttp"
@@ -120,6 +121,16 @@ type Client struct {
 	bodyLimit int64
 	// sleep pauses between retries; swapped by tests for determinism.
 	sleep func(context.Context, time.Duration) error
+
+	// cfSolver clears Cloudflare challenges when attached (nil keeps
+	// the pre-CF behavior for plain responses: only the typed
+	// CFChallengeError classification changes).
+	cfSolver CFSolver
+
+	// mu guards the clearance UA/language overrides set after a solve.
+	mu                     sync.RWMutex
+	userAgentOverride      string
+	acceptLanguageOverride string
 }
 
 // New builds the tls-client-backed Client from config.Network:
@@ -199,6 +210,13 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 			continue
 		}
 
+		// Cloudflare challenge ladder: detected challenges bypass the
+		// generic retry loop entirely (a challenge never clears by
+		// waiting) and either solve-and-retry-once or fail typed.
+		if detectCFChallenge(resp) {
+			return c.solveChallenge(ctx, op, req, resp)
+		}
+
 		if resp.StatusCode < http.StatusBadRequest {
 			return resp, nil
 		}
@@ -235,8 +253,9 @@ func (c *Client) attempt(ctx context.Context, req Request, payload []byte) (*Res
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	freq.Header.Set("User-Agent", c.cfg.UserAgent)
-	freq.Header.Set("Accept-Language", defaultAcceptLanguage)
+	ua, lang := c.effectiveUA()
+	freq.Header.Set("User-Agent", ua)
+	freq.Header.Set("Accept-Language", lang)
 	for k, v := range req.Headers {
 		freq.Header.Set(k, v)
 	}

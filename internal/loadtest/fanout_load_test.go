@@ -188,6 +188,15 @@ func TestLoadSkipManager500Resolves(t *testing.T) {
 
 	leaked := goroutineDelta(t, goroutinesBefore, 2*time.Second, 25)
 
+	// One aniskip GET and one anime-skip POST per resolve: the manager
+	// has no cache and no retries, so the counts must be exact.
+	if got := fake.gets.Load(); got != skipResolves {
+		t.Errorf("aniskip GETs = %d, want %d (one per resolve)", got, skipResolves)
+	}
+	if got := fake.posts.Load(); got != skipResolves {
+		t.Errorf("anime-skip POSTs = %d, want %d (one per resolve)", got, skipResolves)
+	}
+
 	fmt.Fprintf(os.Stdout, "=== skip manager load results (%d resolves) ===\n", skipResolves)
 	fmt.Fprintf(os.Stdout, "wall\t%s\t%.0f resolves/s\taniskip GETs %d\tanimeskip POSTs %d\tleak delta %d\n\n",
 		wall.Round(time.Millisecond), float64(skipResolves)/wall.Seconds(), fake.gets.Load(), fake.posts.Load(), leaked)

@@ -1,4 +1,16 @@
-.PHONY: build test lint tidy release docker-build load parity goldens-update
+.PHONY: build test lint tidy release docker-build load parity goldens-update build-matrix notices
+
+# Cross-compile every goreleaser target (CGO off). Regression guard:
+# platform-only APIs (e.g. syscall.Kill) must never sneak back into
+# portable files — see PR12 review C1.
+BUILD_MATRIX := linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64
+
+build-matrix:
+	@set -e; for target in $(BUILD_MATRIX); do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		echo "==> building $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build ./...; \
+	done
 
 build:
 	go build ./...
@@ -35,3 +47,11 @@ parity:
 # Regenerate the API contract goldens (review the diff!).
 goldens-update:
 	go test ./internal/regression -update -count=1
+
+# List the direct dependency inventory for THIRD-PARTY-NOTICES.md:
+# versions refresh from go.mod; licenses live in each module's
+# LICENSE/COPYING file in the module cache. Manually reconcile the
+# table after dependency changes.
+notices:
+	@go list -m -f '{{if and (not .Indirect) (ne .Path "github.com/an0nx/anicli-go")}}{{.Path}} {{.Version}}{{end}}' all
+	@echo "--> reconcile THIRD-PARTY-NOTICES.md (module cache: $$(go env GOMODCACHE))"

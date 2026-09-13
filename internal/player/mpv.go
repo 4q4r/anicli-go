@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -186,8 +185,9 @@ func (p *Player) start(ctx context.Context, args []string) (*process, error) {
 
 	cmd := exec.Command(p.bin, args...) //nolint:gosec // bin/args are config-derived, not request input
 	// python start_new_session=True: detach into its own process group
-	// so group signals do not hit the CLI.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// so group signals do not hit the CLI (platform-specific; see
+	// mpv_unix.go / mpv_windows.go).
+	setNewProcessGroup(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -237,25 +237,16 @@ func (p *Player) pump(stdout io.ReadCloser) {
 	}
 }
 
-// terminate runs the shutdown ladder: SIGTERM the process group, wait
-// the grace window, then SIGKILL.
+// terminate runs the shutdown ladder: ask the platform to stop the
+// process (group) — SIGTERM the group, wait the grace window, then
+// SIGKILL on Unix; an immediate kill on Windows, where no deliverable
+// SIGTERM exists (see terminateProcessGroup in the platform files) —
+// and reap the exit status.
 func (proc *process) terminate(grace time.Duration) error {
 	if proc.cmd.Process == nil {
 		return nil
 	}
-	pgid := -proc.cmd.Process.Pid
-	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("player: SIGTERM process group: %w", err)
-	}
-	select {
-	case err := <-proc.wait:
-		return err
-	case <-time.After(grace):
-		if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return fmt.Errorf("player: SIGKILL process group: %w", err)
-		}
-		return <-proc.wait
-	}
+	return terminateProcessGroup(proc, grace, proc.wait)
 }
 
 // sleepCtx sleeps d unless ctx finishes first; false means interrupted.

@@ -47,6 +47,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - THIRD-PARTY-NOTICES.md
       - settings.example.toml
 
 checksum:

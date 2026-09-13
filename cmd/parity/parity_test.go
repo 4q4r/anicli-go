@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,13 +24,16 @@ import (
 // parityProvider is a fake provider whose Search rides the real
 // netclient transport against an httptest loopback server; episodes and
 // resolve are deterministic in-memory answers. No test here touches the
-// real network.
+// real network. epSleep/resSleep simulate slow provider legs for the
+// per-operation budget assertions.
 type parityProvider struct {
-	id    string
-	http  *netclient.Client
-	srv   *httptest.Server
-	fail  bool
-	epURL string
+	id       string
+	http     *netclient.Client
+	srv      *httptest.Server
+	fail     bool
+	epURL    string
+	epSleep  time.Duration
+	resSleep time.Duration
 }
 
 func newParityProvider(t *testing.T, id string, fail bool) *parityProvider {
@@ -88,9 +92,12 @@ func (p *parityProvider) Search(ctx context.Context, query string) ([]contracts.
 	return out, nil
 }
 
-func (p *parityProvider) GetEpisodes(_ context.Context, animeURL string) ([]contracts.Episode, error) {
+func (p *parityProvider) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
 	if p.fail {
 		return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0, errors.New("parity fake failure"))
+	}
+	if !sleepCtx(ctx, p.epSleep) {
+		return nil, ctx.Err()
 	}
 	p.epURL = animeURL
 	return []contracts.Episode{
@@ -109,10 +116,13 @@ func (p *parityProvider) GetEpisodes(_ context.Context, animeURL string) ([]cont
 	}, nil
 }
 
-func (p *parityProvider) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+func (p *parityProvider) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	if _, ok := episode.RawEmbeds[dubID]; !ok {
 		return contracts.MediaStream{}, contracts.WrapProvider(p.id, contracts.OpResolveStream, 0,
 			fmt.Errorf("dub %q not present on episode %s", dubID, episode.Num))
+	}
+	if !sleepCtx(ctx, p.resSleep) {
+		return contracts.MediaStream{}, ctx.Err()
 	}
 	return contracts.MediaStream{
 		DubName: dubID,
@@ -145,6 +155,7 @@ func newToolDeps(t *testing.T, n int, failIdx ...int) deps {
 		},
 		now:     func() time.Time { return time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC) },
 		saveDir: saveDir,
+		seq:     new(atomic.Uint64),
 	}
 }
 
@@ -181,7 +192,7 @@ func TestParitySearchSavesAndPrintsJSON(t *testing.T) {
 	}
 
 	saved := readSaved(t, d.saveDir)
-	wantName := "p00-search-20260913T120000Z.json"
+	wantName := "p00-search-20260913T120000Z-0001.json"
 	raw, ok := saved[wantName]
 	if !ok {
 		t.Fatalf("expected saved capture %q, got %v", wantName, keysOf(saved))
@@ -220,7 +231,7 @@ func TestParityEpisodesSavesList(t *testing.T) {
 		t.Fatalf("stdout missing episode data:\n%s", out.String())
 	}
 	saved := readSaved(t, d.saveDir)
-	if _, ok := saved["p00-episodes-20260913T120000Z.json"]; !ok {
+	if _, ok := saved["p00-episodes-20260913T120000Z-0001.json"]; !ok {
 		t.Fatalf("expected episodes capture file, got %v", keysOf(saved))
 	}
 }
@@ -238,7 +249,7 @@ func TestParityResolveSavesStream(t *testing.T) {
 		t.Fatalf("stdout missing resolved stream:\n%s", out.String())
 	}
 	saved := readSaved(t, d.saveDir)
-	if _, ok := saved["p00-resolve-20260913T120000Z.json"]; !ok {
+	if _, ok := saved["p00-resolve-20260913T120000Z-0001.json"]; !ok {
 		t.Fatalf("expected resolve capture file, got %v", keysOf(saved))
 	}
 }
@@ -296,6 +307,83 @@ func TestParityFlagsAccepted(t *testing.T) {
 	code := run([]string{"--proxy", "http://127.0.0.1:10809", "--timeout", "10s", "search", "p00", "x"}, &out, &errOut, d)
 	if code != 0 {
 		t.Fatalf("flags must be accepted, exit %d, stderr: %s", code, errOut.String())
+	}
+}
+
+// newSlowToolDeps is newToolDeps with one provider whose episode and
+// resolve legs sleep (per-operation budget assertions).
+func newSlowToolDeps(t *testing.T, epSleep, resSleep time.Duration) deps {
+	t.Helper()
+
+	saveDir := t.TempDir()
+	return deps{
+		buildRegistry: func(config.Settings) (*providers.Registry, error) {
+			reg := providers.NewEmptyRegistry()
+			p := newParityProvider(t, "p00", false)
+			p.epSleep = epSleep
+			p.resSleep = resSleep
+			if err := reg.Register(p); err != nil {
+				return nil, err
+			}
+			return reg, nil
+		},
+		now:     func() time.Time { return time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC) },
+		saveDir: saveDir,
+		seq:     new(atomic.Uint64),
+	}
+}
+
+// TestParitySameSecondCapturesDoNotCollide pins the filename collision
+// guard: two captures of the same provider+op inside one second (here:
+// a frozen clock) must land in two distinct files, not overwrite each
+// other.
+func TestParitySameSecondCapturesDoNotCollide(t *testing.T) {
+	d := newToolDeps(t, 1)
+	var out, errOut strings.Builder
+
+	for range 2 {
+		code := run([]string{"search", "p00", "test"}, &out, &errOut, d)
+		if code != 0 {
+			t.Fatalf("exit code = %d, stderr: %s", code, errOut.String())
+		}
+	}
+
+	if got := len(readSaved(t, d.saveDir)); got != 2 {
+		t.Fatalf("same-second captures collided: %d files saved, want 2", got)
+	}
+}
+
+// TestParityResolveSplitsEpisodesAndResolveBudgets pins the resolve
+// budget split: episodes and resolve each get the FULL per-operation
+// timeout. 70ms episodes + 70ms resolve under a 100ms budget succeeds
+// only when the budgets are separate (one shared 100ms ctx would
+// starve resolve at 140ms total).
+func TestParityResolveSplitsEpisodesAndResolveBudgets(t *testing.T) {
+	d := newSlowToolDeps(t, 70*time.Millisecond, 70*time.Millisecond)
+	var out, errOut strings.Builder
+
+	code := run([]string{"--timeout", "100ms", "resolve", "p00", "https://p00.example/a", "1080"}, &out, &errOut, d)
+	if code != 0 {
+		t.Fatalf("split budgets: resolve must succeed (70ms+70ms legs under a 100ms per-op budget), exit %d, stderr: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"op": "resolve"`) {
+		t.Fatalf("stdout missing resolve capture:\n%s", out.String())
+	}
+}
+
+// sleepCtx sleeps d unless ctx finishes first; false means
+// interrupted.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 

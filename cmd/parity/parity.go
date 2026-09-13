@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -41,12 +42,17 @@ const gateProviders = 11
 var probeQueries = []string{"test", "naruto"}
 
 // deps carries the injectable seams: registry construction (tests
-// substitute fakes), the clock (stable capture filenames in tests) and
-// the capture save directory.
+// substitute fakes), the clock (stable capture timestamps in tests),
+// the capture save directory and the capture sequence counter.
 type deps struct {
 	buildRegistry func(config.Settings) (*providers.Registry, error)
 	now           func() time.Time
 	saveDir       string
+	// seq disambiguates capture filenames inside one process run:
+	// second-granularity timestamps alone collide on back-to-back
+	// captures. Shared by pointer across the deps value copies handed
+	// to the subcommands; both constructors initialize it.
+	seq *atomic.Uint64
 }
 
 func realDeps() deps {
@@ -56,6 +62,7 @@ func realDeps() deps {
 		},
 		now:     time.Now,
 		saveDir: filepath.Join("testdata", "parity"),
+		seq:     new(atomic.Uint64),
 	}
 }
 
@@ -174,8 +181,10 @@ func emit(out io.Writer, d deps, cap capture) error {
 		return err
 	}
 
-	name := fmt.Sprintf("%s-%s-%s.json", cap.Provider, cap.Op,
-		d.now().UTC().Format("20060102T150405Z"))
+	// The -%04d sequence guards against second-granularity filename
+	// collisions on back-to-back captures.
+	name := fmt.Sprintf("%s-%s-%s-%04d.json", cap.Provider, cap.Op,
+		d.now().UTC().Format("20060102T150405Z"), d.seq.Add(1))
 	if err := os.MkdirAll(d.saveDir, 0o750); err != nil {
 		return fmt.Errorf("create %s: %w", d.saveDir, err)
 	}
@@ -275,10 +284,12 @@ func parityResolveCommand(d deps, setup func(*cobra.Command) (*env, error)) *cob
 			}
 			timeout := env.timeout
 
-			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-			defer cancel()
-
-			episodes, err := p.GetEpisodes(ctx, args[1])
+			// Episodes and resolve each get the FULL per-operation
+			// budget: a slow episodes fetch must not starve the
+			// resolve that follows it.
+			epCtx, cancelEp := context.WithTimeout(cmd.Context(), timeout)
+			episodes, err := p.GetEpisodes(epCtx, args[1])
+			cancelEp()
 			if err != nil {
 				return fmt.Errorf("episodes %s %s: %w", args[0], args[1], err)
 			}
@@ -287,8 +298,10 @@ func parityResolveCommand(d deps, setup func(*cobra.Command) (*env, error)) *cob
 			}
 			episode := episodes[0]
 
+			resCtx, cancelRes := context.WithTimeout(cmd.Context(), timeout)
+			defer cancelRes()
 			start := time.Now()
-			stream, err := p.ResolveStream(ctx, episode, args[2])
+			stream, err := p.ResolveStream(resCtx, episode, args[2])
 			if err != nil {
 				return fmt.Errorf("resolve %s ep %s dub %q: %w", args[0], episode.Num, args[2], err)
 			}
@@ -303,12 +316,11 @@ func parityResolveCommand(d deps, setup func(*cobra.Command) (*env, error)) *cob
 
 // allRow is one provider's probe outcome for the summary table.
 type allRow struct {
-	id    string
-	ok    bool
-	took  time.Duration
-	bytes int
-	hits  string
-	err   string
+	id   string
+	ok   bool
+	took time.Duration
+	hits string
+	err  string
 }
 
 // parityAllCommand builds `parity all`: every registered provider is
@@ -342,7 +354,6 @@ func parityAllCommand(setup func(*cobra.Command) (*env, error)) *cobra.Command {
 						row.err = fmt.Sprintf("%s: %v", query, shorten(err.Error(), 60))
 						break
 					}
-					row.bytes += len(results)
 					row.hits += fmt.Sprintf("%s:%d ", query, len(results))
 				}
 				row.took = time.Since(start)

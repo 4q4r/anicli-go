@@ -13,11 +13,13 @@ RUN go mod download
 COPY . .
 
 # Static build with the release version triple injected (same seams
-# goreleaser uses; date stamp from SOURCE_DATE_EPOCH when provided).
+# goreleaser uses; date stamp honors SOURCE_DATE_EPOCH for
+# reproducible builds when provided).
 ARG VERSION=dev
 ARG COMMIT=none
+ARG SOURCE_DATE_EPOCH=
 ENV CGO_ENABLED=0
-RUN BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
+RUN BUILD_DATE=$(date -u -d @${SOURCE_DATE_EPOCH:-$(date +%s)} +%Y-%m-%dT%H:%M:%SZ) && \
     go build -trimpath \
       -ldflags="-s -w \
         -X github.com/an0nx/anicli-go/internal/cli.Version=${VERSION} \
@@ -28,6 +30,10 @@ RUN BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/anicli /anicli
+
+# License notices for the binary distribution (tls-client ships
+# BSD-4-Clause: the advertising clause requires notice reproduction).
+COPY THIRD-PARTY-NOTICES.md LICENSE /usr/share/licenses/anicli/
 
 # Optional: settings.toml baked in at build time.
 # COPY settings.toml /config/settings.toml

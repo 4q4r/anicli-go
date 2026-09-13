@@ -8,7 +8,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
-func TestAllReturnsElevenProviders(t *testing.T) {
+func TestAllReturnsTenProviders(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -18,12 +18,12 @@ func TestAllReturnsElevenProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 11 {
-		t.Fatalf("All() = %d providers, want 11", len(bare))
+	if len(bare) != 10 {
+		t.Fatalf("All() = %d providers, want 10", len(bare))
 	}
 
 	wantIDs := []string{
-		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime",
 	}
@@ -80,12 +80,12 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 11 {
-		t.Fatalf("List() = %d providers, want 11", len(list))
+	if len(list) != 10 {
+		t.Fatalf("List() = %d providers, want 10", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
 	wantOrder := []string{
-		"anilibria", "animevost", "anilib", "animego", "sovetromantica",
+		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime",
 	}

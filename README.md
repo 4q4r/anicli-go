@@ -106,12 +106,11 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 11 провайдеров"]
+    subgraph sources["Источники — 10 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
         P4[animego]
-        P5[sovetromantica]
         P6[gogoanime]
         P7[animepahe]
         P8[dreamcast]
@@ -234,7 +233,6 @@ max_concurrency = 2     # одновременные фоновые загруз
 | animevost | api.animevost.org | видео | ✅ живой |
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |
-| sovetromantica | sovetromantica.com | видео | ✅ живой |
 | gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
 | animepahe | animepahe.ru | видео | ⚠️ периодические блокировки |
 | dreamcast | dreamerscast.com | видео | ✅ живой |
@@ -242,13 +240,14 @@ max_concurrency = 2     # одновременные фоновые загруз
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
 | allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
 
-Не портированы (мёртвые на момент G1-проверки 2026-09-12):
+Не портированы / удалены (мёртвые):
 
 | Источник | Причина |
 |----------|---------|
 | animekai | официально закрыт 2026-05-10; домены NXDOMAIN / parked |
 | anivibe | anivibe.ru не отвечает; бывший .net угнан под ad-farm |
 | yummyanime | не входил в G1-гейт порта |
+| sovetromantica | домен sovetromantica.com угнан под казино-фарм, проект заморожен с 2025; удалён в PR22 |
 
 Проверить доступность живых источников: `make parity` (см. ниже).
 

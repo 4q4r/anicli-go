@@ -13,13 +13,13 @@ import (
 // expectedProviderOrder is the full roster in registry order. The
 // meta-test fails when a provider is silently dropped, renamed,
 // duplicated or re-ordered, and when a roster member loses its
-// dedicated fixture→DTO shape test.
+// dedicated fixture→DTO shape test. sovetromantica was removed in PR22
+// (domain hijacked off the anime project, frozen 2025).
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
 	"anilib",
 	"animego",
-	"sovetromantica",
 	"gogoanime",
 	"animepahe",
 	"dreamcast",
@@ -29,8 +29,9 @@ var expectedProviderOrder = []string{
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly
-// the eleven providers, unique, in the pinned order (prevents silent
-// provider drop — the G1 gate and the parity tool both assume 11).
+// the ten providers, unique, in the pinned order (prevents silent
+// provider drop — the G1 gate and the parity tool both assume the
+// roster size).
 func TestProviderRosterComplete(t *testing.T) {
 	built, err := providers.All(config.Default())
 	if err != nil {
@@ -48,11 +49,9 @@ func TestProviderRosterComplete(t *testing.T) {
 		got = append(got, id)
 	}
 
-	if len(got) != 11 {
-		t.Errorf("registry must hold exactly 11 providers, got %d: %v", len(got), got)
-	}
-	if len(expectedProviderOrder) != 11 {
-		t.Fatalf("expected roster table must list 11 providers, has %d", len(expectedProviderOrder))
+	if len(got) != len(expectedProviderOrder) {
+		t.Errorf("registry must hold exactly %d providers, got %d: %v",
+			len(expectedProviderOrder), len(got), got)
 	}
 	for i, want := range expectedProviderOrder {
 		if i >= len(got) {

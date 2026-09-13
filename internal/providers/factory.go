@@ -33,9 +33,6 @@ var allFactories = []struct {
 	{"animego", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimego(AnimeGoBase, http)
 	}},
-	{"sovetromantica", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSovetRomantica(SovetRomanticaBase, http)
-	}},
 	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},

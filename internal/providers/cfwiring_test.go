@@ -60,8 +60,8 @@ func TestRegistryEnabledWiresSolverAndCloses(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
-	if len(reg.List()) != 11 {
-		t.Fatalf("all 11 providers must be registered, got %d", len(reg.List()))
+	if len(reg.List()) != 10 {
+		t.Fatalf("all 10 providers must be registered, got %d", len(reg.List()))
 	}
 }
 
@@ -75,7 +75,7 @@ func TestRegistryDisabledKeepsPlainClients(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.List()) != 11 {
+	if len(reg.List()) != 10 {
 		t.Fatalf("providers = %d", len(reg.List()))
 	}
 }

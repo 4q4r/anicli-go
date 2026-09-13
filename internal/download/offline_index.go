@@ -323,6 +323,14 @@ func SetEntryChapterTypes(titleDir, episodeNum, videoKey, audioKey string, quali
 
 // writeIndex persists the canonical document: version 1, entries
 // sorted by numeric episode then stream keys (python sort key).
+//
+// Cosmetic divergences from the python writer (F47, data model
+// unchanged — both sides parse each other's files): CreatedAt is Go
+// RFC3339Nano (trailing fraction zeros trimmed, "Z" suffix) where
+// python's isoformat() always emits microseconds and "+00:00"; and the
+// JSON encoder differs only in exotic-escape details (Go leaves
+// U+2028/U+2029 raw with SetEscapeHTML(false), python json leaves them
+// raw too) — same indent (2), same key order via struct fields.
 func writeIndex(titleDir string, entries []Entry) error {
 	sorted := make([]Entry, len(entries))
 	copy(sorted, entries)

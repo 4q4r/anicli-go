@@ -1,0 +1,66 @@
+# goreleaser v2 config — cross-platform release engineering.
+# Binaries: linux/amd64, linux/arm64, windows/amd64, darwin/amd64,
+# darwin/arm64; CGO disabled (pure-Go sqlite); version triple injected
+# at internal/cli's -ldflags seams. No docker yet (no registry).
+version: 2
+
+project_name: anicli
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: anicli
+    main: ./cmd/anicli
+    binary: anicli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # windows/arm64 is not in the release matrix.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/an0nx/anicli-go/internal/cli.Version={{.Version}}
+      - -X github.com/an0nx/anicli-go/internal/cli.Commit={{.Commit}}
+      - -X github.com/an0nx/anicli-go/internal/cli.Date={{.Date}}
+
+archives:
+  - id: anicli
+    ids:
+      - anicli
+    # tarball everywhere; zip for windows (Exploder-friendly).
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - THIRD-PARTY-NOTICES.md
+      - settings.example.toml
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge"

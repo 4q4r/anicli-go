@@ -31,10 +31,6 @@ linters:
         - name: unexported-return
     gocritic:
       enable-all: false
-  exclusions:
-    paths:
-      # G1 gate probe, kept verbatim for provenance; not production code.
-      - cmd/spike
 
 issues:
   max-issues-per-linter: 0

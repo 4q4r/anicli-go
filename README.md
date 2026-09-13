@@ -1,0 +1,284 @@
+<div align="center">
+
+<!-- TODO: замените на реальный GIF/скриншот TUI после первого релиза -->
+<img src="https://placehold.co/800x250/1e1e2e/cdd6f4?text=anicli-go+TUI+preview" width="800" alt="preview">
+
+## anicli-go
+
+Порт [anicli-py](../anicli-py) на Go: единый бинарник — TUI, HTTP-API и общий core на 11 аниме-источниках
+
+[![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
+[![Tests](https://img.shields.io/badge/tests-815%2B-green?style=for-the-badge)](Makefile)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
+
+</div>
+
+---
+
+## 📑 Содержание
+
+- [О проекте](#-о-проекте)
+- [Возможности](#-возможности)
+- [Карта модулей](#-карта-модулей)
+- [Установка](#-установка)
+- [Быстрый старт](#-быстрый-старт)
+- [Конфигурация](#-конфигурация)
+- [Источники](#-источники)
+- [Разработка](#-разработка)
+- [Лицензия](#-лицензия)
+
+---
+
+## 📜 О проекте
+
+**anicli-go** — консольный медиа-центр для просмотра аниме: поиск, воспроизведение через mpv,
+загрузка серий, синхронизация со Shikimori и умные пропуски опенингов/эндингов.
+
+Порт замороженного Python-оригинала (`anicli-py`) 1:1 — с сохранением wire-форматов API,
+схемы БД и поведенческих нюансов. Ключевые отличия от предшественника:
+
+| | anicli-py | anicli-go |
+|---|---|---|
+| Распространение | Poetry-окружение | один статический бинарник (~15 МБ) |
+| ML-группировка | ONNX MiniLM | локальная семантическая группировка без нейросети |
+| HTTP-клиент | httpx | tls-client (отпечаток Chrome 150) |
+| БД | SQLAlchemy + alembic | pure-Go SQLite (modernc), та же схема |
+| Пропуски | ML + API | API (AniSkip v2 + AnimeSkip) + IntroSkipper |
+
+---
+
+## ✨ Возможности
+
+<details open>
+<summary><b>🔍 Мульти-источник</b></summary>
+
+| Функция | Описание |
+|---------|----------|
+| **Поиск** | Параллельный fan-out по 11 источникам с ограничением параллелизма |
+| **Группировка** | Семантическое объединение дублей между источниками |
+| **Потоки** | Извлечение прямых ссылок (HLS/MP4) из 9 типов плееров |
+
+</details>
+
+<details>
+<summary><b>🖥️ Два интерфейса, один core</b></summary>
+
+TUI (bubbletea v2) для терминала и HTTP-API (chi) для веб-морды — оба работают через
+одни и те же сервисы: провайдеры, хранилище, shikimori-клиент, менеджер загрузок.
+
+</details>
+
+<details>
+<summary><b>⏭️ Пропуски опенингов</b></summary>
+
+AniSkip v2 + AnimeSkip (GraphQL) опрашиваются параллельно и умно склеиваются
+(слияние по типу, приоритет провайдера); локальный IntroSkipper (ffmpeg) —
+fallback для собственных файлов. Результат — FFMETADATA-главы для mpv.
+
+</details>
+
+<details>
+<summary><b>⬇️ Загрузка серий</b></summary>
+
+Фоновый менеджер с ограниченной конкурентностью, ffmpeg-склейка видео+аудио,
+атомарная запись файлов и офлайн-индекс (`.anicli_offline_index.json`) библиотеки.
+
+</details>
+
+---
+
+## 🧭 Карта модулей
+
+```mermaid
+graph TD
+    subgraph interfaces["Интерфейсы"]
+        TUI["TUI (bubbletea v2)<br/>internal/tui"]
+        CLI["cli (cobra)<br/>internal/cli"]
+        API["HTTP-API (chi)<br/>internal/api — 20 эндпоинтов"]
+    end
+
+    subgraph core["Общий core"]
+        REG["Реестр провайдеров<br/>internal/providers"]
+        SHIKI["Shikimori-клиент<br/>internal/shikimori"]
+        SKIP["Менеджер пропусков<br/>internal/skip"]
+        DL["Загрузки + офлайн-индекс<br/>internal/download"]
+        ST["SQLite-хранилище<br/>internal/storage"]
+        META["Метаданные<br/>internal/metadata"]
+    end
+
+    subgraph sources["Источники — 11 провайдеров"]
+        P1[anilibria]
+        P2[animevost]
+        P3[anilib]
+        P4[animego]
+        P5[sovetromantica]
+        P6[gogoanime]
+        P7[animepahe]
+        P8[dreamcast]
+        P9[sameband]
+        P10[kodik]
+        P11[allanime]
+    end
+
+    EXT["Извлекатели плееров (9)<br/>internal/extractors"]
+
+    TUI --> REG & SHIKI & SKIP & DL & ST
+    API --> REG & SHIKI & ST
+    CLI --> TUI & API
+    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P9 & P10 & P11
+    P6 & P7 & P11 --> EXT
+    SKIP --> ST
+    DL --> SKIP
+```
+
+---
+
+## 🚀 Установка
+
+### Готовые бинарники (goreleaser)
+
+Скачайте архив со [страницы релизов](../../releases), распакуйте и положите `anicli` в `$PATH`:
+
+| Система | Архив |
+|---------|-------|
+| Linux (x86_64) | `anicli_X.Y.Z_linux_amd64.tar.gz` |
+| Linux (ARM64) | `anicli_X.Y.Z_linux_arm64.tar.gz` |
+| Windows (x86_64) | `anicli_X.Y.Z_windows_amd64.zip` |
+| macOS (Intel) | `anicli_X.Y.Z_darwin_amd64.tar.gz` |
+| macOS (Apple Silicon) | `anicli_X.Y.Z_darwin_arm64.tar.gz` |
+
+Контрольные суммы — в `checksums.txt` рядом с релизом.
+
+### Docker
+
+```bash
+docker build -t anicli:latest .
+docker run --rm -p 8765:8765 \
+  -v $PWD/settings.toml:/config/settings.toml \
+  anicli:latest serve --config /config/settings.toml
+```
+
+> Образ distroless: без оболочки, под пользователем `nonroot`.
+
+### Сборка из исходников
+
+```bash
+git clone <repo> && cd anicli-go
+make build            # go build ./...
+go build -o ./anicli ./cmd/anicli
+```
+
+Требуется Go ≥ 1.27. CGO не нужен (pure-Go SQLite).
+
+---
+
+## ⚡ Быстрый старт
+
+```bash
+# 1. Конфиг (не обязателен — дефолты встроены)
+cp settings.example.toml ~/.config/anicli/settings.toml
+
+# 2. TUI — обычный запуск
+anicli
+
+# 3. HTTP-API сервер (api.enabled = true в настройках)
+anicli serve
+
+# 4. Диагностика окружения
+anicli doctor
+```
+
+---
+
+## ⚙️ Конфигурация
+
+Файл настроек: `$ANICLI_CONFIG` → `$XDG_CONFIG_HOME/anicli/settings.toml` →
+`~/.config/anicli/settings.toml`. Секреты можно задавать переменными окружения
+(они сильнее файла):
+
+| Переменная | Назначение |
+|------------|------------|
+| `ANICLI_PROXY_URL` | прокси (http/https/socks5) для всех запросов |
+| `ANICLI_SHIKIMORI_SESSION` | cookie-сессия Shikimori |
+| `ANICLI_API_AUTH_SECRET` | секрет подписи токенов API |
+| `ANICLI_KODIK_TOKEN` | имя переменной с токеном Kodik API |
+| `ANICLI_DB_URL` | путь к базе данных |
+| `ANICLI_DATA` | каталог данных |
+
+Полный пример с комментариями — [`settings.example.toml`](settings.example.toml).
+Ключевые секции:
+
+```toml
+[network]
+proxy_url = ""          # или "http://127.0.0.1:10809"
+max_parallel = 4        # предел параллельности fan-out поиска
+
+[api]
+enabled = true          # включить HTTP-API
+bind = "127.0.0.1:8765" # только loopback по умолчанию
+
+[shikimori]
+enabled = false         # интеграция с трекером
+
+[download]
+max_concurrency = 2     # одновременные фоновые загрузки
+```
+
+---
+
+## 📡 Источники
+
+| Провайдер | Сайт | Тип | Статус |
+|-----------|------|-----|--------|
+| anilibria | aniliberty.top | видео+аудио | ✅ живой |
+| animevost | api.animevost.org | видео | ✅ живой |
+| anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
+| animego | animego.one | видео | ✅ живой |
+| sovetromantica | sovetromantica.com | видео | ✅ живой |
+| gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
+| animepahe | animepahe.ru | видео | ⚠️ периодические блокировки |
+| dreamcast | dreamerscast.com | видео | ✅ живой |
+| sameband | sameband.studio | видео | ⚠️ нестабильный |
+| kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
+| allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
+
+Не портированы (мёртвые на момент G1-проверки 2026-09-12):
+
+| Источник | Причина |
+|----------|---------|
+| animekai | официально закрыт 2026-05-10; домены NXDOMAIN / parked |
+| anivibe | anivibe.ru не отвечает; бывший .net угнан под ad-farm |
+| yummyanime | не входил в G1-гейт порта |
+
+Проверить доступность живых источников: `make parity` (см. ниже).
+
+---
+
+## 🛠 Разработка
+
+```bash
+make build          # сборка
+make test           # go test -race -count=1 ./...
+make lint           # golangci-lint run
+make load           # нагрузочные тесты (build tag `load`)
+make parity         # живой G1-гейт: 11/11 провайдеров должны ответить
+make goldens-update # перегенерация золотых файлов контракта API
+make release        # релизные артефакты через goreleaser
+make docker-build   # distroless-образ
+```
+
+### Контроль качества
+
+| Слой | Механизм |
+|------|----------|
+| Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
+| Инварианты TUI | таблица регрессии I1–I4 |
+| Ростер провайдеров | мета-тест: ровно 11, уникальны, у каждого фикстуры |
+| Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
+| Живые сайты | `cmd/parity` — capture-инструмент паритета |
+
+---
+
+## 📄 Лицензия
+
+[MIT](LICENSE) © 2026 An0nX

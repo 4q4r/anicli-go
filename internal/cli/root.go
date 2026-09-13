@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/tui"
 )
 
 // Build information, overridden at link time via -ldflags:
@@ -50,7 +52,11 @@ func NewRootCommand() *cobra.Command {
 			"HTTP-API face sharing one core.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runTUI(cmd.Context(), cmd.OutOrStdout())
+			settingsPath, err := ConfigPathFrom(cmd)
+			if err != nil {
+				return err
+			}
+			return runTUI(cmd.Context(), cmd.OutOrStdout(), settingsPath)
 		},
 	}
 
@@ -112,10 +118,35 @@ func newVersionCommand() *cobra.Command {
 	}
 }
 
-// runTUI is the default face (bubbletea v2 app, planned for G5).
-func runTUI(_ context.Context, out io.Writer) error {
-	_, _ = fmt.Fprintln(out, "anicli tui: not implemented yet")
-	return nil
+// runTUI is the default face: loads settings, wires the real service
+// set and runs the bubbletea v2 application until quit; SIGINT/SIGTERM
+// cancel the app context for a graceful exit.
+func runTUI(ctx context.Context, _ io.Writer, settingsPath string) error {
+	settings, err := loadSettingsOrFail(settingsPath)
+	if err != nil {
+		return err
+	}
+
+	dbPath, err := settings.DBPath()
+	if err != nil {
+		return fmt.Errorf("resolve db path: %w", err)
+	}
+	store, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return fmt.Errorf("open storage: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	real, err := tui.NewRealDeps(*settings, store)
+	if err != nil {
+		return fmt.Errorf("build tui services: %w", err)
+	}
+	defer real.Close()
+
+	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
+	return tui.Run(signalCtx, real.Deps, slog.Default())
 }
 
 // runServe is the HTTP API face: loads settings, opens storage, builds

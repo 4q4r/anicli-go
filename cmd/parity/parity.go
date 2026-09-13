@@ -1,0 +1,392 @@
+// Command parity is the live-site parity capture tool: it runs REAL
+// provider operations (search, episodes, resolve) through the real
+// registry and config, prints JSON, and saves captures under
+// testdata/parity/ for diffing against the frozen Python behaviour.
+//
+// This tool is meant to be run by a human/controller against live
+// sites; it is excluded from the normal zero-network test discipline.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/providers"
+)
+
+// env is the resolved per-command world: the provider registry plus
+// the effective per-operation timeout (single config load per command).
+type env struct {
+	reg     *providers.Registry
+	timeout time.Duration
+}
+
+// gateProviders is the G1 gate threshold: `parity all` exits non-zero
+// when fewer than this many providers answer both probe queries.
+const gateProviders = 11
+
+// probeQueries are the two queries every provider must answer in
+// `parity all`.
+var probeQueries = []string{"test", "naruto"}
+
+// deps carries the injectable seams: registry construction (tests
+// substitute fakes), the clock (stable capture filenames in tests) and
+// the capture save directory.
+type deps struct {
+	buildRegistry func(config.Settings) (*providers.Registry, error)
+	now           func() time.Time
+	saveDir       string
+}
+
+func realDeps() deps {
+	return deps{
+		buildRegistry: func(cfg config.Settings) (*providers.Registry, error) {
+			return providers.NewRegistry(cfg, nil)
+		},
+		now:     time.Now,
+		saveDir: filepath.Join("testdata", "parity"),
+	}
+}
+
+// run executes the CLI and returns the process exit code. Errors are
+// printed by cobra (SilenceUsage keeps usage noise off failure paths).
+func run(args []string, out, errOut io.Writer, d deps) int {
+	root := &cobra.Command{
+		Use:   "parity",
+		Short: "Live provider parity capture tool (search/episodes/resolve/all)",
+		Long: "parity runs real provider operations against live sites via the real\n" +
+			"registry+config, prints JSON captures and saves them under testdata/parity/.\n" +
+			"`parity all` is the permanent G1 gate: all 11 providers must answer.",
+		SilenceUsage: true,
+	}
+	root.SetOut(out)
+	root.SetErr(errOut)
+	root.SetArgs(args)
+
+	var (
+		cfgPath string
+		proxy   string
+		timeout time.Duration
+	)
+	root.PersistentFlags().StringVar(&cfgPath, "config", "",
+		"path to settings.toml (default: $ANICLI_CONFIG > XDG > ~/.config/anicli/settings.toml)")
+	root.PersistentFlags().StringVar(&proxy, "proxy", "",
+		"proxy URL overriding network.proxy_url (default: config value; explicit empty = direct)")
+	root.PersistentFlags().DurationVar(&timeout, "timeout", 0,
+		"per-operation timeout (default: network.request_timeout, 30s)")
+
+	// load resolves settings + the effective per-operation timeout.
+	load := func(cmd *cobra.Command) (config.Settings, time.Duration, error) {
+		settings, err := config.Load(config.ResolveConfigPath(cfgPath))
+		if err != nil {
+			return config.Settings{}, 0, fmt.Errorf("load settings: %w", err)
+		}
+		if cmd.Flags().Changed("proxy") {
+			settings.Network.ProxyURL = proxy
+		}
+		effective := timeout
+		if effective <= 0 {
+			effective = settings.Network.RequestTimeout
+		}
+		return *settings, effective, nil
+	}
+
+	// env is the resolved per-command world: the provider registry
+	// plus the effective per-operation timeout (one config load).
+	setup := func(cmd *cobra.Command) (*env, error) {
+		settings, timeout, err := load(cmd)
+		if err != nil {
+			return nil, err
+		}
+		reg, err := d.buildRegistry(settings)
+		if err != nil {
+			return nil, fmt.Errorf("build provider registry: %w", err)
+		}
+		return &env{reg: reg, timeout: timeout}, nil
+	}
+
+	root.AddCommand(
+		paritySearchCommand(d, setup),
+		parityEpisodesCommand(d, setup),
+		parityResolveCommand(d, setup),
+		parityAllCommand(setup),
+	)
+
+	if err := root.Execute(); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// provider fetches one provider by id or fails with a clear message.
+func provider(reg *providers.Registry, id string) (contracts.Provider, error) {
+	p, ok := reg.Get(id)
+	if !ok {
+		known := make([]string, 0, len(reg.List()))
+		for _, item := range reg.List() {
+			known = append(known, item.ID())
+		}
+		return nil, fmt.Errorf("unknown provider %q (registered: %s)", id, strings.Join(known, ", "))
+	}
+	return p, nil
+}
+
+// capture is the saved/printed envelope of one operation.
+type capture struct {
+	Tool       string `json:"tool"`
+	Op         string `json:"op"`
+	Provider   string `json:"provider"`
+	TookMS     int64  `json:"took_ms"`
+	CapturedAt string `json:"captured_at"`
+
+	Query    string                   `json:"query,omitempty"`
+	URL      string                   `json:"url,omitempty"`
+	Dub      string                   `json:"dub,omitempty"`
+	Episode  string                   `json:"episode_num,omitempty"`
+	Count    int                      `json:"count"`
+	Results  []contracts.SearchResult `json:"results,omitempty"`
+	Episodes []contracts.Episode      `json:"episodes,omitempty"`
+	Stream   *contracts.MediaStream   `json:"stream,omitempty"`
+}
+
+// emit prints the capture as indented JSON and saves it under saveDir.
+func emit(out io.Writer, d deps, cap capture) error {
+	cap.Tool = "parity"
+	cap.CapturedAt = d.now().UTC().Format(time.RFC3339)
+
+	data, err := json.MarshalIndent(cap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode capture: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(out, string(data)); err != nil {
+		return err
+	}
+
+	name := fmt.Sprintf("%s-%s-%s.json", cap.Provider, cap.Op,
+		d.now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(d.saveDir, 0o750); err != nil {
+		return fmt.Errorf("create %s: %w", d.saveDir, err)
+	}
+	path := filepath.Join(d.saveDir, name)
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil { //nolint:gosec // capture artifact
+		return fmt.Errorf("write capture %s: %w", path, err)
+	}
+	_, _ = fmt.Fprintf(out, "saved: %s\n", path)
+	return nil
+}
+
+// paritySearchCommand builds `parity search <provider> "<query>"`.
+func paritySearchCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <provider> <query>",
+		Short: "Run a real search against the live provider",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := setup(cmd)
+			if err != nil {
+				return err
+			}
+			p, err := provider(env.reg, args[0])
+			if err != nil {
+				return err
+			}
+			timeout := env.timeout
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+
+			start := time.Now()
+			results, err := p.Search(ctx, args[1])
+			if err != nil {
+				return fmt.Errorf("search %s %q: %w", args[0], args[1], err)
+			}
+			return emit(cmd.OutOrStdout(), d, capture{
+				Op: "search", Provider: args[0], Query: args[1],
+				Count: len(results), Results: results,
+				TookMS: time.Since(start).Milliseconds(),
+			})
+		},
+	}
+}
+
+// parityEpisodesCommand builds `parity episodes <provider> <url>`.
+func parityEpisodesCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "episodes <provider> <url>",
+		Short: "List episodes of a live anime URL",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := setup(cmd)
+			if err != nil {
+				return err
+			}
+			p, err := provider(env.reg, args[0])
+			if err != nil {
+				return err
+			}
+			timeout := env.timeout
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+
+			start := time.Now()
+			episodes, err := p.GetEpisodes(ctx, args[1])
+			if err != nil {
+				return fmt.Errorf("episodes %s %s: %w", args[0], args[1], err)
+			}
+			return emit(cmd.OutOrStdout(), d, capture{
+				Op: "episodes", Provider: args[0], URL: args[1],
+				Count: len(episodes), Episodes: episodes,
+				TookMS: time.Since(start).Milliseconds(),
+			})
+		},
+	}
+}
+
+// parityResolveCommand builds `parity resolve <provider> <url> <dub>`:
+// episodes are fetched, the FIRST episode is resolved under the given
+// dub (a video key of the episode, e.g. "1080"). Resolve triggers a
+// real stream fetch — that is the point.
+func parityResolveCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <provider> <url> <dub>",
+		Short: "Resolve the first episode's stream for a dub (live)",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := setup(cmd)
+			if err != nil {
+				return err
+			}
+			p, err := provider(env.reg, args[0])
+			if err != nil {
+				return err
+			}
+			timeout := env.timeout
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+
+			episodes, err := p.GetEpisodes(ctx, args[1])
+			if err != nil {
+				return fmt.Errorf("episodes %s %s: %w", args[0], args[1], err)
+			}
+			if len(episodes) == 0 {
+				return fmt.Errorf("resolve %s %s: provider returned no episodes", args[0], args[1])
+			}
+			episode := episodes[0]
+
+			start := time.Now()
+			stream, err := p.ResolveStream(ctx, episode, args[2])
+			if err != nil {
+				return fmt.Errorf("resolve %s ep %s dub %q: %w", args[0], episode.Num, args[2], err)
+			}
+			return emit(cmd.OutOrStdout(), d, capture{
+				Op: "resolve", Provider: args[0], URL: args[1], Dub: args[2],
+				Episode: episode.Num, Count: len(stream.Links), Stream: &stream,
+				TookMS: time.Since(start).Milliseconds(),
+			})
+		},
+	}
+}
+
+// allRow is one provider's probe outcome for the summary table.
+type allRow struct {
+	id    string
+	ok    bool
+	took  time.Duration
+	bytes int
+	hits  string
+	err   string
+}
+
+// parityAllCommand builds `parity all`: every registered provider is
+// probed with both gate queries under a per-operation timeout; the
+// summary table is printed and the command fails when fewer than
+// gateProviders providers answered both queries.
+func parityAllCommand(setup func(*cobra.Command) (*env, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "all",
+		Short: "Probe all providers (G1 gate): search 'test' + 'naruto' everywhere",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := setup(cmd)
+			if err != nil {
+				return err
+			}
+			timeout := env.timeout
+			out := cmd.OutOrStdout()
+
+			rows := make([]allRow, 0, len(env.reg.List()))
+			for _, p := range env.reg.List() {
+				row := allRow{id: p.ID()}
+				start := time.Now()
+				row.ok = true
+				for _, query := range probeQueries {
+					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+					results, err := p.Search(ctx, query)
+					cancel()
+					if err != nil {
+						row.ok = false
+						row.err = fmt.Sprintf("%s: %v", query, shorten(err.Error(), 60))
+						break
+					}
+					row.bytes += len(results)
+					row.hits += fmt.Sprintf("%s:%d ", query, len(results))
+				}
+				row.took = time.Since(start)
+				row.hits = strings.TrimSpace(row.hits)
+				rows = append(rows, row)
+			}
+
+			okCount := 0
+			for _, row := range rows {
+				if row.ok {
+					okCount++
+				}
+			}
+
+			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "provider\tstatus\ttime\tqueries\tfailure")
+			for _, row := range rows {
+				status, failure := "OK", ""
+				if !row.ok {
+					status, failure = "FAIL", row.err
+				}
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					row.id, status, row.took.Round(time.Millisecond), row.hits, failure)
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+
+			if okCount < gateProviders {
+				_, _ = fmt.Fprintf(out, "gate FAILED: %d/%d providers OK (need >= %d)\n",
+					okCount, len(rows), gateProviders)
+				return fmt.Errorf("parity gate FAILED: %d/%d providers OK (need >= %d)",
+					okCount, len(rows), gateProviders)
+			}
+			_, _ = fmt.Fprintf(out, "gate PASSED: %d/%d providers OK\n", okCount, len(rows))
+			return nil
+		},
+	}
+}
+
+// shorten truncates long strings for the summary table.
+func shorten(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}

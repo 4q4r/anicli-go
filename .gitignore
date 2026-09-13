@@ -1,4 +1,5 @@
 /anicli-go
+/parity
 /dist/
 /*.db
 .sdd/

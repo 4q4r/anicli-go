@@ -186,8 +186,8 @@ func TestSearchGroupingFlow(t *testing.T) {
 	app := searchFlowApp(fs)
 	group := NewSearchGroup(app.deps, results)
 
-	// Check the two Naruto entries (body items 0 and 1).
-	group.check.MoveDown()
+	// Check the two Naruto entries (items 0 and 1; the cursor starts
+	// on item 0).
 	group.check.Toggle()
 	group.check.MoveDown()
 	group.check.Toggle()

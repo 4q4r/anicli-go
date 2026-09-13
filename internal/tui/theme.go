@@ -34,11 +34,14 @@ type themeSet struct {
 var theme = newTheme()
 
 // newTheme builds the palette. Foreground-only styles keep rendering
-// deterministic across terminal backgrounds.
+// deterministic across terminal backgrounds. Title carries a leading
+// pad (PR24: the header never rubs against the screen corner; screens
+// add the blank line below it).
 func newTheme() themeSet {
 	return themeSet{
 		Title: lipgloss.NewStyle().
 			Bold(true).
+			PaddingLeft(1).
 			Foreground(lipgloss.Color("#56B6C2")),
 		Cursor: lipgloss.NewStyle().
 			Bold(true).

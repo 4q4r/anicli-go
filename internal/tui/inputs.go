@@ -102,7 +102,9 @@ func (t *TextPrompt) resolve(key tea.KeyPressMsg) (any, tea.Cmd) {
 // grouping flow: the user marks results belonging to the same title.
 // It shares the PinList movement model but toggles with space and
 // resolves the checked subset on Enter; Esc/Ctrl-C and an empty
-// selection resolve to Back (I2).
+// selection resolve to Back (I2). The cursor ranges over the real
+// items only — the trailing Back row is appended by the Menu but never
+// parked on.
 type CheckList struct {
 	title   string
 	items   []Choice
@@ -110,8 +112,9 @@ type CheckList struct {
 	list    *PinList
 }
 
-// NewCheckList builds the multi-select over items (no Back row: the
-// Back semantics live in Resolve, and Esc always yields Back).
+// NewCheckList builds the multi-select over items (the trailing Back
+// row exists in the underlying menu for nav resolution, but the
+// cursor never parks on it).
 func NewCheckList(title string, items []Choice) *CheckList {
 	menu := NewMenu(title, "Нет элементов", items...)
 	return &CheckList{
@@ -122,20 +125,30 @@ func NewCheckList(title string, items []Choice) *CheckList {
 	}
 }
 
-// MoveDown moves the cursor (skipping the pinned Back row).
-func (c *CheckList) MoveDown() { c.list.MoveDown() }
+// clampBody keeps the cursor on a real item (never the trailing Back
+// row, never out of range).
+func (c *CheckList) clampBody() {
+	if c.list.Cursor() >= len(c.items) {
+		c.list.Jump(max(len(c.items)-1, 0))
+	}
+}
 
-// MoveUp moves the cursor (the Back row is skipped: the cursor never
-// parks on it).
+// MoveDown moves the cursor to the next item.
+func (c *CheckList) MoveDown() {
+	c.list.MoveDown()
+	c.clampBody()
+}
+
+// MoveUp moves the cursor to the previous item (clamped at the first).
 func (c *CheckList) MoveUp() {
-	if c.list.Cursor() > 1 {
+	if c.list.Cursor() > 0 {
 		c.list.MoveUp()
 	}
 }
 
 // Toggle flips the checked state of the current item.
 func (c *CheckList) Toggle() {
-	idx := c.list.Cursor() - 1 // body index into c.items
+	idx := c.list.Cursor()
 	if idx < 0 || idx >= len(c.items) {
 		return
 	}
@@ -205,6 +218,7 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 		if !c.list.HandleKey(key) {
 			return false
 		}
+		c.clampBody()
 	case 'j':
 		c.MoveDown()
 	case 'k':
@@ -221,17 +235,18 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 	return true
 }
 
-// Render draws the list with ✔ markers on checked items.
+// Render draws the list with ✔ markers on checked items. The title
+// renders with the PR24 padding (one leading pad + blank line).
 func (c *CheckList) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Title.Render(c.title))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	for i, item := range c.items {
 		marker := "☐"
 		if c.checked[item.ID] {
 			marker = "✔"
 		}
-		if c.list.Cursor() == i+1 {
+		if c.list.Cursor() == i {
 			b.WriteString(theme.Cursor.Render("▸ " + marker + " " + item.Label))
 		} else {
 			b.WriteString(theme.Item.Render("  " + marker + " " + item.Label))

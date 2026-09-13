@@ -2,10 +2,13 @@
 // bubbletea v2 screen-stack application porting the flow structure of
 // the Python CLI (anicli-py anicli/cli/*) onto the Go core services.
 //
-// Navigation is governed by the §5 TUI invariants:
+// Navigation is governed by the §5 TUI invariants (PR24 layout):
 //
-//	I1 — the Back entry is always prepended at position 0 of every
-//	     menu and is always visible in the viewport;
+//	I1 — the Back entry is always appended as the LAST item of every
+//	     menu and is always visible, pinned at the BOTTOM of the
+//	     viewport (PR24: it used to sit at position 0 / the top);
+//	     the ROOT menu carries no Back at all — its last item is
+//	     «🚪 Выход», which exits the app;
 //	I2 — Esc, Ctrl-C and empty input normalize to the Back sentinel,
 //	     never to an application exit and never to a crash; the root
 //	     menu is the only place where an interrupt (Ctrl-C) exits the
@@ -54,35 +57,43 @@ type Choice struct {
 }
 
 // Menu is a navigation prompt: the caller's choices with the Back
-// entry prepended at position 0 (I1) and an optional empty-state
+// entry appended as the LAST item (I1) and an optional empty-state
 // message rendered when no other choices exist (I3).
 type Menu struct {
 	// Title is the prompt header.
 	Title string
-	// Items always starts with the Back entry at index 0.
+	// Items always ends with the Back entry at the last index.
 	Items []Choice
 	// EmptyMessage is shown instead of the (absent) choices when the
 	// menu was built from an empty list.
 	EmptyMessage string
 }
 
-// NewMenu builds a prompt from choices, prepending Back at position 0
-// (I1). An empty choices slice is legal (I3): the menu then consists
-// of the Back entry alone plus the empty-state message.
+// NewMenu builds a prompt from choices, appending Back as the LAST
+// item (I1 — pinned at the bottom of the viewport by PinList). An
+// empty choices slice is legal (I3): the menu then consists of the
+// Back entry alone plus the empty-state message.
 func NewMenu(title, emptyMessage string, choices ...Choice) Menu {
 	items := make([]Choice, 0, len(choices)+1)
-	items = append(items, Choice{ID: BackID, Label: BackLabel, Value: Back})
 	items = append(items, choices...)
+	items = append(items, Choice{ID: BackID, Label: BackLabel, Value: Back})
 	return Menu{Title: title, Items: items, EmptyMessage: emptyMessage}
 }
 
+// NewMenuWithoutBack builds a prompt with NO Back entry — the root
+// menu shape (I1 root exception): the caller's choices alone, the
+// last of which («🚪 Выход») occupies the pinned bottom slot.
+func NewMenuWithoutBack(title, emptyMessage string, choices ...Choice) Menu {
+	return Menu{Title: title, Items: append([]Choice(nil), choices...), EmptyMessage: emptyMessage}
+}
+
 // RenderItems renders the plain-text item labels, one per line, in
-// menu order (Back first, I1). An empty menu keeps the Back row and
-// appends the empty-state message below it — the same layout
+// menu order (choices first, Back LAST, I1). An empty menu renders
+// the empty-state message above the Back row — the same layout
 // PinList.Render uses for empty menus.
 func (m Menu) RenderItems() string {
 	if len(m.Items) == 1 && m.EmptyMessage != "" {
-		return BackLabel + "\n" + m.EmptyMessage
+		return m.EmptyMessage + "\n" + BackLabel
 	}
 	lines := make([]string, 0, len(m.Items))
 	for _, item := range m.Items {
@@ -94,8 +105,9 @@ func (m Menu) RenderItems() string {
 // ResolveKey maps one key press onto a MENU prompt outcome (I2): cancel
 // keys (Esc, Ctrl-C) normalize to the Back sentinel; Enter resolves
 // the currently highlighted item — which is Back itself when the
-// cursor sits on position 0 or when the choice list is empty (I3). Any
-// other key returns nil meaning "not resolved, keep waiting".
+// cursor sits on the trailing Back row or when the choice list is
+// empty (I3). Any other key returns nil meaning "not resolved, keep
+// waiting".
 func ResolveKey(menu Menu, cursor int, key tea.KeyPressMsg) any {
 	if IsCancelKey(key) {
 		return Back

@@ -330,9 +330,9 @@ func (r *rebindProgress) bind(group []contracts.SearchResult) error {
 // View implements Screen.
 func (r *rebindProgress) View() tea.View {
 	if r.list != nil {
-		return tea.NewView(r.list.Render())
+		return tea.NewView(themedList(r.list))
 	}
-	return tea.NewView(theme.Title.Render("Поиск источника: "+r.query) + "\n" +
+	return tea.NewView(theme.Title.Render("Поиск источника: "+r.query) + "\n\n" +
 		theme.Dim.Render("enter — сгруппировать и выбрать · esc — назад"))
 }
 

@@ -177,8 +177,8 @@ func TestSessionEpisodeNavigation(t *testing.T) {
 		if ss.state != sessionStateEpisodeList {
 			t.Fatalf("jump must open the episode list, got %v", ss.state)
 		}
-		// Move to episode 3 (index 3 = Back0, ep1, ep2, ep3).
-		ss.episodeList.Jump(3)
+		// Move to episode 3 (index 2 = ep1, ep2, ep3).
+		ss.episodeList.Jump(2)
 		next, _ = ss.Update(enter())
 		if next.(*sessionScreen).currentEpisode() != "3" {
 			t.Fatalf("pick must set current episode, got %q", next.(*sessionScreen).currentEpisode())
@@ -242,7 +242,7 @@ func TestSessionDubSelect(t *testing.T) {
 
 	// Audio pick: «⭐ Как видео» style shortcut = same key.
 	ss = next.(*sessionScreen)
-	ss.dubList.Jump(1) // first non-Back entry is the "как видео" option
+	ss.dubList.Jump(0) // first entry is the "как видео" option
 	next, _ = ss.Update(enter())
 	if next.(*sessionScreen).state != sessionStateQuality {
 		t.Fatalf("after audio dub the quality picker opens, got %v", next.(*sessionScreen).state)
@@ -463,8 +463,7 @@ func TestSessionScoreSubmitsAsScore(t *testing.T) {
 	s := shikiSessionForTests(t, shiki, nil)
 
 	ss := openInfo(s)
-	next, _ := ss.Update(down())  // cursor → Статус
-	next, _ = next.Update(down()) // cursor → Оценка
+	next, _ := ss.Update(down()) // cursor → Оценка (Статус is index 0)
 	next, _ = next.Update(enter())
 	prompt := next.(*sessionScreen)
 	if prompt.state != sessionStateInfoScore {
@@ -503,9 +502,8 @@ func TestSessionRewatchesSubmit(t *testing.T) {
 	s := shikiSessionForTests(t, shiki, nil)
 
 	ss := openInfo(s)
-	next, _ := ss.Update(down())  // Статус
-	next, _ = next.Update(down()) // Оценка
-	next, _ = next.Update(down()) // Пересмотры
+	next, _ := ss.Update(down())  // → Оценка
+	next, _ = next.Update(down()) // → Пересмотры
 	next, _ = next.Update(enter())
 	prompt := next.(*sessionScreen)
 	if prompt.state != sessionStateInfoRewatches {
@@ -528,8 +526,7 @@ func TestSessionRewatchesSubmit(t *testing.T) {
 func TestSessionInfoMenuPersists(t *testing.T) {
 	s := newSessionForTests(t)
 	ss := openInfo(s)
-	next, _ := ss.Update(down())
-	next, _ = next.Update(enter())
+	next, _ := ss.Update(enter())
 	got := next.(*sessionScreen)
 	if got.state != sessionStateInfoStatus {
 		t.Fatalf("Down+Enter in the info menu must reach the status picker, got %v", got.state)
@@ -544,15 +541,13 @@ func TestSessionStatusPickDispatches(t *testing.T) {
 	s := shikiSessionForTests(t, shiki, nil)
 
 	ss := openInfo(s)
-	next, _ := ss.Update(down()) // Статус
-	next, _ = next.Update(enter())
+	next, _ := ss.Update(enter())
 	sp := next.(*sessionScreen)
 	if sp.state != sessionStateInfoStatus {
 		t.Fatalf("must open the status picker, got %v", sp.state)
 	}
-	// Down lands on «Смотрю»; Enter resolves it (not Back).
-	next, _ = sp.Update(down())
-	_, cmd := next.Update(enter())
+	// The cursor starts on «Смотрю»; Enter resolves it (not Back).
+	_, cmd := sp.Update(enter())
 	if cmd == nil {
 		t.Fatalf("status pick must dispatch UpdateStatus")
 	}
@@ -582,9 +577,9 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
 	}
-	// Down → «Передний план» (first body item), Enter dispatches.
-	next, _ = ss.Update(down())
-	next, cmd := next.Update(enter())
+	// The cursor starts on «Передний план» (first item), Enter
+	// dispatches.
+	next, cmd := ss.Update(enter())
 	if cmd == nil {
 		t.Fatalf("foreground pick must dispatch the download")
 	}
@@ -618,8 +613,7 @@ func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 	ss.rangeInput.typeText("1")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(down())
-	next, _ = next.Update(down()) // «Фон»
+	next, _ = ss.Update(down()) // «Фон»
 	next, _ = next.Update(enter())
 	if len(dl.submitted) != 1 {
 		t.Fatalf("background pick must submit one task, got %d", len(dl.submitted))
@@ -642,8 +636,7 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 	ss.rangeInput.typeText("1")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(down())
-	next, cmd := next.Update(enter())
+	next, cmd := ss.Update(enter())
 	settled := cmd().(downloadSettledMsg)
 	if settled.err == nil {
 		t.Fatalf("download failure must be carried")
@@ -668,10 +661,10 @@ func watchToQuality(t *testing.T, s *sessionScreen) *sessionScreen {
 	s.list.Jump(sessionActionIndex(s, "watch"))
 	next, _ := s.Update(enter())
 	ss := next.(*sessionScreen)
-	ss.dubList.Jump(1)
+	ss.dubList.Jump(0)
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	ss.dubList.Jump(1)
+	ss.dubList.Jump(0)
 	next, cmd := ss.Update(enter())
 	if cmd == nil {
 		t.Fatalf("audio pick must schedule the stream resolve")
@@ -705,9 +698,9 @@ func TestSessionQualityMemory(t *testing.T) {
 	s := NewSessionScreen(deps, group[0], group)
 	s.loadEpisodesSync()
 
-	// First watch: pick 720 explicitly (items: Back, auto, 1080, 720).
+	// First watch: pick 720 explicitly (items: auto, 1080, 720).
 	ss := watchToQuality(t, s)
-	ss.qualityList.Jump(3)
+	ss.qualityList.Jump(2)
 	next, cmd := ss.Update(enter())
 	msg := cmd().(playedMsg)
 	if msg.err != nil {
@@ -731,7 +724,7 @@ func TestSessionQualityMemory(t *testing.T) {
 	}
 	next, _ = next.Update(srMsg)
 	ss = next.(*sessionScreen)
-	ss.qualityList.Jump(1) // Авто
+	ss.qualityList.Jump(0) // Авто
 	_, cmd = ss.Update(enter())
 	if _, ok := cmd().(playedMsg); !ok {
 		t.Fatalf("second play must settle, got %T", cmd())
@@ -755,11 +748,11 @@ func TestSessionStatusUpdateRateIDReuse(t *testing.T) {
 
 	pickStatus := func(sess *sessionScreen) (*sessionScreen, tea.Cmd) {
 		ss := openInfo(sess)
-		next, _ := ss.Update(down()) // Статус
-		next, _ = next.Update(enter())
+		// The info menu cursor starts on «Статус» (PR24 layout).
+		next, _ := ss.Update(enter())
 		sp := next.(*sessionScreen)
-		next, _ = sp.Update(down()) // «Смотрю»
-		screen, cmd := next.Update(enter())
+		// The status picker cursor starts on «Смотрю».
+		screen, cmd := sp.Update(enter())
 		return screen.(*sessionScreen), cmd
 	}
 
@@ -855,7 +848,7 @@ func TestSessionResumeCarriesShikimoriBinding(t *testing.T) {
 	}
 	next, _ = next.Update(msg)
 	ss := next.(*sessionScreen)
-	ss.qualityList.Jump(1) // Авто
+	ss.qualityList.Jump(0) // Авто
 	_, cmd = ss.Update(enter())
 	if _, ok := cmd().(playedMsg); !ok {
 		t.Fatalf("play must settle, got %T", cmd())

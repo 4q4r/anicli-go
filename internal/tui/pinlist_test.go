@@ -27,13 +27,18 @@ func itoa(i int) string {
 	return digits
 }
 
-// TestPinListBackRowAlwaysVisible: I1 — the Back row (menu position 0)
-// is rendered on every page, at every scroll offset, for any cursor.
+// TestPinListBackRowAlwaysVisible: I1 (PR24) — the Back row (menu LAST
+// position) is rendered on every page, at every scroll offset, for any
+// cursor, PINNED AT THE BOTTOM of the viewport.
 func TestPinListBackRowAlwaysVisible(t *testing.T) {
-	t.Run("back label visible on first page", func(t *testing.T) {
+	t.Run("back label visible on first page, below the items", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(3)...), 10)
-		if !strings.Contains(m.Render(), BackLabel) {
+		r := m.Render()
+		if !strings.Contains(r, BackLabel) {
 			t.Fatalf("Back must render on page 1")
+		}
+		if strings.Index(r, BackLabel) < strings.Index(r, "Элемент 3") {
+			t.Fatalf("Back must render BELOW the items, got:\n%s", r)
 		}
 	})
 
@@ -49,14 +54,33 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 			t.Fatalf("cursor item must be visible after scrolling")
 		}
 	})
+
+	t.Run("backless (root) menu pins the last choice at the bottom", func(t *testing.T) {
+		m := NewPinList(NewMenuWithoutBack("Корень", "",
+			Choice{ID: "a", Label: "Первый"},
+			Choice{ID: "exit", Label: "🚪 Выход"},
+		), 10)
+		r := m.Render()
+		if !strings.Contains(r, "🚪 Выход") {
+			t.Fatalf("root list must render the exit entry, got:\n%s", r)
+		}
+		if strings.Contains(r, BackLabel) {
+			t.Fatalf("root list must not render a Back row, got:\n%s", r)
+		}
+		if strings.Index(r, "🚪 Выход") < strings.Index(r, "Первый") {
+			t.Fatalf("the exit entry must render BELOW the body items, got:\n%s", r)
+		}
+	})
 }
 
 // TestPinListCursorAndPaging: cursor movement, clamping and page turns.
+// The cursor domain covers the full item list INCLUDING the pinned
+// bottom row; it starts on the first body item.
 func TestPinListCursorAndPaging(t *testing.T) {
-	t.Run("cursor starts on Back (position 0)", func(t *testing.T) {
+	t.Run("cursor starts on the first body item (0)", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(5)...), 10)
 		if m.Cursor() != 0 {
-			t.Fatalf("cursor must start at Back position 0, got %d", m.Cursor())
+			t.Fatalf("cursor must start at body position 0, got %d", m.Cursor())
 		}
 	})
 
@@ -73,17 +97,17 @@ func TestPinListCursorAndPaging(t *testing.T) {
 		}
 	})
 
-	t.Run("cursor clamps at both ends", func(t *testing.T) {
+	t.Run("cursor clamps at both ends (0 and the pinned Back row)", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(3)...), 10)
 		m.MoveUp()
 		if m.Cursor() != 0 {
-			t.Fatalf("cursor must clamp at 0 (Back), got %d", m.Cursor())
+			t.Fatalf("cursor must clamp at 0, got %d", m.Cursor())
 		}
 		for range 10 {
 			m.MoveDown()
 		}
 		if m.Cursor() != 3 {
-			t.Fatalf("cursor must clamp at last item, got %d", m.Cursor())
+			t.Fatalf("cursor must clamp at the pinned Back row, got %d", m.Cursor())
 		}
 	})
 
@@ -100,10 +124,14 @@ func TestPinListCursorAndPaging(t *testing.T) {
 		}
 	})
 
-	t.Run("empty menu renders Back and the empty message", func(t *testing.T) {
+	t.Run("empty menu renders the empty message above Back", func(t *testing.T) {
 		m := NewPinList(NewMenu("Пусто", "Ничего не найдено"), 10)
-		if !strings.Contains(m.Render(), BackLabel) || !strings.Contains(m.Render(), "Ничего не найдено") {
-			t.Fatalf("empty menu must render Back + empty-state, got %q", m.Render())
+		r := m.Render()
+		if !strings.Contains(r, BackLabel) || !strings.Contains(r, "Ничего не найдено") {
+			t.Fatalf("empty menu must render message + Back, got %q", r)
+		}
+		if strings.Index(r, "Ничего не найдено") > strings.Index(r, BackLabel) {
+			t.Fatalf("empty message must render ABOVE the Back row, got %q", r)
 		}
 		// Enter on the lone Back resolves through nav.
 		menu := m.Menu()
@@ -127,7 +155,9 @@ func TestPinListCursorAndPaging(t *testing.T) {
 	})
 }
 
-// TestPinListVisibleRange: the visible body window calculation.
+// TestPinListVisibleRange: the visible body window calculation. The
+// body window covers items [0, len-1); the pinned last row is not part
+// of the scrolling body.
 func TestPinListVisibleRange(t *testing.T) {
 	t.Run("body window follows the cursor", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(25)...), 6)
@@ -140,6 +170,9 @@ func TestPinListVisibleRange(t *testing.T) {
 		}
 		if hi-lo > 6 {
 			t.Fatalf("body window must not exceed height 6, got %d", hi-lo)
+		}
+		if hi > 25 {
+			t.Fatalf("body window must exclude the pinned last row, got hi=%d", hi)
 		}
 	})
 }

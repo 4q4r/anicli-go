@@ -30,22 +30,23 @@ func enterKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 var navInvariants = []navInvariant{
 	{
 		id:   "I1",
-		name: "Back is always prepended at position 0 of every menu (and visible in empty menus)",
+		name: "Back is always appended as the LAST item of every menu and pinned at the viewport bottom (empty menus too)",
 		live: func(t *testing.T) {
 			menu := tui.NewMenu("Заголовок", "пусто",
 				tui.Choice{ID: "a", Label: "A"},
 				tui.Choice{ID: "b", Label: "B"},
 			)
-			if len(menu.Items) == 0 || menu.Items[0].ID != tui.BackID ||
-				menu.Items[0].Label != tui.BackLabel || menu.Items[0].Value != tui.Back {
-				t.Fatalf("I1: menu items must start with the Back entry, got %+v", menu.Items)
+			last := len(menu.Items) - 1
+			if len(menu.Items) == 0 || menu.Items[last].ID != tui.BackID ||
+				menu.Items[last].Label != tui.BackLabel || menu.Items[last].Value != tui.Back {
+				t.Fatalf("I1: menu items must end with the Back entry, got %+v", menu.Items)
 			}
 
 			empty := tui.NewMenu("Заголовок", "ничего нет")
 			if len(empty.Items) != 1 || empty.Items[0].ID != tui.BackID {
 				t.Fatalf("I1: empty menu must still hold exactly the Back row, got %+v", empty.Items)
 			}
-			if want := tui.BackLabel + "\nничего нет"; empty.RenderItems() != want {
+			if want := "ничего нет\n" + tui.BackLabel; empty.RenderItems() != want {
 				t.Fatalf("I1: empty render = %q, want %q", empty.RenderItems(), want)
 			}
 		},
@@ -91,7 +92,7 @@ var navInvariants = []navInvariant{
 			if got := tui.ResolveKey(menu, 0, enterKey()); got != tui.Back {
 				t.Fatalf("I3: enter on an empty menu must resolve the Back row, got %v", got)
 			}
-			if want := tui.BackLabel + "\nНичего не найдено"; menu.RenderItems() != want {
+			if want := "Ничего не найдено\n" + tui.BackLabel; menu.RenderItems() != want {
 				t.Fatalf("I3: empty render = %q, want %q", menu.RenderItems(), want)
 			}
 		},
@@ -112,7 +113,7 @@ var navInvariants = []navInvariant{
 			// A user payload equal to nothing else resolves by value,
 			// never colliding with the sentinel.
 			menu2 := tui.NewMenu("Заголовок", "", tui.Choice{ID: "x", Label: "X", Value: 42})
-			if got := tui.ResolveKey(menu2, 1, enterKey()); got != 42 {
+			if got := tui.ResolveKey(menu2, 0, enterKey()); got != 42 {
 				t.Fatalf("I4: choice payload must resolve intact, got %v", got)
 			}
 		},

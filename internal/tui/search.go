@@ -371,7 +371,8 @@ func (s *searchSource) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return s, replace(NewSessionScreen(s.deps, primary, s.group))
 }
 
-// View implements Screen.
+// View implements Screen: the padded source-picker title above the
+// list (PR24).
 func (s *searchSource) View() tea.View {
-	return tea.NewView(s.list.Render())
+	return tea.NewView(theme.Title.Render(s.list.Menu().Title) + "\n\n" + s.list.Render())
 }

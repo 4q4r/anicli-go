@@ -153,13 +153,11 @@ func (s *offlineSession) buildEpisodeList() {
 		})
 	}
 	s.episodeList = NewPinList(NewMenu("Выберите серию:", "Локальные серии не найдены", choices...), defaultListHeight)
-	if len(choices) > 0 {
-		s.episodeList.Jump(1)
-	}
 }
 
 // buildActionMenu renders the offline action set (python
-// _offline_session menu).
+// _offline_session menu). The trailing Back row appended by NewMenu is
+// the menu's exit path (PR24 bottom pin).
 func (s *offlineSession) buildActionMenu() {
 	s.list = NewPinList(NewMenu(s.header(), "", []Choice{
 		{ID: "watch", Label: "▶ Смотреть"},
@@ -167,7 +165,6 @@ func (s *offlineSession) buildActionMenu() {
 		{ID: "prev", Label: "⏮ Пред."},
 		{ID: "jump", Label: "🔢 Перейти к серии"},
 		{ID: "variant", Label: "🎛 Сменить локальный поток"},
-		{ID: "exit", Label: "🚪 Назад"},
 	}...), defaultListHeight)
 }
 
@@ -254,9 +251,6 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	case "variant":
 		return s.pickVariant()
-	case "exit":
-		s.stateVariant = false
-		return s, pop()
 	default:
 		return s, nil
 	}
@@ -357,11 +351,11 @@ func (s *offlineSession) View() tea.View {
 	var body string
 	switch {
 	case s.current == "":
-		body = s.episodeList.Render()
+		body = themedList(s.episodeList)
 	case s.stateVariant && s.variantList != nil:
-		body = s.variantList.Render()
+		body = themedList(s.variantList)
 	default:
-		body = theme.Title.Render(s.header()) + "\n" + s.list.Render()
+		body = theme.Title.Render(s.header()) + "\n\n" + s.list.Render()
 	}
 	if s.status != "" {
 		body += "\n" + theme.StatusLine.Render(s.status)

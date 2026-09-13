@@ -71,7 +71,7 @@ func TestOfflineSession(t *testing.T) {
 	})
 
 	t.Run("pick episode then watch plays local file offline-marked", func(t *testing.T) {
-		s.episodeList.Jump(1) // episode 1
+		s.episodeList.Jump(0) // episode 1
 		next, _ := s.Update(enter())
 		ss := next.(*offlineSession)
 		if ss.current != "1" {
@@ -118,10 +118,10 @@ func TestOfflineSession(t *testing.T) {
 		}
 		t2, _ := deps2.Offline.Titles()
 		s2 := NewOfflineSession(deps2, t2[0])
-		s2.episodeList.Jump(1)
+		s2.episodeList.Jump(0)
 		next, _ := s2.Update(enter())
 		ss := next.(*offlineSession)
-		ss.list.Jump(1)
+		ss.list.Jump(0)
 		_, cmd := ss.Update(enter())
 		if cmd == nil {
 			t.Fatalf("watch must schedule")
@@ -158,7 +158,7 @@ func TestOfflineWatchDispatchesPlayback(t *testing.T) {
 	titles, _ := deps.Offline.Titles()
 	s := NewOfflineSession(deps, titles[0])
 
-	s.episodeList.Jump(1) // episode 1
+	s.episodeList.Jump(0) // episode 1
 	next, _ := s.Update(enter())
 	ss := next.(*offlineSession)
 	ss.list.Jump(offlineActionIndex(ss, "watch"))
@@ -208,7 +208,7 @@ func TestOfflineVariantPickerFlow(t *testing.T) {
 	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}}
 	titles, _ := deps.Offline.Titles()
 	s := NewOfflineSession(deps, titles[0])
-	s.episodeList.Jump(1)
+	s.episodeList.Jump(0)
 	next, _ := s.Update(enter())
 	ss := next.(*offlineSession)
 
@@ -219,10 +219,10 @@ func TestOfflineVariantPickerFlow(t *testing.T) {
 		if !vs.stateVariant {
 			t.Fatalf("variant picker must engage")
 		}
-		// Down moves the PICKER (not the action menu): two downs from
-		// Back land on the 720p [b] sub variant; Enter applies it.
+		// Down moves the PICKER (not the action menu): the cursor
+		// starts on the first variant; one down lands on the 720p [b]
+		// sub variant; Enter applies it.
 		next, _ = vs.Update(down())
-		next, _ = next.Update(down())
 		next, _ = next.Update(enter())
 		picked := next.(*offlineSession)
 		if picked.stateVariant {

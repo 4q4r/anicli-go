@@ -7,6 +7,8 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // Health screen id.
@@ -25,12 +27,15 @@ type healthSettledMsg struct {
 // healthScreen runs every provider's test search in parallel with a
 // live OK/Error table (python health_check + check_provider_safe
 // port): one lightweight "test" query per provider with a timeout.
+// Providers disabled at startup for missing configuration render as
+// ОТКЛЮЧЁН rows with their reason and are never probed (PR24).
 type healthScreen struct {
-	deps    *Deps
-	spin    spinner.Model
-	rows    []ProviderMeta
-	status  map[string]string
-	pending map[string]bool
+	deps     *Deps
+	spin     spinner.Model
+	rows     []ProviderMeta
+	disabled []providers.DisabledProvider
+	status   map[string]string
+	pending  map[string]bool
 }
 
 // NewHealthScreen builds the screen and schedules the checks.
@@ -39,15 +44,18 @@ type healthScreen struct {
 func NewHealthScreen(deps *Deps) *healthScreen {
 	sp := spinner.New(spinner.WithSpinner(spinner.Line))
 	var rows []ProviderMeta
+	var disabled []providers.DisabledProvider
 	if deps != nil && deps.Search != nil {
 		rows = deps.Search.Providers()
+		disabled = deps.Search.DisabledProviders()
 	}
 	h := &healthScreen{
-		deps:    deps,
-		spin:    sp,
-		rows:    rows,
-		status:  make(map[string]string, len(rows)),
-		pending: make(map[string]bool, len(rows)),
+		deps:     deps,
+		spin:     sp,
+		rows:     rows,
+		disabled: disabled,
+		status:   make(map[string]string, len(rows)),
+		pending:  make(map[string]bool, len(rows)),
 	}
 	for _, r := range rows {
 		h.status[r.ID] = "Проверка…"
@@ -99,7 +107,8 @@ func (h *healthScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	}
 }
 
-// View implements Screen: the live table.
+// View implements Screen: the live table. Disabled providers render
+// as ОТКЛЮЧЁН rows below the checked ones (PR24).
 func (h *healthScreen) View() tea.View {
 	var b strings.Builder
 	b.WriteString(theme.Title.Render("🛠 Проверка провайдеров"))
@@ -118,7 +127,11 @@ func (h *healthScreen) View() tea.View {
 		}
 		fmt.Fprintf(&b, "  %-16s %-6s %s\n", row.Name, "Ping", style.Render(state))
 	}
-	if len(h.rows) == 0 {
+	for _, d := range h.disabled {
+		fmt.Fprintf(&b, "  %-16s %-6s %s\n", d.ID, "—",
+			theme.Warning.Render("ОТКЛЮЧЁН: "+d.Reason))
+	}
+	if len(h.rows)+len(h.disabled) == 0 {
 		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
 		b.WriteString("\n")
 	}

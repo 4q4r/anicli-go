@@ -117,6 +117,11 @@ func (s *realSearch) Providers() []ProviderMeta {
 	return out
 }
 
+// DisabledProviders surfaces the startup exclusion set (PR24).
+func (s *realSearch) DisabledProviders() []providers.DisabledProvider {
+	return s.registry.Disabled()
+}
+
 func (s *realSearch) Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error) {
 	p, ok := s.registry.Get(providerID)
 	if !ok {

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // fakeSearch implements SearchService with per-provider behavior.
@@ -19,6 +20,7 @@ type fakeSearch struct {
 	errs      map[string]error
 	panics    map[string]bool
 	queries   map[string]string
+	disabled  []providers.DisabledProvider
 }
 
 func newFakeSearch() *fakeSearch {
@@ -28,14 +30,17 @@ func newFakeSearch() *fakeSearch {
 			{ID: "anilib", Name: "AniLib"},
 			{ID: "broken", Name: "Broken"},
 		},
-		results: map[string][]contracts.SearchResult{},
-		errs:    map[string]error{},
-		panics:  map[string]bool{},
-		queries: map[string]string{},
+		results:  map[string][]contracts.SearchResult{},
+		errs:     map[string]error{},
+		panics:   map[string]bool{},
+		queries:  map[string]string{},
+		disabled: nil,
 	}
 }
 
 func (f *fakeSearch) Providers() []ProviderMeta { return f.providers }
+
+func (f *fakeSearch) DisabledProviders() []providers.DisabledProvider { return f.disabled }
 
 func (f *fakeSearch) Search(_ context.Context, providerID, query string) ([]contracts.SearchResult, error) {
 	f.queries[providerID] = query

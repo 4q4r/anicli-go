@@ -99,26 +99,55 @@ func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, e
 // need browser capabilities (the AllAnime crypto bridge). Providers
 // whose id is listed in [providers].exclude are skipped entirely — no
 // client, no registry slot — and the exclusion is logged at startup
-// (PR23).
+// (PR23). Providers that cannot run without user configuration (kodik
+// without a token) are skipped the same way and returned in the
+// disabled set (PR24).
 func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager) ([]contracts.Provider, error) {
+	out, _, err := allWithCFDisabled(cfg, extra, cf)
+	return out, err
+}
+
+// allWithCFDisabled is allWithCF that also returns the
+// unconfigured-provider set for registry bookkeeping.
+func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager) ([]contracts.Provider, []DisabledProvider, error) {
 	excluded := make(map[string]bool, len(cfg.Providers.Exclude))
 	for _, id := range cfg.Providers.Exclude {
 		excluded[id] = true
 	}
+	disabledMap := unconfiguredIDs(cfg)
 	out := make([]contracts.Provider, 0, len(allFactories))
 	for _, factory := range allFactories {
 		if excluded[factory.id] {
 			slog.Info("provider excluded: " + factory.id)
 			continue
 		}
+		if d, off := disabledMap[factory.id]; off {
+			slog.Info("provider disabled (not configured): " + d.ID + ": " + d.Reason)
+			continue
+		}
 		opts := append([]netclient.Option{netclient.WithProvider(factory.id)}, extra...)
 		client, err := netclient.New(cfg.Network, opts...)
 		if err != nil {
-			return nil, fmt.Errorf("build %s client: %w", factory.id, err)
+			return nil, nil, fmt.Errorf("build %s client: %w", factory.id, err)
 		}
 		out = append(out, factory.build(client, cfg, cf))
 	}
-	return out, nil
+	disabled := make([]DisabledProvider, 0, len(disabledMap))
+	for _, d := range disabledMap {
+		disabled = append(disabled, d)
+	}
+	sortDisabled(disabled)
+	return out, disabled, nil
+}
+
+// sortDisabled orders the disabled set by provider id for stable
+// output.
+func sortDisabled(disabled []DisabledProvider) {
+	for i := 1; i < len(disabled); i++ {
+		for j := i; j > 0 && disabled[j].ID < disabled[j-1].ID; j-- {
+			disabled[j], disabled[j-1] = disabled[j-1], disabled[j]
+		}
+	}
 }
 
 // NewRegistry builds the full provider set with every provider wrapped
@@ -141,7 +170,7 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registr
 	if err != nil {
 		return nil, err
 	}
-	bare, err := allWithCF(cfg, cfOpts, cfMgr)
+	bare, disabled, err := allWithCFDisabled(cfg, cfOpts, cfMgr)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +184,7 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registr
 			return nil, err
 		}
 	}
+	reg.disabled = disabled
 	reg.cfClose = cfClose
 	return reg, nil
 }

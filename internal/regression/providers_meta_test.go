@@ -35,7 +35,12 @@ var expectedProviderOrder = []string{
 // provider drop — the G1 gate and the parity tool both assume the
 // roster size).
 func TestProviderRosterComplete(t *testing.T) {
-	built, err := providers.All(config.Default())
+	// The full 11-provider roster needs kodik configured (PR24:
+	// a tokenless kodik is disabled at startup and dropped from the
+	// registry).
+	cfg := config.Default()
+	cfg.Providers.Kodik.Token = "test-token"
+	built, err := providers.All(cfg)
 	if err != nil {
 		t.Fatalf("providers.All: %v", err)
 	}

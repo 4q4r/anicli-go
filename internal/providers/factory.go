@@ -37,7 +37,7 @@ var allFactories = []struct {
 		return newSovetRomantica(SovetRomanticaBase, http)
 	}},
 	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newGogoAnime(GogoAnimeBase, GogoAnimeAjaxBase, http)
+		return newGogoAnime(GogoAnimeBase, http)
 	}},
 	{"animepahe", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimePahe(AnimePaheBase, http)

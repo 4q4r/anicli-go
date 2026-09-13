@@ -463,9 +463,13 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 	keys := sortedEmbedKeys(ep.RawEmbeds)
 	choices := make([]Choice, 0, len(keys)+1)
 	if state == sessionStateDubAudio && s.videoDub != "" {
+		name := stripProviderTag(s.videoDub)
+		if tag := s.dubLangTag(s.videoDub); tag != "" {
+			name = tag + " " + name
+		}
 		choices = append(choices, Choice{
 			ID:    s.videoDub,
-			Label: "⭐ Как видео (" + stripProviderTag(s.videoDub) + ")",
+			Label: "⭐ Как видео (" + name + ")",
 			Value: s.videoDub,
 		})
 	}
@@ -473,9 +477,13 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 		if state == sessionStateDubAudio && k == s.videoDub {
 			continue
 		}
+		label := k
+		if tag := s.dubLangTag(k); tag != "" {
+			label = tag + " " + k
+		}
 		choices = append(choices, Choice{
 			ID:    k,
-			Label: fmt.Sprintf("%s [%d сер.]", k, s.dubStats[k]),
+			Label: fmt.Sprintf("%s [%d сер.]", label, s.dubStats[k]),
 			Value: k,
 		})
 	}
@@ -489,6 +497,17 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 		s.dubList.Jump(1)
 	}
 	return s, nil
+}
+
+// dubLangTag returns the display language tag ("[RU]", "[JA]") of a
+// dub key, looking the key's provider content language up via the
+// episode service; "" when the language is unknown (plain name).
+func (s *sessionScreen) dubLangTag(key string) string {
+	lang := s.deps.Episode.ContentLanguage(providerOfTrackKey(key))
+	if lang == "" {
+		return ""
+	}
+	return "[" + strings.ToUpper(lang) + "]"
 }
 
 // handleDubKey resolves the dub pickers.

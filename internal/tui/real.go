@@ -145,6 +145,10 @@ func (s *realEpisode) ResolveStream(ctx context.Context, providerID string, epis
 	return p.ResolveStream(ctx, episode, dubID)
 }
 
+func (s *realEpisode) ContentLanguage(providerID string) string {
+	return s.registry.ContentLanguage(providerID)
+}
+
 // --- PlaybackService ---
 
 type realPlayback struct {

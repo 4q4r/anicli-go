@@ -76,12 +76,14 @@ func (r *Registry) ContentLanguage(id string) string {
 	return lc.ContentLanguage()
 }
 
-// bareProvider peels the registry wrapper layers (SearchDelegator and
-// friends) down to the concrete provider they serve.
+// bareProvider peels the registry wrapper layers (SearchDelegator, the
+// dub stream filter) down to the concrete provider they serve.
 func bareProvider(p contracts.Provider) contracts.Provider {
 	for {
 		switch w := p.(type) {
 		case SearchDelegator:
+			p = w.Provider
+		case dubFilteredProvider:
 			p = w.Provider
 		default:
 			return p

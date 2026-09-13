@@ -17,6 +17,7 @@ type fakeEpisode struct {
 	episodes map[string][]contracts.Episode
 	streams  map[string]contracts.MediaStream
 	errs     map[string]error
+	langs    map[string]string
 }
 
 func (f *fakeEpisode) GetEpisodes(_ context.Context, providerID, _ string) ([]contracts.Episode, error) {
@@ -24,6 +25,10 @@ func (f *fakeEpisode) GetEpisodes(_ context.Context, providerID, _ string) ([]co
 		return nil, err
 	}
 	return f.episodes[providerID], nil
+}
+
+func (f *fakeEpisode) ContentLanguage(providerID string) string {
+	return f.langs[providerID]
 }
 
 func (f *fakeEpisode) ResolveStream(_ context.Context, _ string, _ contracts.Episode, dubID string) (contracts.MediaStream, error) {
@@ -270,6 +275,45 @@ func TestSessionDubSelect(t *testing.T) {
 	}
 	if !strings.Contains(pb.played[0].Title, "Тайтл - 1") {
 		t.Fatalf("player title must carry anime and episode, got %q", pb.played[0].Title)
+	}
+}
+
+// TestSessionDubSelectLanguageTags pins the [RU]/[JA] dub prefixes
+// (PR23): a provider with a known content language renders its dubs
+// as "[XX] <name>", a provider without one renders the plain name.
+// The choice values stay the raw keys — the tag is display-only.
+func TestSessionDubSelectLanguageTags(t *testing.T) {
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			langs:    map[string]string{"animego": "ru", "anilib": ""},
+		},
+		Playback: &fakePlayback{},
+	}
+	group := []contracts.SearchResult{
+		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
+		{Title: "Тайтл", URL: "u2", SourceID: "anilib"},
+	}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	next, _ := s.Update(nil)
+	ss, ok := next.(*sessionScreen)
+	if !ok {
+		ss = s
+	}
+	opened, _ := ss.openDubSelect(sessionStateDubVideo)
+	ss = opened.(*sessionScreen)
+
+	labels := map[string]string{}
+	for _, c := range ss.dubList.Menu().Items {
+		labels[c.ID] = c.Label
+	}
+	if got := labels["[animego] Дубль 1"]; got != "[RU] [animego] Дубль 1 [2 сер.]" {
+		t.Errorf("tagged dub label = %q, want %q", got, "[RU] [animego] Дубль 1 [2 сер.]")
+	}
+	if got := labels["[anilib] AniLib"]; got != "[anilib] AniLib [2 сер.]" {
+		t.Errorf("plain dub label = %q, want %q", got, "[anilib] AniLib [2 сер.]")
 	}
 }
 

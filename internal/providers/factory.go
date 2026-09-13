@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/an0nx/anicli-go/internal/cfbrowser"
 	"github.com/an0nx/anicli-go/internal/config"
@@ -78,11 +79,12 @@ func cacheDirFor(cfg config.Settings) string {
 	return dir
 }
 
-// All builds every implemented provider: one netclient client each
+// All builds the provider set from cfg: one netclient client each
 // (browser-fingerprint profile, own cookie jar, provider-tagged errors)
 // constructed from cfg.Network, plus per-provider settings where a
-// source needs them (kodik's token). Grow allFactories as later waves
-// land.
+// source needs them (kodik's token). Providers listed in
+// [providers].exclude are skipped (PR23). Grow allFactories as later
+// waves land.
 func All(cfg config.Settings) ([]contracts.Provider, error) {
 	return all(cfg, nil)
 }
@@ -94,10 +96,21 @@ func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, e
 }
 
 // allWithCF is all with the shared CF manager handed to providers that
-// need browser capabilities (the AllAnime crypto bridge).
+// need browser capabilities (the AllAnime crypto bridge). Providers
+// whose id is listed in [providers].exclude are skipped entirely — no
+// client, no registry slot — and the exclusion is logged at startup
+// (PR23).
 func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager) ([]contracts.Provider, error) {
+	excluded := make(map[string]bool, len(cfg.Providers.Exclude))
+	for _, id := range cfg.Providers.Exclude {
+		excluded[id] = true
+	}
 	out := make([]contracts.Provider, 0, len(allFactories))
 	for _, factory := range allFactories {
+		if excluded[factory.id] {
+			slog.Info("provider excluded: " + factory.id)
+			continue
+		}
 		opts := append([]netclient.Option{netclient.WithProvider(factory.id)}, extra...)
 		client, err := netclient.New(cfg.Network, opts...)
 		if err != nil {
@@ -109,10 +122,17 @@ func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Mana
 }
 
 // NewRegistry builds the full provider set with every provider wrapped
-// in a SearchDelegator recording into stats. stats may be nil: searches
-// then simply are not recorded. When [cf].enabled the CF challenge
-// ladder is wired into every client; Close releases it.
+// in a SearchDelegator recording into stats, and — when
+// [providers].exclude_streams is configured — in a dub stream filter
+// that drops trash streams from episode listings (PR23). stats may be
+// nil: searches then simply are not recorded. When [cf].enabled the CF
+// challenge ladder is wired into every client; Close releases it.
 func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registry, error) {
+	filter, err := NewStreamFilter(cfg.Providers.ExcludeStreams)
+	if err != nil {
+		return nil, err
+	}
+
 	cfMgr, err := cfbrowser.NewManager(cfg)
 	if err != nil {
 		return nil, err
@@ -128,6 +148,9 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registr
 
 	reg := NewEmptyRegistry()
 	for _, p := range bare {
+		if filter != nil {
+			p = dubFilteredProvider{Provider: p, filter: filter}
+		}
 		if err := reg.Register(SearchDelegator{Provider: p, stats: stats}); err != nil {
 			return nil, err
 		}

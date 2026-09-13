@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -230,4 +232,39 @@ func TestConfigPathFrom(t *testing.T) {
 			t.Fatalf("ConfigPathFrom = %q, want env value", got)
 		}
 	})
+}
+
+// TestDoctorMarksExcludedProviders pins the PR23 [providers].exclude
+// surface: excluded providers keep a slot in the doctor provider
+// list, suffixed [excluded], so their omission from the active
+// fan-out is visible instead of silent.
+func TestDoctorMarksExcludedProviders(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	if err := os.WriteFile(path, []byte(`
+[providers]
+exclude = ["animepahe", "kodik"]
+`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	var buf bytes.Buffer
+	root := NewRootCommand()
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"doctor", "--config", path})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute doctor: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "animepahe [excluded]") {
+		t.Errorf("doctor output %q must mark animepahe as excluded", out)
+	}
+	if !strings.Contains(out, "kodik [excluded]") {
+		t.Errorf("doctor output %q must mark kodik as excluded", out)
+	}
+	if strings.Contains(out, "animego [excluded]") {
+		t.Errorf("active providers must not carry the excluded marker: %q", out)
+	}
 }

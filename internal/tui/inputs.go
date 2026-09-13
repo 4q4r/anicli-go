@@ -184,6 +184,13 @@ func (c *CheckList) Resolve(key tea.KeyPressMsg) any {
 	return checked
 }
 
+// InvertSelection flips every item's checked state.
+func (c *CheckList) InvertSelection() {
+	for _, item := range c.items {
+		c.checked[item.ID] = !c.checked[item.ID]
+	}
+}
+
 // HandleKey applies movement and toggle keys, reporting whether the
 // key was consumed.
 func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
@@ -202,6 +209,12 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 		c.MoveDown()
 	case 'k':
 		c.MoveUp()
+	case 'a':
+		// Toggle between select-all and deselect-all.
+		allChecked := len(c.CheckedItems()) == len(c.items)
+		c.SelectAll(!allChecked)
+	case 'i':
+		c.InvertSelection()
 	default:
 		return false
 	}
@@ -225,6 +238,6 @@ func (c *CheckList) Render() string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(theme.StatusLine.Render("space — отметить · enter — продолжить · esc — назад"))
+	b.WriteString(theme.StatusLine.Render("space — отметить · a — все/ничего · i — инверт · enter — продолжить · esc — назад"))
 	return b.String()
 }

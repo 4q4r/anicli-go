@@ -142,3 +142,39 @@ func idsOf(cs []Choice) []string {
 	}
 	return out
 }
+
+func TestCheckListSelectAllToggle(t *testing.T) {
+	items := []Choice{
+		{ID: "a", Label: "A"}, {ID: "b", Label: "B"}, {ID: "c", Label: "C"},
+	}
+	cl := NewCheckList("test", items)
+
+	// 'a' selects all when none checked
+	cl.HandleKey(tea.KeyPressMsg{Code: 'a'})
+	if got := len(cl.CheckedItems()); got != 3 {
+		t.Errorf("a after none: got %d checked, want 3", got)
+	}
+
+	// 'a' deselects all when all checked
+	cl.HandleKey(tea.KeyPressMsg{Code: 'a'})
+	if got := len(cl.CheckedItems()); got != 0 {
+		t.Errorf("a after all: got %d checked, want 0", got)
+	}
+
+	// 'i' inverts (none -> all here, partial generally)
+	cl.HandleKey(tea.KeyPressMsg{Code: 'i'})
+	if got := len(cl.CheckedItems()); got != 3 {
+		t.Errorf("i after none: got %d checked, want 3", got)
+	}
+
+	// space toggles one off, then 'i' restores
+	cl.MoveDown() // cursor on item 0
+	cl.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace})
+	if got := len(cl.CheckedItems()); got != 2 {
+		t.Fatalf("space: got %d, want 2", got)
+	}
+	cl.HandleKey(tea.KeyPressMsg{Code: 'i'})
+	if got := len(cl.CheckedItems()); got != 1 {
+		t.Errorf("i partial: got %d, want 1", got)
+	}
+}

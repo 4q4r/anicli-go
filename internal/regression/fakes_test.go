@@ -2,6 +2,7 @@ package regression
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -125,7 +126,7 @@ func (fixedShiki) GetAnimesInfo(_ context.Context, _ []int64) ([]shikimori.Anime
 			EpisodesAired: 24,
 			Status:        "ongoing",
 			Kind:          "TV",
-			Score:         8.9,
+			Score:         json.Number("8.9"),
 			Description:   "Fixed regression description.",
 			Genres:        []shikimori.Genre{{ID: 1, Name: "Action", Russian: "Экшен"}},
 			NextEpisode:   13,
@@ -141,7 +142,7 @@ func (fixedShiki) GetAnimesInfo(_ context.Context, _ []int64) ([]shikimori.Anime
 			Episodes: 26,
 			Status:   "released",
 			Kind:     "TV",
-			Score:    7.1,
+			Score:    json.Number("7.1"),
 		},
 	}, nil
 }
@@ -172,7 +173,7 @@ func (fixedShiki) GetAnimeDetails(_ context.Context, id int64) (*shikimori.Anime
 			Episodes:   26,
 			Status:     "ongoing",
 			Kind:       "TV",
-			Score:      8.9,
+			Score:      json.Number("8.9"),
 			AiredOn:    "1998-04-03",
 			ReleasedOn: "1999-04-24",
 		},

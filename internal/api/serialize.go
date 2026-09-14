@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -221,7 +222,7 @@ func animeRowMap(a *shikimori.Anime) map[string]any {
 		"name":            a.Name,
 		"russian":         a.Russian,
 		"image":           image,
-		"score":           a.Score,
+		"score":           scoreToFloat(a.Score),
 		"description":     a.Description,
 		"genres":          genres,
 		"kind":            a.Kind,
@@ -292,4 +293,18 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// scoreToFloat converts the shikimori wire score (json.Number — the API
+// sends "8.61" as a string) into a plain float for the JSON payload;
+// an empty/unparseable number degrades to nil.
+func scoreToFloat(n json.Number) any {
+	if n == "" {
+		return nil
+	}
+	f, err := n.Float64()
+	if err != nil {
+		return nil
+	}
+	return f
 }

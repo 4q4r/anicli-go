@@ -61,7 +61,7 @@ func TestSyncScreenCompletionShowsSummary(t *testing.T) {
 		Updated: 4, Created: 5, Pushed: 6,
 	}})
 	view := next.View().Content
-	if !contains(view, "Синхронизировано: 4 обновлено, 5 добавлено, 6 отправлено") {
+	if !contains(view, "Обновлено: 4 · Добавлено: 5 · Отправлено: 6") {
 		t.Fatalf("summary line missing, got:\n%s", view)
 	}
 	if !contains(view, "завершена") {

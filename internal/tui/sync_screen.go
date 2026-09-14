@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -76,7 +77,7 @@ type SyncScreen struct {
 func NewSyncScreen(deps *Deps) *SyncScreen {
 	return &SyncScreen{
 		deps:       deps,
-		spin:       spinner.New(spinner.WithSpinner(spinner.Dot)),
+		spin:       spinner.New(spinner.WithSpinner(spinner.Meter)),
 		phase:      syncPhaseRunning,
 		progressCh: make(chan shikimori.SyncProgress, 20),
 	}
@@ -177,20 +178,35 @@ func (s *SyncScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	}
 }
 
-// View implements Screen.
+// View implements Screen: Python-parity sync UI — title, magenta
+// spinner line for the rates fetch, cyan headline + Unicode progress
+// bar for the metadata/pull phases, then the summary.
 func (s *SyncScreen) View() tea.View {
 	var b []byte
-	b = append(b, theme.Title.Render("Списки Shikimori")...)
+	b = append(b, theme.Title.Render("Синхронизация с Shikimori")...)
 	b = append(b, '\n', '\n')
 	switch s.phase {
 	case syncPhaseRunning:
-		b = append(b, theme.Accent.Render(s.spin.View()+" Синхронизация с Shikimori…")...)
-		b = append(b, '\n', '\n')
-		if s.progress != nil {
-			b = append(b, theme.Dim.Render(s.progress.Message)...)
-			if s.progress.Total > 0 && s.progress.Done > 0 {
-				pct := s.progress.Done * 100 / s.progress.Total
-				b = append(b, theme.Dim.Render(fmt.Sprintf(" (%d%%)", pct))...)
+		if s.progress == nil {
+			b = append(b, theme.Accent.Render(s.spin.View()+" Загрузка списков Shikimori…")...)
+		} else {
+			switch s.progress.Phase {
+			case "rates":
+				b = append(b, theme.Accent.Render(s.spin.View()+" Загрузка списков Shikimori…")...)
+			case "pull":
+				b = append(b, theme.Accent.Render(s.spin.View()+" Сопоставление локальных записей")...)
+				b = append(b, '\n', '\n')
+				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
+			case "new":
+				b = append(b, theme.Success.Render(fmt.Sprintf("Найдено %d новых аниме. Загрузка метаданных…", s.progress.Total))...)
+				b = append(b, '\n', '\n')
+				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
+			case "push":
+				b = append(b, theme.Warning.Render(s.spin.View()+" Отправка отложенных изменений")...)
+				b = append(b, '\n', '\n')
+				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
+			default:
+				b = append(b, theme.Accent.Render(s.spin.View()+" "+s.progress.Message)...)
 			}
 		}
 	case syncPhaseDone:
@@ -200,12 +216,12 @@ func (s *SyncScreen) View() tea.View {
 		}
 		b = append(b, theme.Success.Render("✓ Синхронизация завершена")...)
 		b = append(b, '\n', '\n')
-		b = append(b, fmt.Sprintf("Синхронизировано: %d обновлено, %d добавлено, %d отправлено",
+		b = append(b, fmt.Sprintf("Обновлено: %d · Добавлено: %d · Отправлено: %d",
 			r.Updated, r.Created, r.Pushed)...)
 		if r.Conflicts > 0 {
 			b = append(b, '\n')
 			b = append(b, theme.Warning.Render(fmt.Sprintf(
-				"Конфликтов: %d (статус — с Shikimori, прогресс — локальный)", r.Conflicts))...)
+				"⚠ Конфликтов: %d (статус — с Shikimori, прогресс — локальный)", r.Conflicts))...)
 		}
 		b = append(b, '\n', '\n')
 		b = append(b, theme.StatusLine.Render("любая клавиша — продолжить")...)
@@ -217,6 +233,24 @@ func (s *SyncScreen) View() tea.View {
 		b = append(b, theme.StatusLine.Render("любая клавиша — продолжить")...)
 	}
 	return tea.NewView(string(b))
+}
+
+// renderProgressBar draws a horizontal Unicode progress bar:
+// ████████░░░░░░░░░░░░░░░░░░░░ 45%
+func renderProgressBar(done, total, width int) string {
+	if total <= 0 || width <= 0 {
+		return ""
+	}
+	pct := done * 100 / total
+	if pct > 100 {
+		pct = 100
+	}
+	filled := done * width / total
+	if filled > width {
+		filled = width
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	return theme.Accent.Render(bar) + " " + fmt.Sprintf("%d%%", pct)
 }
 
 // afterAuthScreen picks the opening screen after the first-run auth

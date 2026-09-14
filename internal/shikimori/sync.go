@@ -157,6 +157,7 @@ func (s *Syncer) SyncFull(ctx context.Context, progress func(SyncProgress)) (*Sy
 	}
 	result := &SyncResult{}
 
+	s.log.Info("shikimori sync: starting", "repo_nil", s.repo == nil)
 	report(SyncProgress{Phase: "rates", Message: "Загрузка списка Shikimori…"})
 	rates, err := s.client.GetUserRates(ctx)
 	if err != nil {
@@ -176,7 +177,9 @@ func (s *Syncer) SyncFull(ctx context.Context, progress func(SyncProgress)) (*Sy
 	}
 
 	report(SyncProgress{Phase: "pull", Message: "Сопоставление локальных записей…", Total: len(rateByTarget)})
+	s.log.Info("shikimori sync: remote rates", "count", len(rates))
 	locals, err := s.repo.ListAllWithShikimoriID(ctx)
+	s.log.Info("shikimori sync: local rows with shikimori_id", "count", len(locals))
 	if err != nil {
 		return result, fmt.Errorf("shikimori sync: local roster: %w", err)
 	}
@@ -207,6 +210,9 @@ func (s *Syncer) SyncFull(ctx context.Context, progress func(SyncProgress)) (*Sy
 		return result, err
 	}
 	report(SyncProgress{Phase: "done", Message: "Готово"})
+	s.log.Info("shikimori sync: full sync complete",
+		"updated", result.Updated, "created", result.Created,
+		"pushed", result.Pushed, "conflicts", result.Conflicts)
 	return result, nil
 }
 
@@ -253,10 +259,12 @@ func (s *Syncer) createMissing(ctx context.Context, rateByTarget map[int64]UserR
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
+	s.log.Info("shikimori sync: fetching metadata", "ids", len(ids))
 	infos, err := s.client.GetAnimesInfo(ctx, ids)
 	if err != nil {
 		return fmt.Errorf("shikimori sync: animes info: %w", err)
 	}
+	s.log.Info("shikimori sync: metadata received", "infos", len(infos))
 	for i, info := range infos {
 		if err := s.createRemote(ctx, info, rateByTarget[info.ID]); err != nil {
 			return err
@@ -304,6 +312,8 @@ func (s *Syncer) createRemote(ctx context.Context, info Anime, rate UserRate) er
 	if err := s.repo.Upsert(ctx, &rec); err != nil {
 		return fmt.Errorf("shikimori sync: create %d: %w", shikiID, err)
 	}
+	s.log.Info("shikimori sync: created row",
+		"shikimori_id", shikiID, "title", title, "source_url", rec.SourceURL)
 	return nil
 }
 

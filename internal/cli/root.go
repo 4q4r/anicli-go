@@ -154,17 +154,46 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	}
 	defer real.Close()
 
+	// TUI alt-screen captures the terminal: slog.Default writes to
+	// stderr which renders ON TOP of the TUI. Route diagnostics to
+	// a log file instead.
+	tuiLog := newTUILogger()
+	defer tuiLog.Close()
+
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.
 	wireShikiSetup(real.Deps, *settings, settingsPath)
 	// PR27: the startup two-way list sync seam.
-	wireStartupSync(real.Deps, settingsPath, real.ShikiNet, store.Progress)
+	wireStartupSync(real.Deps, settingsPath, real.ShikiNet, store.Progress, tuiLog.Logger)
 	real.Deps.StartupNotices = notices
 
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	return tui.Run(signalCtx, real.Deps, slog.Default())
+	return tui.Run(signalCtx, real.Deps, tuiLog.Logger)
+}
+
+// newTUILogger builds a file-based logger for the TUI session (stderr
+// would corrupt the alt-screen rendering).
+func newTUILogger() *tuiLogger {
+	path := os.TempDir() + "/anicli-tui.log"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		// Degrade to discard — never stderr inside the TUI.
+		return &tuiLogger{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	}
+	return &tuiLogger{Logger: slog.New(slog.NewTextHandler(f, nil)), f: f}
+}
+
+type tuiLogger struct {
+	*slog.Logger
+	f *os.File
+}
+
+func (t *tuiLogger) Close() {
+	if t.f != nil {
+		_ = t.f.Close()
+	}
 }
 
 // wireShikiSetup installs the PR26 setup seams onto the TUI deps: the
@@ -247,15 +276,15 @@ func wireShikiSetup(deps *tui.Deps, settings config.Settings, settingsPath strin
 // persisted by the first-run setup screens authorize the very first
 // sync, and the OAuth token persister keeps refreshed tokens durable.
 // The shikimori transport is shared with the rest of the TUI.
-func wireStartupSync(deps *tui.Deps, settingsPath string, shikiNet *netclient.Client, progress *storage.ProgressRepo) {
+func wireStartupSync(deps *tui.Deps, settingsPath string, shikiNet *netclient.Client, progress *storage.ProgressRepo, logger *slog.Logger) {
 	deps.SyncFull = func(ctx context.Context, cb func(shikimori.SyncProgress)) (*shikimori.SyncResult, error) {
 		fresh, err := config.Load(settingsPath)
 		if err != nil {
 			return nil, fmt.Errorf("startup sync: load settings: %w", err)
 		}
-		client := shikimori.New(fresh.Shikimori, shikiNet, nil,
+		client := shikimori.New(fresh.Shikimori, shikiNet, logger,
 			shikimori.WithTokenPersister(shikiTokenPersister(settingsPath)))
-		return shikimori.NewSyncer(client, progress, nil).SyncFull(ctx, cb)
+		return shikimori.NewSyncer(client, progress, logger).SyncFull(ctx, cb)
 	}
 }
 

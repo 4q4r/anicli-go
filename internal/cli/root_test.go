@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,7 +321,7 @@ func TestWireStartupSync(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	deps := &tui.Deps{}
-	wireStartupSync(deps, settingsPath, net, st.Progress)
+	wireStartupSync(deps, settingsPath, net, st.Progress, slog.Default())
 	if deps.SyncFull == nil {
 		t.Fatal("SyncFull not wired onto the deps")
 	}

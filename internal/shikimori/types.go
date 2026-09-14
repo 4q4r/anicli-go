@@ -1,5 +1,7 @@
 package shikimori
 
+import "encoding/json"
+
 // Wire types of the Shikimori API (v1 animes endpoints + v2 user_rates),
 // ported from the frozen Python original's dict shapes plus the
 // structured-relations ruling (FEATURE_INVENTORY F: characters/staff/
@@ -33,20 +35,22 @@ type Genre struct {
 // related/similar listings). Relations arrays are filled by
 // GetAnimeDetails, not by the wire format of the base endpoint.
 type Anime struct {
-	ID            int64   `json:"id"`
-	Name          string  `json:"name"`
-	Russian       string  `json:"russian,omitempty"`
-	Image         Image   `json:"image"`
-	Episodes      int     `json:"episodes"`
-	EpisodesAired int     `json:"episodes_aired,omitempty"`
-	Status        string  `json:"status,omitempty"` // ongoing, released, anounced...
-	Kind          string  `json:"kind,omitempty"`   // TV, Movie, OVA...
-	Score         float64 `json:"score,omitempty"`
-	Rating        string  `json:"rating,omitempty"`
-	Description   string  `json:"description,omitempty"`
-	Genres        []Genre `json:"genres,omitempty"`
-	AiredOn       string  `json:"aired_on,omitempty"`
-	ReleasedOn    string  `json:"released_on,omitempty"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Russian       string `json:"russian,omitempty"`
+	Image         Image  `json:"image"`
+	Episodes      int    `json:"episodes"`
+	EpisodesAired int    `json:"episodes_aired,omitempty"`
+	Status        string `json:"status,omitempty"` // ongoing, released, anounced...
+	Kind          string `json:"kind,omitempty"`   // TV, Movie, OVA...
+	// Score arrives as a JSON string ("8.61") on /api/animes list
+	// responses; json.Number tolerates both wire shapes.
+	Score       json.Number `json:"score,omitempty"`
+	Rating      string      `json:"rating,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Genres      []Genre     `json:"genres,omitempty"`
+	AiredOn     string      `json:"aired_on,omitempty"`
+	ReleasedOn  string      `json:"released_on,omitempty"`
 	// NextEpisode and NextEpisodeAt feed the home feed and release
 	// calendar projections (python anime rows carry them on /api/animes
 	// list responses).

@@ -307,10 +307,14 @@ func (c *Client) GetAnimesInfo(ctx context.Context, ids []int64) ([]Anime, error
 
 		resp, err := c.get(ctx, "/api/animes", query)
 		if err != nil {
+			c.log.Warn("shikimori: animes chunk failed",
+				"start", start, "ids", len(chunk), "error", err)
 			continue // python: silently skip a failing chunk
 		}
 		var rows []Anime
 		if err := json.Unmarshal(resp.Body, &rows); err != nil {
+			c.log.Warn("shikimori: animes chunk decode failed",
+				"start", start, "body_len", len(resp.Body), "error", err)
 			continue
 		}
 		out = append(out, rows...)

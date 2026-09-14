@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -493,10 +494,10 @@ func TestHomeFeedComposition(t *testing.T) {
 			{ID: 2, TargetID: 300, TargetType: "Anime", Status: "planned", CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339)},
 		},
 		animes: []shikimori.Anime{
-			{ID: 100, Name: "Anime EN", Russian: "Аниме", Status: "ongoing", EpisodesAired: 6, NextEpisode: 7, Score: 9.1,
+			{ID: 100, Name: "Anime EN", Russian: "Аниме", Status: "ongoing", EpisodesAired: 6, NextEpisode: 7, Score: json.Number("9.1"),
 				Image:         shikimori.Image{Original: "/system/animes/original/100.jpg"},
 				NextEpisodeAt: now.Add(-5 * time.Hour).Format(time.RFC3339)},
-			{ID: 300, Name: "Planned EN", Russian: "Запланировано", Status: "anounced", Score: 7.2,
+			{ID: 300, Name: "Planned EN", Russian: "Запланировано", Status: "anounced", Score: json.Number("7.2"),
 				Image: shikimori.Image{Original: "/system/animes/original/300.jpg"}},
 		},
 		ongoing: []shikimori.OngoingCandidate{

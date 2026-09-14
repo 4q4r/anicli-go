@@ -388,3 +388,63 @@ func TestProgressDeleteMissing(t *testing.T) {
 		t.Errorf("error = %v, want contracts.ErrNotFound", err)
 	}
 }
+
+// TestProgressListAllWithShikimoriID pins the PR27 startup-sync roster:
+// only rows bound to a Shikimori anime come back (the sync never touches
+// purely local entries).
+func TestProgressListAllWithShikimoriID(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	bound1 := fullProgress("https://animego/a1")
+	bound2 := fullProgress("https://animego/a2")
+	unbound := fullProgress("https://animego/a3")
+	unbound.ShikimoriID = nil
+	unbound.ShikimoriRateID = nil
+	for _, p := range []*AnimeProgress{bound1, bound2, unbound} {
+		if err := st.Progress.Upsert(context.Background(), p); err != nil {
+			t.Fatalf("seed upsert: %v", err)
+		}
+	}
+
+	got, err := st.Progress.ListAllWithShikimoriID(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllWithShikimoriID: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (unbound excluded), got %+v", len(got), got)
+	}
+	for _, p := range got {
+		if p.ShikimoriID == nil {
+			t.Errorf("unbound row %d leaked into the shikimori roster", p.ID)
+		}
+	}
+}
+
+// TestProgressListDirty pins the deferred-push roster of the PR27
+// startup sync: only dirty-flagged rows come back.
+func TestProgressListDirty(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	dirty := fullProgress("https://animego/a1")
+	clean := fullProgress("https://animego/a2")
+	clean.Dirty = false
+	if err := st.Progress.Upsert(context.Background(), dirty); err != nil {
+		t.Fatalf("seed dirty: %v", err)
+	}
+	if err := st.Progress.Upsert(context.Background(), clean); err != nil {
+		t.Fatalf("seed clean: %v", err)
+	}
+
+	got, err := st.Progress.ListDirty(context.Background())
+	if err != nil {
+		t.Fatalf("ListDirty: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1 (only the dirty row), got %+v", len(got), got)
+	}
+	if got[0].ID != dirty.ID {
+		t.Errorf("row id = %d, want %d", got[0].ID, dirty.ID)
+	}
+}

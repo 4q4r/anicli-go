@@ -165,6 +165,49 @@ func (r *ProgressRepo) ListHistory(ctx context.Context, status string, limit, of
 	return out, rows.Err()
 }
 
+// ListAllWithShikimoriID returns every row bound to a Shikimori anime
+// — the roster the PR27 startup sync pulls remote rates against
+// (python: select where shikimori_id is not null).
+func (r *ProgressRepo) ListAllWithShikimoriID(ctx context.Context) ([]AnimeProgress, error) {
+	rows, err := r.db.QueryContext(ctx,
+		animeProgressSelect+` WHERE shikimori_id IS NOT NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list by shikimori id: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AnimeProgress
+	for rows.Next() {
+		p, err := scanAnimeProgress(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan by-shikimori-id row: %w", err)
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// ListDirty returns every row flagged for a deferred push — the roster
+// the PR27 startup sync replays toward Shikimori.
+func (r *ProgressRepo) ListDirty(ctx context.Context) ([]AnimeProgress, error) {
+	rows, err := r.db.QueryContext(ctx,
+		animeProgressSelect+` WHERE dirty = 1 ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list dirty: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AnimeProgress
+	for rows.Next() {
+		p, err := scanAnimeProgress(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan dirty row: %w", err)
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
 // UpdatePlayback records the last playback position: current episode, dub
 // preferences ("" clears to NULL) and the seconds snapshot, bumping
 // updated_at.

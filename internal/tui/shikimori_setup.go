@@ -182,7 +182,7 @@ func (s *shikiCookieScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case shikiPhaseDone:
 		if _, ok := msg.(tea.KeyPressMsg); ok {
-			return s, replace(newRootAfterAuth(s.deps))
+			return s, replace(afterAuthScreen(s.deps))
 		}
 		return s, nil
 	default: // shikiPhaseError
@@ -372,7 +372,7 @@ func (s *shikiOAuthScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case shikiOAuthDone:
 		if _, ok := msg.(tea.KeyPressMsg); ok {
-			return s, replace(newRootAfterAuth(s.deps))
+			return s, replace(afterAuthScreen(s.deps))
 		}
 		return s, nil
 	default: // shikiOAuthError

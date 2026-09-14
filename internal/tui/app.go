@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
 // errPanic marks a recovered panic; errors surfacing from screens or
@@ -337,6 +338,10 @@ type Deps struct {
 	// blocking resolve that waits for the code and exchanges it for
 	// tokens (nil surfaces as an error in the setup screens).
 	ShikiOAuth func(clientID, clientSecret string, port int) (authURL string, resolve func(ctx context.Context) (ShikiOAuthResult, error), err error)
+	// SyncFull runs the PR27 startup two-way Shikimori list sync
+	// (pull remote rates, create remote-only rows, replay dirty ones).
+	// nil means no sync capability — the sync screen is skipped.
+	SyncFull func(ctx context.Context) (*shikimori.SyncResult, error)
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

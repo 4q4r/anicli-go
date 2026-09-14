@@ -23,15 +23,19 @@ func TestStartupNotices(t *testing.T) {
 	cfg.Providers.Kodik.Token = ""
 
 	notices := startupNotices(cfg)
-	if len(notices) != 1 {
-		t.Fatalf("want one notice, got %v", notices)
+	// Shikimori defaults to enabled=true (core feature) with empty
+	// credentials, so the default config yields both the provider and
+	// the Shikimori notice.
+	if len(notices) != 2 {
+		t.Fatalf("want two notices (kodik + shikimori), got %v", notices)
 	}
-	want := "⚠ Провайдер 'kodik' отключён: не задан токен (providers.kodik.token)"
-	if notices[0] != want {
-		t.Fatalf("notice = %q, want %q", notices[0], want)
+	wantKodik := "⚠ Провайдер 'kodik' отключён: не задан токен (providers.kodik.token)"
+	if notices[0] != wantKodik {
+		t.Fatalf("notice[0] = %q, want %q", notices[0], wantKodik)
 	}
 
 	cfg.Providers.Kodik.Token = "set"
+	cfg.Shikimori.Session = "configured"
 	if got := startupNotices(cfg); len(got) != 0 {
 		t.Fatalf("configured providers must not warn, got %v", got)
 	}

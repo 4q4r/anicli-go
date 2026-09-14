@@ -28,6 +28,9 @@ type MenuScreenConfig struct {
 	// drops the Back entry entirely — the root menu is backless, its
 	// last item («🚪 Выход») occupies the pinned bottom slot.
 	Root bool
+	// Notices renders as red warning lines between title and list
+	// (root screen only — disabled providers, unconfigured Shikimori).
+	Notices []string
 	// Status is an optional bottom hint line.
 	Status string
 	// Height overrides the body height (0 = default).
@@ -41,12 +44,13 @@ type MenuScreenConfig struct {
 // with Back appended last, cancel keys normalized, and picks delegated
 // to the flow handler.
 type MenuScreen struct {
-	id     string
-	title  string
-	root   bool
-	status string
-	list   *PinList
-	onPick PickHandler
+	id      string
+	title   string
+	root    bool
+	status  string
+	list    *PinList
+	onPick  PickHandler
+	notices []string
 }
 
 // NewMenuScreen builds the screen from cfg.
@@ -70,12 +74,13 @@ func NewMenuScreen(cfg MenuScreenConfig) *MenuScreen {
 		onPick = func(any) tea.Cmd { return pop() }
 	}
 	return &MenuScreen{
-		id:     cfg.ID,
-		title:  cfg.Title,
-		root:   cfg.Root,
-		status: cfg.Status,
-		list:   l,
-		onPick: onPick,
+		id:      cfg.ID,
+		title:   cfg.Title,
+		root:    cfg.Root,
+		status:  cfg.Status,
+		list:    l,
+		onPick:  onPick,
+		notices: cfg.Notices,
 	}
 }
 
@@ -118,11 +123,21 @@ func (m *MenuScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 }
 
 // View implements Screen. The title renders with a leading pad and a
-// blank line before the list (PR24 title padding).
+// blank line before the list (PR24 title padding); the root screen
+// additionally renders the red startup notices (disabled providers,
+// unconfigured Shikimori) between the title and the list — they live
+// INSIDE the TUI because pre-alt-screen terminal output is invisible.
 func (m *MenuScreen) View() tea.View {
 	var b []byte
 	b = append(b, theme.Title.Render(m.title)...)
 	b = append(b, '\n', '\n')
+	if m.root && len(m.notices) > 0 {
+		for _, n := range m.notices {
+			b = append(b, theme.Error.Render(n)...)
+			b = append(b, '\n')
+		}
+		b = append(b, '\n')
+	}
 	b = append(b, m.list.Render()...)
 	if m.status != "" {
 		b = append(b, '\n')
@@ -149,9 +164,10 @@ const (
 // exception).
 func NewRootScreen(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
-		ID:    rootScreenID,
-		Title: "AniCLI — аниме в терминале",
-		Root:  true,
+		ID:      rootScreenID,
+		Title:   "AniCLI — аниме в терминале",
+		Root:    true,
+		Notices: deps.StartupNotices,
 		Choices: []Choice{
 			{ID: "search", Label: rootSearchLabel},
 			{ID: "lists", Label: rootListsLabel},

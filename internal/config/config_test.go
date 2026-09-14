@@ -40,8 +40,8 @@ func TestDefaults(t *testing.T) {
 	if got.Player.Quality != "1080" {
 		t.Errorf("Player.Quality = %q, want 1080 (python default_quality)", got.Player.Quality)
 	}
-	if got.Shikimori.Enabled {
-		t.Error("Shikimori.Enabled = true, want false")
+	if !got.Shikimori.Enabled {
+		t.Error("Shikimori.Enabled = false, want true (core feature: tracking + first-run setup)")
 	}
 	if got.Shikimori.Session != "" || got.Shikimori.AccessToken != "" {
 		t.Error("Shikimori secrets must default empty")

@@ -312,6 +312,12 @@ type Deps struct {
 	// binding etc.); nil degrades to slog.Default().
 	Log *slog.Logger
 
+	// StartupNotices carries the red warning lines (disabled providers,
+	// unconfigured Shikimori) rendered on the root screen INSIDE the
+	// TUI — pre-alt-screen terminal output is invisible after the TUI
+	// takes over.
+	StartupNotices []string
+
 	// ShikiCfg snapshots the [shikimori] section at startup (PR26):
 	// the first-run setup screens compose their updates on top of it
 	// (preserving unrelated fields such as the OAuth client

@@ -132,9 +132,10 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 		return err
 	}
 
-	for _, notice := range startupNotices(*settings) {
-		startupRed(out, notice)
-	}
+	// Startup notices render INSIDE the TUI (on the root screen), not
+	// here — pre-alt-screen terminal output is invisible after the TUI
+	// takes over.
+	notices := startupNotices(*settings)
 
 	dbPath, err := settings.DBPath()
 	if err != nil {
@@ -156,6 +157,7 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.
 	wireShikiSetup(real.Deps, *settings, settingsPath)
+	real.Deps.StartupNotices = notices
 
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()

@@ -231,7 +231,7 @@ func Default() Settings {
 			Quality: "1080",
 		},
 		Shikimori: Shikimori{
-			Enabled:        false,
+			Enabled:        true,
 			Session:        "",
 			AccessToken:    "",
 			RefreshToken:   "",

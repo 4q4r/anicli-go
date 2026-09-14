@@ -81,11 +81,23 @@ type Player struct {
 	Quality string `toml:"quality"`
 }
 
-// Shikimori configures tracker integration.
+// Shikimori configures tracker integration. Two credential paths:
+// the _kawai_session cookie (session) or OAuth2 (access_token plus the
+// refresh material); the token wins when both are configured.
 type Shikimori struct {
 	Enabled     bool   `toml:"enabled"`
 	Session     string `toml:"session"`
 	AccessToken string `toml:"access_token"`
+	// RefreshToken is the OAuth2 refresh token (`anicli shikimori auth`).
+	RefreshToken string `toml:"refresh_token"`
+	// TokenExpiresAt is the unix timestamp when AccessToken expires
+	// (Shikimori access tokens live one day; refreshed automatically
+	// within the last five minutes).
+	TokenExpiresAt int64 `toml:"token_expires_at"`
+	// ClientID and ClientSecret are the OAuth2 application credentials
+	// (shikimori.io/apps); needed for token refresh.
+	ClientID     string `toml:"client_id"`
+	ClientSecret string `toml:"client_secret"`
 }
 
 // Skip configures skip-time providers.
@@ -219,9 +231,13 @@ func Default() Settings {
 			Quality: "1080",
 		},
 		Shikimori: Shikimori{
-			Enabled:     false,
-			Session:     "",
-			AccessToken: "",
+			Enabled:        false,
+			Session:        "",
+			AccessToken:    "",
+			RefreshToken:   "",
+			TokenExpiresAt: 0,
+			ClientID:       "",
+			ClientSecret:   "",
 		},
 		Skip: Skip{
 			ProvidersOrder:      []string{"aniskip", "anime_skip", "intro_skipper"},

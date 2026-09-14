@@ -67,11 +67,20 @@ quality = "1080"
 enabled = false
 
 # Cookie "_kawai_session" (обязательна для записи прогресса).
-# Взять в браузере: DevTools (F12) -> Application -> Cookies -> shikimori.one
+# Взять в браузере: DevTools (F12) -> Application -> Cookies -> shikimori.io
 # session = "ВАШ_ТОКЕН_ЗДЕСЬ"
 
 # OAuth2 access token (альтернатива session; используется при наличии).
+# Создайте приложение на https://shikimori.io/apps и выполните:
+#   anicli shikimori auth --client-id XXX --client-secret YYY
+# Поля ниже заполняются автоматически командой auth; access-токен живёт
+# сутки и продлевается автоматически (refresh за 5 минут до истечения
+# или после 401), новые токены сохраняются в этот же файл.
 # access_token = "..."
+# refresh_token = "..."
+# token_expires_at = 0
+# client_id = "..."
+# client_secret = "..."
 
 # ------------------------------------------
 # [skip] Пропуск заставок

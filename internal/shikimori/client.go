@@ -1,4 +1,4 @@
-// Package shikimori is the Shikimori (shikimori.one) tracker client,
+// Package shikimori is the Shikimori (shikimori.io) tracker client,
 // ported from anicli-py anicli/core/shikimori.py plus the user rulings in
 // the feature inventory (section F) that the frozen Python tree had lost.
 //
@@ -45,8 +45,13 @@ import (
 // anicli/config.py ShikimoriSettings.user_agent = "anicli-ru").
 const UserAgent = "anicli-ru"
 
-// DefaultBaseURL is the production site root.
-const DefaultBaseURL = "https://shikimori.one"
+// DefaultBaseURL is the production site root. shikimori.io is the
+// canonical domain since the 2026 migration: the old shikimori.one is
+// blocked in Russia and answers 301/308 redirects to .io — which
+// rewrite the OAuth token POST into a GET (observed upstream in Mihon
+// #3497) — so every request, tokens included, goes straight to .io
+// (the official OAuth guide itself uses shikimori.io/oauth).
+const DefaultBaseURL = "https://shikimori.io"
 
 // retryAfterPenalty is the budget penalty applied when a 429 surfaces
 // past the netclient's Retry-After-aware retries; it mirrors the
@@ -93,6 +98,10 @@ type Client struct {
 	baseURL string
 	lim     *limiter
 
+	// persist reports refreshed [shikimori] sections to the settings
+	// file (nil in embedded/test clients; PR25 E).
+	persist func(config.Shikimori) error
+
 	mu           sync.Mutex
 	csrf         string
 	csrfWarned   bool // single-warning ruling
@@ -102,8 +111,9 @@ type Client struct {
 
 // New builds the client. cfg selects the auth mode; net is the shared
 // transport (build it with netclient.WithProvider("shikimori")); logger
-// may be nil (slog.Default is used).
-func New(cfg config.Shikimori, net *netclient.Client, logger *slog.Logger) *Client {
+// may be nil (slog.Default is used). Options install the extras (e.g.
+// WithTokenPersister).
+func New(cfg config.Shikimori, net *netclient.Client, logger *slog.Logger, opts ...Option) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -119,7 +129,7 @@ func New(cfg config.Shikimori, net *netclient.Client, logger *slog.Logger) *Clie
 		mode = modeCookie
 	}
 
-	return &Client{
+	c := &Client{
 		cfg:     cfg,
 		net:     net,
 		log:     logger,
@@ -127,17 +137,30 @@ func New(cfg config.Shikimori, net *netclient.Client, logger *slog.Logger) *Clie
 		baseURL: DefaultBaseURL,
 		lim:     newLimiter(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// currentMode snapshots the auth mode; the bearer path may degrade it
+// to modeNone at runtime after an unrecoverable token failure (PR25 C).
+func (c *Client) currentMode() authMode {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mode
 }
 
 // Mode reports the active auth mode as a diagnostic string
 // ("disabled", "none", "cookie" or "bearer").
-func (c *Client) Mode() string { return c.mode.String() }
+func (c *Client) Mode() string { return c.currentMode().String() }
 
 // Authenticated reports whether the client carries user credentials
 // (cookie or bearer) — the gate for personalized endpoints (python
 // is_authenticated).
 func (c *Client) Authenticated() bool {
-	return c.mode == modeCookie || c.mode == modeBearer
+	mode := c.currentMode()
+	return mode == modeCookie || mode == modeBearer
 }
 
 // apiHeaders builds the headers every JSON API request carries: the
@@ -149,11 +172,17 @@ func (c *Client) apiHeaders() map[string]string {
 		"Accept":           "application/json, text/plain, */*",
 		"X-Requested-With": "XMLHttpRequest",
 	}
-	switch c.mode {
+	switch c.currentMode() {
 	case modeCookie:
-		h["Cookie"] = "_kawai_session=" + c.cfg.Session
+		c.mu.Lock()
+		session := c.cfg.Session
+		c.mu.Unlock()
+		h["Cookie"] = "_kawai_session=" + session
 	case modeBearer:
-		h["Authorization"] = "Bearer " + c.cfg.AccessToken
+		c.mu.Lock()
+		token := c.cfg.AccessToken
+		c.mu.Unlock()
+		h["Authorization"] = "Bearer " + token
 	}
 	return h
 }
@@ -167,8 +196,11 @@ func (c *Client) pageHeaders() map[string]string {
 		"Accept":           "text/html,application/xhtml+xml",
 		"X-Requested-With": "XMLHttpRequest",
 	}
-	if c.mode == modeCookie {
-		h["Cookie"] = "_kawai_session=" + c.cfg.Session
+	if c.currentMode() == modeCookie {
+		c.mu.Lock()
+		session := c.cfg.Session
+		c.mu.Unlock()
+		h["Cookie"] = "_kawai_session=" + session
 	}
 	return h
 }
@@ -177,7 +209,7 @@ func (c *Client) pageHeaders() map[string]string {
 // reads pass in every non-disabled mode; authed operations demand cookie
 // or bearer credentials.
 func (c *Client) requireMode(authed bool) error {
-	switch c.mode {
+	switch c.currentMode() {
 	case modeDisabled:
 		return ErrDisabled
 	case modeNone:
@@ -189,14 +221,27 @@ func (c *Client) requireMode(authed bool) error {
 }
 
 // get performs a rate-limited JSON GET. It never bootstraps CSRF
-// (GET-skips-CSRF ruling).
+// (GET-skips-CSRF ruling). Bearer mode proactively refreshes the token
+// near expiry and retries once with the fresh token after an
+// auth-class failure (PR25 C).
 func (c *Client) get(ctx context.Context, path string, query url.Values) (*netclient.Response, error) {
-	if err := c.lim.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("shikimori: rate limiter: %w", err)
-	}
+	c.ensureFreshToken(ctx)
+
 	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
+	}
+	resp, err := c.doGet(ctx, u)
+	if err != nil && authFailure(statusCodeOf(err)) && c.tryBearerRefreshOn401(ctx) {
+		resp, err = c.doGet(ctx, u)
+	}
+	return resp, err
+}
+
+// doGet is one rate-limited GET attempt.
+func (c *Client) doGet(ctx context.Context, u string) (*netclient.Response, error) {
+	if err := c.lim.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("shikimori: rate limiter: %w", err)
 	}
 	return c.net.Do(ctx, netclient.Request{
 		Method:  http.MethodGet,
@@ -225,10 +270,11 @@ func (c *Client) mutate(ctx context.Context, method, path, op string,
 
 	csrfRetried := false
 	plannedRetried := false
+	bearerRetried := false
 
-	for range 3 { // original + at most one CSRF replay + one 422 replay
+	for range 4 { // original + one CSRF replay + one bearer refresh replay + one 422 replay
 		csrf := ""
-		if c.mode == modeCookie {
+		if c.currentMode() == modeCookie {
 			csrf, _ = c.csrfToken(ctx)
 		}
 
@@ -236,8 +282,14 @@ func (c *Client) mutate(ctx context.Context, method, path, op string,
 		if err != nil {
 			status := statusCodeOf(err)
 
+			// Bearer-mode refresh ladder (PR25 C): 401/403 refreshes
+			// the token once and replays with the fresh one.
+			if authFailure(status) && !bearerRetried && c.tryBearerRefreshOn401(ctx) {
+				bearerRetried = true
+				continue
+			}
 			// Cookie-mode CSRF ladder: 401/403 only, exactly one replay.
-			if c.mode == modeCookie && authFailure(status) && !csrfRetried {
+			if c.currentMode() == modeCookie && authFailure(status) && !csrfRetried {
 				csrfRetried = true
 				c.dropCSRF()
 				continue
@@ -267,6 +319,8 @@ func (c *Client) mutate(ctx context.Context, method, path, op string,
 
 // sendMutating issues one mutating HTTP request.
 func (c *Client) sendMutating(ctx context.Context, method, path string, body any, csrf, op string) (*netclient.Response, error) {
+	c.ensureFreshToken(ctx)
+
 	if err := c.lim.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("shikimori: rate limiter: %w", err)
 	}
@@ -278,7 +332,7 @@ func (c *Client) sendMutating(ctx context.Context, method, path string, body any
 
 	headers := c.apiHeaders()
 	headers["Content-Type"] = "application/json"
-	if c.mode == modeCookie {
+	if c.currentMode() == modeCookie {
 		// Python parity: the header rides even when bootstrap failed
 		// (empty value); the 401/403 ladder arbitrates.
 		headers["X-CSRF-Token"] = csrf

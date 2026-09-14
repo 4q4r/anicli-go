@@ -137,12 +137,29 @@ type searchVariantsMsg struct {
 	variants []string
 }
 
+// shikiEnrichmentActive gates the hybrid enrichment (PR25 A): the
+// phase runs only with a wired, non-disabled Shikimori service — the
+// enrichment is a bonus, never a requirement of search.
+func shikiEnrichmentActive(deps *Deps) bool {
+	if deps == nil || deps.Shiki == nil {
+		return false
+	}
+	if !deps.Shiki.Enabled() {
+		return false
+	}
+	return deps.Shiki.Mode() != "disabled"
+}
+
 // resolveSearchVariants runs the hybrid enrichment (PR24): Shikimori
 // SearchIDs over the original query → best-ratio match above the
 // binding threshold → metadata aliases of the MATCHED title → the
-// capped variant set (original query first, max 8). Any failure
-// quietly degrades to the bare query (python parity).
+// capped variant set (original query first, max 8). Any failure — or
+// a nil/disabled Shikimori — quietly degrades to the bare query
+// (python parity; PR25 A: enrichment is optional).
 func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
+	if !shikiEnrichmentActive(deps) {
+		return searchVariantsMsg{}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
 	ids, err := deps.Shiki.SearchIDs(ctx, query)
@@ -253,12 +270,13 @@ func (m *searchProgress) searchBudget() time.Duration {
 // ID implements Screen.
 func (m *searchProgress) ID() string { return searchProgressID }
 
-// Init implements Screen: with Shikimori enabled the enrichment phase
+// Init implements Screen: with Shikimori active the enrichment phase
 // resolves the variant set first; everything else fans out
-// immediately. Commands own their timeout contexts rather than
-// deriving from the app lifecycle — see the App.ctx divergence note.
+// immediately (PR25 A: a nil/disabled Shikimori never gates search).
+// Commands own their timeout contexts rather than deriving from the
+// app lifecycle — see the App.ctx divergence note.
 func (m *searchProgress) Init() tea.Cmd {
-	if m.deps != nil && m.deps.Shiki != nil && m.deps.Shiki.Enabled() && len(m.rows) > 0 {
+	if m.deps != nil && shikiEnrichmentActive(m.deps) && len(m.rows) > 0 {
 		m.enriching = true
 		return tea.Batch(m.spin.Tick, safeCmd(searchProgressID, func() tea.Msg {
 			return resolveSearchVariants(m.deps, m.query)

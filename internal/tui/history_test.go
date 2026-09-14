@@ -55,6 +55,9 @@ var _ HistoryService = (*fakeHistory)(nil)
 // fakeShiki implements ShikimoriService.
 type fakeShiki struct {
 	enabled bool
+	// mode is the Mode() diagnostic; empty renders as-is (never
+	// "disabled", so enrichment stays active unless asked otherwise).
+	mode    string
 	updates []shikiUpdate
 	// rateIDs records the rate id received per UpdateStatus call
 	// (0 = the create/POST path).
@@ -76,6 +79,8 @@ type shikiUpdate struct {
 }
 
 func (f *fakeShiki) Enabled() bool { return f.enabled }
+
+func (f *fakeShiki) Mode() string { return f.mode }
 
 func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, rateID int64, status string, score, rewatches *int) (int64, error) {
 	f.updates = append(f.updates, shikiUpdate{

@@ -40,9 +40,30 @@ type RealDeps struct {
 	registry *providers.Registry
 }
 
+// RealOption customizes the production wiring of NewRealDeps.
+type RealOption func(*realOptions)
+
+// realOptions carries the NewRealDeps customizations.
+type realOptions struct {
+	// shikiPersister reports refreshed Shikimori OAuth sections to the
+	// settings file (PR25 E); nil keeps the client in-memory only.
+	shikiPersister func(config.Shikimori) error
+}
+
+// WithShikiPersister installs the Shikimori token persistence hook:
+// successful OAuth refreshes survive process restarts.
+func WithShikiPersister(p func(config.Shikimori) error) RealOption {
+	return func(o *realOptions) { o.shikiPersister = p }
+}
+
 // NewRealDeps wires the production core: registry, storage, player,
 // skip manager, downloader, offline index and the shikimori client.
-func NewRealDeps(settings config.Settings, store *storage.Store) (*RealDeps, error) {
+func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOption) (*RealDeps, error) {
+	var o realOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	registry, err := providers.NewRegistry(settings, store.ProviderStats)
 	if err != nil {
 		return nil, fmt.Errorf("build provider registry: %w", err)
@@ -63,7 +84,8 @@ func NewRealDeps(settings config.Settings, store *storage.Store) (*RealDeps, err
 		player:   player.New(player.Options{Bin: settings.Player.Path}),
 		skips:    skip.NewManager(settings.Skip, shikiNet),
 		dl:       download.New(download.Options{FFmpeg: "ffmpeg"}),
-		shiki:    shikimori.New(settings.Shikimori, shikiNet, nil),
+		shiki: shikimori.New(settings.Shikimori, shikiNet, nil,
+			shikimori.WithTokenPersister(o.shikiPersister)),
 		settings: settings,
 	}
 
@@ -371,6 +393,10 @@ type realShiki struct {
 }
 
 func (s *realShiki) Enabled() bool { return s.enabled }
+
+// Mode reports the client's auth-mode diagnostic (PR25 A: "disabled"
+// gates the enrichment out of hybrid search).
+func (s *realShiki) Mode() string { return s.client.Mode() }
 
 func (s *realShiki) UpdateStatus(ctx context.Context, shikimoriID, rateID int64, status string, score, rewatches *int) (int64, error) {
 	input := shikimori.RateInput{

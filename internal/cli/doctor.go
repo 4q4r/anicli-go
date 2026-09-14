@@ -161,6 +161,12 @@ func runDoctor(ctx context.Context, settingsPath string, out io.Writer) error {
 		}
 	}
 
+	// Shikimori integration row (PR25 F): auth mode, user and token
+	// expiry (or the disabled verdict) — the enrichment is optional,
+	// the doctor merely reports its credential state.
+	shikiStatus, shikiFailed := shikiDoctorRow(probeShikimoriStatus(ctx, *settings, budget))
+	rows = append(rows, row{id: "shikimori", name: "shikimori", status: shikiStatus, results: "—", failed: shikiFailed})
+
 	// Stable render order: registry order (probes) then disabled.
 	const fmtRow = "%-18s %-38s %s\n"
 	_, _ = fmt.Fprintf(out, fmtRow, "Провайдер", "Статус", "Результатов")

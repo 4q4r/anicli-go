@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -181,7 +182,7 @@ func (s *shikiCookieScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case shikiPhaseDone:
 		if _, ok := msg.(tea.KeyPressMsg); ok {
-			return s, popToRoot()
+			return s, replace(newRootAfterAuth(s.deps))
 		}
 		return s, nil
 	default: // shikiPhaseError
@@ -371,7 +372,7 @@ func (s *shikiOAuthScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case shikiOAuthDone:
 		if _, ok := msg.(tea.KeyPressMsg); ok {
-			return s, popToRoot()
+			return s, replace(newRootAfterAuth(s.deps))
 		}
 		return s, nil
 	default: // shikiOAuthError
@@ -520,11 +521,10 @@ type ShikiSetupScreen struct {
 // NewShikimoriSetup builds the selection screen.
 func NewShikimoriSetup(deps *Deps) *ShikiSetupScreen {
 	menu := NewMenuWithoutBack(
-		"⚠ Shikimori не настроен — синхронизация списка отключена",
+		"⚠ Shikimori не настроен — авторизация обязательна",
 		"",
 		Choice{ID: "cookie", Label: "🔑 Cookie (вставить _kawai_session из браузера)"},
 		Choice{ID: "oauth", Label: "🔐 OAuth2 (открыть браузер для авторизации)"},
-		Choice{ID: "skip", Label: "⏭  Пропустить (настроить позже: anicli shikimori auth)"},
 	)
 	return &ShikiSetupScreen{deps: deps, list: NewPinList(menu, defaultListHeight)}
 }
@@ -536,7 +536,8 @@ func (s *ShikiSetupScreen) ID() string { return shikiSetupID }
 func (s *ShikiSetupScreen) Init() tea.Cmd { return nil }
 
 // Update implements Screen: movement drives the list, Enter resolves
-// the pick, cancel keys normalize to skip (pop).
+// the pick. Auth is MANDATORY — Esc/Ctrl-C exits the app (the search
+// requires Shikimori for hybrid enrichment; skipping is not allowed).
 func (s *ShikiSetupScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -545,26 +546,26 @@ func (s *ShikiSetupScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if s.list.HandleKey(key) {
 		return s, nil
 	}
+	if IsCancelKey(key) {
+		return s, quit()
+	}
 	resolved := ResolveKey(s.list.Menu(), s.list.Cursor(), key)
 	switch pick := resolved.(type) {
 	case nil:
 		return s, nil
 	case *backToken:
-		// Esc/Ctrl-C: the same semantics as Пропустить (PR26 keeps
-		// the I2 root exception at the ROOT menu only).
-		return s, pop()
+		// The menu is backless; backToken shouldn't appear. Treat as
+		// cancel → exit (auth is mandatory).
+		return s, quit()
 	case string:
 		switch pick {
 		case "cookie":
 			return s, push(newShikiCookieScreen(s.deps))
 		case "oauth":
 			return s, push(newShikiOAuthScreen(s.deps))
-		default: // "skip"
-			return s, pop()
 		}
-	default:
-		return s, nil
 	}
+	return s, nil
 }
 
 // View implements Screen: red warning header, the subtitle, the list.
@@ -576,8 +577,24 @@ func (s *ShikiSetupScreen) View() tea.View {
 	b = append(b, '\n', '\n')
 	b = append(b, s.list.Render()...)
 	b = append(b, '\n')
-	b = append(b, theme.StatusLine.Render("enter — выбрать · esc — пропустить")...)
+	b = append(b, theme.StatusLine.Render("enter — выбрать · esc/ctrl+c — выход (авторизация обязательна)")...)
 	return tea.NewView(string(b))
+}
+
+// newRootAfterAuth builds the root menu with the Shikimori notice
+// stripped: the user just completed authentication, so the startup
+// warning is stale and must not render on the root screen.
+func newRootAfterAuth(deps *Deps) *MenuScreen {
+	filtered := make([]string, 0, len(deps.StartupNotices))
+	for _, n := range deps.StartupNotices {
+		if strings.Contains(n, "Shikimori") {
+			continue
+		}
+		filtered = append(filtered, n)
+	}
+	d := *deps
+	d.StartupNotices = filtered
+	return NewRootScreen(&d)
 }
 
 // ShikimoriNeedsSetup reports the PR26 first-run gate: the tracker

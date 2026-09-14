@@ -136,8 +136,8 @@ func TestShikiCookieScreenHappyPath(t *testing.T) {
 	if view := s.View().Content; !strings.Contains(view, "kawai-fan") {
 		t.Fatalf("done view must show the nickname, got:\n%s", view)
 	}
-	if _, ok := cmdMsg(updateCmd(t, s, enter())).(popToRootMsg); !ok {
-		t.Fatalf("enter on done must pop to root")
+	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
+		t.Fatalf("enter on done must replace with root")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestShikiCookieScreenVerifyFailsButSaved(t *testing.T) {
 	if !strings.Contains(view, "сохранён") || !strings.Contains(view, "401") {
 		t.Fatalf("done view must show saved + warning, got:\n%s", view)
 	}
-	if _, ok := cmdMsg(updateCmd(t, s, enter())).(popToRootMsg); !ok {
+	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
 		t.Fatalf("enter must still continue to root")
 	}
 }
@@ -322,8 +322,8 @@ func TestShikiOAuthScreenPrefilledCreds(t *testing.T) {
 	if !strings.Contains(view, "токены сохранены") || !strings.Contains(view, "oauth-fan") {
 		t.Fatalf("done view must show saved tokens + nickname, got:\n%s", view)
 	}
-	if _, ok := cmdMsg(updateCmd(t, s, enter())).(popToRootMsg); !ok {
-		t.Fatalf("enter on done must pop to root")
+	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
+		t.Fatalf("enter on done must replace with root")
 	}
 }
 
@@ -446,11 +446,10 @@ func TestShikiOAuthScreenNilSeam(t *testing.T) {
 	}
 }
 
-// TestShikiSetupMenu pins the PR26 selection screen: the red warning
-// header, the three auth choices (no Back row — Пропустить is the
-// escape), cookie/oauth pushes, skip pops, and the I2 interrupt
-// normalization (Esc/Ctrl-C leave without quitting — only the root
-// menu's Ctrl-C exits the app).
+// TestShikiSetupMenu pins the mandatory auth selection screen: the
+// red warning header, the two auth choices (no Back, no Skip — auth
+// is REQUIRED), cookie/oauth pushes, Esc/Ctrl-C quit the app (the
+// user cannot bypass authorization).
 func TestShikiSetupMenu(t *testing.T) {
 	deps := shikiSetupDeps(config.Shikimori{Enabled: true}, &fakeSettingsWriter{}, &fakeShikiWhoAmI{})
 	s := NewShikimoriSetup(deps)
@@ -459,37 +458,27 @@ func TestShikiSetupMenu(t *testing.T) {
 		view := s.View().Content
 		for _, want := range []string{
 			"Shikimori не настроен",
-			"синхронизация списка отключена",
+			"авторизация обязательна",
 			"🔑 Cookie (вставить _kawai_session из браузера)",
 			"🔐 OAuth2 (открыть браузер для авторизации)",
-			"⏭  Пропустить (настроить позже: anicli shikimori auth)",
 		} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("setup view must contain %q, got:\n%s", want, view)
 			}
 		}
-		if strings.Contains(view, BackLabel) {
-			t.Fatalf("the setup menu is backless (Пропустить is the escape), got:\n%s", view)
+		for _, banned := range []string{BackLabel, "Пропустить"} {
+			if strings.Contains(view, banned) {
+				t.Fatalf("setup view must NOT contain %q (auth is mandatory), got:\n%s", banned, view)
+			}
 		}
 	})
 
-	t.Run("skip pops to the root menu", func(t *testing.T) {
-		m := NewShikimoriSetup(deps)
-		m.list.Jump(indexOfSetupChoice(m, "skip"))
-		if _, ok := cmdMsg(updateCmd(t, m, enter())).(popMsg); !ok {
-			t.Fatalf("Пропустить must pop to root")
-		}
-	})
-
-	t.Run("esc and ctrl+c pop, never quit (I2)", func(t *testing.T) {
+	t.Run("esc and ctrl+c quit (auth is mandatory)", func(t *testing.T) {
 		for _, key := range []tea.KeyPressMsg{esc(), ctrlC()} {
 			m := NewShikimoriSetup(deps)
 			cmd := updateCmd(t, m, key)
-			if isQuitCmd(cmd) {
-				t.Fatalf("interrupt at setup must not quit the app")
-			}
-			if _, ok := cmdMsg(cmd).(popMsg); !ok {
-				t.Fatalf("interrupt at setup must pop (skip semantics), got %#v", cmdMsg(cmd))
+			if !isQuitCmd(cmd) {
+				t.Fatalf("interrupt at setup must QUIT (no skip path), got %#v", cmdMsg(cmd))
 			}
 		}
 	})
@@ -552,15 +541,16 @@ func TestShikimoriNeedsSetup(t *testing.T) {
 	})
 }
 
-// TestInitialStack pins the Run() gate (PR26): the setup screen rides
-// ON TOP of the root menu when needed, and the root menu opens
-// directly otherwise.
+// TestInitialStack pins the auth gate: the setup screen IS the whole
+// stack when Shikimori is unconfigured (auth is mandatory — the root
+// menu is not reachable until authorization completes), and the root
+// menu opens directly when configured.
 func TestInitialStack(t *testing.T) {
-	t.Run("needs setup", func(t *testing.T) {
+	t.Run("needs setup — auth-only stack", func(t *testing.T) {
 		deps := &Deps{ShikiCfg: config.Shikimori{Enabled: true}}
 		ids := screenIDs(initialStack(deps))
-		if len(ids) != 2 || ids[0] != rootScreenID || ids[1] != shikiSetupID {
-			t.Fatalf("want [root shikimori_setup], got %v", ids)
+		if len(ids) != 1 || ids[0] != shikiSetupID {
+			t.Fatalf("want [shikimori_setup] (auth is mandatory, no root below), got %v", ids)
 		}
 	})
 	t.Run("configured opens at root", func(t *testing.T) {

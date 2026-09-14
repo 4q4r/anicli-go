@@ -8,16 +8,15 @@ import (
 	"log/slog"
 )
 
-// initialStack builds the opening screen stack (PR26): the root menu,
-// with the Shikimori first-run setup screen pushed on top when the
-// integration is enabled but unconfigured. The setup screen pops on
-// skip/completion, so the root menu is what remains either way.
+// initialStack builds the opening screen stack: when Shikimori is
+// unconfigured, the auth setup screen is the ONLY screen — the root
+// menu is not reachable until authorization completes (search requires
+// Shikimori; auth is mandatory).
 func initialStack(deps *Deps) []Screen {
-	root := NewRootScreen(deps)
 	if ShikimoriNeedsSetup(deps) {
-		return []Screen{root, NewShikimoriSetup(deps)}
+		return []Screen{NewShikimoriSetup(deps)}
 	}
-	return []Screen{root}
+	return []Screen{NewRootScreen(deps)}
 }
 
 // Run launches the interactive terminal application: the root menu

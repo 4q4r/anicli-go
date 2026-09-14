@@ -122,7 +122,9 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 			continue
 		}
 		if d, off := disabledMap[factory.id]; off {
-			slog.Info("provider disabled (not configured): " + d.ID + ": " + d.Reason)
+			// The red startup notice already covers this; slog would
+			// duplicate the line next to user-facing output.
+			_ = d
 			continue
 		}
 		opts := append([]netclient.Option{netclient.WithProvider(factory.id)}, extra...)

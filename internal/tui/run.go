@@ -11,12 +11,26 @@ import (
 // initialStack builds the opening screen stack: when Shikimori is
 // unconfigured, the auth setup screen is the ONLY screen — the root
 // menu is not reachable until authorization completes (search requires
-// Shikimori; auth is mandatory).
+// Shikimori; auth is mandatory). Once authenticated, the startup
+// two-way list sync (PR27) runs before the root menu when the sync
+// seam is wired.
 func initialStack(deps *Deps) []Screen {
 	if ShikimoriNeedsSetup(deps) {
 		return []Screen{NewShikimoriSetup(deps)}
 	}
+	if shikiSyncNeeded(deps) {
+		return []Screen{NewSyncScreen(deps)}
+	}
 	return []Screen{NewRootScreen(deps)}
+}
+
+// shikiSyncNeeded reports the PR27 startup-sync gate: the tracker is
+// authenticated (enabled with a session cookie or an OAuth token) and
+// the sync seam is wired — the sync then always runs on startup.
+func shikiSyncNeeded(deps *Deps) bool {
+	return deps != nil && deps.SyncFull != nil &&
+		deps.ShikiCfg.Enabled &&
+		(deps.ShikiCfg.Session != "" || deps.ShikiCfg.AccessToken != "")
 }
 
 // Run launches the interactive terminal application: the root menu

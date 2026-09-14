@@ -157,6 +157,8 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.
 	wireShikiSetup(real.Deps, *settings, settingsPath)
+	// PR27: the startup two-way list sync seam.
+	wireStartupSync(real.Deps, settingsPath, real.ShikiNet, store.Progress)
 	real.Deps.StartupNotices = notices
 
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
@@ -237,6 +239,23 @@ func wireShikiSetup(deps *tui.Deps, settings config.Settings, settingsPath strin
 			}, nil
 		}
 		return authURL, resolve, nil
+	}
+}
+
+// wireStartupSync installs the PR27 startup two-way list sync seam:
+// the closure re-reads the settings file on every run, so credentials
+// persisted by the first-run setup screens authorize the very first
+// sync, and the OAuth token persister keeps refreshed tokens durable.
+// The shikimori transport is shared with the rest of the TUI.
+func wireStartupSync(deps *tui.Deps, settingsPath string, shikiNet *netclient.Client, progress *storage.ProgressRepo) {
+	deps.SyncFull = func(ctx context.Context) (*shikimori.SyncResult, error) {
+		fresh, err := config.Load(settingsPath)
+		if err != nil {
+			return nil, fmt.Errorf("startup sync: load settings: %w", err)
+		}
+		client := shikimori.New(fresh.Shikimori, shikiNet, nil,
+			shikimori.WithTokenPersister(shikiTokenPersister(settingsPath)))
+		return shikimori.NewSyncer(client, progress, nil).SyncFull(ctx)
 	}
 }
 

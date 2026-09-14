@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/tui"
 )
 
 // mustDefaultSettings returns the default settings without proxy:
@@ -287,5 +291,47 @@ exclude = ["animepahe", "kodik"]
 		if id == "animepahe" || id == "kodik" {
 			t.Errorf("excluded providers must not be probed, saw %v", stub.seen)
 		}
+	}
+}
+
+// TestWireStartupSync pins the PR27 wiring: the seam lands on the deps
+// and reads the settings FRESH from disk — a disabled section settles
+// as a silent no-op without any network egress.
+func TestWireStartupSync(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.toml")
+	// Explicitly disabled section: proves the closure reads the FILE
+	// (the in-memory default has Shikimori enabled) and settles a
+	// disabled integration as a network-free no-op.
+	if err := os.WriteFile(settingsPath, []byte("[shikimori]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	cfg := mustDefaultSettings(t)
+	net, err := netclient.New(cfg.Network, netclient.WithProvider("shikimori"))
+	if err != nil {
+		t.Fatalf("netclient: %v", err)
+	}
+	st, err := storage.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	deps := &tui.Deps{}
+	wireStartupSync(deps, settingsPath, net, st.Progress)
+	if deps.SyncFull == nil {
+		t.Fatal("SyncFull not wired onto the deps")
+	}
+
+	// Default settings carry no credentials: the integration is off,
+	// the sync must no-op without egress.
+	result, err := deps.SyncFull(context.Background())
+	if err != nil {
+		t.Fatalf("SyncFull on disabled section: %v", err)
+	}
+	if result == nil || result.Updated != 0 || result.Created != 0 || result.Pushed != 0 {
+		t.Fatalf("result = %+v, want zeroed no-op", result)
 	}
 }

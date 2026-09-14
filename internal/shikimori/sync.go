@@ -136,9 +136,28 @@ type SyncResult struct {
 //     renders its warning from it);
 //   - a failed dirty replay keeps the row dirty for the next startup
 //     and surfaces as the returned error alongside the partial result.
-func (s *Syncer) SyncFull(ctx context.Context) (*SyncResult, error) {
+//
+// SyncProgress reports the live state of a running sync (rendered on
+// the SyncScreen spinner line).
+type SyncProgress struct {
+	Phase   string // "rates" | "pull" | "new" | "push"
+	Message string // human-readable, e.g. "Загрузка метаданных: 50/200"
+	Done    int
+	Total   int
+}
+
+// SyncFull runs the two-way startup sync. progress (may be nil) is
+// invoked on every phase transition and periodically within phases so
+// the caller can render a live status line.
+func (s *Syncer) SyncFull(ctx context.Context, progress func(SyncProgress)) (*SyncResult, error) {
+	report := func(p SyncProgress) {
+		if progress != nil {
+			progress(p)
+		}
+	}
 	result := &SyncResult{}
 
+	report(SyncProgress{Phase: "rates", Message: "Загрузка списка Shikimori…"})
 	rates, err := s.client.GetUserRates(ctx)
 	if err != nil {
 		if errors.Is(err, ErrDisabled) {
@@ -149,12 +168,14 @@ func (s *Syncer) SyncFull(ctx context.Context) (*SyncResult, error) {
 	if len(rates) == 0 {
 		return result, nil // python: `if not rates: return`
 	}
+	report(SyncProgress{Phase: "rates", Message: fmt.Sprintf("Список загружен: %d записей", len(rates)), Done: len(rates), Total: len(rates)})
 
 	rateByTarget := make(map[int64]UserRate, len(rates))
 	for _, rate := range rates {
 		rateByTarget[rate.TargetID] = rate
 	}
 
+	report(SyncProgress{Phase: "pull", Message: "Сопоставление локальных записей…", Total: len(rateByTarget)})
 	locals, err := s.repo.ListAllWithShikimoriID(ctx)
 	if err != nil {
 		return result, fmt.Errorf("shikimori sync: local roster: %w", err)
@@ -169,14 +190,23 @@ func (s *Syncer) SyncFull(ctx context.Context) (*SyncResult, error) {
 		if err := s.pullRate(ctx, &rec, rate, result); err != nil {
 			return result, err
 		}
+		if (i+1)%10 == 0 || i == len(locals)-1 {
+			report(SyncProgress{Phase: "pull", Message: fmt.Sprintf("Обновление записей: %d/%d", i+1, len(locals)), Done: i + 1, Total: len(locals)})
+		}
 	}
 
-	if err := s.createMissing(ctx, rateByTarget, result); err != nil {
+	if len(rateByTarget) > 0 {
+		report(SyncProgress{Phase: "new", Message: fmt.Sprintf("Новые тайтлы: %d — загрузка метаданных…", len(rateByTarget)), Total: len(rateByTarget)})
+	}
+	if err := s.createMissing(ctx, rateByTarget, result, report); err != nil {
 		return result, err
 	}
-	if err := s.pushDirty(ctx, result); err != nil {
+
+	report(SyncProgress{Phase: "push", Message: "Отправка отложенных изменений…"})
+	if err := s.pushDirty(ctx, result, report); err != nil {
 		return result, err
 	}
+	report(SyncProgress{Phase: "done", Message: "Готово"})
 	return result, nil
 }
 
@@ -213,7 +243,7 @@ func (s *Syncer) pullRate(ctx context.Context, rec *storage.AnimeProgress, rate 
 // createMissing fetches metadata for the remote-only anime and inserts
 // shikimori-sourced placeholder rows (python shikimori_sync.py:63-101);
 // GetAnimesInfo chunks the ids at 50 per request internally.
-func (s *Syncer) createMissing(ctx context.Context, rateByTarget map[int64]UserRate, result *SyncResult) error {
+func (s *Syncer) createMissing(ctx context.Context, rateByTarget map[int64]UserRate, result *SyncResult, report func(SyncProgress)) error {
 	if len(rateByTarget) == 0 {
 		return nil
 	}
@@ -227,11 +257,14 @@ func (s *Syncer) createMissing(ctx context.Context, rateByTarget map[int64]UserR
 	if err != nil {
 		return fmt.Errorf("shikimori sync: animes info: %w", err)
 	}
-	for _, info := range infos {
+	for i, info := range infos {
 		if err := s.createRemote(ctx, info, rateByTarget[info.ID]); err != nil {
 			return err
 		}
 		result.Created++
+		if (i+1)%10 == 0 || i == len(infos)-1 {
+			report(SyncProgress{Phase: "new", Message: fmt.Sprintf("Новые тайтлы: %d/%d", i+1, len(infos)), Done: i + 1, Total: len(infos)})
+		}
 	}
 	return nil
 }
@@ -277,10 +310,13 @@ func (s *Syncer) createRemote(ctx context.Context, info Anime, rate UserRate) er
 // pushDirty replays the deferred-sync queue: every dirty bound row is
 // pushed with its own episode counter and status; the flag clears only
 // on success, so a failed replay stays queued for the next startup.
-func (s *Syncer) pushDirty(ctx context.Context, result *SyncResult) error {
+func (s *Syncer) pushDirty(ctx context.Context, result *SyncResult, report func(SyncProgress)) error {
 	dirty, err := s.repo.ListDirty(ctx)
 	if err != nil {
 		return fmt.Errorf("shikimori sync: dirty roster: %w", err)
+	}
+	if len(dirty) > 0 {
+		report(SyncProgress{Phase: "push", Message: fmt.Sprintf("Отправка: %d записей", len(dirty)), Total: len(dirty)})
 	}
 	var pushErr error
 	for i := range dirty {
@@ -297,6 +333,9 @@ func (s *Syncer) pushDirty(ctx context.Context, result *SyncResult) error {
 			return fmt.Errorf("shikimori sync: replay persist %d: %w", rec.ID, err)
 		}
 		result.Pushed++
+		if (i+1)%5 == 0 || i == len(dirty)-1 {
+			report(SyncProgress{Phase: "push", Message: fmt.Sprintf("Отправка: %d/%d", i+1, len(dirty)), Done: i + 1, Total: len(dirty)})
+		}
 	}
 	return pushErr
 }

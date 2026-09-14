@@ -55,44 +55,73 @@ const (
 	syncPhaseFailed
 )
 
+// syncProgressMsg carries a live progress update from the running sync.
+type syncProgressMsg struct {
+	progress shikimori.SyncProgress
+}
+
 // SyncScreen runs the PR27 startup two-way sync and hands over to the
 // root menu.
 type SyncScreen struct {
-	deps   *Deps
-	spin   spinner.Model
-	phase  syncPhase
-	result *shikimori.SyncResult
-	err    error
+	deps       *Deps
+	spin       spinner.Model
+	phase      syncPhase
+	result     *shikimori.SyncResult
+	err        error
+	progress   *shikimori.SyncProgress // last received live progress
+	progressCh chan shikimori.SyncProgress
 }
 
 // NewSyncScreen builds the screen over the injected sync seam.
 func NewSyncScreen(deps *Deps) *SyncScreen {
 	return &SyncScreen{
-		deps:  deps,
-		spin:  spinner.New(spinner.WithSpinner(spinner.Dot)),
-		phase: syncPhaseRunning,
+		deps:       deps,
+		spin:       spinner.New(spinner.WithSpinner(spinner.Dot)),
+		phase:      syncPhaseRunning,
+		progressCh: make(chan shikimori.SyncProgress, 20),
 	}
 }
 
 // ID implements Screen.
 func (s *SyncScreen) ID() string { return syncScreenID }
 
-// Init implements Screen: the spinner blink plus the sync command.
+// Init implements Screen: the spinner blink, the sync command and the
+// progress poller.
 func (s *SyncScreen) Init() tea.Cmd {
-	return tea.Batch(s.spin.Tick, safeCmd(syncScreenID, s.runCmd()))
+	return tea.Batch(s.spin.Tick, safeCmd(syncScreenID, s.runCmd()), s.pollProgress())
 }
 
-// runCmd executes the startup sync under its budget (nil seam degrades
-// loudly).
+// pollProgress reads one progress update from the channel and returns
+// it as a message; the Update handler re-arms after each delivery.
+func (s *SyncScreen) pollProgress() tea.Cmd {
+	ch := s.progressCh
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil // channel closed: sync finished
+		}
+		return syncProgressMsg{progress: p}
+	}
+}
+
+// runCmd executes the startup sync under its budget; progress updates
+// are written to the shared channel for the poller to deliver.
 func (s *SyncScreen) runCmd() tea.Cmd {
 	deps := s.deps
+	ch := s.progressCh
 	return func() tea.Msg {
+		defer close(ch)
 		if deps == nil || deps.SyncFull == nil {
 			return syncDoneMsg{err: errSyncUnavailable}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), syncBudget)
 		defer cancel()
-		result, err := deps.SyncFull(ctx)
+		result, err := deps.SyncFull(ctx, func(p shikimori.SyncProgress) {
+			select {
+			case ch <- p:
+			default: // channel full: drop rather than block the sync
+			}
+		})
 		return syncDoneMsg{result: result, err: err}
 	}
 }
@@ -119,6 +148,12 @@ func (s *SyncScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		var cmd tea.Cmd
 		s.spin, cmd = s.spin.Update(m)
 		return s, cmd
+	case syncProgressMsg:
+		if s.phase == syncPhaseRunning {
+			p := m.progress
+			s.progress = &p
+		}
+		return s, s.pollProgress() // re-arm for the next update
 	case syncDoneMsg:
 		s.result, s.err = m.result, m.err
 		if m.err != nil {
@@ -150,6 +185,14 @@ func (s *SyncScreen) View() tea.View {
 	switch s.phase {
 	case syncPhaseRunning:
 		b = append(b, theme.Accent.Render(s.spin.View()+" Синхронизация с Shikimori…")...)
+		b = append(b, '\n', '\n')
+		if s.progress != nil {
+			b = append(b, theme.Dim.Render(s.progress.Message)...)
+			if s.progress.Total > 0 && s.progress.Done > 0 {
+				pct := s.progress.Done * 100 / s.progress.Total
+				b = append(b, theme.Dim.Render(fmt.Sprintf(" (%d%%)", pct))...)
+			}
+		}
 	case syncPhaseDone:
 		r := s.result
 		if r == nil {

@@ -248,14 +248,14 @@ func wireShikiSetup(deps *tui.Deps, settings config.Settings, settingsPath strin
 // sync, and the OAuth token persister keeps refreshed tokens durable.
 // The shikimori transport is shared with the rest of the TUI.
 func wireStartupSync(deps *tui.Deps, settingsPath string, shikiNet *netclient.Client, progress *storage.ProgressRepo) {
-	deps.SyncFull = func(ctx context.Context) (*shikimori.SyncResult, error) {
+	deps.SyncFull = func(ctx context.Context, cb func(shikimori.SyncProgress)) (*shikimori.SyncResult, error) {
 		fresh, err := config.Load(settingsPath)
 		if err != nil {
 			return nil, fmt.Errorf("startup sync: load settings: %w", err)
 		}
 		client := shikimori.New(fresh.Shikimori, shikiNet, nil,
 			shikimori.WithTokenPersister(shikiTokenPersister(settingsPath)))
-		return shikimori.NewSyncer(client, progress, nil).SyncFull(ctx)
+		return shikimori.NewSyncer(client, progress, nil).SyncFull(ctx, cb)
 	}
 }
 

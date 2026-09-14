@@ -339,9 +339,10 @@ type Deps struct {
 	// tokens (nil surfaces as an error in the setup screens).
 	ShikiOAuth func(clientID, clientSecret string, port int) (authURL string, resolve func(ctx context.Context) (ShikiOAuthResult, error), err error)
 	// SyncFull runs the PR27 startup two-way Shikimori list sync
-	// (pull remote rates, create remote-only rows, replay dirty ones).
+	// (pull remote rates, create remote-only rows, replay dirty ones);
+	// the progress callback receives live updates for the sync screen.
 	// nil means no sync capability — the sync screen is skipped.
-	SyncFull func(ctx context.Context) (*shikimori.SyncResult, error)
+	SyncFull func(ctx context.Context, progress func(shikimori.SyncProgress)) (*shikimori.SyncResult, error)
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

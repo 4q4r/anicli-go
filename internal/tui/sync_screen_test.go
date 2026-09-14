@@ -15,7 +15,7 @@ import (
 func syncDeps(result *shikimori.SyncResult, err error) *Deps {
 	return &Deps{
 		ShikiCfg: config.Shikimori{Enabled: true, Session: "s"},
-		SyncFull: func(context.Context) (*shikimori.SyncResult, error) {
+		SyncFull: func(context.Context, func(shikimori.SyncProgress)) (*shikimori.SyncResult, error) {
 			return result, err
 		},
 	}

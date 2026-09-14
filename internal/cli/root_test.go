@@ -327,7 +327,7 @@ func TestWireStartupSync(t *testing.T) {
 
 	// Default settings carry no credentials: the integration is off,
 	// the sync must no-op without egress.
-	result, err := deps.SyncFull(context.Background())
+	result, err := deps.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull on disabled section: %v", err)
 	}

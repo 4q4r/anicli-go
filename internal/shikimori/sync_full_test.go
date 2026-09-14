@@ -93,7 +93,7 @@ func TestSyncFullUpdatesExisting(t *testing.T) {
 		CurrentEpisode: "7", ShikimoriID: int64Ptr(501), ShikimoriStatus: "watching",
 	})
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSyncFullCreatesNew(t *testing.T) {
 		CurrentEpisode: "3", ShikimoriID: int64Ptr(500), ShikimoriStatus: "watching",
 	})
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestSyncFullPushesDirty(t *testing.T) {
 		Dirty: true,
 	})
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestSyncFullConflictResolution(t *testing.T) {
 		ShikimoriStatus: "watching", Dirty: true,
 	})
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestSyncFullEmptyRatesIsNoop(t *testing.T) {
 	})
 	_, syncer, _ := syncFullFixture(t, handler)
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestSyncFullRatesErrorSurfaces(t *testing.T) {
 	})
 	_, syncer, _ := syncFullFixture(t, handler)
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err == nil {
 		t.Fatal("SyncFull err = nil, want the rates failure surfaced")
 	}
@@ -360,7 +360,7 @@ func TestSyncFullDisabledIsNoop(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	result, err := NewSyncer(c, st.Progress, nil).SyncFull(context.Background())
+	result, err := NewSyncer(c, st.Progress, nil).SyncFull(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("SyncFull on disabled integration: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestSyncFullPushFailureKeepsDirty(t *testing.T) {
 		ShikimoriStatus: "watching", Dirty: true,
 	})
 
-	result, err := syncer.SyncFull(context.Background())
+	result, err := syncer.SyncFull(context.Background(), nil)
 	if err == nil {
 		t.Fatal("SyncFull err = nil, want push failure surfaced")
 	}

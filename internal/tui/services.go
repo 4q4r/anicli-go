@@ -131,6 +131,10 @@ type HealthService interface {
 type ShikimoriService interface {
 	// Enabled reports whether the tracker integration is active.
 	Enabled() bool
+	// Mode reports the client's auth mode diagnostic ("disabled",
+	// "none", "cookie" or "bearer"); "disabled" means the enrichment
+	// and authed flows must skip Shikimori entirely (PR25 A).
+	Mode() string
 	// UpdateStatus patches the rate of one anime; nil score/rewatches
 	// leave them untouched. rateID > 0 PATCHes the existing rate,
 	// otherwise a new rate is created and its id returned.

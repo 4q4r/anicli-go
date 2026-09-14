@@ -67,6 +67,7 @@ func NewRootCommand() *cobra.Command {
 		newDoctorCommand(),
 		newVersionCommand(),
 		newCFCommand(),
+		newShikimoriCommand(),
 	)
 	return root
 }
@@ -143,7 +144,8 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	}
 	defer func() { _ = store.Close() }()
 
-	real, err := tui.NewRealDeps(*settings, store)
+	real, err := tui.NewRealDeps(*settings, store,
+		tui.WithShikiPersister(shikiTokenPersister(settingsPath)))
 	if err != nil {
 		return fmt.Errorf("build tui services: %w", err)
 	}
@@ -188,7 +190,8 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 	if err != nil {
 		return fmt.Errorf("build shikimori transport: %w", err)
 	}
-	var shiki api.ShikiClient = shikimori.New(settings.Shikimori, shikiNet, nil)
+	var shiki api.ShikiClient = shikimori.New(settings.Shikimori, shikiNet, nil,
+		shikimori.WithTokenPersister(shikiTokenPersister(settingsPath)))
 
 	app, err := api.NewApp(api.Config{
 		Settings: *settings,
@@ -210,6 +213,20 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 }
 
 // runDoctor lives in doctor.go (PR24 search-based diagnostics).
+
+// shikiTokenPersister builds the Shikimori OAuth persistence hook
+// (PR25 E): a refreshed token pair is written back to the settings
+// file read-modify-write (token fields only — the file-side session
+// cookie and every other section stay untouched).
+func shikiTokenPersister(settingsPath string) func(config.Shikimori) error {
+	return func(section config.Shikimori) error {
+		return config.UpdateShikimori(settingsPath, func(s *config.Shikimori) {
+			s.AccessToken = section.AccessToken
+			s.RefreshToken = section.RefreshToken
+			s.TokenExpiresAt = section.TokenExpiresAt
+		})
+	}
+}
 
 // loadSettingsOrFail resolves the effective settings for a command,
 // failing loudly on a broken settings file (config.Load already treats a

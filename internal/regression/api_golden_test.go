@@ -103,7 +103,7 @@ func newGoldenApp(t *testing.T) (*api.App, http.Handler) {
 	}
 	if err := store.Sources.ReplaceForAnime(context.Background(), rows[0].ID, []storage.AnimeSource{
 		{SourceID: fixedProviderID, SourceURL: "https://fixed.example/anime/1"},
-		{SourceID: "shikimori", SourceURL: "https://shikimori.one/animes/21"},
+		{SourceID: "shikimori", SourceURL: "https://shikimori.io/animes/21"},
 	}); err != nil {
 		t.Fatalf("seed sources: %v", err)
 	}

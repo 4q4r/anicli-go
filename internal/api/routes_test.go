@@ -500,8 +500,8 @@ func TestHomeFeedComposition(t *testing.T) {
 				Image: shikimori.Image{Original: "/system/animes/original/300.jpg"}},
 		},
 		ongoing: []shikimori.OngoingCandidate{
-			{ShikimoriID: 100, PosterURL: "https://shikimori.one/system/animes/original/100.jpg", SourceURL: "https://shikimori.one/animes/100"},
-			{ShikimoriID: 999, PosterURL: "https://shikimori.one/system/animes/original/999.jpg", SourceURL: "https://shikimori.one/animes/999"},
+			{ShikimoriID: 100, PosterURL: "https://shikimori.io/system/animes/original/100.jpg", SourceURL: "https://shikimori.io/animes/100"},
+			{ShikimoriID: 999, PosterURL: "https://shikimori.io/system/animes/original/999.jpg", SourceURL: "https://shikimori.io/animes/999"},
 		},
 	}
 	h := app.Router()
@@ -584,7 +584,7 @@ func TestHomeFeedComposition(t *testing.T) {
 	}
 
 	// Poster resolution must be absolute against the shikimori base.
-	if pu, _ := cwCard["poster_url"].(string); !strings.HasPrefix(pu, "https://shikimori.one/system/animes/original/100.jpg") {
+	if pu, _ := cwCard["poster_url"].(string); !strings.HasPrefix(pu, "https://shikimori.io/system/animes/original/100.jpg") {
 		t.Fatalf("poster_url = %v", cwCard["poster_url"])
 	}
 }

@@ -102,7 +102,7 @@ func (fixedShiki) Autocomplete(_ context.Context, _ string, _ int) ([]shikimori.
 			PosterURL:   strPtr("/system/animes/original/21.jpg"),
 			Type:        strPtr("TV"),
 			Year:        intPtr(1998),
-			URL:         "https://shikimori.one/animes/21",
+			URL:         "https://shikimori.io/animes/21",
 		},
 	}, nil
 }
@@ -154,7 +154,7 @@ func (fixedShiki) FetchOngoingCandidates(_ context.Context) ([]shikimori.Ongoing
 			TitleEn:     strPtr("Cowboy Bebop"),
 			PosterURL:   "/system/animes/original/21.jpg",
 			Year:        intPtr(1998),
-			SourceURL:   "https://shikimori.one/animes/21",
+			SourceURL:   "https://shikimori.io/animes/21",
 		},
 	}, nil
 }

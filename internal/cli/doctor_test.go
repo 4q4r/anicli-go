@@ -37,6 +37,69 @@ func TestStartupNotices(t *testing.T) {
 	}
 }
 
+// TestStartupNoticesShikimori: the PR26 first-run warning — enabled
+// integration without any credentials warns; every configured or
+// disabled state stays silent.
+func TestStartupNoticesShikimori(t *testing.T) {
+	hasShikiNotice := func(notices []string) bool {
+		for _, n := range notices {
+			if strings.Contains(n, "Shikimori не настроен") {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("enabled without credentials warns", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "set"
+		cfg.Shikimori.Enabled = true
+		notices := startupNotices(cfg)
+		if !hasShikiNotice(notices) {
+			t.Fatalf("want the Shikimori notice, got %v", notices)
+		}
+		want := "⚠ Shikimori не настроен: нет ни cookie, ни OAuth токена (выберите способ в TUI)"
+		found := false
+		for _, n := range notices {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("notice wording mismatch, want %q, got %v", want, notices)
+		}
+	})
+
+	t.Run("session configured stays silent", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "set"
+		cfg.Shikimori.Enabled = true
+		cfg.Shikimori.Session = "kawai"
+		if hasShikiNotice(startupNotices(cfg)) {
+			t.Fatal("a configured session must not warn")
+		}
+	})
+
+	t.Run("access token configured stays silent", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "set"
+		cfg.Shikimori.Enabled = true
+		cfg.Shikimori.AccessToken = "at"
+		if hasShikiNotice(startupNotices(cfg)) {
+			t.Fatal("a configured token must not warn")
+		}
+	})
+
+	t.Run("disabled stays silent (explicitly off)", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "set"
+		cfg.Shikimori.Enabled = false
+		if hasShikiNotice(startupNotices(cfg)) {
+			t.Fatal("shikimori.enabled = false must not warn")
+		}
+	})
+}
+
 // stubProbe replaces the live doctor probe (no network egress in
 // tests) and records the providers it saw. The doctor probes
 // concurrently, so the log is mutex-guarded.

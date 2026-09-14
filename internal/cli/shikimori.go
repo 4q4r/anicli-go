@@ -33,6 +33,9 @@ const shikiAuthWaitTimeout = 5 * time.Minute
 type shikiOAuthClient interface {
 	ExchangeCode(ctx context.Context, clientID, clientSecret, redirectURI, code string) (*shikimori.TokenSet, error)
 	GetUserID(ctx context.Context) (int64, error)
+	// WhoAmI resolves id + nickname in one round-trip (PR26 setup
+	// flows).
+	WhoAmI(ctx context.Context) (int64, string, error)
 }
 
 // newShikiOAuthClient builds the flow client against the real site

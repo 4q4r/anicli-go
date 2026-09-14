@@ -65,11 +65,16 @@ var doctorProbe = func(ctx context.Context, p contracts.Provider, budget time.Du
 }
 
 // startupNotices builds the PR24 startup warning lines — one per
-// provider disabled for missing configuration.
+// provider disabled for missing configuration — plus the PR26
+// first-run Shikimori warning when the integration is enabled but
+// carries neither a session cookie nor an OAuth token.
 func startupNotices(cfg config.Settings) []string {
 	var out []string
 	for _, d := range providers.UnconfiguredProviders(cfg) {
 		out = append(out, fmt.Sprintf("⚠ Провайдер '%s' отключён: %s", d.ID, d.Reason))
+	}
+	if cfg.Shikimori.Enabled && cfg.Shikimori.Session == "" && cfg.Shikimori.AccessToken == "" {
+		out = append(out, "⚠ Shikimori не настроен: нет ни cookie, ни OAuth токена (выберите способ в TUI)")
 	}
 	return out
 }

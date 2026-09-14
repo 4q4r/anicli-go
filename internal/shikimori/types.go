@@ -168,6 +168,9 @@ type rateResponse struct {
 // whoamiResponse is the minimal whoami reply.
 type whoamiResponse struct {
 	ID int64 `json:"id"`
+	// Nickname greets the user by name in the setup flows (PR26);
+	// absent in degraded replies — callers fall back to the id.
+	Nickname string `json:"nickname"`
 }
 
 // rolesEntry is one raw /roles row before splitting into character/staff:

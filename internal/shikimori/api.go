@@ -24,38 +24,46 @@ func CanonicalStatus(status string) string {
 // GetUserID resolves the Shikimori user id via /api/users/whoami and
 // caches it for the client lifetime.
 func (c *Client) GetUserID(ctx context.Context) (int64, error) {
+	id, _, err := c.WhoAmI(ctx)
+	return id, err
+}
+
+// WhoAmI resolves the user id and nickname via /api/users/whoami and
+// caches both for the client lifetime (PR26: the setup screens greet
+// the user by nickname). An absent nickname in the reply decodes as
+// "" — callers render the id fallback.
+func (c *Client) WhoAmI(ctx context.Context) (int64, string, error) {
 	if err := c.requireMode(true); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	c.mu.Lock()
-	cached := c.userID
+	cached := c.user
 	c.mu.Unlock()
 	if cached != nil {
-		return *cached, nil
+		return cached.id, cached.nickname, nil
 	}
 
 	resp, err := c.get(ctx, "/api/users/whoami", nil)
 	if err != nil {
 		if authFailure(statusCodeOf(err)) {
-			return 0, fmt.Errorf("%w: whoami: %w", ErrAuthRequired, err)
+			return 0, "", fmt.Errorf("%w: whoami: %w", ErrAuthRequired, err)
 		}
-		return 0, fmt.Errorf("shikimori whoami: %w", err)
+		return 0, "", fmt.Errorf("shikimori whoami: %w", err)
 	}
 	var reply whoamiResponse
 	if err := json.Unmarshal(resp.Body, &reply); err != nil {
-		return 0, fmt.Errorf("shikimori whoami: decode response: %w", err)
+		return 0, "", fmt.Errorf("shikimori whoami: decode response: %w", err)
 	}
 	if reply.ID == 0 {
 		// Anonymous whoami: credentials absent or rejected.
-		return 0, fmt.Errorf("%w: whoami returned no user", ErrAuthRequired)
+		return 0, "", fmt.Errorf("%w: whoami returned no user", ErrAuthRequired)
 	}
 
 	c.mu.Lock()
-	id := reply.ID
-	c.userID = &id
+	c.user = &userIdentity{id: reply.ID, nickname: reply.Nickname}
 	c.mu.Unlock()
-	return id, nil
+	return reply.ID, reply.Nickname, nil
 }
 
 // GetAnime fetches the base anime entry from /api/animes/{id}. Public:

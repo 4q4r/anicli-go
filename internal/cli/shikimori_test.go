@@ -16,12 +16,14 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/shikimori"
+	"github.com/an0nx/anicli-go/internal/tui"
 )
 
 // fakeOAuthClient is the test double of the auth-flow client seam.
 type fakeOAuthClient struct {
 	set       *shikimori.TokenSet
 	userID    int64
+	nickname  string
 	exchangeF func(code string) (*shikimori.TokenSet, error)
 	whoamiF   func() (int64, error)
 }
@@ -38,6 +40,14 @@ func (f *fakeOAuthClient) GetUserID(context.Context) (int64, error) {
 		return f.whoamiF()
 	}
 	return f.userID, nil
+}
+
+func (f *fakeOAuthClient) WhoAmI(context.Context) (int64, string, error) {
+	if f.whoamiF != nil {
+		id, err := f.whoamiF()
+		return id, f.nickname, err
+	}
+	return f.userID, f.nickname, nil
 }
 
 // stubOAuthSeams replaces the client and browser seams for one test and
@@ -314,4 +324,104 @@ func stubDoctorProbe(t *testing.T, s *stubProbe) {
 	orig := doctorProbe
 	doctorProbe = s.probe
 	t.Cleanup(func() { doctorProbe = orig })
+}
+
+// TestWireShikiSetup pins the PR26 runTUI wiring: the deps carry the
+// [shikimori] snapshot, the settings writer persists through
+// config.UpdateShikimori (other sections preserved), whoami verifies
+// candidate sections and the OAuth seam reuses the CLI loopback flow.
+func TestWireShikiSetup(t *testing.T) {
+	// Not parallel: swaps the package-level client/browser seams.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.toml")
+	if err := os.WriteFile(path, []byte("[player]\npath = \"mpv-x\"\n\n[shikimori]\nenabled = true\nclient_id = \"cid\"\nclient_secret = \"csec\"\n"), 0o600); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+	settings, err := loadSettingsOrFail(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	expires := time.Now().Add(86400 * time.Second).Unix()
+	fake := &fakeOAuthClient{
+		set:       &shikimori.TokenSet{AccessToken: "at-7", RefreshToken: "rt-7", ExpiresAt: expires},
+		userID:    42,
+		nickname:  "wired-fan",
+		exchangeF: nil,
+	}
+	stubOAuthSeams(t, fake, func(string) error { return nil })
+
+	deps := &tui.Deps{}
+	wireShikiSetup(deps, *settings, path)
+
+	t.Run("snapshot and seams wired", func(t *testing.T) {
+		if deps.ShikiCfg != settings.Shikimori {
+			t.Fatalf("ShikiCfg = %+v, want the loaded section", deps.ShikiCfg)
+		}
+		if deps.SettingsWriter == nil || deps.ShikiWhoAmI == nil || deps.ShikiOAuth == nil {
+			t.Fatal("all three setup seams must be wired")
+		}
+	})
+
+	t.Run("settings writer persists the section and preserves others", func(t *testing.T) {
+		section := settings.Shikimori
+		section.Session = "new-cookie"
+		if err := deps.SettingsWriter(section); err != nil {
+			t.Fatalf("SettingsWriter: %v", err)
+		}
+		loaded, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if !loaded.Shikimori.Enabled || loaded.Shikimori.Session != "new-cookie" ||
+			loaded.Shikimori.ClientID != "cid" || loaded.Shikimori.ClientSecret != "csec" {
+			t.Fatalf("persisted [shikimori] = %+v", loaded.Shikimori)
+		}
+		if loaded.Player.Path != "mpv-x" {
+			t.Fatalf("player section lost: %+v", loaded.Player)
+		}
+	})
+
+	t.Run("whoami verifies a candidate section", func(t *testing.T) {
+		section := settings.Shikimori
+		section.Session = "verify-me"
+		user, err := deps.ShikiWhoAmI(context.Background(), section)
+		if err != nil {
+			t.Fatalf("ShikiWhoAmI: %v", err)
+		}
+		if user.ID != 42 || user.Nickname != "wired-fan" {
+			t.Fatalf("user = %+v, want (42, wired-fan)", user)
+		}
+	})
+
+	t.Run("oauth seam runs the loopback flow", func(t *testing.T) {
+		fake.exchangeF = func(string) (*shikimori.TokenSet, error) {
+			return &shikimori.TokenSet{AccessToken: "at-26", RefreshToken: "rt-26", ExpiresAt: expires}, nil
+		}
+		authURL, resolve, err := deps.ShikiOAuth("cid", "csec", 0)
+		if err != nil {
+			t.Fatalf("ShikiOAuth start: %v", err)
+		}
+		u, err := url.Parse(authURL)
+		if err != nil {
+			t.Fatalf("authorize URL %q: %v", authURL, err)
+		}
+		if q := u.Query(); q.Get("client_id") != "cid" || !strings.HasPrefix(q.Get("redirect_uri"), "http://127.0.0.1:") {
+			t.Fatalf("authorize URL query = %v", q)
+		}
+		// Deliver the code the way the browser redirect would.
+		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=live-code")
+		if err != nil {
+			t.Fatalf("callback: %v", err)
+		}
+		_ = resp.Body.Close()
+
+		set, err := resolve(context.Background())
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if set.AccessToken != "at-26" || set.RefreshToken != "rt-26" || set.ExpiresAt != expires {
+			t.Fatalf("tokens = %+v", set)
+		}
+	})
 }

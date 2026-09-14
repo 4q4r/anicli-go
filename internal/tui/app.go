@@ -8,6 +8,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/config"
 )
 
 // errPanic marks a recovered panic; errors surfacing from screens or
@@ -151,13 +153,16 @@ type App struct {
 }
 
 // NewApp builds the application model with the root screen on the
-// stack.
-func NewApp(root Screen, deps *Deps, log *slog.Logger) App {
+// stack. Optional overlays push additional screens ON TOP of the root
+// (PR26: the first-run Shikimori setup gate); Init runs the topmost
+// screen's Init.
+func NewApp(root Screen, deps *Deps, log *slog.Logger, overlays ...Screen) App {
 	if log == nil {
 		log = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return App{stack: []Screen{root}, deps: deps, log: log, ctx: ctx, cancel: cancel}
+	stack := append([]Screen{root}, overlays...)
+	return App{stack: stack, deps: deps, log: log, ctx: ctx, cancel: cancel}
 }
 
 // Init implements tea.Model: runs the root screen's Init.
@@ -306,6 +311,26 @@ type Deps struct {
 	// Log is the diagnostics sink for quiet-skip notes (shikimori
 	// binding etc.); nil degrades to slog.Default().
 	Log *slog.Logger
+
+	// ShikiCfg snapshots the [shikimori] section at startup (PR26):
+	// the first-run setup screens compose their updates on top of it
+	// (preserving unrelated fields such as the OAuth client
+	// credentials).
+	ShikiCfg config.Shikimori
+	// SettingsWriter persists an updated [shikimori] section to the
+	// settings file (wired from the CLI's config.UpdateShikimori;
+	// nil in embedded builds — the setup screens surface that as an
+	// error instead of pretending success).
+	SettingsWriter func(config.Shikimori) error
+	// ShikiWhoAmI verifies candidate credentials with one whoami
+	// round-trip, without touching the running client (nil surfaces
+	// as an error in the setup screens).
+	ShikiWhoAmI func(ctx context.Context, section config.Shikimori) (ShikiUser, error)
+	// ShikiOAuth starts the OAuth2 authorization-code flow: it opens
+	// the loopback callback server, returns the authorize URL and a
+	// blocking resolve that waits for the code and exchanges it for
+	// tokens (nil surfaces as an error in the setup screens).
+	ShikiOAuth func(clientID, clientSecret string, port int) (authURL string, resolve func(ctx context.Context) (ShikiOAuthResult, error), err error)
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

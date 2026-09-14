@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -151,10 +153,89 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	}
 	defer real.Close()
 
+	// PR26: the first-run Shikimori setup gate — the TUI gets the
+	// config snapshot and the persistence/verification/OAuth seams.
+	wireShikiSetup(real.Deps, *settings, settingsPath)
+
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
 	return tui.Run(signalCtx, real.Deps, slog.Default())
+}
+
+// wireShikiSetup installs the PR26 setup seams onto the TUI deps: the
+// [shikimori] snapshot, the settings writer (read-modify-write through
+// config.UpdateShikimori), the candidate-section whoami probe and the
+// OAuth loopback flow shared with `anicli shikimori auth`.
+func wireShikiSetup(deps *tui.Deps, settings config.Settings, settingsPath string) {
+	deps.ShikiCfg = settings.Shikimori
+
+	// The section replaces the file's [shikimori] wholesale; the
+	// screens compose it from the startup snapshot so unrelated
+	// fields (client credentials) survive. UpdateShikimori layers no
+	// environment overrides, so an env-provided session cookie can
+	// never bake into the file.
+	deps.SettingsWriter = func(section config.Shikimori) error {
+		return config.UpdateShikimori(settingsPath, func(s *config.Shikimori) { *s = section })
+	}
+
+	deps.ShikiWhoAmI = func(ctx context.Context, section config.Shikimori) (tui.ShikiUser, error) {
+		probe := settings
+		probe.Shikimori = section
+		client, err := newShikiOAuthClient(probe)
+		if err != nil {
+			return tui.ShikiUser{}, err
+		}
+		id, nickname, err := client.WhoAmI(ctx)
+		if err != nil {
+			return tui.ShikiUser{}, err
+		}
+		return tui.ShikiUser{ID: id, Nickname: nickname}, nil
+	}
+
+	deps.ShikiOAuth = func(clientID, clientSecret string, port int) (string, func(context.Context) (tui.ShikiOAuthResult, error), error) {
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			return "", nil, fmt.Errorf("shikimori oauth: локальный redirect-сервер: %w", err)
+		}
+		redirectURI := "http://" + ln.Addr().String() + "/callback"
+		authURL := shikimori.AuthorizeURL(clientID, redirectURI)
+
+		srv, codeCh, errCh := startShikiCallbackServer(ln)
+		// Best-effort browser open: the TUI renders the URL too.
+		_ = shikiOpenBrowser(authURL)
+
+		resolve := func(ctx context.Context) (tui.ShikiOAuthResult, error) {
+			defer func() { _ = srv.Close() }()
+			var code string
+			select {
+			case code = <-codeCh:
+			case err := <-errCh:
+				return tui.ShikiOAuthResult{}, err
+			case <-ctx.Done():
+				return tui.ShikiOAuthResult{}, fmt.Errorf("shikimori oauth: ожидание кода авторизации прервано: %w", ctx.Err())
+			}
+
+			// A clean section for the exchange: no stale cookie or
+			// token headers on the token endpoint.
+			flowSettings := settings
+			flowSettings.Shikimori = config.Shikimori{Enabled: true}
+			client, err := newShikiOAuthClient(flowSettings)
+			if err != nil {
+				return tui.ShikiOAuthResult{}, err
+			}
+			set, err := client.ExchangeCode(ctx, clientID, clientSecret, redirectURI, code)
+			if err != nil {
+				return tui.ShikiOAuthResult{}, fmt.Errorf("shikimori oauth: обмен кода на токены: %w", err)
+			}
+			return tui.ShikiOAuthResult{
+				AccessToken:  set.AccessToken,
+				RefreshToken: set.RefreshToken,
+				ExpiresAt:    set.ExpiresAt,
+			}, nil
+		}
+		return authURL, resolve, nil
+	}
 }
 
 // runServe is the HTTP API face: loads settings, opens storage, builds

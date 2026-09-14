@@ -106,7 +106,14 @@ type Client struct {
 	csrf         string
 	csrfWarned   bool // single-warning ruling
 	csrfWarnings int  // test-visible count of emitted warnings
-	userID       *int64
+	user         *userIdentity
+}
+
+// userIdentity is the cached whoami answer (id + nickname, PR26);
+// nil means "not resolved yet".
+type userIdentity struct {
+	id       int64
+	nickname string
 }
 
 // New builds the client. cfg selects the auth mode; net is the shared

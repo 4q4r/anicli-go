@@ -864,3 +864,49 @@ func TestProviderErrorPassthrough(t *testing.T) {
 		t.Errorf("GetAnime err = %v, want contracts.ErrNotFound", err)
 	}
 }
+
+// TestWhoAmIReturnsNickname pins the combined identity probe (PR26):
+// one whoami round-trip resolves id + nickname, both cached and shared
+// with GetUserID; an absent nickname decodes as "" (callers render the
+// id fallback).
+func TestWhoAmIReturnsNickname(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nickname decoded and cached", func(t *testing.T) {
+		t.Parallel()
+		c, log := newTestClient(t, cookieCfg("sess42"), func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, map[string]any{"id": 42, "nickname": "kawai-fan"})
+		})
+
+		id, nick, err := c.WhoAmI(context.Background())
+		if err != nil {
+			t.Fatalf("WhoAmI: %v", err)
+		}
+		if id != 42 || nick != "kawai-fan" {
+			t.Errorf("WhoAmI = (%d, %q), want (42, kawai-fan)", id, nick)
+		}
+
+		// The cache is shared: GetUserID after WhoAmI performs no
+		// second round-trip.
+		if _, err = c.GetUserID(context.Background()); err != nil {
+			t.Fatalf("GetUserID after WhoAmI: %v", err)
+		}
+		if got := log.count("/api/users/whoami"); got != 1 {
+			t.Errorf("whoami calls = %d, want 1 (shared cache)", got)
+		}
+	})
+
+	t.Run("empty nickname decodes as empty", func(t *testing.T) {
+		t.Parallel()
+		c, _ := newTestClient(t, bearerCfg("tok"), func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, map[string]any{"id": 7})
+		})
+		id, nick, err := c.WhoAmI(context.Background())
+		if err != nil {
+			t.Fatalf("WhoAmI: %v", err)
+		}
+		if id != 7 || nick != "" {
+			t.Errorf("WhoAmI = (%d, %q), want (7, \"\")", id, nick)
+		}
+	})
+}

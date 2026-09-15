@@ -65,6 +65,9 @@ const shikiPickTimeout = 30e9 // 30s
 func (s *shikiPickScreen) Init() tea.Cmd {
 	deps := s.deps
 	query := s.query
+	if deps != nil && deps.Log != nil {
+		deps.Log.Info("search: shiki pick", "query", query)
+	}
 	return safeCmd(shikiPickID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), shikiPickTimeout)
 		defer cancel()
@@ -135,6 +138,16 @@ func (s *shikiPickScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			// then start the provider fan-out.
 			return s, startShikiFanOut(s.deps, cand)
 		}
+	case shikiFanOutMsg:
+		// The variants resolved by startShikiFanOut settle HERE: this
+		// screen is still on top when the message arrives, so it owns
+		// the swap to the fan-out table (PR28: the message used to be
+		// dropped and the flow dead-ended on the pick list).
+		variants := m.variants
+		if len(variants) == 0 {
+			variants = []string{m.title}
+		}
+		return s, replace(NewShikiFanOut(s.deps, m.title, m.shikimoriID, variants))
 	default:
 		return s, nil
 	}
@@ -229,14 +242,24 @@ func (s *shikiFanOutScreen) ID() string { return "shiki_fanout" }
 
 // Init overrides: no Shikimori enrichment needed (already resolved).
 func (s *shikiFanOutScreen) Init() tea.Cmd {
+	if s.deps != nil && s.deps.Log != nil {
+		s.deps.Log.Info("search: shiki fan-out",
+			"title", s.title, "shikimori_id", s.shikimoriID,
+			"variants", len(s.variants), "providers", len(s.rows))
+	}
 	return s.startFanOut()
 }
 
-// Update handles the shikiFanOutMsg that resolves variants.
+// Update delegates every message to the progress table. A stale
+// shikiFanOutMsg (a duplicate variant resolution landing after the
+// screen swap) must NOT restart the fan-out, so it falls through to
+// the table's default no-op like any other unknown message. When the
+// table keeps itself, this wrapper stays the screen so the stack top
+// keeps the shiki_fanout identity.
 func (s *shikiFanOutScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	if m, ok := msg.(shikiFanOutMsg); ok {
-		// Replace with a proper fan-out screen using the resolved variants.
-		return s, replace(NewShikiFanOut(s.deps, m.title, m.shikimoriID, m.variants))
+	next, cmd := s.searchProgress.Update(msg)
+	if next == Screen(s.searchProgress) {
+		return s, cmd
 	}
-	return s.searchProgress.Update(msg)
+	return next, cmd
 }

@@ -119,8 +119,11 @@ func TestCheckboxMultiSelect(t *testing.T) {
 		cb.MoveDown()
 		cb.Toggle()
 		v := cb.Render()
-		if !strings.Contains(v, "✔") {
+		if !strings.Contains(v, "●") {
 			t.Fatalf("checked marker missing:\n%s", v)
+		}
+		if !strings.Contains(v, "○") {
+			t.Fatalf("unchecked marker missing:\n%s", v)
 		}
 	})
 

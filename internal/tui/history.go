@@ -186,7 +186,7 @@ func newRebindProgress(deps *Deps, rec *storage.AnimeProgress) *rebindProgress {
 	query := derefStr(rec.ShikimoriTitle, rec.Title)
 	sp := NewSearchProgress(deps, query)
 	sp.logTag = "rebind"
-	sp.titleOverride = "Поиск источника: " + query
+	sp.titleOverride = "Поиск по провайдерам: " + query
 	// The record rides along as the resume payload: a group pick
 	// enters the session restored to the saved episode and dubs.
 	sp.resume = rec

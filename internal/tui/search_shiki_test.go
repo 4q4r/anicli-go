@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -80,23 +82,20 @@ func TestShikiPickFlowReachesFanOut(t *testing.T) {
 		}
 	}
 
-	// Enter on the settled results below the table advances to the
-	// source pick (PR30: automatic grouping, no checklist).
+	// Check the single row (space), enter: one checked provider
+	// enters the session directly (PR31: the provider checklist
+	// replaced the automatic grouping).
+	topOf(model).Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	_, advance := topOf(model).Update(enter())
 	if advance == nil {
-		t.Fatalf("enter on the settled fan-out must advance")
+		t.Fatalf("enter on the checked row must advance")
 	}
-	switch m := advance().(type) {
-	case pushMsg:
-		if m.screen.ID() != searchSourceID {
-			t.Fatalf("fan-out must advance to the source pick, got %q", m.screen.ID())
-		}
-	case replaceMsg:
-		if m.screen.ID() != searchSourceID {
-			t.Fatalf("fan-out must advance to the source pick, got %q", m.screen.ID())
-		}
-	default:
-		t.Fatalf("unexpected advance message %#v", advance())
+	sessionMsg, isReplace := advance().(replaceMsg)
+	if !isReplace {
+		t.Fatalf("unexpected advance message %T", advance())
+	}
+	if _, ok := sessionMsg.screen.(*sessionScreen); !ok {
+		t.Fatalf("one checked provider must enter the session directly, got %q", sessionMsg.screen.ID())
 	}
 }
 

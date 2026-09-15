@@ -204,12 +204,13 @@ func bestShikiCandidate(query string, ids map[string]int64) (string, int64) {
 // then one row per provider runs its language-routed variants inside
 // a per-provider timeout budget.
 //
-// PR30 settled phase: once every row settles, the results group
-// automatically (GroupByTitle, the resume rehydrate matcher) and
-// render as a SELECTABLE list BELOW the table — no "press enter"
-// gate. Enter on a group continues the flow: a resumed record (the
-// catalog «Списки» search) enters the session restored to its saved
-// episode and dubs (I6); a fresh search opens the source pick.
+// PR31 settled phase: once every row settles, EVERY result renders
+// as its own checklist row BELOW the table — no similarity grouping,
+// exact title+provider dedup only. Enter resolves the checked subset
+// into the flow: a resumed record (the catalog «Списки» search)
+// enters the session restored to its saved episode and dubs (I6); a
+// fresh search with one provider checked opens the session directly,
+// with several checked first the provider picker.
 type searchProgress struct {
 	deps    *Deps
 	query   string
@@ -234,11 +235,12 @@ type searchProgress struct {
 	// the plain search flow. The catalog rebind flow sets it (PR30)
 	// so a group pick resumes the session.
 	resume *storage.AnimeProgress
-	// resultList renders the grouped results BELOW the table once
-	// every row settled (PR30); nil until then.
-	resultList *PinList
+	// resultCheck renders the per-result provider checklist BELOW the
+	// table once every row settled (PR31: every result gets its own
+	// row — no similarity grouping); nil until then.
+	resultCheck *CheckList
 	// titleOverride replaces the default live header when set (the
-	// catalog flow's «Поиск источника: …», PR30).
+	// catalog flow's «Поиск по провайдерам: …», PR30/PR31).
 	titleOverride string
 }
 
@@ -364,9 +366,9 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				m.deps.Log.Info(m.logTag+": complete",
 					"responded", len(m.responded), "results", len(m.results))
 			}
-			// PR30: the settled table grows its results below
+			// PR30/PR31: the settled table grows its results below
 			// automatically — no enter gate between the fan-out and
-			// the grouped list.
+			// the provider checklist.
 			m.settleResults()
 		}
 		return m, nil
@@ -374,31 +376,39 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if IsCancelKey(msg) {
 			return m, pop()
 		}
-		if m.resultList != nil {
-			// Settled (PR30): the below-table results list owns the
-			// keys; a pick continues the flow, Back/esc return to the
-			// caller's list.
-			if m.resultList.HandleKey(msg) {
+		if m.resultCheck != nil {
+			// Settled (PR31): the below-table checklist owns the keys
+			// — space/a/i toggle, enter resolves the checked subset
+			// (esc already popped above).
+			if m.resultCheck.HandleKey(msg) {
 				return m, nil
 			}
-			resolved := ResolveKey(m.resultList.Menu(), m.resultList.Cursor(), msg)
-			if resolved == nil {
+			if msg.Code != tea.KeyEnter {
 				return m, nil
 			}
-			if resolved == Back {
-				return m, pop()
-			}
-			group, ok := resolved.([]contracts.SearchResult)
-			if !ok {
+			checked := m.resultCheck.CheckedItems()
+			if len(checked) == 0 {
 				return m, nil
+			}
+			group := make([]contracts.SearchResult, 0, len(checked))
+			for _, c := range checked {
+				if r, ok := c.Value.(contracts.SearchResult); ok {
+					group = append(group, r)
+				}
 			}
 			if m.resume != nil {
-				// Catalog flow (I6): the pick resumes the session,
-				// restored to the saved episode and dubs.
-				primary := primaryForResume(group, *m.resume)
-				return m, replace(newResumedSession(m.deps, primary, group, *m.resume))
+				// Catalog flow (I6): the selection resumes the record;
+				// with several providers checked the picker decides
+				// the primary first.
+				if len(group) > 1 {
+					return m, replace(newSearchSource(m.deps, group, m.resume))
+				}
+				return m, replace(newResumedSession(m.deps, group[0], group, *m.resume))
 			}
-			return m, replace(NewSearchSource(m.deps, group))
+			if len(group) > 1 {
+				return m, replace(newSearchSource(m.deps, group, nil))
+			}
+			return m, replace(NewSessionScreen(m.deps, group[0], group))
 		}
 		if len(m.pending) > 0 {
 			// Fan-out still running: nothing to pick yet — the
@@ -414,42 +424,38 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	}
 }
 
-// settleResults groups the settled result set and builds the
-// below-table pick list (PR30): the same title matching as the resume
-// rehydrate (GroupByTitle), biggest group first (python parity).
+// settleResults builds the below-table provider checklist (PR31):
+// EVERY settled result becomes its own row — no similarity grouping,
+// no dedup beyond an exact title+provider match (keep first). The
+// label leads with the provider's friendly name so multi-provider
+// hits of the same title stay distinguishable rows.
 func (m *searchProgress) settleResults() {
-	if m.resultList != nil || len(m.results) == 0 {
+	if m.resultCheck != nil || len(m.results) == 0 {
 		return
 	}
-	groups := GroupByTitle(m.results, rehydrateGroupThreshold)
-	sort.SliceStable(groups, func(i, j int) bool { return len(groups[i]) > len(groups[j]) })
-	choices := make([]Choice, 0, len(groups))
-	for i, g := range groups {
-		choices = append(choices, Choice{
-			ID:    "g" + strconv.Itoa(i),
-			Label: BestDisplayTitle(g) + " (" + sourcesPlural(len(g)) + ")",
-			Value: g,
+	names := make(map[string]string, len(m.rows))
+	for _, row := range m.rows {
+		names[row.ID] = row.Name
+	}
+	seen := make(map[string]bool, len(m.results))
+	items := make([]Choice, 0, len(m.results))
+	for _, r := range m.results {
+		key := r.Title + "\x00" + r.SourceID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		name := names[r.SourceID]
+		if name == "" {
+			name = r.SourceID
+		}
+		items = append(items, Choice{
+			ID:    "r" + strconv.Itoa(len(items)),
+			Label: name + " — " + r.Title,
+			Value: r,
 		})
 	}
-	m.resultList = NewPinList(NewMenu("Найденные источники:", "", choices...), defaultListHeight)
-}
-
-// sourcesPlural renders the RU source-count suffix (1 источник,
-// 2 источника, 5 источников).
-func sourcesPlural(n int) string {
-	abs := n
-	if abs < 0 {
-		abs = -abs
-	}
-	mod10, mod100 := abs%10, abs%100
-	switch {
-	case mod10 == 1 && mod100 != 11:
-		return strconv.Itoa(n) + " источник"
-	case mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14):
-		return strconv.Itoa(n) + " источника"
-	default:
-		return strconv.Itoa(n) + " источников"
-	}
+	m.resultCheck = NewCheckList("Выберите провайдеры:", items)
 }
 
 // searchErrText renders one settled error: timeouts get the dedicated
@@ -522,13 +528,11 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString(lipgloss.PlaceHorizontal(tableWidth, lipgloss.Center, theme.StatusLine.Render(counter)))
 		b.WriteString("\n")
 	}
-	if m.resultList != nil {
-		// PR30: settled — the grouped results replace the bare
-		// counter area below the table.
+	if m.resultCheck != nil {
+		// PR31: settled — the provider checklist replaces the bare
+		// counter area below the table (every result its own row).
 		b.WriteString("\n")
-		b.WriteString(theme.Title.Render("Найденные источники:"))
-		b.WriteString("\n")
-		b.WriteString(m.resultList.Render())
+		b.WriteString(m.resultCheck.Render())
 	}
 	if len(m.pending) == 0 && len(m.results) == 0 {
 		b.WriteString("\n")
@@ -536,11 +540,9 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	hint := "esc — назад"
-	if m.resultList != nil {
-		hint = "enter — выбрать · esc — назад"
-	}
-	b.WriteString(theme.StatusLine.Render(hint))
+	// The settled checklist renders its own full key hints (space/a/
+	// i/enter), so the outer status line stays the plain back hint.
+	b.WriteString(theme.StatusLine.Render("esc — назад"))
 	return tea.NewView(b.String())
 }
 
@@ -618,36 +620,28 @@ func (g *searchGroup) View() tea.View {
 	return tea.NewView(g.check.Render())
 }
 
-// rehydrateGroupThreshold is the clustering similarity used before the
-// resume rehydrate match (same 0.6 family as the rebind flow).
-const rehydrateGroupThreshold = 0.6
-
-// primaryForResume picks the session primary: the group member that
-// matches the record's stored (source, url); else the record's own
-// source (python keeps the saved res as primary even when only a
-// similar group matched).
-func primaryForResume(group []contracts.SearchResult, rec storage.AnimeProgress) contracts.SearchResult {
-	for _, res := range group {
-		if res.SourceID == rec.SourceID && res.URL == rec.SourceURL {
-			return res
-		}
-	}
-	return contracts.SearchResult{Title: rec.Title, SourceID: rec.SourceID, URL: rec.SourceURL}
-}
-
-// searchSource picks the primary source of the freshly grouped title
-// (python selected_group[0] made explicit).
+// searchSource picks the provider to use for this session (python
+// selected_group[0] made explicit): one row per checked result.
 type searchSource struct {
 	deps  *Deps
 	group []contracts.SearchResult
 	list  *PinList
+	// resume, when set, continues the history record on the pick
+	// instead of a fresh session (the catalog flow's picker, PR31).
+	resume *storage.AnimeProgress
 }
 
-// NewSearchSource builds the source picker: each grouped result in
-// registry-stable order.
+// NewSearchSource builds the provider picker for a fresh session:
+// each checked result in registry-stable order.
 //
 //nolint:revive // internal screen type
 func NewSearchSource(deps *Deps, group []contracts.SearchResult) *searchSource {
+	return newSearchSource(deps, group, nil)
+}
+
+// newSearchSource builds the picker, optionally resuming the history
+// record on its pick (the catalog flow).
+func newSearchSource(deps *Deps, group []contracts.SearchResult, resume *storage.AnimeProgress) *searchSource {
 	stable := append([]contracts.SearchResult(nil), group...)
 	sort.SliceStable(stable, func(i, j int) bool { return stable[i].SourceID < stable[j].SourceID })
 	choices := make([]Choice, 0, len(stable))
@@ -658,11 +652,12 @@ func NewSearchSource(deps *Deps, group []contracts.SearchResult) *searchSource {
 			Value: r,
 		})
 	}
-	title := "Источник: " + BestDisplayTitle(group)
+	title := "Выберите провайдера: " + BestDisplayTitle(group)
 	return &searchSource{
-		deps:  deps,
-		group: stable,
-		list:  NewPinList(NewMenu(title, "", choices...), defaultListHeight),
+		deps:   deps,
+		group:  stable,
+		list:   NewPinList(NewMenu(title, "", choices...), defaultListHeight),
+		resume: resume,
 	}
 }
 
@@ -691,6 +686,12 @@ func (s *searchSource) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	primary, ok := resolved.(contracts.SearchResult)
 	if !ok {
 		return s, pop()
+	}
+	if s.resume != nil {
+		// Catalog flow (PR31): the explicit pick overrides the
+		// record's saved binding — the user chose which provider to
+		// use for this session, the record restores episode/dubs.
+		return s, replace(newResumedSession(s.deps, primary, s.group, *s.resume))
 	}
 	return s, replace(NewSessionScreen(s.deps, primary, s.group))
 }

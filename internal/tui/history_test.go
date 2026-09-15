@@ -376,22 +376,24 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	model := drive(app, pushMsg{screen: newRebindProgress(deps, &rec)})
 	model = drainCmds(model)
 
-	// Settled WITHOUT any enter press: the grouped results sit below
-	// the table.
+	// Settled WITHOUT any enter press: the provider checklist sits
+	// below the table.
 	top := topOf(model)
 	v := top.View().Content
 	for _, want := range []string{
-		"Поиск источника: Ванпанчмен",
+		"Поиск по провайдерам: Ванпанчмен",
 		"Завершено",
-		"Найденные источники",
-		"Ванпанчмен (1 источник)",
+		"Выберите провайдеры",
+		"AnimeGO — Ванпанчмен",
 	} {
 		if !contains(v, want) {
 			t.Fatalf("settled catalog view missing %q, got:\n%s", want, v)
 		}
 	}
 
-	// Enter on the group replaces the screen with the resumed session.
+	// Check the provider row (space), enter: the resumed session
+	// replaces the screen.
+	top.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	_, cmd := top.Update(enter())
 	if cmd == nil {
 		t.Fatalf("enter on the below-table results must advance")
@@ -421,10 +423,10 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	}
 }
 
-// TestCatalogSearchNoMatchStillShowsGroups (PR30): results that do
-// not match the record still group below the table — the user picks
-// manually (no auto-match bypass, no manual grouping checklist), and
-// esc from the results returns to the catalog.
+// TestCatalogSearchNoMatchStillShowsGroups (PR30/PR31): results that
+// do not match the record still render below the table — every result
+// its own checklist row, the user picks manually (no auto-match
+// bypass) — and esc from the results returns to the catalog.
 func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
 		results: map[string][]contracts.SearchResult{
@@ -440,8 +442,8 @@ func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 	model = drainCmds(model)
 
 	v := topOf(model).View().Content
-	if !contains(v, "Найденные источники") || !contains(v, "Совсем Другое Аниме (1 источник)") {
-		t.Fatalf("non-matching results must still group below the table, got:\n%s", v)
+	if !contains(v, "Выберите провайдеры") || !contains(v, "AnimeGO — Совсем Другое Аниме") {
+		t.Fatalf("non-matching results must still render below the table, got:\n%s", v)
 	}
 
 	// Esc from the results view pops back to the catalog list.

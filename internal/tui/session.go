@@ -487,9 +487,9 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 			Value: k,
 		})
 	}
-	title := "Выберите видеопоток:"
+	title := "Выберите источник видео:"
 	if state == sessionStateDubAudio {
-		title = "Выберите аудиопоток:"
+		title = "Выберите источник аудио:"
 	}
 	s.state = state
 	s.dubList = NewPinList(NewMenu(title, "Нет доступных потоков", choices...), defaultListHeight)
@@ -564,7 +564,7 @@ func (s *sessionScreen) buildQualityList() {
 	for _, q := range qualities {
 		choices = append(choices, Choice{ID: q, Label: q + "p", Value: q})
 	}
-	s.qualityList = NewPinList(NewMenu("Выберите качество:", "", choices...), defaultListHeight)
+	s.qualityList = NewPinList(NewMenu("Выберите источник (качество):", "", choices...), defaultListHeight)
 }
 
 // handleQualityKey resolves the quality pick and launches playback.
@@ -1207,7 +1207,7 @@ func (s *sessionScreen) View() tea.View {
 	var body string
 	switch s.state {
 	case sessionStateLoading:
-		body = theme.Title.Render("Сбор ссылок со всех источников…") + "\n\n" +
+		body = theme.Title.Render("Сбор ссылок со всех провайдеров…") + "\n\n" +
 			theme.Dim.Render("ожидание провайдеров")
 	case sessionStateMenu:
 		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.list.Render()

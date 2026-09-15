@@ -142,20 +142,22 @@ func TestSearchFanOutProgress(t *testing.T) {
 		}
 	}
 
-	// PR30: once every row settled, the grouped results appear BELOW
-	// the table automatically — no enter press.
+	// PR31: once every row settled, EVERY result renders as its own
+	// checklist row BELOW the table automatically — no enter press,
+	// no grouping.
 	v = progress.View().Content
-	if !strings.Contains(v, "Найденные источники") {
-		t.Fatalf("settled fan-out must show the grouped results below the table, got:\n%s", v)
+	if !strings.Contains(v, "Выберите провайдеры") {
+		t.Fatalf("settled fan-out must show the provider checklist below the table, got:\n%s", v)
 	}
-	if !strings.Contains(v, "Наруто (2 источника)") {
-		t.Fatalf("the two similar hits must group into one entry, got:\n%s", v)
+	if !strings.Contains(v, "AnimeGO — Наруто") || !strings.Contains(v, "AniLib — Наруто") {
+		t.Fatalf("the two provider hits must stay separate rows, got:\n%s", v)
 	}
 }
 
-// TestSearchProgressAssembly (PR30): after the fan-out completes, the
-// grouped results render BELOW the table automatically — no enter
-// gate — and enter on a group advances to the source pick.
+// TestSearchProgressAssembly (PR30/PR31): after the fan-out completes,
+// every result renders as its own checklist row BELOW the table
+// automatically — no enter gate — and enter with one checked provider
+// enters the session directly.
 func TestSearchProgressAssembly(t *testing.T) {
 	fs := newFakeSearch()
 	fs.results["animego"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
@@ -170,23 +172,32 @@ func TestSearchProgressAssembly(t *testing.T) {
 		t.Fatalf("results must be assembled, got %d", len(progress.results))
 	}
 
-	// Settled: the results appear below the table WITHOUT enter.
+	// Settled: the checklist appears below the table WITHOUT enter.
 	v := progress.View().Content
-	if !strings.Contains(v, "Найденные источники") {
-		t.Fatalf("settled progress must show the results below the table, got:\n%s", v)
+	if !strings.Contains(v, "Выберите провайдеры") {
+		t.Fatalf("settled progress must show the checklist below the table, got:\n%s", v)
+	}
+	if !strings.Contains(v, "AnimeGO — Наруто") {
+		t.Fatalf("the result must render as its own row, got:\n%s", v)
 	}
 
-	// Enter on the group advances to the source pick.
+	// Enter with nothing checked stays put (empty selection is legal).
+	if _, cmd := progress.Update(enter()); cmd != nil {
+		t.Fatalf("enter with no checked provider must be a no-op, got %T", cmd())
+	}
+
+	// Check the row (space), enter: straight into the session.
+	progress.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	_, cmd := progress.Update(enter())
 	if cmd == nil {
-		t.Fatalf("enter on the below-table results must advance")
+		t.Fatalf("enter with one checked provider must advance")
 	}
 	rm, ok := cmd().(replaceMsg)
 	if !ok {
-		t.Fatalf("progress must replace with the source pick, got %T", cmd())
+		t.Fatalf("one checked provider must enter the session, got %T", cmd())
 	}
-	if rm.screen.ID() != searchSourceID {
-		t.Fatalf("progress must advance to the source pick, got %q", rm.screen.ID())
+	if _, ok := rm.screen.(*sessionScreen); !ok {
+		t.Fatalf("one checked provider must enter the session directly, got %q", rm.screen.ID())
 	}
 }
 

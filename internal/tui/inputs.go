@@ -235,16 +235,17 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 	return true
 }
 
-// Render draws the list with ✔ markers on checked items. The title
+// Render draws the list with ● markers on checked items (python
+// questionary.checkbox parity: ○ unchecked, ● checked). The title
 // renders with the PR24 padding (one leading pad + blank line).
 func (c *CheckList) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Title.Render(c.title))
 	b.WriteString("\n\n")
 	for i, item := range c.items {
-		marker := "☐"
+		marker := "○"
 		if c.checked[item.ID] {
-			marker = "✔"
+			marker = "●"
 		}
 		if c.list.Cursor() == i {
 			b.WriteString(theme.Cursor.Render("▸ " + marker + " " + item.Label))

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -52,8 +54,9 @@ func TestRebindProgressRendersProviderTable(t *testing.T) {
 		"Завершено",
 		"Ответившие: 2/3 провайдеров",
 		"Всего результатов: 2",
-		"Найденные источники",
-		"Наруто (2 источника)",
+		"Выберите провайдеры",
+		"AnimeGO — Наруто",
+		"AniLib — Наруто",
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("rebind table missing %q, got:\n%s", want, v)
@@ -76,7 +79,7 @@ func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 		t.Fatalf("enter must be blocked while rows are pending")
 	}
 
-	// Settle the single row with a hit: the grouped results must
+	// Settle the single row with a hit: the provider checklist must
 	// appear below the table WITHOUT any enter press.
 	next, _ := r.Update(providerResultMsg{
 		provider: fs.providers[0],
@@ -84,14 +87,16 @@ func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 	})
 	r = next.(*rebindProgress)
 	v := r.View().Content
-	if !strings.Contains(v, "Найденные источники") {
+	if !strings.Contains(v, "Выберите провайдеры") {
 		t.Fatalf("settled results must appear below the table without enter, got:\n%s", v)
 	}
-	if !strings.Contains(v, "Наруто (1 источник)") {
-		t.Fatalf("the settled group must render with its source count, got:\n%s", v)
+	if !strings.Contains(v, "AnimeGO — Наруто") {
+		t.Fatalf("the settled result must render as its own row, got:\n%s", v)
 	}
 
-	// Enter on the below-table results resumes the session.
+	// Check the row (space), enter: the resumed session replaces the
+	// screen.
+	r.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	_, cmd := r.Update(enter())
 	if cmd == nil {
 		t.Fatalf("enter on the below-table results must advance")

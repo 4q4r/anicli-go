@@ -30,9 +30,10 @@ const (
 // searchTimeout bounds one provider search inside the fan-out.
 const searchTimeout = 30 * time.Second
 
-// NewSearchInput builds the query prompt (python search_and_start's
-// questionary.text port). Empty input and interrupts normalize to
-// Back (I2) and pop the screen.
+// NewSearchInput builds the query prompt. The free-text query goes to
+// the Shikimori autocomplete first (user ruling: search works strictly
+// through the Shikimori list — providers only see canonical titles
+// and their alternatives).
 func NewSearchInput(deps *Deps) *TextPrompt {
 	return NewTextPrompt(TextPromptConfig{
 		ID:          searchInputID,
@@ -44,7 +45,7 @@ func NewSearchInput(deps *Deps) *TextPrompt {
 			if !ok {
 				return pop()
 			}
-			return replace(NewSearchProgress(deps, query))
+			return replace(NewShikiPickScreen(deps, query))
 		},
 	})
 }
@@ -276,6 +277,9 @@ func (m *searchProgress) ID() string { return searchProgressID }
 // Commands own their timeout contexts rather than deriving from the
 // app lifecycle — see the App.ctx divergence note.
 func (m *searchProgress) Init() tea.Cmd {
+	if m.deps != nil && m.deps.Log != nil {
+		m.deps.Log.Info("search: starting", "query", m.query, "providers", len(m.rows), "enrich", shikiEnrichmentActive(m.deps))
+	}
 	if m.deps != nil && shikiEnrichmentActive(m.deps) && len(m.rows) > 0 {
 		m.enriching = true
 		return tea.Batch(m.spin.Tick, safeCmd(searchProgressID, func() tea.Msg {
@@ -327,6 +331,10 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return m, m.startFanOut()
 	case providerResultMsg:
+		if m.deps != nil && m.deps.Log != nil {
+			m.deps.Log.Info("search: provider settled",
+				"provider", msg.provider.ID, "results", len(msg.results), "err", msg.err)
+		}
 		delete(m.pending, msg.provider.ID)
 		switch {
 		case msg.err != nil:

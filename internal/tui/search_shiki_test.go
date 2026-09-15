@@ -80,19 +80,20 @@ func TestShikiPickFlowReachesFanOut(t *testing.T) {
 		}
 	}
 
-	// Enter on the settled table advances to the grouping checklist.
+	// Enter on the settled results below the table advances to the
+	// source pick (PR30: automatic grouping, no checklist).
 	_, advance := topOf(model).Update(enter())
 	if advance == nil {
 		t.Fatalf("enter on the settled fan-out must advance")
 	}
 	switch m := advance().(type) {
 	case pushMsg:
-		if m.screen.ID() != searchGroupID {
-			t.Fatalf("fan-out must advance to grouping, got %q", m.screen.ID())
+		if m.screen.ID() != searchSourceID {
+			t.Fatalf("fan-out must advance to the source pick, got %q", m.screen.ID())
 		}
 	case replaceMsg:
-		if m.screen.ID() != searchGroupID {
-			t.Fatalf("fan-out must advance to grouping, got %q", m.screen.ID())
+		if m.screen.ID() != searchSourceID {
+			t.Fatalf("fan-out must advance to the source pick, got %q", m.screen.ID())
 		}
 	default:
 		t.Fatalf("unexpected advance message %#v", advance())
@@ -184,21 +185,23 @@ func TestShikiPickFlowLogs(t *testing.T) {
 	}
 }
 
-// TestHistoryResumeRendersTableWithShiki: the 📜 Списки resume
-// fan-out (the old searchProgress surface) renders its provider table
-// with Shikimori enrichment active — the production shape.
-func TestHistoryResumeRendersTableWithShiki(t *testing.T) {
+// TestCatalogRebindRendersTableWithShiki (PR30): the 📜 Списки catalog
+// fan-out (rebindProgress) renders its provider table with the
+// Shikimori-shaped deps active — the production shape. The record has
+// no canonical title here, so the fan-out runs on the bare record
+// title.
+func TestCatalogRebindRendersTableWithShiki(t *testing.T) {
 	_, deps := shikiFlowDeps(testLogger())
 	rec := &storage.AnimeProgress{Title: "Наруто", SourceID: "animego", SourceURL: "u1"}
 
 	app := NewApp(NewRootScreen(deps), deps, testLogger())
-	model := drive(app, pushMsg{screen: newHistoryResume(deps, rec)})
+	model := drive(app, pushMsg{screen: newRebindProgress(deps, rec)})
 	model = drainCmds(model)
 
 	v := topOf(model).View().Content
 	for _, want := range []string{"AnimeGO", "AniLib", "Завершено", "Ответившие: 2/2"} {
 		if !strings.Contains(v, want) {
-			t.Errorf("resume table missing %q, got:\n%s", want, v)
+			t.Errorf("catalog fan-out table missing %q, got:\n%s", want, v)
 		}
 	}
 }

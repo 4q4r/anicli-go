@@ -11,14 +11,14 @@ import (
 // until a flow actually calls one).
 func newTestDeps() *Deps { return &Deps{} }
 
-// TestRootMenuContents: the root menu shows the six RU entries from
-// the Python original (including 📂 Скачанное). Root shows NO «Назад»
-// row: «🚪 Выход» takes its place as the pinned BOTTOM row (PR24).
+// TestRootMenuContents: the root menu shows the five RU entries (PR30:
+// free-text search removed — search happens strictly through the
+// catalog «📜 Списки»). Root shows NO «Назад» row: «🚪 Выход» takes its
+// place as the pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
 	for _, want := range []string{
-		"🔎 Поиск",
 		"📜 Списки",
 		"📂 Скачанное",
 		"🗄️ Управление БД",
@@ -29,13 +29,20 @@ func TestRootMenuContents(t *testing.T) {
 			t.Fatalf("root view must contain %q, got:\n%s", want, view)
 		}
 	}
+	if strings.Contains(view, "Поиск") {
+		t.Fatalf("root view must NOT contain the removed free-text search entry, got:\n%s", view)
+	}
 	if strings.Contains(view, BackLabel) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel, view)
 	}
+	// Exactly five entries (PR30: search gone).
+	if items := root.list.Menu().Items; len(items) != 5 {
+		t.Fatalf("root menu must hold 5 items, got %d: %+v", len(items), items)
+	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Выход")
-	searchIdx := strings.LastIndex(view, "🔎 Поиск")
-	if exitIdx < searchIdx {
+	listsIdx := strings.LastIndex(view, "📜 Списки")
+	if exitIdx < listsIdx {
 		t.Fatalf("Выход must render below the other root entries, got:\n%s", view)
 	}
 }
@@ -103,7 +110,6 @@ func TestRootNavigation(t *testing.T) {
 		id   string
 		want string
 	}{
-		{"search", searchInputID},
 		{"lists", historyFilterID},
 		{"downloads", offlineTitlesID},
 		{"db", dbMenuID},

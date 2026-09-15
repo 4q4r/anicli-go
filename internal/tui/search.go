@@ -202,11 +202,14 @@ func bestShikiCandidate(query string, ids map[string]int64) (string, int64) {
 // search_provider_task + generate_search_table port, PR24 hybrid
 // shape): the query first resolves Shikimori variants (when enabled),
 // then one row per provider runs its language-routed variants inside
-// a per-provider timeout budget. Enter advances to the manual
-// grouping checklist once every row settled.
-// In resume mode (resume != nil) enter first tries the record's
-// rehydrate auto-match (I6) and only falls through to manual
-// grouping with a note when no match exists.
+// a per-provider timeout budget.
+//
+// PR30 settled phase: once every row settles, the results group
+// automatically (GroupByTitle, the resume rehydrate matcher) and
+// render as a SELECTABLE list BELOW the table — no "press enter"
+// gate. Enter on a group continues the flow: a resumed record (the
+// catalog «Списки» search) enters the session restored to its saved
+// episode and dubs (I6); a fresh search opens the source pick.
 type searchProgress struct {
 	deps    *Deps
 	query   string
@@ -228,8 +231,15 @@ type searchProgress struct {
 	// the plain flow, "rebind" for the lists binding flow — PR29).
 	logTag string
 	// resume carries the history record being continued (I6); nil in
-	// the plain search flow.
+	// the plain search flow. The catalog rebind flow sets it (PR30)
+	// so a group pick resumes the session.
 	resume *storage.AnimeProgress
+	// resultList renders the grouped results BELOW the table once
+	// every row settled (PR30); nil until then.
+	resultList *PinList
+	// titleOverride replaces the default live header when set (the
+	// catalog flow's «Поиск источника: …», PR30).
+	titleOverride string
 }
 
 // NewSearchProgress builds the fan-out screen and schedules the
@@ -349,41 +359,96 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.status[msg.provider.ID] = "Завершено"
 			m.results = append(m.results, msg.results...)
 		}
-		if len(m.pending) == 0 && m.deps != nil && m.deps.Log != nil {
-			m.deps.Log.Info(m.logTag+": complete",
-				"responded", len(m.responded), "results", len(m.results))
+		if len(m.pending) == 0 {
+			if m.deps != nil && m.deps.Log != nil {
+				m.deps.Log.Info(m.logTag+": complete",
+					"responded", len(m.responded), "results", len(m.results))
+			}
+			// PR30: the settled table grows its results below
+			// automatically — no enter gate between the fan-out and
+			// the grouped list.
+			m.settleResults()
 		}
 		return m, nil
 	case tea.KeyPressMsg:
 		if IsCancelKey(msg) {
 			return m, pop()
 		}
-		if msg.Code != tea.KeyEnter {
-			return m, nil
+		if m.resultList != nil {
+			// Settled (PR30): the below-table results list owns the
+			// keys; a pick continues the flow, Back/esc return to the
+			// caller's list.
+			if m.resultList.HandleKey(msg) {
+				return m, nil
+			}
+			resolved := ResolveKey(m.resultList.Menu(), m.resultList.Cursor(), msg)
+			if resolved == nil {
+				return m, nil
+			}
+			if resolved == Back {
+				return m, pop()
+			}
+			group, ok := resolved.([]contracts.SearchResult)
+			if !ok {
+				return m, nil
+			}
+			if m.resume != nil {
+				// Catalog flow (I6): the pick resumes the session,
+				// restored to the saved episode and dubs.
+				primary := primaryForResume(group, *m.resume)
+				return m, replace(newResumedSession(m.deps, primary, group, *m.resume))
+			}
+			return m, replace(NewSearchSource(m.deps, group))
 		}
 		if len(m.pending) > 0 {
+			// Fan-out still running: nothing to pick yet — the
+			// results appear on their own when the rows settle.
 			return m, nil
-		}
-		if m.resume != nil {
-			// Resume (I6, python history.py _rehydrate_group): a
-			// confident match enters the session directly, restored
-			// to the saved episode and dubs; anything else (including
-			// an empty result set) falls through to manual grouping
-			// with a note.
-			groups := GroupByTitle(m.results, rehydrateGroupThreshold)
-			if matched := RehydrateGroup(groups, *m.resume); matched != nil {
-				primary := primaryForResume(matched, *m.resume)
-				return m, replace(newResumedSession(m.deps, primary, matched, *m.resume))
-			}
-			return m, replace(newSearchGroupNoted(m.deps, m.results,
-				"Автопривязка не найдена — отметьте один тайтл и сгруппируйте вручную"))
 		}
 		if len(m.results) == 0 {
 			return m, pop()
 		}
-		return m, replace(NewSearchGroup(m.deps, m.results))
+		return m, nil
 	default:
 		return m, nil
+	}
+}
+
+// settleResults groups the settled result set and builds the
+// below-table pick list (PR30): the same title matching as the resume
+// rehydrate (GroupByTitle), biggest group first (python parity).
+func (m *searchProgress) settleResults() {
+	if m.resultList != nil || len(m.results) == 0 {
+		return
+	}
+	groups := GroupByTitle(m.results, rehydrateGroupThreshold)
+	sort.SliceStable(groups, func(i, j int) bool { return len(groups[i]) > len(groups[j]) })
+	choices := make([]Choice, 0, len(groups))
+	for i, g := range groups {
+		choices = append(choices, Choice{
+			ID:    "g" + strconv.Itoa(i),
+			Label: BestDisplayTitle(g) + " (" + sourcesPlural(len(g)) + ")",
+			Value: g,
+		})
+	}
+	m.resultList = NewPinList(NewMenu("Найденные источники:", "", choices...), defaultListHeight)
+}
+
+// sourcesPlural renders the RU source-count suffix (1 источник,
+// 2 источника, 5 источников).
+func sourcesPlural(n int) string {
+	abs := n
+	if abs < 0 {
+		abs = -abs
+	}
+	mod10, mod100 := abs%10, abs%100
+	switch {
+	case mod10 == 1 && mod100 != 11:
+		return strconv.Itoa(n) + " источник"
+	case mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14):
+		return strconv.Itoa(n) + " источника"
+	default:
+		return strconv.Itoa(n) + " источников"
 	}
 }
 
@@ -401,10 +466,15 @@ func searchErrText(err error) string {
 const tableWidth = 60
 
 // View implements Screen: the live three-column status table with the
-// centered overall counter (PR24).
+// centered overall counter (PR24); once every row settled, the
+// grouped results render BELOW the table as a selectable list (PR30).
 func (m *searchProgress) View() tea.View {
 	var b strings.Builder
-	b.WriteString(theme.Title.Render(fmt.Sprintf("Поиск аниме (Найдено: %d)", len(m.results))))
+	header := m.titleOverride
+	if header == "" {
+		header = fmt.Sprintf("Поиск аниме (Найдено: %d)", len(m.results))
+	}
+	b.WriteString(theme.Title.Render(header))
 	b.WriteString("\n\n")
 	if m.enriching {
 		b.WriteString(theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
@@ -452,13 +522,25 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString(lipgloss.PlaceHorizontal(tableWidth, lipgloss.Center, theme.StatusLine.Render(counter)))
 		b.WriteString("\n")
 	}
+	if m.resultList != nil {
+		// PR30: settled — the grouped results replace the bare
+		// counter area below the table.
+		b.WriteString("\n")
+		b.WriteString(theme.Title.Render("Найденные источники:"))
+		b.WriteString("\n")
+		b.WriteString(m.resultList.Render())
+	}
 	if len(m.pending) == 0 && len(m.results) == 0 {
 		b.WriteString("\n")
 		b.WriteString(theme.Warning.Render("Ничего не найдено"))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(theme.StatusLine.Render("enter — продолжить · esc — назад"))
+	hint := "esc — назад"
+	if m.resultList != nil {
+		hint = "enter — выбрать · esc — назад"
+	}
+	b.WriteString(theme.StatusLine.Render(hint))
 	return tea.NewView(b.String())
 }
 

@@ -410,8 +410,10 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString(theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "  %-16s %-36s %s\n",
-		theme.Dim.Render("Провайдер"), theme.Dim.Render("Статус"), theme.Dim.Render("Результатов"))
+	fmt.Fprintf(&b, "  %s %s %s\n",
+		padDisplay(theme.Dim.Render("Провайдер"), 16),
+		padDisplay(theme.Dim.Render("Статус"), 36),
+		theme.Dim.Render("Результатов"))
 	for _, row := range m.rows {
 		state := m.status[row.ID]
 		count := "—"
@@ -435,7 +437,8 @@ func (m *searchProgress) View() tea.View {
 			state = "✗ " + state
 			style = theme.Error
 		}
-		fmt.Fprintf(&b, "  %-16s %-36s %s\n", row.Name, style.Render(state), count)
+		fmt.Fprintf(&b, "  %s %s %s\n",
+			padDisplay(row.Name, 16), padDisplay(style.Render(state), 36), padDisplay(count, 4))
 	}
 	if len(m.rows) == 0 {
 		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
@@ -614,4 +617,16 @@ func (s *searchSource) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // list (PR24).
 func (s *searchSource) View() tea.View {
 	return tea.NewView(theme.Title.Render(s.list.Menu().Title) + "\n\n" + s.list.Render())
+}
+
+// padDisplay right-pads s with spaces to the given display width,
+// accounting for ANSI escape codes (zero visual width) and multi-byte
+// Unicode (Cyrillic = 1 column, CJK = 2 columns). This replaces
+// fmt's %-Ns which pads by byte count and misaligns Cyrillic rows.
+func padDisplay(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
 }

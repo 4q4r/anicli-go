@@ -173,7 +173,8 @@ func TestShikiPickFlowLogs(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		`msg="search: shiki pick" query=наруто`,
-		`msg="search: shiki fan-out" title=Наруто`,
+		`msg="fan-out: starting" title=Наруто`,
+		`variants=2`,
 		`providers=2`,
 		`msg="search: provider settled" provider=animego`,
 	} {

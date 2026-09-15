@@ -224,6 +224,9 @@ type searchProgress struct {
 	// enrichment settles); enriching marks the Shikimori phase.
 	variants  []string
 	enriching bool
+	// logTag prefixes this table's lifecycle log lines ("search" for
+	// the plain flow, "rebind" for the lists binding flow — PR29).
+	logTag string
 	// resume carries the history record being continued (I6); nil in
 	// the plain search flow.
 	resume *storage.AnimeProgress
@@ -249,6 +252,7 @@ func NewSearchProgress(deps *Deps, query string) *searchProgress {
 		counts:    make(map[string]int, len(rows)),
 		responded: make(map[string]bool, len(rows)),
 		variants:  []string{query},
+		logTag:    "search",
 	}
 	for _, r := range rows {
 		m.status[r.ID] = "Ожидание…"
@@ -278,7 +282,7 @@ func (m *searchProgress) ID() string { return searchProgressID }
 // app lifecycle — see the App.ctx divergence note.
 func (m *searchProgress) Init() tea.Cmd {
 	if m.deps != nil && m.deps.Log != nil {
-		m.deps.Log.Info("search: starting", "query", m.query, "providers", len(m.rows), "enrich", shikiEnrichmentActive(m.deps))
+		m.deps.Log.Info(m.logTag+": starting", "query", m.query, "providers", len(m.rows), "enrich", shikiEnrichmentActive(m.deps))
 	}
 	if m.deps != nil && shikiEnrichmentActive(m.deps) && len(m.rows) > 0 {
 		m.enriching = true
@@ -332,7 +336,7 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return m, m.startFanOut()
 	case providerResultMsg:
 		if m.deps != nil && m.deps.Log != nil {
-			m.deps.Log.Info("search: provider settled",
+			m.deps.Log.Info(m.logTag+": provider settled",
 				"provider", msg.provider.ID, "results", len(msg.results), "err", msg.err)
 		}
 		delete(m.pending, msg.provider.ID)
@@ -344,6 +348,10 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.counts[msg.provider.ID] = len(msg.results)
 			m.status[msg.provider.ID] = "Завершено"
 			m.results = append(m.results, msg.results...)
+		}
+		if len(m.pending) == 0 && m.deps != nil && m.deps.Log != nil {
+			m.deps.Log.Info(m.logTag+": complete",
+				"responded", len(m.responded), "results", len(m.results))
 		}
 		return m, nil
 	case tea.KeyPressMsg:

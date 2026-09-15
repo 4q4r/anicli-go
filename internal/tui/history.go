@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -214,85 +215,115 @@ func derefStr(p *string, fallback string) string {
 	return fallback
 }
 
-// rebindProgressMsg settles the rebind fan-out.
+// rebindGroupsMsg settles the rebind fan-out.
 type rebindGroupsMsg struct {
 	groups [][]contracts.SearchResult
 }
 
-// newRebindProgress searches, groups by the record title similarity,
-// and lets the user pick the group to bind (python search_and_bind).
+// rebindProgress reuses the searchProgress live table for the lists
+// binding search (PR29): the record's canonical Shikimori title seeds
+// the query variants, the table renders per-provider statuses plus the
+// centered overall counter, and enter — once every row settled —
+// groups the results for the binding pick (python search_and_bind).
 type rebindProgress struct {
-	deps    *Deps
-	rec     *storage.AnimeProgress
-	query   string
-	results []contracts.SearchResult
-	list    *PinList
+	*searchProgress
+	rec  *storage.AnimeProgress
+	list *PinList
 }
 
 func newRebindProgress(deps *Deps, rec *storage.AnimeProgress, query string) *rebindProgress {
-	return &rebindProgress{deps: deps, rec: rec, query: query}
+	sp := NewSearchProgress(deps, query)
+	sp.logTag = "rebind"
+	return &rebindProgress{searchProgress: sp, rec: rec}
 }
 
 // ID implements Screen.
 func (r *rebindProgress) ID() string { return historyRebindID + "-search" }
 
-// Init implements Screen: one safe search command per provider.
-// Commands own their timeout contexts — see the App.ctx note.
+// Init implements Screen: log the start, then enrich the variants from
+// the record's canonical Shikimori title when the record is bound
+// (canonical + metadata aliases — the Shikimori-first flow shape);
+// unbound records fan out on the bare query. Commands own their
+// timeout contexts — see the App.ctx note.
 func (r *rebindProgress) Init() tea.Cmd {
-	providers := r.deps.Search.Providers()
-	cmds := make([]tea.Cmd, 0, len(providers))
-	for _, p := range providers {
-		cmds = append(cmds, safeCmd(r.ID(), func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-			defer cancel()
-			res, err := r.deps.Search.Search(ctx, p.ID, r.query)
-			if err != nil {
-				return providerResultMsg{provider: p, err: err}
-			}
-			return providerResultMsg{provider: p, results: res}
+	if r.deps != nil && r.deps.Log != nil {
+		r.deps.Log.Info("rebind: starting",
+			"query", r.query, "providers", len(r.rows), "record", r.rec.ID)
+	}
+	if canonical := derefStr(r.rec.ShikimoriTitle, ""); canonical != "" {
+		r.enriching = true
+		return tea.Batch(r.spin.Tick, safeCmd(r.ID(), func() tea.Msg {
+			return resolveRebindVariants(r.deps, canonical, r.query)
 		}))
 	}
-	return tea.Batch(cmds...)
+	return r.startFanOut()
 }
 
-// Update implements Screen.
-func (r *rebindProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	switch msg := msg.(type) {
-	case providerResultMsg:
-		if msg.err == nil {
-			r.results = append(r.results, msg.results...)
+// resolveRebindVariants seeds the rebind variant set from the record's
+// canonical title plus its metadata alternative names (PR29): the same
+// shape as resolveSearchVariants with the record playing the Shikimori
+// match. Errors degrade to the bare set — enrichment is a bonus.
+func resolveRebindVariants(deps *Deps, canonical, query string) searchVariantsMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	defer cancel()
+	aliases := []string{canonical}
+	if deps != nil && deps.Metadata != nil {
+		if more, err := deps.Metadata.SearchAlternativeTitles(ctx, canonical); err == nil {
+			aliases = append(aliases, more...)
 		}
-		return r, nil
+	}
+	return searchVariantsMsg{variants: metadata.QueryVariants(query, aliases)}
+}
+
+// Update implements Screen: the table machinery (spinner ticks,
+// variant settling, provider rows) delegates to the embedded
+// searchProgress; enter, the grouped pick and the binding stay
+// rebind-specific.
+func (r *rebindProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	switch m := msg.(type) {
 	case rebindGroupsMsg:
-		r.buildGroupList(msg.groups)
+		r.buildGroupList(m.groups)
 		return r, nil
 	case tea.KeyPressMsg:
-		if IsCancelKey(msg) {
+		if IsCancelKey(m) {
 			return r, pop()
 		}
-		if msg.Code != tea.KeyEnter {
-			return r, nil
-		}
-		if r.list == nil {
-			groups := GroupByTitle(r.results, 0.6)
-			return r, func() tea.Msg { return rebindGroupsMsg{groups: groups} }
-		}
-		resolved := ResolveKey(r.list.Menu(), r.list.Cursor(), msg)
-		if resolved == nil || resolved == Back {
-			return r, pop()
-		}
-		group, ok := resolved.([]contracts.SearchResult)
-		if !ok {
-			return r, nil
-		}
-		if err := r.bind(group); err != nil {
-			return r, func() tea.Msg {
-				return errMsg{screen: r.ID(), err: err}
+		if r.list != nil {
+			if r.list.HandleKey(m) {
+				return r, nil
 			}
+			resolved := ResolveKey(r.list.Menu(), r.list.Cursor(), m)
+			if resolved == nil {
+				return r, nil
+			}
+			if resolved == Back {
+				return r, pop()
+			}
+			group, ok := resolved.([]contracts.SearchResult)
+			if !ok {
+				return r, nil
+			}
+			if err := r.bind(group); err != nil {
+				return r, func() tea.Msg {
+					return errMsg{screen: r.ID(), err: err}
+				}
+			}
+			return r, popToRoot()
 		}
-		return r, popToRoot()
+		if m.Code != tea.KeyEnter {
+			return r, nil
+		}
+		if len(r.pending) > 0 {
+			return r, nil
+		}
+		groups := GroupByTitle(r.results, 0.6)
+		return r, func() tea.Msg { return rebindGroupsMsg{groups: groups} }
 	default:
-		return r, nil
+		next, cmd := r.searchProgress.Update(msg)
+		if next == Screen(r.searchProgress) {
+			return r, cmd
+		}
+		return next, cmd
 	}
 }
 
@@ -327,13 +358,13 @@ func (r *rebindProgress) bind(group []contracts.SearchResult) error {
 	return r.deps.History.BindSource(ctx, r.rec.ID, primary.SourceID, primary.URL)
 }
 
-// View implements Screen.
+// View implements Screen: the live provider table from the embedded
+// searchProgress (PR29) until the grouped pick list takes over.
 func (r *rebindProgress) View() tea.View {
 	if r.list != nil {
 		return tea.NewView(themedList(r.list))
 	}
-	return tea.NewView(theme.Title.Render("Поиск источника: "+r.query) + "\n\n" +
-		theme.Dim.Render("enter — сгруппировать и выбрать · esc — назад"))
+	return r.searchProgress.View()
 }
 
 // newHistoryResume rehydrates the source group and opens the resume

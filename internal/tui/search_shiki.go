@@ -243,7 +243,7 @@ func (s *shikiFanOutScreen) ID() string { return "shiki_fanout" }
 // Init overrides: no Shikimori enrichment needed (already resolved).
 func (s *shikiFanOutScreen) Init() tea.Cmd {
 	if s.deps != nil && s.deps.Log != nil {
-		s.deps.Log.Info("search: shiki fan-out",
+		s.deps.Log.Info("fan-out: starting",
 			"title", s.title, "shikimori_id", s.shikimoriID,
 			"variants", len(s.variants), "providers", len(s.rows))
 	}

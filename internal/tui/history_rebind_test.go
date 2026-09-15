@@ -2,12 +2,10 @@ package tui
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/storage"
@@ -25,10 +23,12 @@ func rebindTestRecord() *storage.AnimeProgress {
 	return &storage.AnimeProgress{ID: 7, Title: "Наруто", NeedsCorrection: true}
 }
 
-// TestRebindProgressRendersProviderTable (PR29): the rebind fan-out
-// screen must render the same live provider table as the plain search
-// flow — header columns, one row per provider, verdicts after
-// settlement and the centered overall counter.
+// TestRebindProgressRendersProviderTable (PR29/PR30): the catalog
+// fan-out screen must render the same live provider table as the
+// plain search flow — header columns, one row per provider, verdicts
+// after settlement and the centered overall counter — and once every
+// row settled, the grouped results appear BELOW the table
+// automatically.
 func TestRebindProgressRendersProviderTable(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
@@ -42,7 +42,7 @@ func TestRebindProgressRendersProviderTable(t *testing.T) {
 
 	deps := hybridDeps(fs, nil, nil, nil)
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
-		pushMsg{screen: newRebindProgress(deps, rebindTestRecord(), "наруто")})
+		pushMsg{screen: newRebindProgress(deps, rebindTestRecord())})
 	model = drainCmds(model)
 	v := topOf(model).View().Content
 
@@ -52,6 +52,8 @@ func TestRebindProgressRendersProviderTable(t *testing.T) {
 		"Завершено",
 		"Ответившие: 2/3 провайдеров",
 		"Всего результатов: 2",
+		"Найденные источники",
+		"Наруто (2 источника)",
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("rebind table missing %q, got:\n%s", want, v)
@@ -59,37 +61,47 @@ func TestRebindProgressRendersProviderTable(t *testing.T) {
 	}
 }
 
-// TestRebindProgressEnterBlockedWhilePending (PR29): enter must not
-// group partial results — the same pending guard as the plain search
-// flow — and once every row settled, enter produces the grouped pick
-// list.
-func TestRebindProgressEnterBlockedWhilePending(t *testing.T) {
+// TestRebindProgressSettlesWithoutEnterGate (PR30): enter is a no-op
+// while rows are pending; once the last row settles, the grouped
+// results render BELOW the table with NO enter press, and enter on
+// the below-table list resumes the session.
+func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = fs.providers[:1]
-	fs.block["animego"] = 400 * time.Millisecond
 	deps := hybridDeps(fs, nil, nil, nil)
-	deps.SearchTimeout = 50 * time.Millisecond
 
-	r := newRebindProgress(deps, rebindTestRecord(), "наруто")
+	r := newRebindProgress(deps, rebindTestRecord())
+	_ = r.Init()
 	if _, cmd := r.Update(enter()); cmd != nil {
 		t.Fatalf("enter must be blocked while rows are pending")
 	}
 
-	// Settle the single row (the blown budget lands as a timeout),
-	// then enter must group.
+	// Settle the single row with a hit: the grouped results must
+	// appear below the table WITHOUT any enter press.
 	next, _ := r.Update(providerResultMsg{
 		provider: fs.providers[0],
-		err:      context.DeadlineExceeded,
+		results:  []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}},
 	})
 	r = next.(*rebindProgress)
+	v := r.View().Content
+	if !strings.Contains(v, "Найденные источники") {
+		t.Fatalf("settled results must appear below the table without enter, got:\n%s", v)
+	}
+	if !strings.Contains(v, "Наруто (1 источник)") {
+		t.Fatalf("the settled group must render with its source count, got:\n%s", v)
+	}
+
+	// Enter on the below-table results resumes the session.
 	_, cmd := r.Update(enter())
 	if cmd == nil {
-		t.Fatalf("enter on the settled rebind table must advance to grouping")
+		t.Fatalf("enter on the below-table results must advance")
 	}
-	r.buildGroupList(GroupByTitle(r.results, 0.6))
-	v := r.View().Content
-	if !strings.Contains(v, "Выберите правильный тайтл") {
-		t.Fatalf("settled rebind must render the grouped pick list, got:\n%s", v)
+	rm, ok := cmd().(replaceMsg)
+	if !ok {
+		t.Fatalf("enter on the results must resume the session, got %T", cmd())
+	}
+	if _, ok := rm.screen.(*sessionScreen); !ok {
+		t.Fatalf("enter on the results must enter a session, got %T", rm.screen)
 	}
 }
 
@@ -104,7 +116,7 @@ func TestRebindProgressLogsLifecycle(t *testing.T) {
 	deps.Log = logger
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
-		pushMsg{screen: newRebindProgress(deps, rebindTestRecord(), "наруто")})
+		pushMsg{screen: newRebindProgress(deps, rebindTestRecord())})
 	_ = drainCmds(model)
 
 	logs := buf.String()
@@ -144,7 +156,7 @@ func TestRebindProgressEnrichesFromRecord(t *testing.T) {
 	rec.ShikimoriTitle = &canonical
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
-		pushMsg{screen: newRebindProgress(deps, rec, "наруто")})
+		pushMsg{screen: newRebindProgress(deps, rec)})
 	model = drainCmds(model)
 	progress := topOf(model).(*rebindProgress)
 

@@ -183,30 +183,34 @@ func TestHistoryListRendering(t *testing.T) {
 	}
 }
 
-// TestHistoryItemActions: selection opens item actions with resume
-// and rebind.
-func TestHistoryItemActions(t *testing.T) {
+// TestHistoryPickStartsFanOut (PR30): picking an anime from the
+// catalog goes DIRECTLY to the provider fan-out — no actions menu, no
+// rebind text prompt: every record already carries its Shikimori
+// binding.
+func TestHistoryPickStartsFanOut(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
 	list.list.Jump(0) // Ванпанчмен
-	next, cmd := list.Update(enter())
+	_, cmd := list.Update(enter())
 	if cmd == nil {
 		t.Fatalf("pick must navigate")
 	}
 	msg := cmd()
 	pm, ok := msg.(pushMsg)
 	if !ok {
-		t.Fatalf("pick must push item actions, got %#v", msg)
+		t.Fatalf("pick must push the fan-out screen, got %#v", msg)
 	}
-	actions := pm.screen
-	if !strings.Contains(actions.View().Content, "Продолжить") {
-		t.Fatalf("item actions must offer resume:\n%s", actions.View().Content)
+	if _, isPrompt := pm.screen.(*TextPrompt); isPrompt {
+		t.Fatalf("pick must not open a rebind text prompt (PR30), got %T", pm.screen)
 	}
-	_ = next
+	if pm.screen.ID() != historyRebindID+"-search" {
+		t.Fatalf("pick must push the catalog fan-out screen, got %q", pm.screen.ID())
+	}
 }
 
-// TestHistoryNeedsCorrection: picking a needs_correction item routes
-// to rebind, not to a session.
+// TestHistoryNeedsCorrection: a needs_correction record ALSO goes
+// straight to the fan-out (PR30) — the catalog search replaces the
+// old rebind prompt for every record alike.
 func TestHistoryNeedsCorrection(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
@@ -217,8 +221,8 @@ func TestHistoryNeedsCorrection(t *testing.T) {
 	if !ok {
 		t.Fatalf("must push a screen, got %#v", msg)
 	}
-	if pm.screen.ID() != historyRebindID {
-		t.Fatalf("needs_correction must route to rebind, got %q", pm.screen.ID())
+	if pm.screen.ID() != historyRebindID+"-search" {
+		t.Fatalf("needs_correction must go straight to the fan-out, got %q", pm.screen.ID())
 	}
 }
 
@@ -344,10 +348,13 @@ func TestDBMenuConfirmFlow(t *testing.T) {
 	})
 }
 
-// TestHistoryResumeAutoEntersSession (I6): resume with matching
-// results skips manual grouping and enters the session restored to
-// the saved episode and dubs, carrying the shikimori binding.
-func TestHistoryResumeAutoEntersSession(t *testing.T) {
+// TestCatalogSearchAutoShowsResultsAndEntersSession (PR30): the
+// catalog fan-out renders the live provider table; once every row
+// settles, the grouped results appear BELOW the table AUTOMATICALLY
+// (no "press enter" gate); enter on a group enters the resumed
+// session (I6) restored to the saved episode and dubs, carrying the
+// shikimori binding.
+func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Ванпанчмен", URL: "u1", SourceID: "animego"}},
@@ -366,21 +373,35 @@ func TestHistoryResumeAutoEntersSession(t *testing.T) {
 	rec.AudioDub = ptrTo("[animego] Дубль 1")
 
 	app := NewApp(NewRootScreen(deps), deps, testLogger())
-	model := drive(app, pushMsg{screen: newHistoryResume(deps, &rec)})
+	model := drive(app, pushMsg{screen: newRebindProgress(deps, &rec)})
+	model = drainCmds(model)
 
-	// Enter on the settled fan-out: auto-match replaces the screen
-	// with the resumed session.
+	// Settled WITHOUT any enter press: the grouped results sit below
+	// the table.
 	top := topOf(model)
+	v := top.View().Content
+	for _, want := range []string{
+		"Поиск источника: Ванпанчмен",
+		"Завершено",
+		"Найденные источники",
+		"Ванпанчмен (1 источник)",
+	} {
+		if !contains(v, want) {
+			t.Fatalf("settled catalog view missing %q, got:\n%s", want, v)
+		}
+	}
+
+	// Enter on the group replaces the screen with the resumed session.
 	_, cmd := top.Update(enter())
 	if cmd == nil {
-		t.Fatalf("enter on settled resume must advance")
+		t.Fatalf("enter on the below-table results must advance")
 	}
 	rm, ok := cmd().(replaceMsg)
 	if !ok {
-		t.Fatalf("resume must replace with the session, got %T", cmd())
+		t.Fatalf("catalog pick must replace with the session, got %T", cmd())
 	}
 	if _, ok := rm.screen.(*sessionScreen); !ok {
-		t.Fatalf("resume must enter a session, got %T", rm.screen)
+		t.Fatalf("catalog pick must enter a session, got %T", rm.screen)
 	}
 
 	// Drive the session's own Init (episode fan-out) through the app.
@@ -400,10 +421,11 @@ func TestHistoryResumeAutoEntersSession(t *testing.T) {
 	}
 }
 
-// TestHistoryResumeNoMatchFallsToManualGrouping (I6): without a
-// confident match, resume falls through to the manual grouping screen
-// with a note.
-func TestHistoryResumeNoMatchFallsToManualGrouping(t *testing.T) {
+// TestCatalogSearchNoMatchStillShowsGroups (PR30): results that do
+// not match the record still group below the table — the user picks
+// manually (no auto-match bypass, no manual grouping checklist), and
+// esc from the results returns to the catalog.
+func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
 		results: map[string][]contracts.SearchResult{
 			"animego": {{Title: "Совсем Другое Аниме", URL: "u9", SourceID: "animego"}},
@@ -414,23 +436,21 @@ func TestHistoryResumeNoMatchFallsToManualGrouping(t *testing.T) {
 	rec.SourceURL = "u-changed"
 
 	app := NewApp(NewRootScreen(deps), deps, testLogger())
-	model := drive(app, pushMsg{screen: newHistoryResume(deps, &rec)})
+	model := drive(app, pushMsg{screen: newRebindProgress(deps, &rec)})
+	model = drainCmds(model)
 
-	top := topOf(model)
-	_, cmd := top.Update(enter())
+	v := topOf(model).View().Content
+	if !contains(v, "Найденные источники") || !contains(v, "Совсем Другое Аниме (1 источник)") {
+		t.Fatalf("non-matching results must still group below the table, got:\n%s", v)
+	}
+
+	// Esc from the results view pops back to the catalog list.
+	_, cmd := topOf(model).Update(esc())
 	if cmd == nil {
-		t.Fatalf("enter on settled resume must advance")
+		t.Fatalf("esc from the results must pop")
 	}
-	rm, ok := cmd().(replaceMsg)
-	if !ok {
-		t.Fatalf("no-match resume must fall through to grouping, got %T", cmd())
-	}
-	group, ok := rm.screen.(*searchGroup)
-	if !ok {
-		t.Fatalf("expected the manual grouping screen, got %T", rm.screen)
-	}
-	if !contains(group.View().Content, "сгруппируйте вручную") {
-		t.Fatalf("fall-through must carry a note:\n%s", group.View().Content)
+	if _, ok := cmd().(popMsg); !ok {
+		t.Fatalf("esc from the results must pop, got %#v", cmd())
 	}
 }
 

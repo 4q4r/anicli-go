@@ -15,11 +15,9 @@ import (
 
 // History flow screen ids.
 const (
-	historyFilterID  = "history-filter"
-	historyListID    = "history-list"
-	historyActionsID = "history-actions"
-	historyRebindID  = "history-rebind"
-	historyResumeID  = "history-resume"
+	historyFilterID = "history-filter"
+	historyListID   = "history-list"
+	historyRebindID = "history-rebind"
 )
 
 // historyStatusChoices pairs storage status keys with RU labels plus
@@ -149,10 +147,10 @@ func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *Men
 			if !ok {
 				return pop()
 			}
-			if rec.NeedsCorrection {
-				return push(newHistoryRebind(deps, rec))
-			}
-			return push(newHistoryActions(deps, rec))
+			// PR30: every record already carries its Shikimori
+			// binding — the pick goes straight to the provider
+			// fan-out, no actions menu and no rebind prompt.
+			return push(newRebindProgress(deps, rec))
 		},
 	})
 }
@@ -163,50 +161,6 @@ func NewHistoryList(deps *Deps, status string, filtered []storage.AnimeProgress)
 	return newHistoryList(deps, status, filtered)
 }
 
-// newHistoryActions offers resume / rebind on one record.
-func newHistoryActions(deps *Deps, rec *storage.AnimeProgress) *MenuScreen {
-	return NewMenuScreen(MenuScreenConfig{
-		ID:    historyActionsID,
-		Title: rec.Title + " — действия",
-		Choices: []Choice{
-			{ID: "resume", Label: "▶ Продолжить просмотр"},
-			{ID: "rebind", Label: "🔗 Перепривязать источник"},
-		},
-		Status: "Эпизод: " + rec.CurrentEpisode,
-		OnPick: func(pick any) tea.Cmd {
-			if pick == Back {
-				return pop()
-			}
-			switch pick {
-			case "resume":
-				return push(newHistoryResume(deps, rec))
-			case "rebind":
-				return push(newHistoryRebind(deps, rec))
-			default:
-				return nil
-			}
-		},
-	})
-}
-
-// newHistoryRebind runs the binding search flow for a
-// needs-correction or rebind-requested record.
-func newHistoryRebind(deps *Deps, rec *storage.AnimeProgress) *TextPrompt {
-	return NewTextPrompt(TextPromptConfig{
-		ID:          historyRebindID,
-		Title:       "🔎 Поиск источника:",
-		Initial:     derefStr(rec.BoundTitle, rec.Title),
-		Placeholder: "название аниме…",
-		OnSubmit: func(resolved any) tea.Cmd {
-			query, ok := resolved.(string)
-			if !ok {
-				return pop()
-			}
-			return replace(newRebindProgress(deps, rec, query))
-		},
-	})
-}
-
 // derefStr falls back when the pointer is nil.
 func derefStr(p *string, fallback string) string {
 	if p != nil && *p != "" {
@@ -215,25 +169,27 @@ func derefStr(p *string, fallback string) string {
 	return fallback
 }
 
-// rebindGroupsMsg settles the rebind fan-out.
-type rebindGroupsMsg struct {
-	groups [][]contracts.SearchResult
-}
-
-// rebindProgress reuses the searchProgress live table for the lists
-// binding search (PR29): the record's canonical Shikimori title seeds
-// the query variants, the table renders per-provider statuses plus the
-// centered overall counter, and enter — once every row settled —
-// groups the results for the binding pick (python search_and_bind).
+// rebindProgress is the CATALOG search screen (PR30): picking an
+// anime from «Списки» lands here directly — the record is already
+// bound to Shikimori, so there is no rebind prompt and no «Привязать?»
+// confirmation. The record's canonical Shikimori title (Title as
+// fallback) seeds the query variants plus the metadata alternative
+// names; the embedded searchProgress renders the live provider table
+// and, once every row settled, the grouped results BELOW the table.
+// A pick resumes the session (I6) — see searchProgress.Update.
 type rebindProgress struct {
 	*searchProgress
-	rec  *storage.AnimeProgress
-	list *PinList
+	rec *storage.AnimeProgress
 }
 
-func newRebindProgress(deps *Deps, rec *storage.AnimeProgress, query string) *rebindProgress {
+func newRebindProgress(deps *Deps, rec *storage.AnimeProgress) *rebindProgress {
+	query := derefStr(rec.ShikimoriTitle, rec.Title)
 	sp := NewSearchProgress(deps, query)
 	sp.logTag = "rebind"
+	sp.titleOverride = "Поиск источника: " + query
+	// The record rides along as the resume payload: a group pick
+	// enters the session restored to the saved episode and dubs.
+	sp.resume = rec
 	return &rebindProgress{searchProgress: sp, rec: rec}
 }
 
@@ -243,8 +199,8 @@ func (r *rebindProgress) ID() string { return historyRebindID + "-search" }
 // Init implements Screen: log the start, then enrich the variants from
 // the record's canonical Shikimori title when the record is bound
 // (canonical + metadata aliases — the Shikimori-first flow shape);
-// unbound records fan out on the bare query. Commands own their
-// timeout contexts — see the App.ctx note.
+// unbound records fan out on the bare query (the record title).
+// Commands own their timeout contexts — see the App.ctx note.
 func (r *rebindProgress) Init() tea.Cmd {
 	if r.deps != nil && r.deps.Log != nil {
 		r.deps.Log.Info("rebind: starting",
@@ -275,107 +231,17 @@ func resolveRebindVariants(deps *Deps, canonical, query string) searchVariantsMs
 	return searchVariantsMsg{variants: metadata.QueryVariants(query, aliases)}
 }
 
-// Update implements Screen: the table machinery (spinner ticks,
-// variant settling, provider rows) delegates to the embedded
-// searchProgress; enter, the grouped pick and the binding stay
-// rebind-specific.
+// Update implements Screen: the whole surface — spinner ticks,
+// variant settling, provider rows, the settled below-table results and
+// the group pick — lives on the embedded searchProgress; this
+// override only keeps the wrapper identity on the stack (the
+// shikiFanOutScreen pattern).
 func (r *rebindProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	switch m := msg.(type) {
-	case rebindGroupsMsg:
-		r.buildGroupList(m.groups)
-		return r, nil
-	case tea.KeyPressMsg:
-		if IsCancelKey(m) {
-			return r, pop()
-		}
-		if r.list != nil {
-			if r.list.HandleKey(m) {
-				return r, nil
-			}
-			resolved := ResolveKey(r.list.Menu(), r.list.Cursor(), m)
-			if resolved == nil {
-				return r, nil
-			}
-			if resolved == Back {
-				return r, pop()
-			}
-			group, ok := resolved.([]contracts.SearchResult)
-			if !ok {
-				return r, nil
-			}
-			if err := r.bind(group); err != nil {
-				return r, func() tea.Msg {
-					return errMsg{screen: r.ID(), err: err}
-				}
-			}
-			return r, popToRoot()
-		}
-		if m.Code != tea.KeyEnter {
-			return r, nil
-		}
-		if len(r.pending) > 0 {
-			return r, nil
-		}
-		groups := GroupByTitle(r.results, 0.6)
-		return r, func() tea.Msg { return rebindGroupsMsg{groups: groups} }
-	default:
-		next, cmd := r.searchProgress.Update(msg)
-		if next == Screen(r.searchProgress) {
-			return r, cmd
-		}
-		return next, cmd
+	next, cmd := r.searchProgress.Update(msg)
+	if next == Screen(r.searchProgress) {
+		return r, cmd
 	}
-}
-
-// buildGroupList renders the grouped candidates.
-func (r *rebindProgress) buildGroupList(groups [][]contracts.SearchResult) {
-	choices := make([]Choice, 0, len(groups))
-	for i, g := range groups {
-		sources := make([]string, 0, len(g))
-		for _, res := range g {
-			sources = append(sources, res.SourceID)
-		}
-		choices = append(choices, Choice{
-			ID:    "g" + strconv.Itoa(i),
-			Label: BestDisplayTitle(g) + " (" + strconv.Itoa(len(sources)) + " ист.) [" + strings.Join(dedupe(sources), ", ") + "]",
-			Value: g,
-		})
-	}
-	r.list = NewPinList(NewMenu("Выберите правильный тайтл для привязки:", "Ничего не найдено", choices...), defaultListHeight)
-}
-
-// bind persists the chosen binding (python record patch).
-func (r *rebindProgress) bind(group []contracts.SearchResult) error {
-	if len(group) == 0 {
-		return nil
-	}
-	primary := group[0]
-	if r.deps == nil || r.deps.History == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
-	defer cancel()
-	return r.deps.History.BindSource(ctx, r.rec.ID, primary.SourceID, primary.URL)
-}
-
-// View implements Screen: the live provider table from the embedded
-// searchProgress (PR29) until the grouped pick list takes over.
-func (r *rebindProgress) View() tea.View {
-	if r.list != nil {
-		return tea.NewView(themedList(r.list))
-	}
-	return r.searchProgress.View()
-}
-
-// newHistoryResume rehydrates the source group and opens the resume
-// fan-out (python _rehydrate_group): the standard search progress
-// surface driven by the record's bound title, with the record
-// attached so a confident auto-match enters the session directly
-// (I6).
-func newHistoryResume(deps *Deps, rec *storage.AnimeProgress) *searchProgress {
-	m := NewSearchProgress(deps, derefStr(rec.BoundTitle, rec.Title))
-	m.resume = rec
-	return m
+	return next, cmd
 }
 
 // RehydrateGroup applies the two-strategy match over similarity
@@ -418,18 +284,4 @@ func GroupByTitle(results []contracts.SearchResult, threshold float64) [][]contr
 		}
 	}
 	return groups
-}
-
-// dedupe removes duplicate strings preserving order.
-func dedupe(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if _, dup := seen[s]; dup {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
 }

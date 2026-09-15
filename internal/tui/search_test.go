@@ -141,10 +141,21 @@ func TestSearchFanOutProgress(t *testing.T) {
 			t.Fatalf("provider %s must see the query first, got %q", id, got)
 		}
 	}
+
+	// PR30: once every row settled, the grouped results appear BELOW
+	// the table automatically — no enter press.
+	v = progress.View().Content
+	if !strings.Contains(v, "Найденные источники") {
+		t.Fatalf("settled fan-out must show the grouped results below the table, got:\n%s", v)
+	}
+	if !strings.Contains(v, "Наруто (2 источника)") {
+		t.Fatalf("the two similar hits must group into one entry, got:\n%s", v)
+	}
 }
 
-// TestSearchProgressAssembly: after the fan-out completes, the screen
-// assembles the flat result set and moves to the grouping checklist.
+// TestSearchProgressAssembly (PR30): after the fan-out completes, the
+// grouped results render BELOW the table automatically — no enter
+// gate — and enter on a group advances to the source pick.
 func TestSearchProgressAssembly(t *testing.T) {
 	fs := newFakeSearch()
 	fs.results["animego"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
@@ -159,22 +170,23 @@ func TestSearchProgressAssembly(t *testing.T) {
 		t.Fatalf("results must be assembled, got %d", len(progress.results))
 	}
 
-	// When all providers settle, the screen offers continuation.
+	// Settled: the results appear below the table WITHOUT enter.
+	v := progress.View().Content
+	if !strings.Contains(v, "Найденные источники") {
+		t.Fatalf("settled progress must show the results below the table, got:\n%s", v)
+	}
+
+	// Enter on the group advances to the source pick.
 	_, cmd := progress.Update(enter())
 	if cmd == nil {
-		t.Fatalf("enter on settled progress must advance")
+		t.Fatalf("enter on the below-table results must advance")
 	}
-	msg := cmd()
-	if pm, ok := msg.(pushMsg); ok {
-		if pm.screen.ID() != searchGroupID {
-			t.Fatalf("progress must push the grouping screen, got %q", pm.screen.ID())
-		}
-	} else if rm, ok := msg.(replaceMsg); ok {
-		if rm.screen.ID() != searchGroupID {
-			t.Fatalf("progress must replace with grouping screen, got %q", rm.screen.ID())
-		}
-	} else {
-		t.Fatalf("unexpected advance message %#v", msg)
+	rm, ok := cmd().(replaceMsg)
+	if !ok {
+		t.Fatalf("progress must replace with the source pick, got %T", cmd())
+	}
+	if rm.screen.ID() != searchSourceID {
+		t.Fatalf("progress must advance to the source pick, got %q", rm.screen.ID())
 	}
 }
 

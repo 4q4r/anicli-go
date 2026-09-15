@@ -146,10 +146,11 @@ func (m *MenuScreen) View() tea.View {
 	return tea.NewView(string(b))
 }
 
-// Root screen ids and labels (RU vocabulary from the Python menu).
+// Root screen ids and labels (RU vocabulary from the Python menu;
+// PR30: no free-text search entry — search happens strictly through
+// the catalog «📜 Списки»).
 const (
 	rootScreenID     = "root"
-	rootSearchLabel  = "🔎 Поиск"
 	rootListsLabel   = "📜 Списки"
 	rootOfflineLabel = "📂 Скачанное"
 	rootDBLabel      = "🗄️ Управление БД"
@@ -158,7 +159,7 @@ const (
 	rootBackHint     = "enter — выбрать · ctrl+c — выход"
 )
 
-// NewRootScreen builds the root menu: six entries with «🚪 Выход» as
+// NewRootScreen builds the root menu: five entries with «🚪 Выход» as
 // the pinned BOTTOM row and NO «Назад» entry (there is nothing above
 // root to go back to, PR24); only here does Ctrl-C exit the app (I2
 // exception).
@@ -169,7 +170,6 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 		Root:    true,
 		Notices: deps.StartupNotices,
 		Choices: []Choice{
-			{ID: "search", Label: rootSearchLabel},
 			{ID: "lists", Label: rootListsLabel},
 			{ID: "downloads", Label: rootOfflineLabel},
 			{ID: "db", Label: rootDBLabel},
@@ -183,8 +183,6 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 				// Esc at root normalizes to Back, which at root means
 				// "stay" (I2: never an app exit).
 				return nil
-			case "search":
-				return push(NewSearchInput(deps))
 			case "lists":
 				return push(NewHistoryFilter(deps))
 			case "downloads":

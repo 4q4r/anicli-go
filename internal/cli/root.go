@@ -165,6 +165,9 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	wireShikiSetup(real.Deps, *settings, settingsPath)
 	// PR27: the startup two-way list sync seam.
 	wireStartupSync(real.Deps, settingsPath, real.ShikiNet, store.Progress, tuiLog.Logger)
+	// PR28: the search flow logs through Deps.Log (search start/settle
+	// lines); without this wire every search was silent in the log.
+	real.Deps.Log = tuiLog.Logger
 	real.Deps.StartupNotices = notices
 
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)

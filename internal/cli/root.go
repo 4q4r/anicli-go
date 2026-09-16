@@ -180,7 +180,9 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 // would corrupt the alt-screen rendering).
 func newTUILogger() *tuiLogger {
 	path := os.TempDir() + "/anicli-tui.log"
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// G304: the path is os.TempDir() plus a fixed file name — no
+	// user-controlled component, inclusion is impossible.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // fixed temp-dir log path
 	if err != nil {
 		// Degrade to discard — never stderr inside the TUI.
 		return &tuiLogger{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
@@ -235,9 +237,16 @@ func wireShikiSetup(deps *tui.Deps, settings config.Settings, settingsPath strin
 			return "", nil, fmt.Errorf("shikimori oauth: локальный redirect-сервер: %w", err)
 		}
 		redirectURI := "http://" + ln.Addr().String() + "/callback"
-		authURL := shikimori.AuthorizeURL(clientID, redirectURI)
+		// PR32: per-run state binds the callback to this authorize URL
+		// (RFC 6749 §10.12); the callback server rejects mismatches.
+		state, err := shikimori.NewOAuthState()
+		if err != nil {
+			_ = ln.Close()
+			return "", nil, fmt.Errorf("shikimori oauth: %w", err)
+		}
+		authURL := shikimori.AuthorizeURL(clientID, redirectURI, state)
 
-		srv, codeCh, errCh := startShikiCallbackServer(ln)
+		srv, codeCh, errCh := startShikiCallbackServer(ln, state)
 		// Best-effort browser open: the TUI renders the URL too.
 		_ = shikiOpenBrowser(authURL)
 

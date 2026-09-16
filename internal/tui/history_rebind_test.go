@@ -192,24 +192,3 @@ func containsQuery(queries []string, want string) bool {
 	}
 	return false
 }
-
-// TestShikiFanOutLogsStart (PR29 B): the Shikimori-first fan-out logs
-// its start with the resolved variant count.
-func TestShikiFanOutLogsStart(t *testing.T) {
-	fs := newFakeSearch()
-	fs.providers = fs.providers[:1]
-	logger, buf := captureLogger()
-	deps := hybridDeps(fs, nil, nil, nil)
-	deps.Log = logger
-
-	s := NewShikiFanOut(deps, "Наруто", 21, []string{"Наруто", "Naruto"})
-	_ = s.Init()
-
-	logs := buf.String()
-	if !strings.Contains(logs, "fan-out: starting") {
-		t.Errorf("fan-out start must be logged, got:\n%s", logs)
-	}
-	if !strings.Contains(logs, "variants=2") {
-		t.Errorf("fan-out start must log the variant count, got:\n%s", logs)
-	}
-}

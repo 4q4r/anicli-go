@@ -130,10 +130,13 @@ func newShikimoriStatusCommand() *cobra.Command {
 }
 
 // startShikiCallbackServer serves the loopback redirect target on ln:
-// /callback?code=… publishes the code, /callback?error=… publishes the
-// failure, everything else gets the hint page. Channels are buffered so
-// the handler never blocks on the consumer.
-func startShikiCallbackServer(ln net.Listener) (*http.Server, <-chan string, <-chan error) {
+// /callback?code=…&state=… publishes the code once the state matches
+// wantState in constant time (RFC 6749 §10.12 — a forged or missing
+// state is rejected as a typed failure and never publishes the code),
+// /callback?error=… publishes the failure, everything else gets the
+// hint page. Channels are buffered so the handler never blocks on the
+// consumer.
+func startShikiCallbackServer(ln net.Listener, wantState string) (*http.Server, <-chan string, <-chan error) {
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
@@ -153,6 +156,14 @@ func startShikiCallbackServer(ln net.Listener) (*http.Server, <-chan string, <-c
 		code := q.Get("code")
 		if code == "" {
 			http.Error(w, "missing code", http.StatusBadRequest)
+			return
+		}
+		if err := shikimori.VerifyOAuthState(wantState, q.Get("state")); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
+			http.Error(w, "state mismatch", http.StatusBadRequest)
 			return
 		}
 		select {
@@ -204,7 +215,14 @@ func runShikimoriAuth(ctx context.Context, out io.Writer, settingsPath, flagClie
 		return fmt.Errorf("shikimori auth: локальный redirect-сервер: %w", err)
 	}
 	redirectURI := "http://" + ln.Addr().String() + "/callback"
-	authURL := shikimori.AuthorizeURL(clientID, redirectURI)
+	// PR32: a fresh unguessable state binds this run's callback to its
+	// authorize URL (login-CSRF / code-injection defense, RFC 6749
+	// §10.12); the callback server rejects any mismatch.
+	state, err := shikimori.NewOAuthState()
+	if err != nil {
+		return fmt.Errorf("shikimori auth: %w", err)
+	}
+	authURL := shikimori.AuthorizeURL(clientID, redirectURI, state)
 
 	_, _ = fmt.Fprintln(out, "Авторизация Shikimori (OAuth2)")
 	_, _ = fmt.Fprintln(out, "Откройте в браузере и разрешите доступ:")
@@ -212,7 +230,7 @@ func runShikimoriAuth(ctx context.Context, out io.Writer, settingsPath, flagClie
 	_, _ = fmt.Fprintln(out, authURL)
 	_, _ = fmt.Fprintln(out)
 
-	srv, codeCh, errCh := startShikiCallbackServer(ln)
+	srv, codeCh, errCh := startShikiCallbackServer(ln, state)
 	defer func() { _ = srv.Close() }()
 	if err := shikiOpenBrowser(authURL); err != nil {
 		_, _ = fmt.Fprintln(out, "(браузер не открылся автоматически — откройте ссылку вручную)")

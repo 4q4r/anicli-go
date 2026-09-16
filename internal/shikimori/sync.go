@@ -124,19 +124,6 @@ type SyncResult struct {
 	Conflicts int
 }
 
-// SyncFull is the startup two-way list sync (PR27), ported from
-// anicli-py anicli/cli/shikimori_sync.py:30-102 plus the deferred
-// dirty-flag replay: pull remote rates into bound local rows, create
-// shikimori-sourced placeholders for remote-only anime (metadata in
-// 50-id chunks via GetAnimesInfo), then replay every dirty row.
-//
-// Verdicts:
-//   - integration disabled or empty remote list -> zeroed result, nil;
-//   - rates fetch failure -> zeroed result + error (the sync screen
-//     renders its warning from it);
-//   - a failed dirty replay keeps the row dirty for the next startup
-//     and surfaces as the returned error alongside the partial result.
-//
 // SyncProgress reports the live state of a running sync (rendered on
 // the SyncScreen spinner line).
 type SyncProgress struct {
@@ -146,9 +133,21 @@ type SyncProgress struct {
 	Total   int
 }
 
-// SyncFull runs the two-way startup sync. progress (may be nil) is
-// invoked on every phase transition and periodically within phases so
-// the caller can render a live status line.
+// SyncFull runs the two-way startup sync (PR27), ported from
+// anicli-py anicli/cli/shikimori_sync.py:30-102 plus the deferred
+// dirty-flag replay: pull remote rates into bound local rows, create
+// shikimori-sourced placeholders for remote-only anime (metadata in
+// 50-id chunks via GetAnimesInfo), then replay every dirty row.
+// progress (may be nil) is invoked on every phase transition and
+// periodically within phases so the caller can render a live status
+// line.
+//
+// Verdicts:
+//   - integration disabled or empty remote list -> zeroed result, nil;
+//   - rates fetch failure -> zeroed result + error (the sync screen
+//     renders its warning from it);
+//   - a failed dirty replay keeps the row dirty for the next startup
+//     and surfaces as the returned error alongside the partial result.
 func (s *Syncer) SyncFull(ctx context.Context, progress func(SyncProgress)) (*SyncResult, error) {
 	report := func(p SyncProgress) {
 		if progress != nil {

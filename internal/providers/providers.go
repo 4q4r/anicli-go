@@ -50,9 +50,8 @@ func (b Base) BaseURL() string { return b.baseURL }
 func (b Base) SourceType() contracts.SourceType { return b.sourceType }
 
 // ContentLanguage returns the provider's primary content language tag
-// ("ru", "ja", …); "" when undeclared. Every dub the service emits is
-// tagged with it (see contracts.DubOption.Language). Providers that
-// differentiate sub and dub tracks (allanime) tag those individually.
+// ("ru", "ja", …); "" when undeclared. The [RU]/[JA] dub tags in the
+// TUI derive from it via dubLangTag — not from a per-dub field.
 func (b Base) ContentLanguage() string { return b.contentLang }
 
 // pythonStr ports Python's str() over a JSON number field: the wire

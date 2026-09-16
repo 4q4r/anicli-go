@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
 // TestStartupNotices: the PR24 startup warning lines — one per
@@ -229,6 +231,44 @@ func runDoctorWithConfig(t *testing.T, out *bytes.Buffer, mutate func(cfg *confi
 	cfg.Network.ProxyURL = ""
 	mutate(&cfg)
 	return runDoctor(context.Background(), writeSettings(t, cfg), out)
+}
+
+// TestDoctorShikimoriReadsSettingsFileLikeTUI pins the PR32 audit
+// invariant: the doctor's Shikimori verdict must derive from the
+// settings FILE loaded exactly the way the TUI's startup sync loads it
+// (config.Load over the actual settings path) — a session cookie
+// persisted by the TUI first-run setup flips the doctor off "публичный
+// режим". Mode detection is config-only (nil transport), so this stays
+// offline.
+func TestDoctorShikimoriReadsSettingsFileLikeTUI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.toml")
+	if err := os.WriteFile(path, []byte("[shikimori]\nenabled = true\nsession = \"kawai-cookie\"\n"), 0o600); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+
+	// The doctor's own loader (runDoctor -> loadSettingsOrFail)…
+	settings, err := loadSettingsOrFail(path)
+	if err != nil {
+		t.Fatalf("loadSettingsOrFail: %v", err)
+	}
+	// …feeds the same mode detection probeShikimoriStatus applies
+	// (shikimori.New with a nil transport answers config diagnostics).
+	if got := shikimori.New(settings.Shikimori, nil, nil).Mode(); got != "cookie" {
+		t.Fatalf("doctor shikimori mode = %q, want \"cookie\" — the file session must be seen", got)
+	}
+
+	// And the doctor-table row renders the cookie verdict, never the
+	// public one.
+	status, failed := shikiDoctorRow(shikiStatusReport{
+		Mode: shikimori.New(settings.Shikimori, nil, nil).Mode(),
+	})
+	if status == "OK: публичный режим (без учётных данных)" {
+		t.Fatalf("cookie mode must not render as публичный режим, got %q", status)
+	}
+	if failed {
+		t.Fatalf("a detected cookie is not a doctor failure: %q", status)
+	}
 }
 
 // writeSettings persists cfg to a temp TOML file via the config

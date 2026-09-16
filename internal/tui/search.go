@@ -21,7 +21,6 @@ import (
 
 // Search flow screen ids.
 const (
-	searchInputID    = "search-input"
 	searchProgressID = "search-progress"
 	searchGroupID    = "search-group"
 	searchSourceID   = "search-source"
@@ -29,26 +28,6 @@ const (
 
 // searchTimeout bounds one provider search inside the fan-out.
 const searchTimeout = 30 * time.Second
-
-// NewSearchInput builds the query prompt. The free-text query goes to
-// the Shikimori autocomplete first (user ruling: search works strictly
-// through the Shikimori list — providers only see canonical titles
-// and their alternatives).
-func NewSearchInput(deps *Deps) *TextPrompt {
-	return NewTextPrompt(TextPromptConfig{
-		ID:          searchInputID,
-		Title:       "🔎 Поиск:",
-		Placeholder: "название аниме…",
-		Status:      "enter — искать · esc — назад",
-		OnSubmit: func(resolved any) tea.Cmd {
-			query, ok := resolved.(string)
-			if !ok {
-				return pop()
-			}
-			return replace(NewShikiPickScreen(deps, query))
-		},
-	})
-}
 
 // providerResultMsg settles one provider's fan-out row.
 type providerResultMsg struct {

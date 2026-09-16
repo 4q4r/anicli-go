@@ -63,11 +63,12 @@ func tokenEndpoint(t *testing.T, mu *sync.Mutex, forms *[]url.Values) http.Handl
 }
 
 // TestAuthorizeURL pins the authorization-code URL contract: correct
-// endpoint and the exact query set including the user_rates scope (PR25 D).
+// endpoint and the exact query set including the user_rates scope (PR25 D)
+// and the CSRF state parameter (RFC 6749 §10.12, PR32).
 func TestAuthorizeURL(t *testing.T) {
 	t.Parallel()
 
-	got := AuthorizeURL("cid", "http://127.0.0.1:8931/callback")
+	got := AuthorizeURL("cid", "http://127.0.0.1:8931/callback", "st-123")
 	u, err := url.Parse(got)
 	if err != nil {
 		t.Fatalf("parse %q: %v", got, err)
@@ -81,10 +82,58 @@ func TestAuthorizeURL(t *testing.T) {
 		"redirect_uri":  "http://127.0.0.1:8931/callback",
 		"response_type": "code",
 		"scope":         "user_rates",
+		"state":         "st-123",
 	} {
 		if got := q.Get(k); got != want {
 			t.Errorf("query %s = %q, want %q", k, got, want)
 		}
+	}
+}
+
+// TestNewOAuthState pins the state generator (PR32): 32 random bytes
+// hex-encoded (64 chars), and two generations never collide — the
+// state exists precisely to be unguessable per flow run.
+func TestNewOAuthState(t *testing.T) {
+	t.Parallel()
+
+	a, err := NewOAuthState()
+	if err != nil {
+		t.Fatalf("NewOAuthState: %v", err)
+	}
+	if len(a) != 64 {
+		t.Errorf("state len = %d, want 64 hex chars (32 bytes)", len(a))
+	}
+	for _, c := range a {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			t.Errorf("state %q carries non-hex rune %q", a, c)
+		}
+	}
+	b, err := NewOAuthState()
+	if err != nil {
+		t.Fatalf("NewOAuthState: %v", err)
+	}
+	if a == b {
+		t.Errorf("two states must never collide, got %q twice", a)
+	}
+}
+
+// TestVerifyOAuthState pins the callback verification: an exact match
+// passes, any mismatch (or emptiness) fails — login-CSRF/code-injection
+// defense (RFC 6749 §10.12).
+func TestVerifyOAuthState(t *testing.T) {
+	t.Parallel()
+
+	if err := VerifyOAuthState("st-1", "st-1"); err != nil {
+		t.Errorf("matching state must verify, got %v", err)
+	}
+	if err := VerifyOAuthState("st-1", "st-2"); err == nil {
+		t.Error("mismatched state must fail")
+	}
+	if err := VerifyOAuthState("st-1", ""); err == nil {
+		t.Error("missing callback state must fail")
+	}
+	if err := VerifyOAuthState("", "st-1"); err == nil {
+		t.Error("missing expected state must fail")
 	}
 }
 

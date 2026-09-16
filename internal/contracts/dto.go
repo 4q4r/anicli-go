@@ -89,11 +89,4 @@ type DubOption struct {
 	ID string `json:"id"`
 	// Name is the human-readable dub name.
 	Name string `json:"name"`
-	// Language is the BCP-47-ish primary language tag of the dub's
-	// audio track ("ru", "ja", "en"); empty when unknown. It comes
-	// from the provider's declared content language, not per-dub
-	// introspection — every dub a provider emits carries its primary
-	// tag. A provider that differentiates sub and dub tracks (like
-	// allanime) tags them individually: sub→"ja", dub→"en".
-	Language string `json:"language,omitempty"`
 }

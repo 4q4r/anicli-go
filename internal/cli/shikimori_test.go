@@ -91,7 +91,12 @@ func TestShikimoriAuthFlow(t *testing.T) {
 		if redirect == "" {
 			return errors.New("authorize URL carries no redirect_uri")
 		}
-		resp, err := http.Get(redirect + "?code=abc-123")
+		// The browser echoes the state back on the redirect (RFC 6749).
+		state := u.Query().Get("state")
+		if state == "" {
+			return errors.New("authorize URL carries no state")
+		}
+		resp, err := http.Get(redirect + "?code=abc-123&state=" + url.QueryEscape(state))
 		if err != nil {
 			return err
 		}
@@ -115,6 +120,10 @@ func TestShikimoriAuthFlow(t *testing.T) {
 	if q := u.Query(); q.Get("client_id") != "cid-1" || q.Get("scope") != "user_rates" ||
 		q.Get("response_type") != "code" || !strings.HasPrefix(q.Get("redirect_uri"), "http://127.0.0.1:") {
 		t.Errorf("authorize URL query = %v", q)
+	}
+	// PR32: the state parameter rides the authorize URL unguessable.
+	if state := u.Query().Get("state"); len(state) < 32 {
+		t.Errorf("authorize URL state = %q, want >=32 random chars", state)
 	}
 	if !strings.Contains(out.String(), "oauth/authorize") {
 		t.Errorf("output must print the authorize URL, got:\n%s", out.String())
@@ -155,6 +164,61 @@ func TestShikimoriAuthFailsWithoutCredentials(t *testing.T) {
 	}
 }
 
+// TestShikimoriAuthRejectsStateMismatch pins the CSRF defense (RFC
+// 6749 §10.12, PR32): a callback whose state does not match the one in
+// the authorize URL fails the flow — the code is never exchanged and
+// the settings file stays untouched.
+func TestShikimoriAuthRejectsStateMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	if err := os.WriteFile(path, []byte("[player]\npath = \"mpv-x\"\n"), 0o600); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+
+	exchanges := 0
+	fake := &fakeOAuthClient{
+		set:    &shikimori.TokenSet{AccessToken: "at-evil", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+		userID: 1,
+	}
+	fake.exchangeF = func(string) (*shikimori.TokenSet, error) {
+		exchanges++
+		return fake.set, nil
+	}
+	// The "attacker" delivers an injected code with a forged state.
+	stubOAuthSeams(t, fake, func(authURL string) error {
+		u, _ := url.Parse(authURL)
+		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=injected&state=forged-state")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return nil
+	})
+
+	var out bytes.Buffer
+	err := runShikimoriAuth(context.Background(), &out, path, "cid-1", "csec-1", 0)
+	if err == nil {
+		t.Fatal("a state mismatch must fail the flow")
+	}
+	if !strings.Contains(err.Error(), "state") {
+		t.Errorf("error must name the state mismatch: %v", err)
+	}
+	if exchanges != 0 {
+		t.Errorf("a mismatched-state code must never reach the exchange, saw %d", exchanges)
+	}
+
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load after rejection: %v", err)
+	}
+	// NB: Enabled=true is the Default() for a file with no
+	// [shikimori] section — AccessToken is the persistence evidence.
+	if loaded.Shikimori.AccessToken != "" || loaded.Shikimori.ClientID != "" {
+		t.Errorf("no token may persist on a state mismatch, got %+v", loaded.Shikimori)
+	}
+	if loaded.Player.Path != "mpv-x" {
+		t.Errorf("player section lost: %+v", loaded.Player)
+	}
+}
+
 // TestShikimoriAuthExchangeFailureFailsLoud pins: a rejected code
 // exchange surfaces the error and writes nothing to settings.
 func TestShikimoriAuthExchangeFailureFailsLoud(t *testing.T) {
@@ -162,9 +226,11 @@ func TestShikimoriAuthExchangeFailureFailsLoud(t *testing.T) {
 	fake := &fakeOAuthClient{exchangeF: func(string) (*shikimori.TokenSet, error) {
 		return nil, errors.New("invalid_grant: code expired")
 	}}
+	// The callback echoes the legit state so the flow reaches the
+	// exchange (the phase this test pins).
 	stubOAuthSeams(t, fake, func(authURL string) error {
 		u, _ := url.Parse(authURL)
-		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=stale")
+		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=stale&state=" + url.QueryEscape(u.Query().Get("state")))
 		if err == nil {
 			_ = resp.Body.Close()
 		}
@@ -181,18 +247,20 @@ func TestShikimoriAuthExchangeFailureFailsLoud(t *testing.T) {
 }
 
 // TestShikiCallbackServer pins the loopback redirect target: /callback
-// with a code answers 200 and publishes the code; an error parameter
-// surfaces as a typed failure; unknown paths get the hint page.
+// with a code AND the expected state answers 200 and publishes the
+// code; a wrong or missing state is rejected as a typed failure (RFC
+// 6749 §10.12); an error parameter surfaces as a typed failure;
+// unknown paths get the hint page.
 func TestShikiCallbackServer(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv, codeCh, errCh := startShikiCallbackServer(ln)
+	srv, codeCh, errCh := startShikiCallbackServer(ln, "st-good")
 	defer func() { _ = srv.Close() }()
 	base := "http://" + ln.Addr().String()
 
-	resp, err := http.Get(base + "/callback?code=xyz-7")
+	resp, err := http.Get(base + "/callback?code=xyz-7&state=st-good")
 	if err != nil {
 		t.Fatalf("callback get: %v", err)
 	}
@@ -207,6 +275,26 @@ func TestShikiCallbackServer(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("code not published")
+	}
+
+	// Wrong state: rejected as a typed error, code never published.
+	resp, err = http.Get(base + "/callback?code=evil&state=st-evil")
+	if err != nil {
+		t.Fatalf("callback state get: %v", err)
+	}
+	_ = resp.Body.Close()
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "state") {
+			t.Errorf("state mismatch error = %v, want a state failure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("state mismatch must surface as a typed error")
+	}
+	select {
+	case code := <-codeCh:
+		t.Errorf("a mismatched-state code must never publish, got %q", code)
+	default:
 	}
 
 	resp, err = http.Get(base + "/callback?error=access_denied")
@@ -409,8 +497,13 @@ func TestWireShikiSetup(t *testing.T) {
 		if q := u.Query(); q.Get("client_id") != "cid" || !strings.HasPrefix(q.Get("redirect_uri"), "http://127.0.0.1:") {
 			t.Fatalf("authorize URL query = %v", q)
 		}
-		// Deliver the code the way the browser redirect would.
-		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=live-code")
+		// Deliver the code the way the browser redirect would: the
+		// state from the authorize URL echoed back (RFC 6749 §10.12).
+		state := u.Query().Get("state")
+		if len(state) < 32 {
+			t.Fatalf("authorize URL state = %q, want >=32 random chars", state)
+		}
+		resp, err := http.Get(u.Query().Get("redirect_uri") + "?code=live-code&state=" + url.QueryEscape(state))
 		if err != nil {
 			t.Fatalf("callback: %v", err)
 		}

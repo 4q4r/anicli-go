@@ -13,7 +13,11 @@ package shikimori
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -37,15 +41,41 @@ type TokenSet struct {
 	ExpiresAt int64
 }
 
+// NewOAuthState generates the CSRF state parameter for one
+// authorization run (RFC 6749 §10.12): 32 crypto/rand bytes,
+// hex-encoded. A fresh state per flow binds the loopback callback to
+// the authorization URL the user opened, so an injected code from
+// another flow cannot ride this one.
+func NewOAuthState() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("shikimori oauth: generate state: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// VerifyOAuthState compares the callback's state against the expected
+// one in constant time; any mismatch — including a missing value — is
+// a login-CSRF/code-injection attempt and fails the flow.
+func VerifyOAuthState(want, got string) error {
+	if subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
+		return errors.New("shikimori oauth: state mismatch (возможна подмена кода авторизации)")
+	}
+	return nil
+}
+
 // AuthorizeURL renders the authorization-code URL the user opens in a
 // browser: client_id + loopback redirect_uri + response_type=code + the
-// user_rates scope required for rate CRUD (PR25 D).
-func AuthorizeURL(clientID, redirectURI string) string {
+// user_rates scope required for rate CRUD (PR25 D) + the mandatory
+// state parameter (RFC 6749 §10.12, PR32) — generate it with
+// NewOAuthState and verify on callback with VerifyOAuthState.
+func AuthorizeURL(clientID, redirectURI, state string) string {
 	q := url.Values{}
 	q.Set("client_id", clientID)
 	q.Set("redirect_uri", redirectURI)
 	q.Set("response_type", "code")
 	q.Set("scope", "user_rates")
+	q.Set("state", state)
 	return DefaultBaseURL + "/oauth/authorize?" + q.Encode()
 }
 

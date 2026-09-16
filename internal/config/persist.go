@@ -1,16 +1,21 @@
 package config
 
 // Settings persistence for secrets that mutate at runtime (PR25: the
-// Shikimori OAuth token refresh). The file is updated read-modify-write:
-// load (defaults + file, no environment overrides — an env secret must
-// never get baked into the file), mutate the one section, validate, then
-// write the whole settings back atomically (temp file + rename) so a
-// crash mid-write can never truncate the previous file.
+// Shikimori OAuth token refresh; PR32: comment-preserving rewrite).
+// The file is updated read-modify-write: load (defaults + file, no
+// environment overrides — an env secret must never get baked into the
+// file), mutate the one section, validate, then rewrite ONLY the
+// [shikimori] section's key-value lines on a line-by-line basis so
+// every other section, every comment and the overall file ordering
+// survive verbatim. The write itself is atomic (temp file + rename)
+// so a crash mid-write can never truncate the previous file.
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -19,10 +24,16 @@ import (
 // cookies, OAuth tokens and password hashes.
 const settingsFilePerm = 0o600
 
+// shikimoriSectionName is the TOML table header of the section this
+// persistence path owns.
+const shikimoriSectionName = "shikimori"
+
 // UpdateShikimori loads the settings file at path (defaults when the
-// file is missing), applies mutate to the [shikimori] section and writes
-// the result back atomically. A malformed or unknown-key file fails
-// loud and is left untouched; the caller surfaces the error.
+// file is missing), applies mutate to the [shikimori] section and
+// writes the result back atomically, replacing only the section's
+// key-value lines — user comments and file ordering survive. A
+// malformed or unknown-key file fails loud and is left untouched; the
+// caller surfaces the error.
 func UpdateShikimori(path string, mutate func(*Shikimori)) error {
 	if mutate == nil {
 		return fmt.Errorf("config: UpdateShikimori: nil mutator")
@@ -44,13 +55,147 @@ func UpdateShikimori(path string, mutate func(*Shikimori)) error {
 	if err := s.Validate(); err != nil {
 		return fmt.Errorf("rewrite settings %s: %w", path, err)
 	}
-	return writeSettingsAtomic(path, &s)
+	return writeShikimoriSection(path, &s.Shikimori)
 }
 
-// writeSettingsAtomic encodes the settings and installs them with a
+// writeShikimoriSection rewrites the file at path so its [shikimori]
+// section carries section, preserving everything else. A missing file
+// is created fresh with just the section.
+func writeShikimoriSection(path string, section *Shikimori) error {
+	var body string
+	// G304: path is the caller-resolved settings file (ResolveConfigPath
+	// or --config), already validated by applyFile — not user input.
+	data, err := os.ReadFile(path) //nolint:gosec // settings path, see above
+	switch {
+	case err == nil:
+		body = rewriteShikimoriSection(string(data), section)
+	case os.IsNotExist(err):
+		body = encodeShikimoriSection(section)
+	default:
+		return fmt.Errorf("rewrite settings %s: %w", path, err)
+	}
+	return writeSettingsAtomic(path, []byte(body))
+}
+
+// rewriteShikimoriSection replaces the [shikimori] section's key-value
+// lines inside src, keeping:
+//   - every line OUTSIDE the section verbatim (other sections, their
+//     comments, their key order);
+//   - standalone comment lines INSIDE the section (moved above the
+//     fresh key block; inline comments on replaced key lines are lost);
+//   - the section ordering.
+//
+// A missing section is appended at the end of the file.
+func rewriteShikimoriSection(src string, section *Shikimori) string {
+	lines := strings.Split(src, "\n")
+
+	start := -1
+	for i, line := range lines {
+		if isShikimoriHeader(line) {
+			start = i
+			break
+		}
+	}
+
+	// No section yet: keep the file verbatim, append the fresh section
+	// behind a blank separator.
+	if start == -1 {
+		out := src
+		if out != "" {
+			out = strings.TrimRight(out, "\n") + "\n\n"
+		}
+		return out + encodeShikimoriSection(section)
+	}
+
+	// The section body reaches until the next table header line.
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if isTableHeader(lines[i]) {
+			end = i
+			break
+		}
+	}
+
+	// Standalone comments survive, above the fresh keys.
+	var kept []string
+	for _, line := range lines[start+1 : end] {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			kept = append(kept, line)
+		}
+	}
+
+	var out []string
+	out = append(out, lines[:start]...)
+	out = append(out, "["+shikimoriSectionName+"]")
+	out = append(out, kept...)
+	out = append(out, shikimoriKeyLines(section)...)
+	if end < len(lines) {
+		// Another section follows: keep it separated by one blank line.
+		out = append(out, "")
+		out = append(out, lines[end:]...)
+	} else {
+		out = append(out, "") // exactly one trailing newline
+	}
+	return strings.Join(out, "\n")
+}
+
+// isShikimoriHeader reports whether the line is the [shikimori] table
+// header (a trailing comment on the line is tolerated; sub-tables like
+// [shikimori.x] do not match).
+func isShikimoriHeader(line string) bool {
+	return sectionHeaderName(line) == shikimoriSectionName
+}
+
+// isTableHeader reports whether the line opens any table
+// ([section], [a.b] or [[array]]).
+func isTableHeader(line string) bool {
+	return sectionHeaderName(line) != ""
+}
+
+// sectionHeaderName extracts the table name from a [name] header line
+// ("" when the line is not a table header). Everything after the
+// closing bracket — a trailing comment — is ignored.
+func sectionHeaderName(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "[") {
+		return ""
+	}
+	rest := trimmed[1:]
+	close := strings.Index(rest, "]")
+	if close < 1 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:close])
+}
+
+// encodeShikimoriSection renders the section as a standalone TOML
+// document ("[shikimori]\nkey = …\n…") via the real encoder, so value
+// quoting matches a full encode exactly.
+func encodeShikimoriSection(section *Shikimori) string {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(struct {
+		Shikimori Shikimori `toml:"shikimori"`
+	}{*section}); err != nil {
+		// A struct of scalars cannot fail to encode; panic-guard only.
+		return "[" + shikimoriSectionName + "]\n"
+	}
+	return buf.String()
+}
+
+// shikimoriKeyLines renders just the section's key-value lines (the
+// encoder output minus its header line).
+func shikimoriKeyLines(section *Shikimori) []string {
+	encoded := strings.Split(strings.TrimSuffix(encodeShikimoriSection(section), "\n"), "\n")
+	if len(encoded) > 0 && isShikimoriHeader(encoded[0]) {
+		return encoded[1:]
+	}
+	return encoded
+}
+
+// writeSettingsAtomic installs data as the settings file with a
 // same-directory temp file + rename: readers observe either the old or
 // the new complete file, never a partial write.
-func writeSettingsAtomic(path string, s *Settings) error {
+func writeSettingsAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create config dir %q: %w", dir, err)
@@ -62,10 +207,10 @@ func writeSettingsAtomic(path string, s *Settings) error {
 	}
 	tmpName := tmp.Name()
 
-	if err := toml.NewEncoder(tmp).Encode(s); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("encode settings: %w", err)
+		return fmt.Errorf("write temp settings: %w", err)
 	}
 	if err := tmp.Chmod(settingsFilePerm); err != nil {
 		_ = tmp.Close()

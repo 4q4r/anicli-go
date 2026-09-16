@@ -96,11 +96,6 @@ func TestDTOJSON(t *testing.T) {
 			dto:  DubOption{ID: "rus", Name: "Оригинал+суб"},
 			want: `{"id":"rus","name":"Оригинал+суб"}`,
 		},
-		{
-			name: "dub option with language",
-			dto:  DubOption{ID: "sub", Name: "Original", Language: "ja"},
-			want: `{"id":"sub","name":"Original","language":"ja"}`,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,7 +138,6 @@ func TestDTORoundTrip(t *testing.T) {
 	assertStableJSON(t, video)
 	assertStableJSON(t, stream)
 	assertStableJSON(t, DubOption{ID: "i", Name: "n"})
-	assertStableJSON(t, DubOption{ID: "i", Name: "n", Language: "ru"})
 	assertStableJSON(t, SearchResult{Title: "t", URL: "u", SourceID: "s"}) // empty optional fields
 	assertStableJSON(t, Episode{Num: "1", RawID: "r"})                     // empty optional fields
 	assertStableJSON(t, MediaStream{DubName: "d"})                         // empty optional fields

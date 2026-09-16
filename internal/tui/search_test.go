@@ -95,12 +95,9 @@ func TestSearchFanOutProgress(t *testing.T) {
 
 	app := searchFlowApp(fs)
 
-	// Navigate: root -> search input -> type query -> enter.
-	model := drive(app, pushMsg{screen: NewSearchInput(app.deps)})
-	input := topOf(model).(*TextPrompt)
-	input.typeText("наруто")
-	model = drive(model, pushMsg{screen: NewSearchProgress(app.deps, "наруто")})
-	_ = input
+	// PR30: the free-text search input is gone (search runs strictly
+	// through the catalog); the fan-out progress is driven directly.
+	model := drive(app, pushMsg{screen: NewSearchProgress(app.deps, "наруто")})
 
 	// The progress screen should have emitted per-provider commands on
 	// Init; execute the fan-out by driving a full command drain.

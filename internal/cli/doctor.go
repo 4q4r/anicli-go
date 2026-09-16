@@ -15,8 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/lipgloss/v2"
-
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/providers"
@@ -77,15 +75,6 @@ func startupNotices(cfg config.Settings) []string {
 		out = append(out, "⚠ Shikimori не настроен: нет ни cookie, ни OAuth токена (выберите способ в TUI)")
 	}
 	return out
-}
-
-// noticeRed is the red startup-notice style; lipgloss degrades to
-// plain text when the writer has no color support.
-var noticeRed = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
-
-// startupRed renders one notice line in ANSI red.
-func startupRed(w io.Writer, line string) {
-	_, _ = fmt.Fprintln(w, noticeRed.Render(line))
 }
 
 // runDoctor probes every registered provider with the two test

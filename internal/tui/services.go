@@ -7,6 +7,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // ProviderMeta identifies one search provider in status tables.
@@ -63,6 +64,22 @@ type PlaybackService interface {
 	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), err error)
 	// Play launches mpv and blocks until it exits.
 	Play(ctx context.Context, req PlayRequest) error
+}
+
+// TorrentService backs «🧲 Торренты» (PR35): the configured links are
+// ingested lazily on first entry (the engine stays idle before that)
+// and metadata fetches run in the background — the UI only ever reads
+// snapshots and never blocks on the network.
+type TorrentService interface {
+	// Enabled reports whether the [torrent] section is active.
+	Enabled() bool
+	// Refresh ingests the configured links once (idempotent, deduped
+	// by infohash) and returns the live release snapshot.
+	Refresh(ctx context.Context) ([]torrent.Release, error)
+	// Files waits for one release's metadata and lists its files.
+	Files(ctx context.Context, ih torrent.InfoHash) ([]torrent.FileEntry, error)
+	// StreamURL builds the loopback playback URL for one file.
+	StreamURL(ih torrent.InfoHash, fileIndex int) string
 }
 
 // PlayRequest is one playback invocation (player.Request flattened).

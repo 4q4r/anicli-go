@@ -101,6 +101,20 @@ func bareProvider(p contracts.Provider) contracts.Provider {
 	}
 }
 
+// TorrentProviderIDs returns the ids of registered torrent-type
+// providers (contracts.TorrentProvider capability): their results are
+// torrent links resolved by the embedded core, not the HTTP-embed
+// pipeline. Wrapper layers are peeled before the check.
+func (r *Registry) TorrentProviderIDs() []string {
+	out := make([]string, 0)
+	for _, p := range r.order {
+		if tp, ok := bareProvider(p).(contracts.TorrentProvider); ok && tp.IsTorrent() {
+			out = append(out, p.ID())
+		}
+	}
+	return out
+}
+
 // List returns every registered provider in registration order.
 func (r *Registry) List() []contracts.Provider {
 	return append([]contracts.Provider(nil), r.order...)

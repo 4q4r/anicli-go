@@ -163,6 +163,45 @@ type Providers struct {
 	Yanima ProvidersYanima `toml:"yanima"`
 }
 
+// Torrent configures the BitTorrent subsystem (PR35): realtime
+// streaming playback over a local HTTP server, no external programs
+// (pure-Go client). The engine stays idle until a link is added —
+// enabling it never starts network machinery on app boot by itself.
+type Torrent struct {
+	// Enabled turns the torrent subsystem on. Default true by design
+	// ruling (commissioned feature, Shikimori-enabled precedent):
+	// combined with the lazy engine this is inert without Links —
+	// nothing boots until a link is added — and no_upload=false only
+	// means ethical seeding after playback (flip no_upload for
+	// leech-only).
+	Enabled bool `toml:"enabled"`
+	// Links is the ingestion list: magnet:?xt=urn:btih:… URIs (with
+	// optional &dn= display name), https://…/*.torrent URLs and plain
+	// 40-hex-char infohashes. Deduplicated by infohash.
+	Links []string `toml:"links"`
+	// Dir is the torrent data directory; empty means
+	// DataDir()/torrents (created on demand).
+	Dir string `toml:"dir"`
+	// Port is the BitTorrent listen port; 0 picks an ephemeral port.
+	Port int `toml:"port"`
+	// NoUpload turns off seeding (leech-only).
+	NoUpload bool `toml:"no_upload"`
+	// ReadaheadMB is the streaming readahead window for playback.
+	ReadaheadMB int `toml:"readahead_mb"`
+	// Proxy routes tracker/webseed/metadata HTTP(S) traffic through
+	// an http/https/socks5 proxy (same scheme set as
+	// network.proxy_url). Library limitation, documented honestly:
+	// BitTorrent PEER traffic (TCP/uTP data exchange) and udp://
+	// tracker announces stay DIRECT — anacrolix v1.61 only threads
+	// the HTTP layer through the proxy.
+	Proxy string `toml:"proxy"`
+	// Trackers are user-specified announce URLs (udp://, http://,
+	// https://, ws://, wss://) added to every torrent for faster peer
+	// discovery. The engine health-checks them concurrently and keeps
+	// the responsive ones (recheck on demand).
+	Trackers []string `toml:"trackers"`
+}
+
 // CF configures the embedded Cloudflare bypass (CloakBrowser stealth
 // Chromium + clearance ladder). Entirely opt-in: disabled by default,
 // every provider request behaves exactly as before unless enabled.
@@ -224,6 +263,7 @@ type Settings struct {
 	API       API       `toml:"api"`
 	Web       Web       `toml:"web"`
 	Providers Providers `toml:"providers"`
+	Torrent   Torrent   `toml:"torrent"`
 	CF        CF        `toml:"cf"`
 }
 
@@ -274,6 +314,14 @@ func Default() Settings {
 			AuthSecret:      "",
 		},
 		Web: Web{Users: map[string]WebUser{}},
+		Torrent: Torrent{
+			Enabled:     true,
+			Links:       []string{},
+			Dir:         "",
+			Port:        42069,
+			NoUpload:    false,
+			ReadaheadMB: 32,
+		},
 		CF: CF{
 			Enabled:            false,
 			SolveTimeout:       90 * time.Second,
@@ -385,6 +433,43 @@ func (s *Settings) Validate() error {
 	for _, pattern := range s.Providers.ExcludeStreams {
 		if _, err := regexp.Compile(pattern); err != nil {
 			return fmt.Errorf("providers.exclude_streams %q: %w", pattern, err)
+		}
+	}
+	// The torrent listen port must be a valid TCP port (0 = ephemeral);
+	// a nonsense port would surface as an obscure bind error deep in
+	// the engine instead of at startup.
+	if s.Torrent.Port < 0 || s.Torrent.Port > 65535 {
+		return fmt.Errorf("torrent.port %d: out of range (0-65535)", s.Torrent.Port)
+	}
+	if s.Torrent.ReadaheadMB < 0 {
+		return fmt.Errorf("torrent.readahead_mb %d: must not be negative", s.Torrent.ReadaheadMB)
+	}
+	if s.Torrent.Proxy != "" {
+		u, err := url.Parse(s.Torrent.Proxy)
+		if err != nil {
+			return fmt.Errorf("torrent.proxy %q: %w", s.Torrent.Proxy, err)
+		}
+		switch u.Scheme {
+		case "http", "https", "socks5":
+			// ok
+		default:
+			return fmt.Errorf("torrent.proxy %q: unsupported scheme %q (want http, https or socks5)",
+				s.Torrent.Proxy, u.Scheme)
+		}
+	}
+	for _, tr := range s.Torrent.Trackers {
+		u, err := url.Parse(tr)
+		if err != nil {
+			return fmt.Errorf("torrent.trackers %q: %w", tr, err)
+		}
+		switch u.Scheme {
+		case "udp", "http", "https", "ws", "wss":
+			if u.Host == "" {
+				return fmt.Errorf("torrent.trackers %q: missing host", tr)
+			}
+		default:
+			return fmt.Errorf("torrent.trackers %q: unsupported scheme %q (want udp, http, https, ws or wss)",
+				tr, u.Scheme)
 		}
 	}
 	return nil

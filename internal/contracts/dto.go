@@ -83,6 +83,18 @@ type MediaStream struct {
 	Links map[string]VideoSource `json:"links,omitempty"`
 }
 
+// TorrentProvider marks torrent-type providers (PR35): their search
+// results carry torrent links (magnet:, .torrent URL or a provider
+// topic id) instead of stream URLs, and their episodes/streams
+// resolve through the embedded torrent core — never the HTTP-embed
+// pipeline. Consumers detect the capability with a type assertion;
+// the registry peels its wrapper layers first (see
+// Registry.TorrentProviderIDs).
+type TorrentProvider interface {
+	// IsTorrent reports the torrent capability.
+	IsTorrent() bool
+}
+
 // DubOption is one selectable dub for an episode.
 type DubOption struct {
 	// ID is the stable identifier consumed by Provider.ResolveStream.

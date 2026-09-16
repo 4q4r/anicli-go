@@ -28,6 +28,12 @@ func TestTorrentDefaults(t *testing.T) {
 	if got.ReadaheadMB != 32 {
 		t.Errorf("Torrent.ReadaheadMB = %d, want 32", got.ReadaheadMB)
 	}
+	if got.Proxy != "" {
+		t.Errorf("Torrent.Proxy = %q, want empty (direct by default)", got.Proxy)
+	}
+	if len(got.Trackers) != 0 {
+		t.Errorf("Torrent.Trackers = %v, want empty (no trackers injected by default)", got.Trackers)
+	}
 }
 
 func TestTorrentLoadFile(t *testing.T) {
@@ -115,6 +121,43 @@ func TestTorrentValidate(t *testing.T) {
 		s.Torrent.ReadaheadMB = -1
 		if err := s.Validate(); err == nil {
 			t.Error("Validate with readahead_mb = -1 must fail")
+		}
+	})
+	t.Run("proxy schemes", func(t *testing.T) {
+		t.Parallel()
+		for scheme, ok := range map[string]bool{
+			"http://127.0.0.1:10809":    true,
+			"https://proxy.example.org": true,
+			"socks5://127.0.0.1:9050":   true,
+			"ftp://127.0.0.1:21":        false,
+			"not-a-url":                 false,
+		} {
+			s := Default()
+			s.Torrent.Proxy = scheme
+			err := s.Validate()
+			if ok != (err == nil) {
+				t.Errorf("Validate proxy %q: err = %v, want valid=%v", scheme, err, ok)
+			}
+		}
+	})
+	t.Run("tracker schemes", func(t *testing.T) {
+		t.Parallel()
+		for u, ok := range map[string]bool{
+			"udp://tracker.example.org:1337/announce": true,
+			"http://tracker.example.org/announce":     true,
+			"https://tracker.example.org/announce":    true,
+			"wss://tracker.example.org/tracker":       true,
+			"wss://tracker.example.org:443/tracker":   true,
+			"ftp://tracker.example.org/announce":      false,
+			"tracker.example.org/announce":            false,
+			"http://":                                 false,
+		} {
+			s := Default()
+			s.Torrent.Trackers = []string{u}
+			err := s.Validate()
+			if ok != (err == nil) {
+				t.Errorf("Validate tracker %q: err = %v, want valid=%v", u, err, ok)
+			}
 		}
 	})
 }

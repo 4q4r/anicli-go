@@ -138,6 +138,12 @@ type Engine struct {
 	dataDir  string
 	releases map[InfoHash]*Release
 	torrents map[InfoHash]*torrent.Torrent
+	// trackerHealth is the latest probe verdict per configured
+	// tracker URL (empty until the first CheckTrackers ran).
+	trackerHealth map[string]TrackerHealth
+	// probeTimeoutOverride lets tests shrink the per-tracker probe
+	// budget; 0 keeps the default.
+	probeTimeoutOverride time.Duration
 }
 
 // NewEngine builds an idle engine from the [torrent] config section.
@@ -149,13 +155,22 @@ func NewEngine(cfg config.Torrent, net *netclient.Client, log *slog.Logger) *Eng
 		log = slog.Default()
 	}
 	return &Engine{
-		cfg:      cfg,
-		net:      net,
-		log:      log,
-		closed:   make(chan struct{}),
-		releases: map[InfoHash]*Release{},
-		torrents: map[InfoHash]*torrent.Torrent{},
+		cfg:           cfg,
+		net:           net,
+		log:           log,
+		closed:        make(chan struct{}),
+		releases:      map[InfoHash]*Release{},
+		torrents:      map[InfoHash]*torrent.Torrent{},
+		trackerHealth: map[string]TrackerHealth{},
 	}
+}
+
+// probeTimeout reports the effective per-tracker probe budget.
+func (e *Engine) probeTimeout() time.Duration {
+	if e.probeTimeoutOverride > 0 {
+		return e.probeTimeoutOverride
+	}
+	return trackerProbeTimeout
 }
 
 // AddLink ingests a magnet: URI (with optional dn= display name and
@@ -230,6 +245,9 @@ func (e *Engine) addSpec(spec *torrent.TorrentSpec) (Release, error) {
 	if err := e.startClientLocked(); err != nil {
 		return Release{}, err
 	}
+	// User trackers ride along on every torrent (alive ones once the
+	// health check has run; all of them before that — fail-open).
+	spec.Trackers = append(spec.Trackers, e.trackerTiersLocked()...)
 	t, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
 		return Release{}, fmt.Errorf("torrent: add %s: %w", spec.InfoHash.HexString(), err)
@@ -471,6 +489,18 @@ func (e *Engine) startClientLocked() error {
 	// a completed seeder with Seed=false rejects every connection);
 	// no_upload=true means leech-only, which is exactly Seed=false.
 	cfg.Seed = !e.cfg.NoUpload
+	// [torrent] proxy: the library threads the HTTP layer (http/https
+	// tracker announces, webseeds, .torrent metadata fetches — and
+	// ws trackers at the anacrolix/tracker layer) through it. PEER
+	// data traffic and udp:// announces stay direct: documented
+	// limitation of anacrolix v1.61, never faked.
+	if e.cfg.Proxy != "" {
+		proxyURL, err := url.Parse(e.cfg.Proxy)
+		if err != nil {
+			return fmt.Errorf("torrent: parse proxy: %w", err)
+		}
+		cfg.HTTPProxy = http.ProxyURL(proxyURL)
+	}
 	if e.testNoExternal {
 		// Offline E2E: peers are wired explicitly via the magnet x.pe
 		// parameter, so every external discovery channel goes off.
@@ -490,6 +520,12 @@ func (e *Engine) startClientLocked() error {
 		return err
 	}
 	e.client = cl
+	// Kick the tracker health check in the background: the verdicts
+	// prune dead announce URLs for every torrent added afterwards and
+	// never delay startup (per-probe timeouts bound the goroutine).
+	if len(e.cfg.Trackers) > 0 {
+		go e.CheckTrackers(context.Background())
+	}
 	e.log.Info("torrent: client started", "dir", dir, "port", e.cfg.Port)
 	return nil
 }

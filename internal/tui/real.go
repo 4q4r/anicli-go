@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +24,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/skip"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // RealDeps bundles the production services with their teardown hooks.
@@ -38,6 +41,10 @@ type RealDeps struct {
 	// registry is the provider set (closed on Close: releases the CF
 	// bypass stack when [cf] is enabled).
 	registry *providers.Registry
+	// Torrent is the concrete torrent service (closed on Close: tears
+	// down the engine when it was ever started); nil when [torrent]
+	// is disabled.
+	Torrent *realTorrent
 }
 
 // RealOption customizes the production wiring of NewRealDeps.
@@ -48,6 +55,15 @@ type realOptions struct {
 	// shikiPersister reports refreshed Shikimori OAuth sections to the
 	// settings file (PR25 E); nil keeps the client in-memory only.
 	shikiPersister func(config.Shikimori) error
+	// logger is the diagnostics sink for the torrent engine (PR35);
+	// nil degrades to a discard logger — never stderr inside the TUI.
+	logger *slog.Logger
+}
+
+// WithLogger installs the diagnostics sink the torrent engine logs to
+// (the CLI passes the TUI file logger — stderr corrupts alt-screen).
+func WithLogger(log *slog.Logger) RealOption {
+	return func(o *realOptions) { o.logger = log }
 }
 
 // WithShikiPersister installs the Shikimori token persistence hook:
@@ -93,6 +109,24 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	real.downloadBridge = dlService
 	manager := download.NewManager(settings.Download.MaxConcurrency, real.runDownload)
 	dlService.manager = manager
+	// PR35: the torrent engine is built only when [torrent] is
+	// enabled and starts fully lazily (client + listeners on the
+	// first Refresh — an enabled subsystem never boots network
+	// machinery on its own).
+	var torrentSvc TorrentService
+	var rt *realTorrent
+	if settings.Torrent.Enabled {
+		log := o.logger
+		if log == nil {
+			log = slog.New(slog.NewTextHandler(io.Discard, nil))
+		}
+		torrentNet, err := netclient.New(settings.Network, netclient.WithProvider("torrent"))
+		if err != nil {
+			return nil, fmt.Errorf("build torrent transport: %w", err)
+		}
+		rt = newRealTorrent(settings.Torrent, torrentNet, log)
+		torrentSvc = rt
+	}
 	deps := &Deps{
 		Search:   &realSearch{registry: registry},
 		Episode:  &realEpisode{registry: registry},
@@ -104,11 +138,15 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
 		Download: &realDownload{manager: manager, core: real},
 		Metadata: realMetadata{manager: metaManager},
+		Torrent:  torrentSvc,
 		// The per-provider fan-out ceiling (network.search_timeout,
 		// default 30s — PR24).
 		SearchTimeout: settings.Network.SearchTimeout,
 	}
-	return &RealDeps{Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet, registry: registry}, nil
+	return &RealDeps{
+		Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet,
+		registry: registry, Torrent: rt,
+	}, nil
 }
 
 // realMetadata adapts the metadata manager onto the TUI service
@@ -122,10 +160,14 @@ func (m realMetadata) SearchAlternativeTitles(ctx context.Context, query string)
 
 // Close releases the background resources. The netclient needs no
 // teardown (it owns no goroutines), so only the download manager, the
-// registry (CF bypass stack) and the store are settled.
+// torrent engine (when it was started), the registry (CF bypass
+// stack) and the store are settled.
 func (r *RealDeps) Close() {
 	if r.Downloads != nil {
 		_ = r.Downloads.Close()
+	}
+	if r.Torrent != nil {
+		r.Torrent.Close()
 	}
 	if r.registry != nil {
 		_ = r.registry.Close()
@@ -626,4 +668,113 @@ func sanitizeFilename(s string) string {
 // sanitizeFragment keeps only safe filename runes.
 func sanitizeFragment(s string) string {
 	return strings.Trim(unsafePathChars.ReplaceAllString(s, "_"), "_")
+}
+
+// --- TorrentService (PR35) ---
+
+// realTorrent adapts the torrent engine onto the TUI service
+// interface. The engine object is created on the FIRST use (not at
+// startup) and the torrent client on the FIRST link — an enabled
+// [torrent] section alone boots nothing.
+type realTorrent struct {
+	cfg config.Torrent
+	net *netclient.Client
+	log *slog.Logger
+
+	mu       sync.Mutex
+	engine   *torrent.Engine
+	ingested bool
+}
+
+// newRealTorrent wires the service; engine and client come later.
+func newRealTorrent(cfg config.Torrent, net *netclient.Client, log *slog.Logger) *realTorrent {
+	return &realTorrent{cfg: cfg, net: net, log: log}
+}
+
+// Enabled implements TorrentService: mirrors the [torrent] section.
+func (s *realTorrent) Enabled() bool { return s.cfg.Enabled }
+
+// engineOrStart returns the engine, building it (never starting the
+// client) on first use. ErrDisabled when the section is off.
+func (s *realTorrent) engineOrStart() (*torrent.Engine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.cfg.Enabled {
+		return nil, torrent.ErrDisabled
+	}
+	if s.engine == nil {
+		s.engine = torrent.NewEngine(s.cfg, s.net, s.log)
+	}
+	return s.engine, nil
+}
+
+// markIngested reports (once) whether this call must push the
+// configured links into the engine; later Refreshes are snapshots.
+func (s *realTorrent) markIngested() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ingested {
+		return false
+	}
+	s.ingested = true
+	return true
+}
+
+// Refresh implements TorrentService: first call ingests the
+// configured links (each failure is collected — one bad link never
+// hides the others), every call returns the live snapshot.
+func (s *realTorrent) Refresh(ctx context.Context) ([]torrent.Release, error) {
+	eng, err := s.engineOrStart()
+	if err != nil {
+		return nil, err
+	}
+	var errs []error
+	if s.markIngested() {
+		for _, link := range s.cfg.Links {
+			if _, err := eng.AddLink(ctx, link); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	releases := eng.Releases()
+	return releases, errors.Join(errs...)
+}
+
+// Files implements TorrentService: the file list of one ready
+// release (the screens only navigate to files of ready releases).
+func (s *realTorrent) Files(_ context.Context, ih torrent.InfoHash) ([]torrent.FileEntry, error) {
+	eng, err := s.engineOrStart()
+	if err != nil {
+		return nil, err
+	}
+	rel, ok := eng.Release(ih)
+	if !ok {
+		return nil, torrent.ErrUnknownRelease
+	}
+	if rel.Status != torrent.StatusReady {
+		return nil, fmt.Errorf("торренты: метаданные ещё не готовы (%s)", rel.Status)
+	}
+	return rel.Files, nil
+}
+
+// StreamURL implements TorrentService: empty while nothing runs.
+func (s *realTorrent) StreamURL(ih torrent.InfoHash, fileIndex int) string {
+	s.mu.Lock()
+	eng := s.engine
+	s.mu.Unlock()
+	if eng == nil {
+		return ""
+	}
+	return eng.StreamURL(ih, fileIndex)
+}
+
+// Close tears down the engine when it was ever started.
+func (s *realTorrent) Close() {
+	s.mu.Lock()
+	eng := s.engine
+	s.engine = nil
+	s.mu.Unlock()
+	if eng != nil {
+		_ = eng.Close()
+	}
 }

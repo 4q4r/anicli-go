@@ -147,19 +147,20 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	}
 	defer func() { _ = store.Close() }()
 
+	// TUI alt-screen captures the terminal: slog.Default writes to
+	// stderr which renders ON TOP of the TUI. Route diagnostics to
+	// a log file instead — including the torrent engine (PR35),
+	// which is wired with the same sink before the deps are built.
+	tuiLog := newTUILogger()
+	defer tuiLog.Close()
+
 	real, err := tui.NewRealDeps(*settings, store,
-		tui.WithShikiPersister(shikiTokenPersister(settingsPath)))
+		tui.WithShikiPersister(shikiTokenPersister(settingsPath)),
+		tui.WithLogger(tuiLog.Logger))
 	if err != nil {
 		return fmt.Errorf("build tui services: %w", err)
 	}
 	defer real.Close()
-
-	// TUI alt-screen captures the terminal: slog.Default writes to
-	// stderr which renders ON TOP of the TUI. Route diagnostics to
-	// a log file instead.
-	tuiLog := newTUILogger()
-	defer tuiLog.Close()
-
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.
 	wireShikiSetup(real.Deps, *settings, settingsPath)

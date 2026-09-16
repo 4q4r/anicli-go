@@ -185,6 +185,18 @@ type Torrent struct {
 	NoUpload bool `toml:"no_upload"`
 	// ReadaheadMB is the streaming readahead window for playback.
 	ReadaheadMB int `toml:"readahead_mb"`
+	// Proxy routes tracker/webseed/metadata HTTP(S) traffic through
+	// an http/https/socks5 proxy (same scheme set as
+	// network.proxy_url). Library limitation, documented honestly:
+	// BitTorrent PEER traffic (TCP/uTP data exchange) and udp://
+	// tracker announces stay DIRECT — anacrolix v1.61 only threads
+	// the HTTP layer through the proxy.
+	Proxy string `toml:"proxy"`
+	// Trackers are user-specified announce URLs (udp://, http://,
+	// https://, ws://, wss://) added to every torrent for faster peer
+	// discovery. The engine health-checks them concurrently and keeps
+	// the responsive ones (recheck on demand).
+	Trackers []string `toml:"trackers"`
 }
 
 // CF configures the embedded Cloudflare bypass (CloakBrowser stealth
@@ -428,6 +440,34 @@ func (s *Settings) Validate() error {
 	}
 	if s.Torrent.ReadaheadMB < 0 {
 		return fmt.Errorf("torrent.readahead_mb %d: must not be negative", s.Torrent.ReadaheadMB)
+	}
+	if s.Torrent.Proxy != "" {
+		u, err := url.Parse(s.Torrent.Proxy)
+		if err != nil {
+			return fmt.Errorf("torrent.proxy %q: %w", s.Torrent.Proxy, err)
+		}
+		switch u.Scheme {
+		case "http", "https", "socks5":
+			// ok
+		default:
+			return fmt.Errorf("torrent.proxy %q: unsupported scheme %q (want http, https or socks5)",
+				s.Torrent.Proxy, u.Scheme)
+		}
+	}
+	for _, tr := range s.Torrent.Trackers {
+		u, err := url.Parse(tr)
+		if err != nil {
+			return fmt.Errorf("torrent.trackers %q: %w", tr, err)
+		}
+		switch u.Scheme {
+		case "udp", "http", "https", "ws", "wss":
+			if u.Host == "" {
+				return fmt.Errorf("torrent.trackers %q: missing host", tr)
+			}
+		default:
+			return fmt.Errorf("torrent.trackers %q: unsupported scheme %q (want udp, http, https, ws or wss)",
+				tr, u.Scheme)
+		}
 	}
 	return nil
 }

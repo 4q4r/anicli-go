@@ -13,6 +13,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik without token is reported with the token reason", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = ""
+		cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable
+		cfg.Providers.Yanima.DDoSP2 = "p2"
 		got := UnconfiguredProviders(cfg)
 		if len(got) != 1 {
 			t.Fatalf("want exactly kodik, got %+v", got)
@@ -28,8 +30,42 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik with a token is not reported", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = "secret"
+		cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable
+		cfg.Providers.Yanima.DDoSP2 = "p2"
 		if got := UnconfiguredProviders(cfg); len(got) != 0 {
 			t.Fatalf("configured kodik must not be disabled, got %+v", got)
+		}
+	})
+
+	t.Run("yanima without both DDoS cookies is reported", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "secret" // isolate the yanima variable
+		got := UnconfiguredProviders(cfg)
+		if len(got) != 1 || got[0].ID != "yanima" {
+			t.Fatalf("want exactly yanima, got %+v", got)
+		}
+		if got[0].Reason == "" {
+			t.Fatalf("reason must not be empty")
+		}
+	})
+
+	t.Run("yanima with one cookie missing is still reported", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "secret"
+		cfg.Providers.Yanima.DDoSP1 = "p1" // ddoS_p2 left empty
+		got := UnconfiguredProviders(cfg)
+		if len(got) != 1 || got[0].ID != "yanima" {
+			t.Fatalf("the wall answers 403 without BOTH cookies, got %+v", got)
+		}
+	})
+
+	t.Run("yanima with both cookies is not reported", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "secret"
+		cfg.Providers.Yanima.DDoSP1 = "p1"
+		cfg.Providers.Yanima.DDoSP2 = "p2"
+		if got := UnconfiguredProviders(cfg); len(got) != 0 {
+			t.Fatalf("configured yanima must not be disabled, got %+v", got)
 		}
 	})
 }
@@ -41,6 +77,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
+	cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "p2"
 
 	bare, err := All(cfg)
 	if err != nil {
@@ -51,8 +89,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 10 {
-		t.Fatalf("want the remaining 10 providers, got %d", len(bare))
+	if len(bare) != 11 {
+		t.Fatalf("want the remaining 11 providers, got %d", len(bare))
 	}
 }
 
@@ -62,6 +100,8 @@ func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
+	cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "p2"
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {
@@ -78,5 +118,31 @@ func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 	}
 	if _, ok := reg.Get("kodik"); ok {
 		t.Fatalf("disabled kodik must not be registered")
+	}
+}
+
+// TestRegistryDisabledListsYanima pins the yanima shape of the same
+// mechanism (PR33): cookieless yanima is reported with its reason and
+// never registered.
+func TestRegistryDisabledListsYanima(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.Kodik.Token = "set" // isolate the yanima variable
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+
+	disabled := reg.Disabled()
+	if len(disabled) != 1 || disabled[0].ID != "yanima" {
+		t.Fatalf("registry must report yanima as disabled, got %+v", disabled)
+	}
+	if disabled[0].Reason == "" {
+		t.Fatalf("disabled entry must carry the reason")
+	}
+	if _, ok := reg.Get("yanima"); ok {
+		t.Fatalf("disabled yanima must not be registered")
 	}
 }

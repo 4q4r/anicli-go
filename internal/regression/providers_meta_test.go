@@ -15,7 +15,8 @@ import (
 // duplicated or re-ordered, and when a roster member loses its
 // dedicated fixture→DTO shape test. sovetromantica was removed in PR22
 // (domain hijacked off the anime project, frozen 2025); anidub (no
-// frozen Python original) joined the roster the same PR.
+// frozen Python original) joined the roster the same PR; yanima
+// (PR33) joined after anidub.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -28,18 +29,21 @@ var expectedProviderOrder = []string{
 	"kodik",
 	"allanime",
 	"anidub",
+	"yanima",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly
-// the ten providers, unique, in the pinned order (prevents silent
+// the roster, unique, in the pinned order (prevents silent
 // provider drop — the G1 gate and the parity tool both assume the
 // roster size).
 func TestProviderRosterComplete(t *testing.T) {
-	// The full 11-provider roster needs kodik configured (PR24:
-	// a tokenless kodik is disabled at startup and dropped from the
-	// registry).
+	// The full roster needs every credentialled provider configured
+	// (PR24/PR33: a tokenless kodik or a cookieless yanima is disabled
+	// at startup and dropped from the registry).
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 	built, err := providers.All(cfg)
 	if err != nil {
 		t.Fatalf("providers.All: %v", err)

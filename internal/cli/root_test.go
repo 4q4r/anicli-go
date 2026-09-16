@@ -18,14 +18,17 @@ import (
 
 // mustDefaultSettings returns the default settings without proxy:
 // registry construction in tests must never route egress anywhere. The
-// kodik token keeps the full 11-provider roster registered (PR24: a
-// tokenless kodik is disabled at startup).
+// kodik token and the yanima DDoS cookies keep the full 12-provider
+// roster registered (PR24/PR33: unconfigured credentialled providers
+// are disabled at startup).
 func mustDefaultSettings(t *testing.T) config.Settings {
 	t.Helper()
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = "test-token"
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 	return cfg
 }
 
@@ -43,8 +46,8 @@ func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if got := len(reg.List()); got != 11 {
-		t.Fatalf("registry has %d providers, want 11", got)
+	if got := len(reg.List()); got != 12 {
+		t.Fatalf("registry has %d providers, want 12", got)
 	}
 
 	var buf bytes.Buffer

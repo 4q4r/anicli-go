@@ -159,6 +159,8 @@ type Providers struct {
 	ExcludeStreams []string `toml:"exclude_streams"`
 	// Kodik configures the Kodik API source.
 	Kodik ProvidersKodik `toml:"kodik"`
+	// Yanima configures the yanima.space source (PR33).
+	Yanima ProvidersYanima `toml:"yanima"`
 }
 
 // CF configures the embedded Cloudflare bypass (CloakBrowser stealth
@@ -193,6 +195,22 @@ type ProvidersKodik struct {
 	// Token is the Kodik API token; also settable via ANICLI_KODIK_TOKEN
 	// (env wins over the file).
 	Token string `toml:"token"`
+}
+
+// ProvidersYanima carries the yanima.space DDoS-wall cookies (PR33):
+// the Mitelis DDoS-Mitigation wall requires mit_ck_p1/mit_ck_p2 on
+// EVERY API request and answers 403 without them (protocol dossier
+// 2026-09-14). Both values are copied from the browser DevTools the
+// same way as the kodik token. A yanima without both cookies is
+// disabled at startup (PR24 unconfigured-provider table).
+type ProvidersYanima struct {
+	// DDoSP1 is the mit_ck_p1 cookie value: base64(IP|UserAgent|OK|hash).
+	DDoSP1 string `toml:"ddoS_p1"`
+	// DDoSP2 is the mit_ck_p2 cookie value: the encrypted challenge token.
+	DDoSP2 string `toml:"ddoS_p2"`
+	// Session is the optional YAA_SESS_ID cookie for authenticated
+	// content (rides along on API and S3 stream requests when set).
+	Session string `toml:"session"`
 }
 
 // Settings is the full configuration surface.

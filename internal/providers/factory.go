@@ -55,6 +55,10 @@ var allFactories = []struct {
 	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
 	}},
+	{"yanima", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newYanima(YanimaBase, cfg.Providers.Yanima.DDoSP1,
+			cfg.Providers.Yanima.DDoSP2, cfg.Providers.Yanima.Session, http)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

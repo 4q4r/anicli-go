@@ -30,6 +30,15 @@ var unconfiguredRules = []struct {
 			return "", false
 		},
 	},
+	{
+		id: "yanima",
+		disabled: func(cfg config.Settings) (string, bool) {
+			if cfg.Providers.Yanima.DDoSP1 == "" || cfg.Providers.Yanima.DDoSP2 == "" {
+				return "не заданы DDoS-куки (providers.yanima.ddoS_p1/ddoS_p2)", true
+			}
+			return "", false
+		},
+	},
 }
 
 // UnconfiguredProviders reports every provider that cannot run with

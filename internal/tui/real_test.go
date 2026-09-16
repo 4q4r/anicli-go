@@ -24,6 +24,8 @@ func TestRealDepsConstruction(t *testing.T) {
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()           // isolate the offline scan
 	settings.Providers.Kodik.Token = "test-token" // keep kodik registered (PR24)
+	settings.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima registered (PR33)
+	settings.Providers.Yanima.DDoSP2 = "test-p2"
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)
@@ -42,7 +44,7 @@ func TestRealDepsConstruction(t *testing.T) {
 	}
 
 	providers := real.Deps.Search.Providers()
-	if len(providers) < 11 {
+	if len(providers) < 12 {
 		t.Fatalf("expected the full provider wave, got %d", len(providers))
 	}
 	ids := make([]string, 0, len(providers))
@@ -74,6 +76,11 @@ func TestRealDepsDisabledProviders(t *testing.T) {
 
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()
+	// yanima stays configured: this test pins the kodik specimen of
+	// the disabled-set mechanism (PR33 added a second credentialled
+	// provider).
+	settings.Providers.Yanima.DDoSP1 = "test-p1"
+	settings.Providers.Yanima.DDoSP2 = "test-p2"
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)

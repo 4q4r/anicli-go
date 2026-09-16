@@ -12,25 +12,27 @@ import (
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
-func TestAllReturnsElevenProviders(t *testing.T) {
+func TestAllReturnsTwelveProviders(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 11 {
-		t.Fatalf("All() = %d providers, want 11", len(bare))
+	if len(bare) != 12 {
+		t.Fatalf("All() = %d providers, want 12", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub",
+		"allanime", "anidub", "yanima",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -79,6 +81,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {
@@ -86,16 +90,16 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 11 {
-		t.Fatalf("List() = %d providers, want 11", len(list))
+	if len(list) != 12 {
+		t.Fatalf("List() = %d providers, want 12", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order);
 	// anidub (no frozen Python original) is appended after the ported
-	// roster.
+	// roster, yanima (PR33) after anidub.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub",
+		"allanime", "anidub", "yanima",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -129,6 +133,8 @@ func TestNewRegistryRecordsSearchStatsWiring(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {
@@ -167,13 +173,15 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 11 {
-		t.Fatalf("All() = %d providers, want 11", len(bare))
+	if len(bare) != 12 {
+		t.Fatalf("All() = %d providers, want 12", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -202,10 +210,15 @@ func TestContentLanguageRoster(t *testing.T) {
 		"kodik":     "ru",
 		"allanime":  "ja", // primary sub track is Japanese; dub→"en"
 		"anidub":    "ru",
+		"yanima":    "ru",
 	}
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
+	// yanima joins the roster only with its DDoS cookies configured
+	// (PR33); kodik stays tokenless here per this test's history.
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
@@ -232,13 +245,15 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Exclude = []string{"animepahe", "kodik"}
+	cfg.Providers.Yanima.DDoSP1 = "test-p1" // keep yanima in the roster (PR33)
+	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 9 {
-		t.Fatalf("All() = %d providers, want 9", len(bare))
+	if len(bare) != 10 {
+		t.Fatalf("All() = %d providers, want 10", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

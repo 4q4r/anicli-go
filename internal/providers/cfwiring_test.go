@@ -16,6 +16,8 @@ func cfEnabledSettings(t *testing.T) (config.Settings, string) {
 	t.Helper()
 	s := config.Default()
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	s.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	s.Providers.Yanima.DDoSP2 = "test-p2"
 	s.CF.Enabled = true
 	s.CF.SolveTimeout = 5 * time.Second
 	s.CF.UpdateInterval = time.Hour
@@ -38,6 +40,8 @@ func cfEnabledSettings(t *testing.T) (config.Settings, string) {
 func TestRegistryEnabledRequiresBinary(t *testing.T) {
 	s := config.Default()
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	s.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	s.Providers.Yanima.DDoSP2 = "test-p2"
 	s.CF.Enabled = true
 	t.Setenv("CLOAKBROWSER_CACHE_DIR", t.TempDir())
 	t.Setenv("CLOAKBROWSER_BINARY_PATH", "")
@@ -62,14 +66,16 @@ func TestRegistryEnabledWiresSolverAndCloses(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
-	if len(reg.List()) != 11 {
-		t.Fatalf("all 11 providers must be registered, got %d", len(reg.List()))
+	if len(reg.List()) != 12 {
+		t.Fatalf("all 12 providers must be registered, got %d", len(reg.List()))
 	}
 }
 
 func TestRegistryDisabledKeepsPlainClients(t *testing.T) {
 	s := config.Default()                  // cf disabled
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
+	s.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	s.Providers.Yanima.DDoSP2 = "test-p2"
 	t.Setenv("ANICLI_DATA", t.TempDir())
 	reg, err := NewRegistry(s, nil)
 	if err != nil {
@@ -78,7 +84,7 @@ func TestRegistryDisabledKeepsPlainClients(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.List()) != 11 {
+	if len(reg.List()) != 12 {
 		t.Fatalf("providers = %d", len(reg.List()))
 	}
 }

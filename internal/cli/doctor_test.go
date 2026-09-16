@@ -18,7 +18,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
-// TestStartupNotices: the PR24 startup warning lines — one per
+// TestStartupNotices: the PR24/PR33 startup warning lines — one per
 // unconfigured provider, exact RU wording.
 func TestStartupNotices(t *testing.T) {
 	cfg := config.Default()
@@ -26,17 +26,23 @@ func TestStartupNotices(t *testing.T) {
 
 	notices := startupNotices(cfg)
 	// Shikimori defaults to enabled=true (core feature) with empty
-	// credentials, so the default config yields both the provider and
-	// the Shikimori notice.
-	if len(notices) != 2 {
-		t.Fatalf("want two notices (kodik + shikimori), got %v", notices)
+	// credentials, so the default config yields the kodik, yanima and
+	// Shikimori notices.
+	if len(notices) != 3 {
+		t.Fatalf("want three notices (kodik + yanima + shikimori), got %v", notices)
 	}
 	wantKodik := "⚠ Провайдер 'kodik' отключён: не задан токен (providers.kodik.token)"
 	if notices[0] != wantKodik {
 		t.Fatalf("notice[0] = %q, want %q", notices[0], wantKodik)
 	}
+	wantYanima := "⚠ Провайдер 'yanima' отключён: не заданы DDoS-куки (providers.yanima.ddoS_p1/ddoS_p2)"
+	if notices[1] != wantYanima {
+		t.Fatalf("notice[1] = %q, want %q", notices[1], wantYanima)
+	}
 
 	cfg.Providers.Kodik.Token = "set"
+	cfg.Providers.Yanima.DDoSP1 = "p1"
+	cfg.Providers.Yanima.DDoSP2 = "p2"
 	cfg.Shikimori.Session = "configured"
 	if got := startupNotices(cfg); len(got) != 0 {
 		t.Fatalf("configured providers must not warn, got %v", got)

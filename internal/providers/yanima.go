@@ -7,19 +7,23 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// This file hosts the yanima.space provider (PR33). It is NOT a
-// Python-tree port: yanima.space is a Russian-dub aggregator (Next.js
-// SPA behind a Mitelis DDoS-Mitigation wall) characterized from
-// user-supplied DevTools curl captures on 2026-09-14 — see the
-// ".sdd/ledger.md" YANIMA.SPACE PROTOCOL DOSSIER. Wire-shape facts
-// marked [LIVE-CAPTURED] come from those captures; response-body
-// field names are shape hypotheses pinned by the fixtures pending a
-// verbatim live capture (disclosed in .sdd/pr33-report.md).
+// This file hosts the yanima.space provider (PR33; PR34 full-episode
+// resolve). It is NOT a Python-tree port: yanima.space is a
+// Russian-dub aggregator (Next.js SPA behind a Mitelis DDoS-Mitigation
+// wall) characterized from user-supplied DevTools curl captures on
+// 2026-09-14 — see the ".sdd/ledger.md" YANIMA.SPACE PROTOCOL DOSSIER.
+// Wire-shape facts marked [LIVE-CAPTURED] come from those captures;
+// the ep1-free/ep2+-walled split and the S3-gated-by-JWT-only facts
+// are [LIVE-VERIFIED protocol, controller 2026-09-13]. The SOURCE row
+// shape (resolution object + src) is live-verified; the response-body
+// wrapper keys remain bounded-tolerant hypotheses pinned by the
+// fixtures (disclosed in .sdd/pr33-report.md and .sdd/pr34-report.md).
 //
 // Anime IDs are Shikimori IDs (/play/{shikimori_id}). The site has no
 // characterized search or episodes endpoint yet, so Search and
@@ -47,7 +51,29 @@ type Yanima struct {
 	ddoSP1  string
 	ddoSP2  string
 	session string
+
+	// ymMu guards ymTokens: the first ym_ JWT each anime successfully
+	// manifests with, kept across ResolveStream calls. The
+	// s3.yanima.space gate is that JWT alone [LIVE-VERIFIED protocol,
+	// controller 2026-09-13: ep1 4K plays free and the subscription
+	// check sits on the MANIFEST endpoint, not on S3 file access], so
+	// a token minted for a free episode is the bypass credential when
+	// a later episode's manifest hits the subscription wall.
+	ymMu     sync.Mutex
+	ymTokens map[string]string
+
+	// s3Host is the hostname of the yanima S3 storage [dossier:
+	// s3.yanima.space]. It decides which SOURCE src rows are native
+	// (JWT-gated) versus foreign embeds (Kodik et al., credential-free):
+	// the ym_ JWT is a bearer credential and is only ever sent to this
+	// host. Injectable like the API baseURL; tests point it at their
+	// fake.
+	s3Host string
 }
+
+// YanimaS3Host is the default s3.yanima.space storage hostname
+// [LIVE-CAPTURED 2026-09-14].
+const YanimaS3Host = "s3.yanima.space"
 
 // newYanima builds the provider against baseURL with the user's wall
 // cookies. The cookies are opaque browser-issued values and are sent
@@ -65,6 +91,9 @@ func newYanima(baseURL, ddoSP1, ddoSP2, session string, http *netclient.Client) 
 		ddoSP1:  ddoSP1,
 		ddoSP2:  ddoSP2,
 		session: session,
+		s3Host:  YanimaS3Host,
+
+		ymTokens: map[string]string{},
 	}
 }
 
@@ -88,23 +117,33 @@ func (p *Yanima) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 			contracts.ErrInvalidInput))
 }
 
-// ResolveStream runs the SOURCE → MANIFEST protocol for one dub
-// [LIVE-CAPTURED endpoint routes 2026-09-14]:
+// ResolveStream resolves the best available quality for one dub
+// [LIVE-CAPTURED endpoint routes 2026-09-14; LIVE-VERIFIED fallback
+// protocol, controller 2026-09-13]:
 //
 //  1. the yanima embed URL is parsed into (animeID, episode[, pinned
 //     quality/resolution]);
 //  2. GET /api/anime/v1/player/source/{id}/{ep}/{dub}?fetchKodik=true
-//     lists the dub's quality/resolution variants;
+//     lists the dub's quality/resolution variants plus direct m3u8
+//     src URLs (Kodik embeds, native S3 rows);
 //  3. GET /api/anime/v2/player/manifest/{id}/{ep}/{quality}/{resolution}
-//     yields the m3u8 URL plus a ym_ JWT per variant;
-//  4. every variant becomes a VideoSource carrying the ym_ Cookie and
-//     the site Referer — both load-bearing on the s3.yanima.space HLS
-//     server.
+//     yields the m3u8 URL plus a ym_ JWT per variant — FREE on episode
+//     1, subscription-walled from episode 2 on;
+//  4. every manifested variant becomes a VideoSource carrying the ym_
+//     Cookie and the site Referer — both load-bearing on the
+//     s3.yanima.space HLS server — and successful tokens are cached
+//     per anime;
+//  5. when the manifest wall swallowed every variant (episode 2+),
+//     the SOURCE-disclosed native S3 src URLs are probed with the
+//     cached ym_ token (the S3 gate is the JWT, not the manifest);
+//  6. if the probes are rejected too, the remaining SOURCE src rows
+//     (Kodik et al., credential-free) become the links.
 //
-// A pinned pair in the embed URL skips the SOURCE discovery call.
-// Per-variant manifest failures are skipped while any sibling
-// succeeds; when every manifest fails the error is
-// ErrAllCandidatesFailed (never a silent empty stream).
+// A pinned pair in the embed URL skips the SOURCE discovery call and
+// stays manifest-only (the user asked for that exact variant). Only
+// server-disclosed URLs are used: no videoId guessing against S3.
+// When every candidate fails the error is ErrAllCandidatesFailed
+// (never a silent empty stream).
 func (p *Yanima) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
@@ -127,14 +166,17 @@ func (p *Yanima) ResolveStream(ctx context.Context, episode contracts.Episode, d
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
 	}
 
+	pinned := ref.quality != "" && ref.resolution != ""
 	variants := []yanimaVariant{{quality: ref.quality, resolution: ref.resolution}}
-	if ref.quality == "" || ref.resolution == "" {
+	if !pinned {
 		variants, err = p.fetchSource(ctx, ref, dubID)
 		if err != nil {
 			return stream, err
 		}
 	}
 
+	// Stage 1 — MANIFEST per variant: free episodes resolve here with
+	// the full quality ladder up to 4K.
 	for _, variant := range variants {
 		res := variant.resolution
 		if _, done := stream.Links[res]; done {
@@ -144,18 +186,64 @@ func (p *Yanima) ResolveStream(ctx context.Context, episode contracts.Episode, d
 		if err != nil {
 			continue // sibling variants stay candidates
 		}
-		cookie := "ym_=" + manifest.token
-		if p.session != "" {
-			cookie += "; YAA_SESS_ID=" + p.session
-		}
+		p.cacheToken(ref.animeID, manifest.token)
 		stream.Links[res] = contracts.VideoSource{
 			URL:     manifest.url,
 			Quality: res,
 			Type:    "m3u8",
 			Headers: map[string]string{
-				"Cookie":  cookie,
+				"Cookie":  p.streamCookie(manifest.token),
 				"Referer": YanimaStreamReferer,
 			},
+		}
+	}
+
+	// Stage 2 — native bypass: the manifest wall is server-side and
+	// episode-scoped, but S3 file access answers to the ym_ JWT alone.
+	// A token minted by an earlier free manifest (episode 1) is tried
+	// against the SOURCE-disclosed native S3 URLs.
+	if len(stream.Links) == 0 && !pinned {
+		if token := p.cachedToken(ref.animeID); token != "" {
+			for _, variant := range variants {
+				res := variant.resolution
+				if variant.src == "" || !p.nativeSrc(variant.src) {
+					continue
+				}
+				if _, done := stream.Links[res]; done {
+					continue
+				}
+				if !p.probeNative(ctx, variant.src, token) {
+					continue // claims enforced / dead URL: try the next row
+				}
+				stream.Links[res] = contracts.VideoSource{
+					URL:     variant.src,
+					Quality: res,
+					Type:    "m3u8",
+					Headers: map[string]string{
+						"Cookie":  p.streamCookie(token),
+						"Referer": YanimaStreamReferer,
+					},
+				}
+			}
+		}
+	}
+
+	// Stage 3 — credential-free fallback: the SOURCE endpoint serves
+	// Kodik m3u8 links for every episode regardless of the wall.
+	if len(stream.Links) == 0 && !pinned {
+		for _, variant := range variants {
+			res := variant.resolution
+			if variant.src == "" || p.nativeSrc(variant.src) {
+				continue // native rows without a token would 403 in the player
+			}
+			if _, done := stream.Links[res]; done {
+				continue
+			}
+			stream.Links[res] = contracts.VideoSource{
+				URL:     variant.src,
+				Quality: res,
+				Type:    "m3u8",
+			}
 		}
 	}
 
@@ -223,6 +311,9 @@ func parseYanimaEmbed(embeds []string) (yanimaRef, error) {
 type yanimaVariant struct {
 	quality    string
 	resolution string
+	// src is the SOURCE-disclosed direct m3u8 (native S3 or Kodik);
+	// "" marks a manifest-only row.
+	src string
 }
 
 // fetchSource calls the SOURCE endpoint for the dub's variants
@@ -286,6 +377,65 @@ func (p *Yanima) apiHeaders() map[string]string {
 	}
 }
 
+// streamCookie renders the Cookie the s3.yanima.space server expects:
+// the ym_ JWT (plus the optional session alongside, mirroring the
+// manifest path).
+func (p *Yanima) streamCookie(token string) string {
+	cookie := "ym_=" + token
+	if p.session != "" {
+		cookie += "; YAA_SESS_ID=" + p.session
+	}
+	return cookie
+}
+
+// cacheToken remembers the anime's first successfully manifested ym_
+// JWT (first wins — the JWT is per-anime/per-episode, but the S3 gate
+// checks the credential, not which episode minted it).
+func (p *Yanima) cacheToken(animeID, token string) {
+	p.ymMu.Lock()
+	defer p.ymMu.Unlock()
+	if _, ok := p.ymTokens[animeID]; !ok {
+		p.ymTokens[animeID] = token
+	}
+}
+
+// cachedToken returns the remembered ym_ JWT for the anime, "" when
+// none was minted yet this session.
+func (p *Yanima) cachedToken(animeID string) string {
+	p.ymMu.Lock()
+	defer p.ymMu.Unlock()
+	return p.ymTokens[animeID]
+}
+
+// probeNative checks one native S3 src URL against the cached ym_
+// credential with a lightweight GET. Any error (403 wall, 404 drift,
+// transport) marks the candidate dead — unverified links must never
+// reach the player.
+func (p *Yanima) probeNative(ctx context.Context, src, token string) bool {
+	_, err := p.http.Do(ctx, netclient.Request{
+		Method: "GET",
+		URL:    src,
+		Headers: map[string]string{
+			"Cookie":  p.streamCookie(token),
+			"Referer": YanimaStreamReferer,
+		},
+		Op: contracts.OpResolveStream,
+	})
+	return err == nil
+}
+
+// nativeSrc reports whether src points at the yanima S3 storage. Native
+// streams are gated by the ym_ JWT; foreign srcs (Kodik et al.) play
+// without credentials — and must never receive the JWT.
+func (p *Yanima) nativeSrc(src string) bool {
+	u, err := url.Parse(src)
+	if err != nil {
+		return false
+	}
+	// Hostname() strips the port (dossier pins s3.yanima.space:9000).
+	return u.Hostname() == p.s3Host
+}
+
 // yanimaManifest is one MANIFEST answer: the HLS playlist URL and the
 // ym_ JWT the S3 server expects as a Cookie.
 type yanimaManifest struct {
@@ -294,8 +444,11 @@ type yanimaManifest struct {
 }
 
 // yanimaVariantKeys are the wrapper keys the SOURCE variant list is
-// looked under (shape hypothesis — the exact envelope was not captured
-// verbatim; the canonical fixture pins {"sources": [...]}).
+// looked under (the canonical fixture pins {"sources": [...]}). The
+// row shape itself is live-verified (controller protocol 2026-09-13:
+// {source, priority, resolution: {name, numeric}, src}); the wrapper
+// stayed a tolerant list since the envelope around the array was not
+// captured verbatim.
 var yanimaVariantKeys = []string{"sources", "variants", "qualities", "data", "results"}
 
 // yanimaManifestURLKeys / yanimaManifestTokenKeys are the field names
@@ -328,7 +481,7 @@ func parseYanimaVariants(raw []byte) ([]yanimaVariant, error) {
 		if !ok {
 			continue
 		}
-		resolution := yanimaStringField(obj["resolution"])
+		resolution := yanimaResolutionLabel(obj["resolution"])
 		if resolution == "" {
 			continue
 		}
@@ -336,7 +489,11 @@ func parseYanimaVariants(raw []byte) ([]yanimaVariant, error) {
 		if quality == "" {
 			quality = resolution
 		}
-		variants = append(variants, yanimaVariant{quality: quality, resolution: resolution})
+		variants = append(variants, yanimaVariant{
+			quality:    quality,
+			resolution: resolution,
+			src:        yanimaStringField(obj["src"]),
+		})
 	}
 	if len(variants) == 0 {
 		return nil, fmt.Errorf("%w: yanima source payload carries no resolution variants", contracts.ErrExtractFailed)
@@ -395,6 +552,23 @@ func parseYanimaManifest(raw []byte) (yanimaManifest, error) {
 		return yanimaManifest{}, fmt.Errorf("%w: yanima manifest payload has no ym_ token", contracts.ErrExtractFailed)
 	}
 	return manifest, nil
+}
+
+// yanimaResolutionLabel reads a SOURCE row's resolution field. The
+// live-verified row shape (controller protocol 2026-09-13) carries an
+// object {name, numeric}; earlier captures and compact payloads carry
+// a bare string/number. numeric wins, then name, then the bare scalar;
+// "" marks the row unusable.
+func yanimaResolutionLabel(v any) string {
+	switch n := v.(type) {
+	case map[string]any:
+		if num := yanimaStringField(n["numeric"]); num != "" {
+			return num
+		}
+		return yanimaStringField(n["name"])
+	default:
+		return yanimaStringField(v)
+	}
 }
 
 // yanimaStringField renders a decoded JSON scalar as the wire string:

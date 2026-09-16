@@ -188,10 +188,7 @@ func (e *Engine) CheckTrackers(ctx context.Context) []TrackerHealth {
 	e.mu.Lock()
 	for _, st := range statuses {
 		prev, had := e.trackerHealth[st.URL]
-		// Keep the first successful verdict: a flaky tracker that
-		// answered once stays in the set until an explicit recheck
-		// proves otherwise is NOT the goal — the latest verdict wins.
-		e.trackerHealth[st.URL] = st
+		e.trackerHealth[st.URL] = st // the latest verdict wins
 		if had && prev.Alive != st.Alive {
 			if st.Alive {
 				e.log.Info("torrent: tracker back alive", "url", st.URL)

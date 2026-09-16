@@ -168,9 +168,12 @@ type Providers struct {
 // (pure-Go client). The engine stays idle until a link is added —
 // enabling it never starts network machinery on app boot by itself.
 type Torrent struct {
-	// Enabled turns the torrent subsystem on. With an empty Links
-	// list the engine still stays idle and the «Торренты» menu shows
-	// a hint.
+	// Enabled turns the torrent subsystem on. Default true by design
+	// ruling (commissioned feature, Shikimori-enabled precedent):
+	// combined with the lazy engine this is inert without Links —
+	// nothing boots until a link is added — and no_upload=false only
+	// means ethical seeding after playback (flip no_upload for
+	// leech-only).
 	Enabled bool `toml:"enabled"`
 	// Links is the ingestion list: magnet:?xt=urn:btih:… URIs (with
 	// optional &dn= display name), https://…/*.torrent URLs and plain

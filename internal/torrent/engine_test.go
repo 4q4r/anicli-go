@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,28 +178,35 @@ func TestParseRange(t *testing.T) {
 	tests := []struct {
 		name      string
 		spec      string
+		size      int64
 		wantStart int64
 		wantLen   int64
 		wantErr   error
 	}{
-		{name: "full closed range", spec: "bytes=0-99", wantStart: 0, wantLen: 100},
-		{name: "second range", spec: "bytes=100-199", wantStart: 100, wantLen: 100},
-		{name: "open end clamps to size", spec: "bytes=900-", wantStart: 900, wantLen: 100},
-		{name: "end beyond size clamps", spec: "bytes=990-2000", wantStart: 990, wantLen: 10},
-		{name: "suffix range", spec: "bytes=-100", wantStart: 900, wantLen: 100},
-		{name: "suffix larger than size", spec: "bytes=-5000", wantStart: 0, wantLen: 1000},
-		{name: "zero bytes suffix unsatisfiable", spec: "bytes=-0", wantErr: ErrRangeNotSatisfiable},
-		{name: "start at size unsatisfiable", spec: "bytes=1000-", wantErr: ErrRangeNotSatisfiable},
-		{name: "start beyond size unsatisfiable", spec: "bytes=1500-1600", wantErr: ErrRangeNotSatisfiable},
-		{name: "malformed ignored", spec: "bytes=zzz", wantStart: 0, wantLen: size},
-		{name: "non-bytes unit ignored", spec: "items=0-1", wantStart: 0, wantLen: size},
-		{name: "multi range serves first", spec: "bytes=0-9,50-59", wantStart: 0, wantLen: 10},
-		{name: "reversed ignored", spec: "bytes=99-0", wantStart: 0, wantLen: size},
+		{name: "full closed range", spec: "bytes=0-99", size: size, wantStart: 0, wantLen: 100},
+		{name: "second range", spec: "bytes=100-199", size: size, wantStart: 100, wantLen: 100},
+		{name: "open end clamps to size", spec: "bytes=900-", size: size, wantStart: 900, wantLen: 100},
+		{name: "end beyond size clamps", spec: "bytes=990-2000", size: size, wantStart: 990, wantLen: 10},
+		{name: "suffix range", spec: "bytes=-100", size: size, wantStart: 900, wantLen: 100},
+		{name: "suffix larger than size", spec: "bytes=-5000", size: size, wantStart: 0, wantLen: 1000},
+		{name: "zero bytes suffix unsatisfiable", spec: "bytes=-0", size: size, wantErr: ErrRangeNotSatisfiable},
+		{name: "start at size unsatisfiable", spec: "bytes=1000-", size: size, wantErr: ErrRangeNotSatisfiable},
+		{name: "start beyond size unsatisfiable", spec: "bytes=1500-1600", size: size, wantErr: ErrRangeNotSatisfiable},
+		{name: "malformed ignored", spec: "bytes=zzz", size: size, wantStart: 0, wantLen: size},
+		{name: "non-bytes unit ignored", spec: "items=0-1", size: size, wantStart: 0, wantLen: size},
+		{name: "multi range serves first", spec: "bytes=0-9,50-59", size: size, wantStart: 0, wantLen: 10},
+		{name: "reversed ignored", spec: "bytes=99-0", size: size, wantStart: 0, wantLen: size},
+		// Zero-length file: every well-formed range is unsatisfiable —
+		// a suffix range must never render "bytes 0--1/0".
+		{name: "suffix on zero-size unsatisfiable", spec: "bytes=-5", size: 0, wantErr: ErrRangeNotSatisfiable},
+		{name: "open range on zero-size unsatisfiable", spec: "bytes=0-", size: 0, wantErr: ErrRangeNotSatisfiable},
+		{name: "closed range on zero-size unsatisfiable", spec: "bytes=0-0", size: 0, wantErr: ErrRangeNotSatisfiable},
+		{name: "malformed on zero-size ignored", spec: "bytes=zzz", size: 0, wantStart: 0, wantLen: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			start, length, err := parseRange(tt.spec, size)
+			start, length, err := parseRange(tt.spec, tt.size)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tt.wantErr)
 			}
@@ -241,6 +250,61 @@ func seedTorrent(t *testing.T, dir string, size int) ([]byte, *metainfo.MetaInfo
 	return data, mi, mi.HashInfoBytes()
 }
 
+// TestResolveAfterCloseFailsLoud pins the lifecycle contract: a
+// closed engine never hands out a reader, even for a ready release.
+func TestResolveAfterCloseFailsLoud(t *testing.T) {
+	dir := t.TempDir()
+	_, mi, ih := seedTorrent(t, dir, 32*1024)
+
+	eng := newTestEngine(t, true)
+	eng.cfg.Dir = dir // storage sees the payload → the release is ready instantly
+	if _, err := eng.AddMetaInfo(mi); err != nil {
+		t.Fatalf("AddMetaInfo: %v", err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	_, err := eng.Resolve(context.Background(), ih, 0)
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("Resolve after Close err = %v, want ErrClosed", err)
+	}
+}
+
+func TestTrackerCheckStopsOnEngineClose(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	released := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(entered) })
+		<-r.Context().Done()
+		close(released)
+	}))
+	defer srv.Close()
+
+	e := newTestEngine(t, true)
+	e.cfg.Trackers = []string{srv.URL + "/announce"}
+	e.probeTimeoutOverride = 10 * time.Second
+
+	e.kickTrackerCheck()
+	<-entered
+	if err := e.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Engine shutdown must cancel the in-flight probe instead of
+	// letting it ride out its full timeout.
+	select {
+	case <-released:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight tracker probe was not cancelled by engine close")
+	}
+}
+
+// seeds a generated file, client B (same process, distinct data dir
+// and port) ingests a magnet with x.pe pointing at A, receives the
+// metadata, streams the whole file through Resolve and serves it over
+// the engine's loopback HTTP server with full + Range requests.
 // TestClientToClientE2E is the offline end-to-end proof: client A
 // seeds a generated file, client B (same process, distinct data dir
 // and port) ingests a magnet with x.pe pointing at A, receives the

@@ -190,7 +190,21 @@ func (s *torrentReleasesScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if resolved == Back {
 			return s, pop()
 		}
-		return s, s.pick(resolved.(torrent.Release))
+		rel, ok := resolved.(torrent.Release)
+		if !ok {
+			return s, nil
+		}
+		return s, s.pick(rel)
+	case torrentPlayedMsg:
+		// Playback settles here: failures surface in the status line,
+		// successes echo the release — never a silent drop.
+		if msg.err != nil {
+			s.errText = msg.err.Error()
+			return s, nil
+		}
+		s.errText = ""
+		s.launched = "запущено: " + msg.rel.DisplayName
+		return s, nil
 	default:
 		return s, nil
 	}
@@ -273,6 +287,8 @@ func (s *torrentReleasesScreen) View() tea.View {
 	return tea.NewView(string(b))
 }
 
+// statusLine renders the bottom line: errors win over the launch
+// echo, the fetch note wins over nothing in particular.
 func (s *torrentReleasesScreen) statusLine() string {
 	switch {
 	case s.errText != "":
@@ -302,6 +318,10 @@ type torrentFilesScreen struct {
 	deps *Deps
 	rel  torrent.Release
 	list *PinList
+	// errText carries the last playback failure; launched the last
+	// success echo (same contract as the releases screen).
+	errText  string
+	launched string
 }
 
 // NewTorrentFiles builds the files screen for one ready release.
@@ -342,24 +362,40 @@ func fileLabel(f torrent.FileEntry) string {
 
 // Update implements Screen: navigation, Enter plays the file, Esc pops.
 func (s *torrentFilesScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	key, ok := msg.(tea.KeyPressMsg)
-	if !ok {
+	switch msg := msg.(type) {
+	case torrentPlayedMsg:
+		// Same settled-error contract as the releases screen: a dead
+		// mpv or a dead URL is visible, never swallowed.
+		if msg.err != nil {
+			s.errText = msg.err.Error()
+			return s, nil
+		}
+		s.errText = ""
+		if msg.file != nil {
+			s.launched = "запущено: " + fileLabel(*msg.file)
+		}
 		return s, nil
-	}
-	if s.list.HandleKey(key) {
+	case tea.KeyPressMsg:
+		if s.list.HandleKey(msg) {
+			return s, nil
+		}
+		resolved := ResolveKey(s.list.Menu(), s.list.Cursor(), msg)
+		if resolved == nil {
+			return s, nil
+		}
+		if resolved == Back {
+			return s, pop()
+		}
+		file, ok := resolved.(torrent.FileEntry)
+		if !ok {
+			return s, nil
+		}
+		return s, func() tea.Msg {
+			err := playTorrentFile(context.Background(), s.deps, s.rel, &file)
+			return torrentPlayedMsg{rel: s.rel, file: &file, err: err}
+		}
+	default:
 		return s, nil
-	}
-	resolved := ResolveKey(s.list.Menu(), s.list.Cursor(), key)
-	if resolved == nil {
-		return s, nil
-	}
-	if resolved == Back {
-		return s, pop()
-	}
-	file := resolved.(torrent.FileEntry)
-	return s, func() tea.Msg {
-		err := playTorrentFile(context.Background(), s.deps, s.rel, &file)
-		return torrentPlayedMsg{rel: s.rel, file: &file, err: err}
 	}
 }
 
@@ -369,5 +405,13 @@ func (s *torrentFilesScreen) View() tea.View {
 	b = append(b, theme.Title.Render("🧲 "+s.rel.DisplayName)...)
 	b = append(b, '\n', '\n')
 	b = append(b, s.list.Render()...)
+	switch {
+	case s.errText != "":
+		b = append(b, '\n')
+		b = append(b, theme.Error.Render("⚠ "+s.errText)...)
+	case s.launched != "":
+		b = append(b, '\n')
+		b = append(b, theme.StatusLine.Render("▶ "+s.launched)...)
+	}
 	return tea.NewView(string(b))
 }

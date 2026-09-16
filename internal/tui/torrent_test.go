@@ -274,6 +274,80 @@ func TestTorrentSingleFileAutoPlays(t *testing.T) {
 	}
 }
 
+// TestTorrentPlayedErrorSurfaces pins the playedMsg contract: an mpv
+// launch failure must never vanish (it settles into the status line),
+// and a success echoes the release (review blocker 1).
+func TestTorrentPlayedErrorSurfaces(t *testing.T) {
+	rel := testRelease("Single Movie 1080p", hexB, torrent.StatusReady,
+		torrent.FileEntry{Path: "Single Movie.mkv", Size: 700 << 20, Index: 0},
+	)
+	ft := &fakeTorrent{
+		enabled:  true,
+		releases: []torrent.Release{rel},
+		files:    map[string][]torrent.FileEntry{hexB: rel.Files},
+	}
+	pb := &fakePlayback{err: errors.New("mpv не найден")}
+	screen := NewTorrentReleases(newTorrentDeps(ft, pb))
+	settle(t, screen, screen.Init())
+	screen.list.Jump(0)
+	_, cmd := screen.Update(enter())
+	settle(t, screen, cmd)
+
+	view := screen.View().Content
+	if !strings.Contains(view, "mpv не найден") {
+		t.Fatalf("playback failure must surface in the status line, got:\n%s", view)
+	}
+	if strings.Contains(view, "запущено") {
+		t.Fatalf("failed playback must not echo success, got:\n%s", view)
+	}
+}
+
+func TestTorrentPlayedSuccessEchoes(t *testing.T) {
+	rel := testRelease("Single Movie 1080p", hexB, torrent.StatusReady,
+		torrent.FileEntry{Path: "Single Movie.mkv", Size: 700 << 20, Index: 0},
+	)
+	ft := &fakeTorrent{
+		enabled:  true,
+		releases: []torrent.Release{rel},
+		files:    map[string][]torrent.FileEntry{hexB: rel.Files},
+	}
+	screen := NewTorrentReleases(newTorrentDeps(ft, &fakePlayback{}))
+	settle(t, screen, screen.Init())
+	screen.list.Jump(0)
+	_, cmd := screen.Update(enter())
+	settle(t, screen, cmd)
+
+	view := screen.View().Content
+	if !strings.Contains(view, "запущено: Single Movie 1080p") {
+		t.Fatalf("successful playback must echo the release, got:\n%s", view)
+	}
+}
+
+// TestTorrentFilesPlayedErrorSurfaces: the files screen surfaces a
+// failed launch the same way (review blocker 1, second producer).
+func TestTorrentFilesPlayedErrorSurfaces(t *testing.T) {
+	rel := testMultiFileRelease()
+	ft := &fakeTorrent{
+		enabled:  true,
+		releases: []torrent.Release{rel},
+		files:    map[string][]torrent.FileEntry{hexA: rel.Files},
+	}
+	pb := &fakePlayback{err: errors.New("плеер недоступен")}
+	screen := NewTorrentReleases(newTorrentDeps(ft, pb))
+	settle(t, screen, screen.Init())
+	screen.list.Jump(0)
+	_, cmd := screen.Update(enter())
+	files := cmd().(pushMsg).screen.(*torrentFilesScreen)
+	settle(t, files, files.Init())
+	files.list.Jump(0)
+	_, playCmd := files.Update(enter())
+	settle(t, files, playCmd)
+
+	if !strings.Contains(files.View().Content, "плеер недоступен") {
+		t.Fatalf("playback failure must surface on the files screen, got:\n%s", files.View().Content)
+	}
+}
+
 func TestTorrentFilesEnterPlays(t *testing.T) {
 	rel := testMultiFileRelease()
 	ft := &fakeTorrent{

@@ -164,7 +164,10 @@ func parseRange(spec string, size int64) (start, length int64, err error) {
 		if err != nil || n < 0 {
 			return 0, size, nil
 		}
-		if n == 0 {
+		if n == 0 || size == 0 {
+			// "bytes=-0" and any suffix against an empty file are
+			// unsatisfiable (a length-0 206 would render
+			// "Content-Range: bytes 0--1/0").
 			return 0, 0, ErrRangeNotSatisfiable
 		}
 		if n > size {

@@ -203,6 +203,9 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 		if e.net == nil {
 			return Release{}, fmt.Errorf("torrent: %s needs a transport but the engine has no netclient", link)
 		}
+		// This fetch rides the shared netclient — i.e.
+		// network.proxy_url — NOT [torrent] proxy, which only covers
+		// the library's own HTTP layer (announces, webseeds).
 		resp, err := e.net.Get(ctx, link, nil)
 		if err != nil {
 			return Release{}, fmt.Errorf("torrent: fetch .torrent: %w", err)
@@ -359,6 +362,14 @@ func sortReleases(rels []Release) {
 // pieces over everything else and returns a streaming reader with the
 // configured readahead window.
 func (e *Engine) Resolve(ctx context.Context, ih InfoHash, fileIndex int) (StreamHandle, error) {
+	// Lifecycle first: a closed engine never hands out a reader, even
+	// for an already-ready release (its reads would fail on the dead
+	// client).
+	select {
+	case <-e.closed:
+		return StreamHandle{}, ErrClosed
+	default:
+	}
 	e.mu.Lock()
 	t, ok := e.torrents[ih]
 	e.mu.Unlock()
@@ -524,10 +535,22 @@ func (e *Engine) startClientLocked() error {
 	// prune dead announce URLs for every torrent added afterwards and
 	// never delay startup (per-probe timeouts bound the goroutine).
 	if len(e.cfg.Trackers) > 0 {
-		go e.CheckTrackers(context.Background())
+		e.kickTrackerCheck()
 	}
 	e.log.Info("torrent: client started", "dir", dir, "port", e.cfg.Port)
 	return nil
+}
+
+// kickTrackerCheck runs one CheckTrackers pass on a context derived
+// from the engine lifecycle: engine shutdown cancels in-flight
+// probes instead of letting them ride out their timeouts.
+func (e *Engine) kickTrackerCheck() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		<-e.closed
+	}()
+	go e.CheckTrackers(ctx)
 }
 
 // isInfoHashHex reports whether s is a bare 40-hex-char infohash.

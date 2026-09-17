@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -65,6 +66,8 @@ type fakeShiki struct {
 	// queries records SearchIDs lookups; ids is their fixture.
 	queries []string
 	ids     map[string]int64
+	// items is the Autocomplete fixture (PR42 enrichment binding).
+	items []shikimori.AutocompleteItem
 	// next is the rate id returned for the next create (PATCH echoes
 	// the incoming id).
 	next int64
@@ -98,6 +101,13 @@ func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, rateID int64, s
 func (f *fakeShiki) SearchIDs(_ context.Context, query string) (map[string]int64, error) {
 	f.queries = append(f.queries, query)
 	return f.ids, nil
+}
+
+// Autocomplete resolves the rich autocomplete records (PR42): the
+// hybrid enrichment binds through BOTH names of a record.
+func (f *fakeShiki) Autocomplete(_ context.Context, query string, _ int) ([]shikimori.AutocompleteItem, error) {
+	f.queries = append(f.queries, query)
+	return f.items, nil
 }
 
 var _ ShikimoriService = (*fakeShiki)(nil)

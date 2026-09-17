@@ -95,6 +95,32 @@ type TorrentProvider interface {
 	IsTorrent() bool
 }
 
+// NamePreference declares which title language a provider's search
+// index matches (PR42). The search fan-out reads it to route the
+// query variants: latin-only indexes (the foreign torrent feeds)
+// receive the romaji/english names and never the Cyrillic ones — a
+// Cyrillic query there is guaranteed-zero.
+type NamePreference int
+
+const (
+	// NamePrefDefault is the no-declared-preference value: the caller
+	// routes variants by content language and script only (existing
+	// PR24 behavior).
+	NamePrefDefault NamePreference = iota
+	// NamePrefLatin is the preference of indexes matching
+	// romaji/english names only.
+	NamePrefLatin
+)
+
+// NamePreferenceProvider is the optional capability of providers whose
+// search index is latin-only (PR42). Undeclaring providers keep the
+// default routing; the registry accessor peels its wrapper layers
+// first (see Registry.NamePreference).
+type NamePreferenceProvider interface {
+	// NamePreference reports the provider's search-name preference.
+	NamePreference() NamePreference
+}
+
 // DubOption is one selectable dub for an episode.
 type DubOption struct {
 	// ID is the stable identifier consumed by Provider.ResolveStream.

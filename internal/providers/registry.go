@@ -128,6 +128,22 @@ func (r *Registry) ContentLanguage(id string) string {
 	return lc.ContentLanguage()
 }
 
+// NamePreference reports the search-name preference the provider under
+// id declares (PR42): NamePrefLatin for the latin-only torrent feeds,
+// NamePrefDefault for everyone else (including unknown ids). The
+// lookup peels the wrapper layers down to the concrete provider.
+func (r *Registry) NamePreference(id string) contracts.NamePreference {
+	p, ok := r.byID[id]
+	if !ok {
+		return contracts.NamePrefDefault
+	}
+	np, ok := bareProvider(p).(contracts.NamePreferenceProvider)
+	if !ok {
+		return contracts.NamePrefDefault
+	}
+	return np.NamePreference()
+}
+
 // bareProvider peels the registry wrapper layers (SearchDelegator, the
 // dub stream filter) down to the concrete provider they serve.
 func bareProvider(p contracts.Provider) contracts.Provider {

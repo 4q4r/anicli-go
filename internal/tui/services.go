@@ -6,6 +6,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -30,6 +31,10 @@ type SearchService interface {
 	// Search queries one provider. Errors mark the provider's row as
 	// failed but never abort the fan-out.
 	Search(ctx context.Context, providerID, query string) ([]contracts.SearchResult, error)
+	// NamePreference reports the provider's search-name preference
+	// (PR42): NamePrefLatin for the latin-only torrent feeds, which
+	// the fan-out routes the latin query variants only.
+	NamePreference(providerID string) contracts.NamePreference
 }
 
 // MetadataService resolves alternative titles for the hybrid search
@@ -142,6 +147,10 @@ type ShikimoriService interface {
 	// SearchIDs maps candidate titles to shikimori anime ids (python
 	// search_ids autocomplete port).
 	SearchIDs(ctx context.Context, query string) (map[string]int64, error)
+	// Autocomplete resolves the rich autocomplete records — ru AND en
+	// names per entry (PR42): the hybrid enrichment binds the query
+	// through both names and seeds the variant pool with both.
+	Autocomplete(ctx context.Context, query string, limit int) ([]shikimori.AutocompleteItem, error)
 }
 
 // DownloadTask is one episode download submitted by «Скачать серии».

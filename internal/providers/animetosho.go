@@ -75,6 +75,12 @@ func newAnimeTosho(feedBase string, http *netclient.Client, engine *torrent.Engi
 // IsTorrent implements contracts.TorrentProvider.
 func (p *AnimeTosho) IsTorrent() bool { return true }
 
+// NamePreference implements contracts.NamePreferenceProvider (PR42):
+// the animetosho feed indexes romaji/english release names only — the
+// search fan-out must route it the latin variants, never the Cyrillic
+// ones.
+func (p *AnimeTosho) NamePreference() contracts.NamePreference { return contracts.NamePrefLatin }
+
 // atAttr is one newznab/torznab attribute. The parse collects attrs
 // from ANY namespace (the struct tag has no namespace): the feed emits
 // every attribute twice — once per namespace — so a prefix or single-

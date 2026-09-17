@@ -339,6 +339,72 @@ func TestTorrentBaseNilEngineIngestFailsLoud(t *testing.T) {
 	}
 }
 
+// TestRegistryWiresSharedTorrentEngine pins the PR36 wiring: with
+// [torrent] enabled the registry builds ONE lazy engine, injects it
+// into every torrent provider and exposes it (the TUI reuses the same
+// engine instead of booting a second client). With [torrent] disabled
+// nyaa never registers (disabled-table) and no engine exists.
+func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
+	t.Parallel()
+
+	t.Run("enabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Default()
+		cfg.Network.ProxyURL = ""
+		cfg.Providers.Kodik.Token = "test-token"
+		cfg.Providers.Yanima.DDoSP1 = "test-p1"
+		cfg.Providers.Yanima.DDoSP2 = "test-p2"
+
+		reg, err := NewRegistry(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		t.Cleanup(func() { _ = reg.Close() })
+
+		eng := reg.TorrentEngine()
+		if eng == nil {
+			t.Fatal("TorrentEngine() = nil with [torrent] enabled")
+		}
+		p, ok := reg.Get("nyaa")
+		if !ok {
+			t.Fatal("nyaa not registered")
+		}
+		ny, ok := bareProvider(p).(*Nyaa)
+		if !ok {
+			t.Fatalf("nyaa entry is %T, want *Nyaa", bareProvider(p))
+		}
+		ny.mu.Lock()
+		wired := ny.engine
+		ny.mu.Unlock()
+		if wired == nil {
+			t.Fatal("the shared engine was not injected into the nyaa provider")
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Default()
+		cfg.Network.ProxyURL = ""
+		cfg.Providers.Kodik.Token = "test-token"
+		cfg.Providers.Yanima.DDoSP1 = "test-p1"
+		cfg.Providers.Yanima.DDoSP2 = "test-p2"
+		cfg.Torrent.Enabled = false
+
+		reg, err := NewRegistry(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		t.Cleanup(func() { _ = reg.Close() })
+
+		if eng := reg.TorrentEngine(); eng != nil {
+			t.Error("TorrentEngine() must be nil with [torrent] disabled")
+		}
+		if _, ok := reg.Get("nyaa"); ok {
+			t.Error("nyaa must not register when the torrent subsystem is off")
+		}
+	})
+}
+
 func TestRegistryFlagsTorrentProviders(t *testing.T) {
 	t.Parallel()
 	reg := NewEmptyRegistry()

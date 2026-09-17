@@ -73,6 +73,30 @@ func TestUnconfiguredProviders(t *testing.T) {
 // TestAllSkipsUnconfiguredProviders: the factory excludes
 // unconfigured providers from the built set entirely (PR24): kodik
 // without a token never gets a client or a registry slot.
+// TestNyaaDisabledWhenTorrentOff pins the disabled-table rule: nyaa
+// has no credentials of its own but cannot resolve without the
+// [torrent] subsystem, so torrent.enabled=false must exclude it via
+// the same unconfigured convention as kodik's missing token.
+func TestNyaaDisabledWhenTorrentOff(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Torrent.Enabled = false
+	disabled := UnconfiguredProviders(cfg)
+	found := false
+	for _, d := range disabled {
+		if d.ID == "nyaa" {
+			found = true
+			if d.Reason == "" {
+				t.Error("disabled reason must be user-facing (RU), got empty")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("nyaa must be in the unconfigured set when [torrent] is disabled")
+	}
+}
+
 func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
@@ -89,8 +113,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 11 {
-		t.Fatalf("want the remaining 11 providers, got %d", len(bare))
+	if len(bare) != 12 {
+		t.Fatalf("want the remaining 12 providers, got %d", len(bare))
 	}
 }
 

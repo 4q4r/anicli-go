@@ -59,6 +59,13 @@ var allFactories = []struct {
 		return newYanima(YanimaBase, cfg.Providers.Yanima.DDoSP1,
 			cfg.Providers.Yanima.DDoSP2, cfg.Providers.Yanima.Session, http)
 	}},
+	// nyaa (PR36): the first torrent search provider. No credentials
+	// and no per-provider settings; the shared torrent engine is
+	// injected by NewRegistry when [torrent] is enabled (All() leaves
+	// it nil — the base fails loud until wired).
+	{"nyaa", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newNyaa(NyaaBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled
@@ -68,6 +75,23 @@ func buildAABridge(cf *cfbrowser.Manager) aaBridgeSource {
 		return nil
 	}
 	return &aaCFBrowserBridge{Solver: cf.Solver, RootURL: AllAnimeReferer + "/", Lane: aaContentLane}
+}
+
+// registryOptions carries the NewRegistry customizations.
+type registryOptions struct {
+	// torrentLogger routes the shared torrent engine's diagnostics;
+	// nil keeps the engine default (slog.Default).
+	torrentLogger *slog.Logger
+}
+
+// RegistryOption customizes NewRegistry.
+type RegistryOption func(*registryOptions)
+
+// WithTorrentLogger routes the shared torrent engine's diagnostics to
+// log. The TUI passes its file logger here (stderr corrupts
+// alt-screen); a nil logger keeps the engine default.
+func WithTorrentLogger(log *slog.Logger) RegistryOption {
+	return func(o *registryOptions) { o.torrentLogger = log }
 }
 
 // cacheDirFor resolves the persistent cache directory for provider
@@ -162,7 +186,16 @@ func sortDisabled(disabled []DisabledProvider) {
 // that drops trash streams from episode listings (PR23). stats may be
 // nil: searches then simply are not recorded. When [cf].enabled the CF
 // challenge ladder is wired into every client; Close releases it.
-func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registry, error) {
+// When [torrent].enabled the registry also builds the ONE shared lazy
+// torrent engine, injects it into every torrent provider (SetEngine)
+// and owns its teardown (PR36): the TUI reuses the same engine via
+// TorrentEngine instead of booting a second client.
+func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...RegistryOption) (*Registry, error) {
+	var o registryOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	filter, err := NewStreamFilter(cfg.Providers.ExcludeStreams)
 	if err != nil {
 		return nil, err
@@ -182,6 +215,11 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo) (*Registr
 	}
 
 	reg := NewEmptyRegistry()
+	if cfg.Torrent.Enabled {
+		if err := reg.wireTorrentEngine(cfg, bare, o.torrentLogger); err != nil {
+			return nil, err
+		}
+	}
 	for _, p := range bare {
 		if filter != nil {
 			p = dubFilteredProvider{Provider: p, filter: filter}

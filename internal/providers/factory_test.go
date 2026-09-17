@@ -25,14 +25,14 @@ func TestAllReturnsTwelveProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 12 {
-		t.Fatalf("All() = %d providers, want 12", len(bare))
+	if len(bare) != 13 {
+		t.Fatalf("All() = %d providers, want 13", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub", "yanima",
+		"allanime", "anidub", "yanima", "nyaa",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -90,16 +90,17 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 12 {
-		t.Fatalf("List() = %d providers, want 12", len(list))
+	if len(list) != 13 {
+		t.Fatalf("List() = %d providers, want 13", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order);
 	// anidub (no frozen Python original) is appended after the ported
-	// roster, yanima (PR33) after anidub.
+	// roster, yanima (PR33) after anidub, nyaa (PR36, first torrent
+	// search provider) after yanima.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub", "yanima",
+		"allanime", "anidub", "yanima", "nyaa",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -180,8 +181,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 12 {
-		t.Fatalf("All() = %d providers, want 12", len(bare))
+	if len(bare) != 13 {
+		t.Fatalf("All() = %d providers, want 13", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -211,6 +212,7 @@ func TestContentLanguageRoster(t *testing.T) {
 		"allanime":  "ja", // primary sub track is Japanese; dub→"en"
 		"anidub":    "ru",
 		"yanima":    "ru",
+		"nyaa":      "ja",
 	}
 
 	cfg := config.Default()
@@ -252,8 +254,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 10 {
-		t.Fatalf("All() = %d providers, want 10", len(bare))
+	if len(bare) != 11 {
+		t.Fatalf("All() = %d providers, want 11", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

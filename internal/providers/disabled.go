@@ -39,6 +39,19 @@ var unconfiguredRules = []struct {
 			return "", false
 		},
 	},
+	{
+		// nyaa (PR36) has no credentials of its own, but its results
+		// resolve through the torrent core — without the [torrent]
+		// subsystem it cannot play anything (kodik-parity: never
+		// register a provider that cannot run).
+		id: "nyaa",
+		disabled: func(cfg config.Settings) (string, bool) {
+			if !cfg.Torrent.Enabled {
+				return "выключена подсистема [torrent] (torrent.enabled)", true
+			}
+			return "", false
+		},
+	},
 }
 
 // UnconfiguredProviders reports every provider that cannot run with

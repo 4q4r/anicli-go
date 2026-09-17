@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -213,9 +212,12 @@ func (p *Anilib) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 // FetchDubs hydrates episode.RawEmbeds from the per-episode players list
 // (port of anilib.py:116-139 fetch_dubs_for_episode). Kodik players are
 // stashed as their embed src; AnimeLib players as an internal: JSON
-// payload. On transport/decode failure the episode is returned unchanged
-// (the Python original swallows the exception); the failure is logged via
-// slog so it stays visible.
+// payload. The Python original swallows transport/decode failures and
+// returns the episode unchanged; this port FAILS LOUD instead — the
+// caller (the session hydration step, PR43) logs the failure to the
+// diagnostics file and continues with no dubs, which is the same UX
+// without the silent path. Callers that prefer the Python semantics
+// ignore the error and keep the unchanged episode.
 func (p *Anilib) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method:  "GET",
@@ -224,14 +226,12 @@ func (p *Anilib) FetchDubs(ctx context.Context, episode *contracts.Episode) (*co
 		Op:      contracts.OpGetEpisodes,
 	})
 	if err != nil {
-		slog.Warn("anilib: fetch dubs failed", "episode", episode.RawID, "error", err)
-		return episode, nil
+		return episode, fmt.Errorf("fetch dubs for episode %s: %w", episode.RawID, err)
 	}
 
 	var data anilibEpisode
 	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		slog.Warn("anilib: decode dubs response", "episode", episode.RawID, "error", jsonErr)
-		return episode, nil
+		return episode, fmt.Errorf("decode dubs of episode %s: %w", episode.RawID, jsonErr)
 	}
 
 	embeds := map[string][]string{}

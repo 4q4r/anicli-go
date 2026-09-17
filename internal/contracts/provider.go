@@ -36,3 +36,18 @@ type Provider interface {
 	// identified by dubID.
 	ResolveStream(ctx context.Context, episode Episode, dubID string) (MediaStream, error)
 }
+
+// DubsHydrator is the optional capability of providers whose episode
+// listings arrive with EMPTY RawEmbeds and hydrate the dub list lazily
+// per episode (anilib, animego; python fetch_dubs_for_episode). The
+// session flow asks for it when an episode carries no sources — the
+// PR43 root cause was exactly this hydration never running. Providers
+// without the capability list their dubs eagerly.
+//
+// FetchDubs fills episode.RawEmbeds in place (a copy is passed by
+// callers) and returns the same episode. A transport failure returns
+// the error: callers treat it as "no dubs known" but log it (fail loud
+// over silent swallow).
+type DubsHydrator interface {
+	FetchDubs(ctx context.Context, episode *Episode) (*Episode, error)
+}

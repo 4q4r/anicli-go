@@ -89,6 +89,55 @@ func newKodikWorld(t *testing.T, apiPath string, linksJSON string) *kodikWorld {
 	return w
 }
 
+// TestKodikVInfoParamShape pins the 2026-09 kodik page redesign
+// [LIVE-VERIFIED 2026-09-17]: the params object was renamed to `vInfo`
+// (vInfo.hash = '…'; vInfo.id = '…'), player_js_path and the app.js
+// ajax pattern disappeared — so the API path rides the /ftor default.
+// Before the vInfo shape was added to scrapeParams, every fresh kodik
+// embed failed with «player page carries no hash/id».
+func TestKodikVInfoParamShape(t *testing.T) {
+	var recorded map[string][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/kodik/vinfo/abc/720p":
+			_, _ = fmt.Fprint(rw, `<!DOCTYPE html><html><body><script>`+
+				`var domain = "animelib.me"; var d_sign = "ds1"; var pd = "pd1"; var pd_sign = "pds";`+
+				` var ref = "https://animelib.me/"; var ref_sign = "rs1";`+
+				` var vInfo = {}; vInfo.type = 'seria'; vInfo.hash = 'h-vinfo'; vInfo.id = '568105';`+
+				`</script></body></html>`)
+		case "/ftor":
+			_ = r.ParseForm()
+			recorded = r.PostForm.Clone()
+			_, _ = fmt.Fprintf(rw, `{"links": {"720": [{"src": %q}]}}`,
+				kodikEncodeSrc("https://cdn.example/video.m3u8"))
+		default:
+			http.NotFound(rw, r)
+		}
+	}))
+	defer srv.Close()
+
+	sources, err := NewFactory(testHTTPClient(t)).GetSources(context.Background(), srv.URL+"/kodik/vinfo/abc/720p")
+	if err != nil {
+		t.Fatalf("GetSources: %v", err)
+	}
+	if len(sources) != 1 {
+		keys := make([]string, 0, len(sources))
+		for k := range sources {
+			keys = append(keys, k)
+		}
+		t.Fatalf("sources keys = %v, want [720]", keys)
+	}
+	if got := recorded["hash"]; len(got) != 1 || got[0] != "h-vinfo" {
+		t.Fatalf("posted hash = %v, want h-vinfo (the vInfo shape must be scraped)", got)
+	}
+	if got := recorded["id"]; len(got) != 1 || got[0] != "568105" {
+		t.Fatalf("posted id = %v, want 568105", got)
+	}
+	if got := recorded["type"]; len(got) != 1 || got[0] != "seria" {
+		t.Fatalf("posted type = %v, want seria", got)
+	}
+}
+
 // TestKodikExtractRoundTrip is the full kodik flow (extractors.py:63-208):
 // player page var scrape, api path from the app.js atob blob, the
 // signed /ftor POST and the ROT-18+base64 link decoding with the

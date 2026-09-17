@@ -31,6 +31,11 @@ func (f *fakeEpisode) ContentLanguage(providerID string) string {
 	return f.langs[providerID]
 }
 
+// HydrateDubs is a no-op: by default test fixtures list eager embeds.
+func (f *fakeEpisode) HydrateDubs(_ context.Context, _ string, episode contracts.Episode) (contracts.Episode, error) {
+	return episode, nil
+}
+
 func (f *fakeEpisode) ResolveStream(_ context.Context, _ string, _ contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	if s, ok := f.streams[dubID]; ok {
 		return s, nil
@@ -46,6 +51,9 @@ type fakePlayback struct {
 	skipIDs  []int64 // shikimori ids seen by ResolveSkips
 	skipPath string
 	err      error
+	// playHook runs before the request is recorded; returning an error
+	// fails the play (tests capture at-play-time file state here).
+	playHook func(PlayRequest) error
 }
 
 func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), error) {
@@ -57,7 +65,12 @@ func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ floa
 	return "", cleanup, nil
 }
 
-func (f *fakePlayback) Play(_ context.Context, req PlayRequest) error {
+func (f *fakePlayback) Play(ctx context.Context, req PlayRequest) error {
+	if f.playHook != nil {
+		if err := f.playHook(req); err != nil {
+			return err
+		}
+	}
 	f.played = append(f.played, req)
 	return f.err
 }
@@ -106,7 +119,9 @@ func TestSessionEpisodesMerged(t *testing.T) {
 }
 
 // TestSessionMenuActions: the action menu covers the Python
-// session_loop entries; exit pops to root.
+// session_loop entries PLUS the PR43 additions (refresh sources,
+// format toggle), in order, with the pinned exit row last; exit pops
+// to root.
 func TestSessionMenuActions(t *testing.T) {
 	s := newSessionForTests(t)
 	v := s.View().Content
@@ -118,11 +133,21 @@ func TestSessionMenuActions(t *testing.T) {
 		"🎨 Сменить озвучку",
 		"📝 Изменить инфо",
 		"⬇ Скачать серии",
+		"🔄 Обновить источники",
+		"Формат: [потоковый]",
 		"🚪 Выход",
 	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("session menu must contain %q:\n%s", want, v)
 		}
+	}
+	// 10 actions + the pinned Back row (I1).
+	if got := len(s.list.Menu().Items); got != 11 {
+		t.Fatalf("session menu rows = %d, want 11 (10 actions + Back)", got)
+	}
+	last := s.list.Menu().Items[10]
+	if last.ID != BackID {
+		t.Fatalf("last menu row = %q, want the pinned Back entry", last.ID)
 	}
 
 	t.Run("exit pops to root", func(t *testing.T) {

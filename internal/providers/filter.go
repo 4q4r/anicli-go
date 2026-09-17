@@ -97,3 +97,24 @@ func (p dubFilteredProvider) GetEpisodes(ctx context.Context, animeURL string) (
 	}
 	return episodes, nil
 }
+
+// FetchDubs forwards the lazy-dub capability (contracts.DubsHydrator)
+// of the wrapped provider — without this forwarding the registry
+// wrapper HIDES the capability from every consumer, which is how the
+// PR43 «Ист: 0» bug survived: the hydration could never be reached.
+// Hydrated embeds pass through the same exclusion filter as the eager
+// listings. Providers without the capability resolve to a no-op.
+func (p dubFilteredProvider) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
+	hydrator, ok := p.Provider.(contracts.DubsHydrator)
+	if !ok {
+		return episode, nil
+	}
+	out, err := hydrator.FetchDubs(ctx, episode)
+	if err != nil {
+		return out, err
+	}
+	if p.filter != nil && out != nil {
+		out.RawEmbeds = p.filter.FilterEmbeds(out.RawEmbeds)
+	}
+	return out, nil
+}

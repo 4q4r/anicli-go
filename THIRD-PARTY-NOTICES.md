@@ -24,6 +24,7 @@ that clause requires notice reproduction in binary distributions.
 | `github.com/chromedp/chromedp` | v0.16.0 | MIT |
 | `github.com/go-chi/chi/v5` | v5.3.2 | MIT |
 | `github.com/jmespath/go-jmespath` | v0.4.0 | Apache-2.0 |
+| `github.com/anacrolix/torrent` | v1.61.0 | **MPL-2.0** (note below) |
 | `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause (Go Authors) |
 | `modernc.org/sqlite` | v1.58.0 | BSD-3-Clause |
@@ -39,6 +40,14 @@ Apache-2.0 dependencies: the Apache License, Version 2.0 text is
 available at <https://www.apache.org/licenses/LICENSE-2.0>. NOTICE
 files, where the modules ship them, are carried in their module
 trees.
+
+## anacrolix/torrent — MPL-2.0 (note)
+
+`github.com/anacrolix/torrent` (the PR35 torrent subsystem core) is
+licensed under the Mozilla Public License 2.0. MPL-2.0 is file-level
+copyleft: legal as an unmodified dependency of this MIT-licensed
+project. anicli modifies nothing inside the module; the license text
+ships in the module's `LICENSE` file.
 
 ## tls-client — BSD-4-Clause (reproduced verbatim)
 

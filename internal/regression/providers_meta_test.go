@@ -16,7 +16,8 @@ import (
 // dedicated fixture→DTO shape test. sovetromantica was removed in PR22
 // (domain hijacked off the anime project, frozen 2025); anidub (no
 // frozen Python original) joined the roster the same PR; yanima
-// (PR33) joined after anidub.
+// (PR33) joined after anidub; nyaa (PR36, first torrent search
+// provider) joined after yanima.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -30,6 +31,7 @@ var expectedProviderOrder = []string{
 	"allanime",
 	"anidub",
 	"yanima",
+	"nyaa",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

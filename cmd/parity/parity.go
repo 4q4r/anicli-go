@@ -42,8 +42,10 @@ func (e *env) close() {
 }
 
 // gateProviders is the G1 gate threshold: `parity all` exits non-zero
-// when fewer than this many providers answer both probe queries.
-const gateProviders = 11
+// when fewer than this many providers answer both probe queries. It
+// tracks the roster minus one dead-provider tolerance (11 of 12 at
+// PR24's roster; 12 of 13 since nyaa joined in PR36).
+const gateProviders = 12
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.
@@ -82,7 +84,8 @@ func run(args []string, out, errOut io.Writer, d deps) int {
 		Short: "Live provider parity capture tool (search/episodes/resolve/all)",
 		Long: "parity runs real provider operations against live sites via the real\n" +
 			"registry+config, prints JSON captures and saves them under testdata/parity/.\n" +
-			"`parity all` is the permanent G1 gate: all 11 providers must answer.",
+			"`parity all` is the permanent G1 gate: all roster providers must answer\n" +
+			"(up to one dead provider tolerated).",
 		SilenceUsage: true,
 	}
 	root.SetOut(out)

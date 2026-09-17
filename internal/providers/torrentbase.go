@@ -87,10 +87,57 @@ func (b *TorrentBase) Ingest(ctx context.Context, link string) (torrent.InfoHash
 	return rel.InfoHash, nil
 }
 
+// torrentEpisodePollInterval is the release-status poll cadence inside
+// EpisodesWait: metadata arrives in the engine's background, the wait
+// just observes it.
+const torrentEpisodePollInterval = 500 * time.Millisecond
+
+// EpisodesWait ingests the link (idempotent) and waits — bounded by
+// the caller's context — for the engine's background metadata fetch,
+// then lists the release's files as standard episodes. The provider
+// GetEpisodes path: search results resolve hours after the RSS was
+// fetched, so the one-shot Episodes snapshot is not enough here.
+func (b *TorrentBase) EpisodesWait(ctx context.Context, link string) ([]contracts.Episode, error) {
+	if _, err := b.Ingest(ctx, link); err != nil {
+		return nil, err
+	}
+	ticker := time.NewTicker(torrentEpisodePollInterval)
+	defer ticker.Stop()
+	for {
+		rel, err := b.releaseForLink(link)
+		if err != nil {
+			return nil, err
+		}
+		switch rel.Status {
+		case torrent.StatusReady:
+			return episodesFromRelease(rel, link), nil
+		case torrent.StatusError:
+			return nil, fmt.Errorf("торренты: метаданные не получены: %s", rel.Err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("торренты: метаданные не готовы (ожидание прервано): %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// ResolveStream is the provider-facing shape of Stream: the torrent
+// link rides the episode's RawEmbeds (the Episodes contract), the dub
+// slot is the single «Торрент» label.
+func (b *TorrentBase) ResolveStream(episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+	embeds, ok := episode.RawEmbeds[torrentDubLabel]
+	if !ok || len(embeds) == 0 || embeds[0] == "" {
+		return contracts.MediaStream{}, fmt.Errorf("торренты: в эпизоде нет ссылки «%s»", torrentDubLabel)
+	}
+	return b.Stream(embeds[0], episode, dubID)
+}
+
 // Episodes lists the release's files as standard episodes: Num is the
 // parsed episode number when available (file index otherwise), RawID
 // is the file index the stream resolves, and the single «Торрент» dub
-// slot keeps the session flow unchanged.
+// slot keeps the session flow unchanged. The torrent link itself rides
+// RawEmbeds so ResolveStream can recover it.
 func (b *TorrentBase) Episodes(link string) ([]contracts.Episode, error) {
 	rel, err := b.releaseForLink(link)
 	if err != nil {
@@ -99,6 +146,12 @@ func (b *TorrentBase) Episodes(link string) ([]contracts.Episode, error) {
 	if rel.Status != torrent.StatusReady {
 		return nil, fmt.Errorf("торренты: метаданные ещё не готовы (%s)", rel.Status)
 	}
+	return episodesFromRelease(rel, link), nil
+}
+
+// episodesFromRelease maps the release's files onto standard episodes
+// (shared by the one-shot Episodes and the waiting EpisodesWait).
+func episodesFromRelease(rel torrent.Release, link string) []contracts.Episode {
 	out := make([]contracts.Episode, 0, len(rel.Files))
 	for _, f := range rel.Files {
 		num := strconv.Itoa(f.Index + 1)
@@ -113,10 +166,10 @@ func (b *TorrentBase) Episodes(link string) ([]contracts.Episode, error) {
 			Num:       num,
 			Title:     name,
 			RawID:     strconv.Itoa(f.Index),
-			RawEmbeds: map[string][]string{torrentDubLabel: {}},
+			RawEmbeds: map[string][]string{torrentDubLabel: {link}},
 		})
 	}
-	return out, nil
+	return out
 }
 
 // torrentStreamWaitTimeout bounds the metadata wait inside Stream:
@@ -175,14 +228,25 @@ func (b *TorrentBase) Stream(link string, episode contracts.Episode, dubID strin
 
 // releaseForLink resolves the last known release for a link. The
 // flow contract: Ingest runs first (the provider's GetEpisodes calls
-// it), so a missing mapping fails loud instead of guessing.
+// it), so a missing mapping fails loud instead of guessing. The LIVE
+// engine snapshot wins over the cached one: metadata arrives in the
+// engine's background after Ingest, so the cache holds the fetching
+// snapshot forever unless refreshed here.
 func (b *TorrentBase) releaseForLink(link string) (torrent.Release, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	ih, ok := b.links[link]
+	eng := b.engine
+	b.mu.Unlock()
 	if !ok {
 		return torrent.Release{}, fmt.Errorf("торренты: ссылка не добавлена: %s", link)
 	}
+	if eng != nil {
+		if rel, ok := eng.Release(ih); ok {
+			return rel, nil
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	rel, ok := b.releases[ih]
 	if !ok {
 		return torrent.Release{}, fmt.Errorf("торренты: релиз не найден: %s", ih.HexString())

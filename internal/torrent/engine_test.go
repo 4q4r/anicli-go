@@ -45,6 +45,34 @@ func newTestEngine(t *testing.T, enabled bool) *Engine {
 	return eng
 }
 
+// TestNewOfflineEngineForTests pins the exported test-only
+// constructor: it must produce an engine with every external
+// discovery channel stripped, so provider-package tests never egress
+// to public DHT/UPnP/webtorrent during the default suite.
+func TestNewOfflineEngineForTests(t *testing.T) {
+	t.Parallel()
+
+	eng := NewOfflineEngineForTests(config.Torrent{
+		Enabled:     true,
+		Dir:         t.TempDir(),
+		Port:        0,
+		ReadaheadMB: 1,
+	}, nil, quietLogger())
+	t.Cleanup(func() { _ = eng.Close() })
+
+	if !eng.testNoExternal {
+		t.Fatal("NewOfflineEngineForTests must set the offline guard (no DHT/UPnP/webtorrent)")
+	}
+	// Same laziness contract as NewEngine: nothing runs until the
+	// first link.
+	if eng.client != nil {
+		t.Error("offline constructor must not start the client")
+	}
+	if eng.httpSrv != nil {
+		t.Error("offline constructor must not start the stream server")
+	}
+}
+
 func TestAddLinkMagnetDedupesByInfoHash(t *testing.T) {
 	t.Parallel()
 	eng := newTestEngine(t, true)

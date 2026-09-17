@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // statWriteTimeout bounds a single search-stat database write so a stuck
@@ -28,6 +31,10 @@ type Registry struct {
 	// updater ticker) when the registry was built with [cf].enabled;
 	// nil otherwise.
 	cfClose func()
+	// engine is the ONE shared lazy torrent engine (PR36): built when
+	// [torrent].enabled, injected into every torrent provider and
+	// torn down by Close. Nil when the subsystem is disabled.
+	engine *torrent.Engine
 }
 
 // NewEmptyRegistry builds a registry with no providers registered.
@@ -35,12 +42,49 @@ func NewEmptyRegistry() *Registry {
 	return &Registry{byID: make(map[string]contracts.Provider)}
 }
 
-// Close releases the shared CF-bypass resources when present. Safe on
-// disabled registries and idempotent.
+// Close releases the shared resources: the torrent engine first
+// (network teardown; safe on a never-started engine), then the CF
+// bypass stack. Safe on disabled registries and idempotent.
 func (r *Registry) Close() error {
+	if r.engine != nil {
+		if err := r.engine.Close(); err != nil {
+			return err
+		}
+		r.engine = nil
+	}
 	if r.cfClose != nil {
 		r.cfClose()
 		r.cfClose = nil
+	}
+	return nil
+}
+
+// TorrentEngine returns the shared lazy torrent engine (nil when the
+// [torrent] subsystem is disabled). The TUI reuses this engine instead
+// of building a second client: search-picked nyaa releases and the
+// «Торренты» screen share one client, one listen port.
+func (r *Registry) TorrentEngine() *torrent.Engine {
+	return r.engine
+}
+
+// wireTorrentEngine builds the shared lazy torrent engine (NewEngine
+// starts nothing) and injects it into every torrent provider via
+// SetEngine. A broken torrent transport fails registry construction
+// loud — the same contract as any provider client. The engine is
+// owned unconditionally: even when no torrent provider is registered
+// (e.g. nyaa in [providers].exclude) it stays — the «Торренты» screen
+// and the configured [torrent].links resolve through it, it costs
+// nothing while idle, and Registry.Close tears it down.
+func (r *Registry) wireTorrentEngine(cfg config.Settings, bare []contracts.Provider, log *slog.Logger) error {
+	net, err := netclient.New(cfg.Network, netclient.WithProvider("torrent"))
+	if err != nil {
+		return fmt.Errorf("build torrent transport: %w", err)
+	}
+	r.engine = torrent.NewEngine(cfg.Torrent, net, log)
+	for _, p := range bare {
+		if se, ok := p.(interface{ SetEngine(*torrent.Engine) }); ok {
+			se.SetEngine(r.engine)
+		}
 	}
 	return nil
 }

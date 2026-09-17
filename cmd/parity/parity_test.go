@@ -265,35 +265,50 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 11)
+	d := newToolDeps(t, 13)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("11/11 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("13/13 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "11/11") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "13/13") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 11 {
+	for i := range 13 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
 	}
 }
 
-func TestParityAllGateFailsBelowEleven(t *testing.T) {
-	d := newToolDeps(t, 11, 3) // provider p03 fails both queries.
+// TestParityAllGateToleratesOneDead pins the tolerance semantics: the
+// floor is the roster minus one (12 of 13 since nyaa joined in PR36).
+func TestParityAllGateToleratesOneDead(t *testing.T) {
+	d := newToolDeps(t, 13, 3) // provider p03 fails both queries.
+	var out, errOut strings.Builder
+
+	code := run([]string{"all"}, &out, &errOut, d)
+	if code != 0 {
+		t.Fatalf("12/13 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "12/13") {
+		t.Fatalf("summary must show 12/13:\n%s", out.String())
+	}
+}
+
+func TestParityAllGateFailsBelowTwelve(t *testing.T) {
+	d := newToolDeps(t, 13, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("10/11 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("11/13 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "10/11") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 10/11 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "11/13") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 11/13 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())

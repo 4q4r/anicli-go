@@ -931,12 +931,19 @@ func (s *sessionScreen) stopBuffering(note string) {
 }
 
 // formatBufferedProgress renders the minimal progress line: percent by
-// bytes (or segment count for HLS) plus the smoothed speed.
+// bytes (or segment count for HLS) plus the smoothed speed. The speed
+// segment is byte-derived, so it is suppressed for segment-based
+// samples whose byte speed is unknown (a bogus «0.0 МБ/с»).
 func formatBufferedProgress(p buffered.Progress) string {
+	// Segment-based samples carry no byte counts; their byte speed is
+	// unknown rather than zero.
 	speed := fmt.Sprintf("%.1f МБ/с", p.SpeedBPS/(1<<20))
 	switch {
 	case p.SegmentsTotal > 0:
 		pct := 100 * p.SegmentsDone / p.SegmentsTotal
+		if p.SpeedBPS == 0 {
+			return fmt.Sprintf("Буферизация: %d%% (сегмент %d/%d)", pct, p.SegmentsDone, p.SegmentsTotal)
+		}
 		return fmt.Sprintf("Буферизация: %d%% (сегмент %d/%d) · %s", pct, p.SegmentsDone, p.SegmentsTotal, speed)
 	case p.Total > 0:
 		pct := 100 * p.Done / p.Total

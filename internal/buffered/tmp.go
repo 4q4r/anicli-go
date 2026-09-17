@@ -1,15 +1,3 @@
-// Package buffered implements the PR43 buffered watch mode: download
-// one video source to a temporary file (progressive GET, torrent
-// loopback stream or a minimal HLS downloader), hand the local path to
-// the player, and delete the file once the player exits.
-//
-// HTTP semantics: playlist fetches ride the shared netclient (browser
-// parity, proxy, CF solver — playlists are small); media bytes stream
-// through a plain net/http client because netclient.Do BUFFERS every
-// response body (bounded by its body limit) and therefore cannot
-// stream multi-gigabyte media. The streaming client carries the same
-// source headers and the configured proxy; redirects follow RFC 7231
-// automatically. There are no external dependencies.
 package buffered
 
 import (
@@ -39,9 +27,10 @@ func newTempDir() (string, error) {
 	return dir, nil
 }
 
-// releaseTempDir removes one download's temp dir and forgets it;
-// safe to call twice.
-func releaseTempDir(dir string) {
+// releaseDir removes one download's temp dir and forgets it; safe to
+// call twice. Failures are reported to log (nil logger = silent — the
+// warnings NEVER go to slog's default, i.e. stderr in the TUI).
+func releaseDir(dir string, log *slog.Logger) {
 	activeMu.Lock()
 	_, known := activeDirs[dir]
 	delete(activeDirs, dir)
@@ -49,13 +38,12 @@ func releaseTempDir(dir string) {
 	if !known {
 		return
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		slog.Warn("buffered: remove temp dir failed", "dir", dir, "error", err)
+	if err := os.RemoveAll(dir); err != nil && log != nil {
+		log.Warn("buffered: remove temp dir failed", "dir", dir, "error", err)
 	}
 }
 
-// CleanupAll removes every registered temp dir (application teardown);
-// the method form implements tui.BufferedService.
+// CleanupAll removes every registered temp dir (application teardown).
 func CleanupAll() {
 	activeMu.Lock()
 	dirs := make([]string, 0, len(activeDirs))
@@ -64,17 +52,28 @@ func CleanupAll() {
 	}
 	activeDirs = map[string]struct{}{}
 	activeMu.Unlock()
-	cleanupDirs(dirs)
+	cleanupDirs(dirs, nil)
 }
 
-// CleanupAll implements the tui.BufferedService teardown contract.
-func (d *Downloader) CleanupAll() { CleanupAll() }
+// CleanupAll implements the tui.BufferedService teardown contract;
+// removal failures reach the downloader's wired (file) logger.
+func (d *Downloader) CleanupAll() {
+	activeMu.Lock()
+	dirs := make([]string, 0, len(activeDirs))
+	for dir := range activeDirs {
+		dirs = append(dirs, dir)
+	}
+	activeDirs = map[string]struct{}{}
+	activeMu.Unlock()
+	cleanupDirs(dirs, d.log)
+}
 
-// cleanupDirs removes dirs, warning per failure.
-func cleanupDirs(dirs []string) {
+// cleanupDirs removes dirs, warning per failure through the given
+// logger (nil = silent).
+func cleanupDirs(dirs []string, log *slog.Logger) {
 	for _, dir := range dirs {
-		if err := os.RemoveAll(dir); err != nil {
-			slog.Warn("buffered: cleanup temp dir failed", "dir", dir, "error", err)
+		if err := os.RemoveAll(dir); err != nil && log != nil {
+			log.Warn("buffered: cleanup temp dir failed", "dir", dir, "error", err)
 		}
 	}
 }

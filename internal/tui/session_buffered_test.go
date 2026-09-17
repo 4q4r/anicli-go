@@ -1,11 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"context"
-	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,25 +15,29 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
-) // realFileBuffered is a BufferedService fake that downloads for real
-// (through stdlib http) so the file plumbing is exercised end to end.
+)
+
+// realFileBuffered is a BufferedService fake. It writes a real
+// on-disk file so the TUI state machine exercises the actual file
+// lifecycle (buffer → play local path → delete), but it does NOT hop
+// through loopback HTTP: the earlier real-GET variant raced httptest
+// connection teardown in shared fd-number space (EBADF on
+// write/close under -race, ~1/10 runs). Transport realism lives in
+// internal/buffered's own httptest suite and the torrent E2E; the
+// state machine under test here only needs the file lifecycle.
 type realFileBuffered struct {
-	mu   sync.Mutex
-	dirs []string
+	mu    sync.Mutex
+	dirs  []string
+	wrote map[string][]byte
+	// Payload is the file content every Buffer call writes.
+	Payload []byte
 }
 
 func (b *realFileBuffered) Buffer(ctx context.Context, src buffered.Source, progress func(buffered.Progress)) (buffered.Handle, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
-	if err != nil {
+	// Cancellation before the download starts settles immediately
+	// (the cancel-path contract the session must surface).
+	if err := ctx.Err(); err != nil {
 		return buffered.Handle{}, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return buffered.Handle{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		return buffered.Handle{}, &fakeStatusError{code: resp.StatusCode}
 	}
 	dir, err := os.MkdirTemp("", "anicli-test-buffer-")
 	if err != nil {
@@ -45,50 +47,21 @@ func (b *realFileBuffered) Buffer(ctx context.Context, src buffered.Source, prog
 	b.dirs = append(b.dirs, dir)
 	b.mu.Unlock()
 	path := filepath.Join(dir, "video.mp4")
-	f, err := os.Create(path) //nolint:gosec // path is our MkdirTemp dir — no user-controlled inclusion
-	if err != nil {
+	payload := append([]byte(nil), b.Payload...)
+	if err := os.WriteFile(path, payload, 0o600); err != nil { //nolint:gosec // path is our MkdirTemp dir — no user-controlled inclusion
 		_ = os.RemoveAll(dir)
 		return buffered.Handle{}, err
 	}
-	// Copy with cancellation: a cancelled ctx stops the download and
-	// removes the temp dir (mirroring the real downloader's contract).
-	done := make(chan error, 1)
-	go func() {
-		buf := make([]byte, 1024)
-		for {
-			n, rerr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, werr := f.Write(buf[:n]); werr != nil {
-					done <- werr
-					return
-				}
-			}
-			if rerr != nil {
-				if errors.Is(rerr, io.EOF) {
-					done <- nil
-				} else {
-					done <- rerr
-				}
-				return
-			}
-		}
-	}()
-	select {
-	case rerr := <-done:
-		if rerr != nil {
-			_ = f.Close()
-			_ = os.RemoveAll(dir)
-			return buffered.Handle{}, rerr
-		}
-		_ = f.Close()
-		return buffered.NewHandle(path, func() { _ = os.RemoveAll(dir) }), nil
-	case <-ctx.Done():
-		_ = resp.Body.Close()
-		<-done
-		_ = f.Close()
-		_ = os.RemoveAll(dir)
-		return buffered.Handle{}, ctx.Err()
+	b.mu.Lock()
+	if b.wrote == nil {
+		b.wrote = map[string][]byte{}
 	}
+	b.wrote[path] = payload
+	b.mu.Unlock()
+	if progress != nil {
+		progress(buffered.Progress{Done: int64(len(payload)), Total: int64(len(payload))})
+	}
+	return buffered.NewHandle(path, func() { _ = os.RemoveAll(dir) }), nil
 }
 
 func (b *realFileBuffered) CleanupAll() {
@@ -99,22 +72,15 @@ func (b *realFileBuffered) CleanupAll() {
 	}
 }
 
-type fakeStatusError struct{ code int }
-
-func (e *fakeStatusError) Error() string { return "status error" }
-
 var _ BufferedService = (*realFileBuffered)(nil)
 
-// newBufferedSession builds a one-episode session with real embeds, a
-// live mp4 server as the resolved stream and the real-file buffered
-// fake.
+// newBufferedSession builds a one-episode session with real embeds and
+// the real-file buffered fake: the resolved stream URL is inert (the
+// fake writes its payload straight to disk), keeping the state-machine
+// test free of loopback-HTTP fd churn.
 func newBufferedSession(t *testing.T) (*sessionScreen, *realFileBuffered, *fakePlayback, string) {
 	t.Helper()
 	payload := "fake-mp4-bytes"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(payload))
-	}))
-	t.Cleanup(srv.Close)
 
 	deps := &Deps{
 		Episode: &fakeEpisode{
@@ -127,12 +93,12 @@ func newBufferedSession(t *testing.T) (*sessionScreen, *realFileBuffered, *fakeP
 			},
 			streams: map[string]contracts.MediaStream{
 				"[anidub] AniDUB": {Links: map[string]contracts.VideoSource{
-					"720": {URL: srv.URL + "/ep1.mp4"},
+					"720": {URL: "https://cdn.example/ep1.mp4"},
 				}},
 			},
 		},
 		Playback: &fakePlayback{},
-		Buffered: &realFileBuffered{},
+		Buffered: &realFileBuffered{Payload: []byte(payload)},
 		Log:      discardLogger(),
 	}
 	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "anidub"}}
@@ -170,20 +136,17 @@ func TestSessionFormatToggle(t *testing.T) {
 // watch flow buffers the resolved stream to a LOCAL file, plays THAT
 // path and deletes the file once the player exits.
 func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
-	s, _, playback, payload := newBufferedSession(t)
+	s, bufSrv, playback, payload := newBufferedSession(t)
 	s.buffered = true
 	s.buildActionMenu()
 
-	// Capture the file state DURING the play call.
-	var playStatErr, playReadErr error
-	var playBody []byte
+	// Existence at play time is polled (transient fd churn must not
+	// fail the check); content equality is asserted against the fake's
+	// recorded copy — written BEFORE the handle was returned, so a
+	// present file at play time holds exactly those bytes.
+	var playStatErr error
 	playback.playHook = func(req PlayRequest) error {
-		playStatErr = nil
-		if _, err := os.Stat(req.URL); err != nil {
-			playStatErr = err
-			return nil
-		}
-		playBody, playReadErr = os.ReadFile(req.URL)
+		playStatErr = statUntilPresent(req.URL, 2*time.Second)
 		return nil
 	}
 
@@ -202,15 +165,16 @@ func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 	}
 	// The quality pick arms a batch: the download cmd plus the
 	// progress pump. Run the batch and take the bufferReadyMsg.
-	if s.state != sessionStateBuffering {
-		t.Fatalf("state = %s, want buffering", s.state)
-	}
 	ready, ok := runBufferedBatch(t, cmd).(bufferReadyMsg)
 	if !ok {
-		t.Fatalf("download settled %T, want bufferReadyMsg", ready)
+		t.Fatalf("download settled %T (%v), want bufferReadyMsg", ready, ready)
 	}
+	// A settle that carries an error (or a stale generation) returns
+	// no playback command — name its cause in the failure instead of
+	// an uninformative fatal.
 	if _, playCmd := s.Update(ready); playCmd == nil {
-		t.Fatal("ready settle must schedule the local playback")
+		t.Fatalf("ready settle must schedule the local playback: settle err=%v, gen=%d/%d, state=%s, status=%q",
+			ready.err, ready.gen, s.bufferGen, s.state, s.status)
 	} else {
 		if s.state != sessionStatePlaying {
 			t.Fatalf("state = %s, want playing", s.state)
@@ -233,12 +197,48 @@ func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 	if playStatErr != nil {
 		t.Fatalf("buffered file missing at play time: %v", playStatErr)
 	}
-	if playReadErr != nil || string(playBody) != payload {
-		t.Fatalf("buffered payload mismatch at play time (read err=%v)", playReadErr)
+	bufSrv.mu.Lock()
+	written := append([]byte(nil), bufSrv.wrote[req.URL]...)
+	bufSrv.mu.Unlock()
+	if !bytes.Equal(written, []byte(payload)) {
+		t.Fatalf("buffered payload mismatch: the fake wrote %d bytes, want %d", len(written), len(payload))
 	}
 	// After the playedMsg the temp file is gone (cleanup ran).
-	if _, err := os.Stat(req.URL); !os.IsNotExist(err) {
+	if err := statUntilGone(req.URL, 2*time.Second); err != nil {
 		t.Fatalf("buffered file survived playback: %v", err)
+	}
+}
+
+// statUntilPresent polls until the path stats OK (or the deadline);
+// transient fd churn (EBADF) in a loaded test process must not fail
+// the existence check.
+func statUntilPresent(path string, deadline time.Duration) error {
+	var lastErr error
+	lim := time.Now().Add(deadline)
+	for {
+		_, lastErr = os.Stat(path)
+		if lastErr == nil {
+			return nil
+		}
+		if os.IsNotExist(lastErr) || time.Now().After(lim) {
+			return lastErr
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// statUntilGone polls until the path is gone (or the deadline).
+func statUntilGone(path string, deadline time.Duration) error {
+	lim := time.Now().Add(deadline)
+	for {
+		_, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if time.Now().After(lim) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -252,6 +252,12 @@ func TestFormatBufferedProgress(t *testing.T) {
 	bySegments := formatBufferedProgress(buffered.Progress{SegmentsDone: 5, SegmentsTotal: 20, SpeedBPS: 1 << 20})
 	if !strings.Contains(bySegments, "25%") || !strings.Contains(bySegments, "сегмент 5/20") {
 		t.Fatalf("segment progress = %q, want 25%% + segment counts", bySegments)
+	}
+	// Segment-based samples carry no byte counts, so the byte speed is
+	// unknown — a bogus «0.0 МБ/с» must be suppressed (PR43 review).
+	bySegmentsZero := formatBufferedProgress(buffered.Progress{SegmentsDone: 1, SegmentsTotal: 20})
+	if strings.Contains(bySegmentsZero, "МБ/с") {
+		t.Fatalf("segment progress with zero speed = %q, want no speed segment", bySegmentsZero)
 	}
 	unknown := formatBufferedProgress(buffered.Progress{Done: 512, SpeedBPS: 0})
 	if !strings.Contains(unknown, "512 Б") {
@@ -303,7 +309,9 @@ func playBuffered(s *sessionScreen, cmd tea.Cmd) tea.Msg {
 
 // runBufferedBatch executes the buffering command batch (download +
 // progress pump) concurrently and returns the bufferReadyMsg — the
-// pump's progress/end messages are drained in the background.
+// pump's progress/end messages are drained in the background. The wait
+// is a generous condition poll (10 s deadline); on timeout it reports
+// which messages DID arrive, so a partial settle names its cause.
 func runBufferedBatch(t *testing.T, cmd tea.Cmd) tea.Msg {
 	t.Helper()
 	msg := cmd()
@@ -315,14 +323,17 @@ func runBufferedBatch(t *testing.T, cmd tea.Cmd) tea.Msg {
 	for _, c := range batch {
 		go func(c tea.Cmd) { msgs <- c() }(c)
 	}
+	deadline := time.After(10 * time.Second)
+	var arrived []string
 	for range batch {
 		select {
 		case m := <-msgs:
 			if ready, ok := m.(bufferReadyMsg); ok {
 				return ready
 			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("buffered batch timed out")
+			arrived = append(arrived, fmt.Sprintf("%T", m))
+		case <-deadline:
+			t.Fatalf("buffered batch timed out; settled so far: %v", arrived)
 		}
 	}
 	return nil

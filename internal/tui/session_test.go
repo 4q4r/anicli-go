@@ -119,7 +119,9 @@ func TestSessionEpisodesMerged(t *testing.T) {
 }
 
 // TestSessionMenuActions: the action menu covers the Python
-// session_loop entries; exit pops to root.
+// session_loop entries PLUS the PR43 additions (refresh sources,
+// format toggle), in order, with the pinned exit row last; exit pops
+// to root.
 func TestSessionMenuActions(t *testing.T) {
 	s := newSessionForTests(t)
 	v := s.View().Content
@@ -131,11 +133,21 @@ func TestSessionMenuActions(t *testing.T) {
 		"🎨 Сменить озвучку",
 		"📝 Изменить инфо",
 		"⬇ Скачать серии",
+		"🔄 Обновить источники",
+		"Формат: [потоковый]",
 		"🚪 Выход",
 	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("session menu must contain %q:\n%s", want, v)
 		}
+	}
+	// 10 actions + the pinned Back row (I1).
+	if got := len(s.list.Menu().Items); got != 11 {
+		t.Fatalf("session menu rows = %d, want 11 (10 actions + Back)", got)
+	}
+	last := s.list.Menu().Items[10]
+	if last.ID != BackID {
+		t.Fatalf("last menu row = %q, want the pinned Back entry", last.ID)
 	}
 
 	t.Run("exit pops to root", func(t *testing.T) {

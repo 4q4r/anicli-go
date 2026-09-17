@@ -1,3 +1,15 @@
+// Package buffered implements the PR43 buffered watch mode: download
+// one video source to a temporary file (progressive GET, torrent
+// loopback stream or a minimal HLS downloader), hand the local path to
+// the player, and delete the file once the player exits.
+//
+// HTTP semantics: playlist fetches ride the shared netclient (browser
+// parity, proxy, CF solver — playlists are small); media bytes stream
+// through a plain net/http client because netclient.Do BUFFERS every
+// response body (bounded by its body limit) and therefore cannot
+// stream multi-gigabyte media. The streaming client carries the same
+// source headers and the configured proxy; redirects follow RFC 7231
+// automatically. There are no external dependencies.
 package buffered
 
 import (
@@ -126,6 +138,25 @@ func isHLS(rawURL string) bool {
 	return strings.Contains(strings.ToLower(u.Path), ".m3u8")
 }
 
+// hlsContentTypes are the playlist MIME types (with any parameters
+// stripped, matched case-insensitively). The response header is
+// authoritative: a manifest served from a path-less URL must still
+// take the HLS pipeline.
+var hlsContentTypes = map[string]bool{
+	"application/vnd.apple.mpegurl": true,
+	"application/x-mpegurl":         true,
+	"audio/mpegurl":                 true,
+	"audio/x-mpegurl":               true,
+}
+
+// isHLSContentType reports a base Content-Type of an HLS playlist.
+func isHLSContentType(ct string) bool {
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return hlsContentTypes[strings.ToLower(strings.TrimSpace(ct))]
+}
+
 // Buffer downloads src to a temporary file. progress (may be nil)
 // receives throttled samples and one final forced sample. On ANY error
 // the temp file is removed before the call returns; on success Cleanup
@@ -137,14 +168,14 @@ func (d *Downloader) Buffer(ctx context.Context, src Source, progress func(Progr
 	}
 	path, err := d.bufferInto(ctx, src, dir, newTracker(d.progressInterval, progress))
 	if err != nil {
-		releaseTempDir(dir)
+		releaseDir(dir, d.log)
 		return Handle{}, err
 	}
 	d.log.Info("buffered: download complete", "url", src.URL, "path", path)
-	return Handle{Path: path, cleanup: func() {
-		releaseTempDir(dir)
+	return NewHandle(path, func() {
+		releaseDir(dir, d.log)
 		d.log.Info("buffered: temp file removed", "dir", dir)
-	}}, nil
+	}), nil
 }
 
 // bufferInto dispatches on the source kind and returns the file path.
@@ -176,6 +207,18 @@ func (d *Downloader) bufferProgressive(ctx context.Context, src Source, dir stri
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", &StatusError{Code: resp.StatusCode, URL: src.URL}
+	}
+
+	// The playlist response header is authoritative: a manifest behind
+	// a path-less URL (no .m3u8 in sight) switches to the HLS pipeline
+	// with the FINAL (post-redirect) URL as the playlist location.
+	if isHLSContentType(resp.Header.Get("Content-Type")) {
+		final := src.URL
+		if resp.Request != nil && resp.Request.URL != nil {
+			final = resp.Request.URL.String()
+		}
+		_ = resp.Body.Close()
+		return d.bufferHLS(ctx, Source{URL: final, Headers: src.Headers, Name: src.Name}, dir, tr)
 	}
 
 	name := localName(src.Name, src.URL, ".mp4")

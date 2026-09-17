@@ -345,6 +345,92 @@ func TestBufferHLSSegmentFailureCleans(t *testing.T) {
 	waitForOrphans(t)
 }
 
+// TestBufferHLSByContentType: a manifest served from a PATH-LESS URL
+// (no .m3u8 anywhere) is detected as HLS through the response
+// Content-Type — the playlist header is authoritative (PR43 review).
+func TestBufferHLSByContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/getvideo":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte("#EXTM3U\n#EXTINF:2.0,\nseg.ts\n#EXT-X-ENDLIST\n"))
+		case "/seg.ts":
+			_, _ = w.Write([]byte("SEGBYTES"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := newTestDownloader(t)
+	handle, err := d.Buffer(context.Background(), Source{URL: srv.URL + "/getvideo?token=1"}, nil)
+	if err != nil {
+		t.Fatalf("Buffer: %v", err)
+	}
+	data, err := os.ReadFile(handle.Path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "SEGBYTES" {
+		t.Fatalf("content = %q, want SEGBYTES (HLS pipeline, not a garbage progressive copy)", data)
+	}
+	handle.Cleanup()
+	waitForOrphans(t)
+}
+
+// cleanupLogger captures the downloader's diagnostics (the never-
+// stderr convention: cleanup failures must reach the wired file
+// logger, not global slog).
+type cleanupLogger struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *cleanupLogger) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (l *cleanupLogger) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, r.Message)
+	return nil
+}
+func (l *cleanupLogger) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *cleanupLogger) WithGroup(string) slog.Handler      { return l }
+
+// TestCleanupFailureLogsToWiredLogger: a failed RemoveAll during
+// cleanup surfaces through the downloader's OWN logger (threaded
+// through release/cleanup), never the global slog default (stderr).
+func TestCleanupFailureLogsToWiredLogger(t *testing.T) {
+	// Registering "<tmp>/outer/child" and then making "<tmp>/outer" a
+	// regular file forces os.RemoveAll to fail with ENOTDIR.
+	outer := filepath.Join(t.TempDir(), "outer")
+	if err := os.WriteFile(outer, []byte("now a file"), 0o600); err != nil {
+		t.Fatalf("create outer as a file: %v", err)
+	}
+	lockedPath := filepath.Join(outer, "child")
+
+	cl := &cleanupLogger{}
+	d := New(nil, nil, nil)
+	d.log = slog.New(cl)
+	// Register the failing path through the production registration
+	// seam, then sweep with the wired logger.
+	registerDirLocked(lockedPath)
+	d.CleanupAll()
+
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if len(cl.warns) == 0 {
+		t.Fatal("cleanup failure was not reported to the wired logger")
+	}
+	// The registry entry is dropped even when the removal fails.
+	waitForOrphans(t)
+}
+
+func registerDirLocked(dir string) {
+	activeMu.Lock()
+	activeDirs[dir] = struct{}{}
+	activeMu.Unlock()
+}
+
 // TestHeadersForwarded: the source headers (Referer etc.) reach both
 // the playlist and the segment requests.
 func TestHeadersForwarded(t *testing.T) {

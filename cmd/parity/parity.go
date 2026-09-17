@@ -44,8 +44,9 @@ func (e *env) close() {
 // gateProviders is the G1 gate threshold: `parity all` exits non-zero
 // when fewer than this many providers answer both probe queries. It
 // tracks the roster minus one dead-provider tolerance (11 of 12 at
-// PR24's roster; 12 of 13 since nyaa joined in PR36).
-const gateProviders = 12
+// PR24's roster; 12 of 13 since nyaa joined in PR36; 13 of 14 since
+// anilibria-torrent joined in PR37).
+const gateProviders = 13
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.

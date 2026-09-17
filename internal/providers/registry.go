@@ -60,9 +60,8 @@ func (r *Registry) Close() error {
 }
 
 // TorrentEngine returns the shared lazy torrent engine (nil when the
-// [torrent] subsystem is disabled). The TUI reuses this engine instead
-// of building a second client: search-picked nyaa releases and the
-// «Торренты» screen share one client, one listen port.
+// [torrent] subsystem is disabled). Every torrent provider resolves
+// its picks through this one client, one listen port.
 func (r *Registry) TorrentEngine() *torrent.Engine {
 	return r.engine
 }
@@ -72,9 +71,8 @@ func (r *Registry) TorrentEngine() *torrent.Engine {
 // SetEngine. A broken torrent transport fails registry construction
 // loud — the same contract as any provider client. The engine is
 // owned unconditionally: even when no torrent provider is registered
-// (e.g. nyaa in [providers].exclude) it stays — the «Торренты» screen
-// and the configured [torrent].links resolve through it, it costs
-// nothing while idle, and Registry.Close tears it down.
+// (e.g. nyaa in [providers].exclude) it stays — it costs nothing
+// while idle and Registry.Close tears it down.
 func (r *Registry) wireTorrentEngine(cfg config.Settings, bare []contracts.Provider, log *slog.Logger) error {
 	net, err := netclient.New(cfg.Network, netclient.WithProvider("torrent"))
 	if err != nil {

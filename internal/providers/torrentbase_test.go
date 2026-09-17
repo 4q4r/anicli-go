@@ -420,9 +420,9 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 	})
 
 	// nyaa excluded while [torrent] stays on: the shared engine must
-	// survive (it is lazy — zero idle cost) because the «Торренты»
-	// screen and the configured [torrent].links resolve through it
-	// even with no torrent SEARCH provider registered.
+	// survive (it is lazy — zero idle cost) because every registered
+	// torrent provider resolves through it, and a re-registration or
+	// config reload must not lose the one shared client.
 	t.Run("nyaa-excluded", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.Default()
@@ -440,7 +440,7 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 
 		eng := reg.TorrentEngine()
 		if eng == nil {
-			t.Fatal("TorrentEngine() = nil with nyaa excluded; «Торренты» links would die with a false disabled verdict")
+			t.Fatal("TorrentEngine() = nil with nyaa excluded; the shared one-client rule would break on the next torrent provider")
 		}
 		if _, ok := reg.Get("nyaa"); ok {
 			t.Error("excluded nyaa must not register")

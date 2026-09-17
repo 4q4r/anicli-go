@@ -309,9 +309,6 @@ type Deps struct {
 	// SearchTimeout bounds ONE provider's whole fan-out participation
 	// (all its query variants); 0 means the package default (30s).
 	SearchTimeout time.Duration
-	// Torrent backs «🧲 Торренты» (PR35); nil hides the flow behind a
-	// settings hint (embedded builds).
-	Torrent TorrentService
 	// Log is the diagnostics sink for quiet-skip notes (shikimori
 	// binding etc.); nil degrades to slog.Default().
 	Log *slog.Logger

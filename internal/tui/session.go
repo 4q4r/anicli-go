@@ -28,6 +28,7 @@ const (
 	sessionStateDubVideo      sessionState = "dub_video"
 	sessionStateDubAudio      sessionState = "dub_audio"
 	sessionStateQuality       sessionState = "quality"
+	sessionStateFormat        sessionState = "format"
 	sessionStateBuffering     sessionState = "buffering"
 	sessionStatePlaying       sessionState = "playing"
 	sessionStateInfoMenu      sessionState = "info_menu"
@@ -189,6 +190,10 @@ type sessionScreen struct {
 	episodeList *PinList // «Перейти к серии»
 	dubList     *PinList // video/audio dub pickers
 	qualityList *PinList
+	// formatList is the pre-play format selector (PR44): «▶ Смотреть»
+	// opens it with exactly two items («Потоковый», «Буферный»); the
+	// pick arms the buffered mode and continues the watch pipeline.
+	formatList *PinList
 	// infoList/statusList/modeList persist their submenus for the
 	// whole substate visit: rebuilding per keypress reset the cursor
 	// and made Enter always resolve Back (C2).
@@ -545,6 +550,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleDubKey(key)
 	case sessionStateQuality:
 		return s.handleQualityKey(key)
+	case sessionStateFormat:
+		return s.handleFormatKey(key)
 	case sessionStateInfoMenu:
 		return s.handleInfoMenuKey(key)
 	case sessionStateInfoStatus:
@@ -616,15 +623,6 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return s, nil // a round is already running; its settle will report
 		}
 		return s, s.hydrateEpisode(s.currentEpisode())
-	case "format":
-		s.buffered = !s.buffered
-		s.buildActionMenu()
-		if s.buffered {
-			s.status = "Формат просмотра: буферный"
-		} else {
-			s.status = "Формат просмотра: потоковый"
-		}
-		return s, nil
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
 		s.status = "Озвучка сброшена — выберите заново при просмотре"
@@ -651,12 +649,13 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 }
 
-// startWatch launches the watch pipeline: interactive dub selection
-// when preferences are missing or unavailable, else straight to
-// stream resolution. A sourceless episode resolves (hydrates) first —
+// startWatch launches the watch pipeline at the PR44 pre-play format
+// selector («Потоковый» / «Буферный» — the python per-episode format
+// choice pattern). A sourceless episode resolves (hydrates) first —
 // the lazily-hydrating providers list empty embeds (PR43) — and an
 // episode whose hydration already found nothing explains the recovery
-// path instead of silently doing nothing.
+// path instead of silently doing nothing; the selector never opens
+// without sources (the dimmed «Смотреть» row keeps it unreachable).
 func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
@@ -670,6 +669,56 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 		if !s.hydrating {
 			s.status = "Нет источников — выполните «🔄 Обновить источники»"
 		}
+		return s, nil
+	}
+	s.state = sessionStateFormat
+	s.formatList = NewPinList(NewMenu("Формат просмотра:", "", []Choice{
+		{ID: "stream", Label: "Потоковый", Value: "stream"},
+		{ID: "buffer", Label: "Буферный", Value: "buffer"},
+	}...), defaultListHeight)
+	return s, nil
+}
+
+// handleFormatKey resolves the format selector: the pick arms the
+// watch mode and continues the pipeline; Back/Esc returns to the
+// episode menu without playing. A buffered pick without the buffered
+// service explains honestly and keeps the selector open (streaming
+// remains pickable).
+func (s *sessionScreen) handleFormatKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.formatList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.formatList.Menu(), s.formatList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.state = sessionStateMenu
+		return s, nil
+	}
+	choice, _ := resolved.(string)
+	switch choice {
+	case "buffer":
+		if s.deps == nil || s.deps.Buffered == nil {
+			s.status = "Буферный режим недоступен"
+			return s, nil
+		}
+		s.buffered = true
+	case "stream":
+		s.buffered = false
+	default:
+		return s, nil
+	}
+	return s.proceedWatch()
+}
+
+// proceedWatch continues the watch pipeline after the format pick:
+// interactive dub selection when preferences are missing or
+// unavailable, else straight to stream resolution.
+func (s *sessionScreen) proceedWatch() (Screen, tea.Cmd) {
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		s.status = "Нет серий"
 		return s, nil
 	}
 	if s.videoDub == "" || ep.RawEmbeds[s.videoDub] == nil {
@@ -1509,18 +1558,8 @@ func (s *sessionScreen) buildActionMenu() {
 		{ID: "info", Label: "📝 Изменить инфо"},
 		{ID: "download", Label: "⬇ Скачать серии"},
 		{ID: "refresh", Label: "🔄 Обновить источники"},
-		{ID: "format", Label: s.formatLabel()},
 		{ID: "exit", Label: "🚪 Выход"},
 	}...), defaultListHeight)
-}
-
-// formatLabel renders the buffered-mode toggle («Формат: [потоковый]» /
-// «Формат: [буферный]», PR43 C: per-session preference, no config).
-func (s *sessionScreen) formatLabel() string {
-	if s.buffered {
-		return "Формат: [буферный]"
-	}
-	return "Формат: [потоковый]"
 }
 
 // buildEpisodeList builds the jump list with local markers.
@@ -1738,6 +1777,8 @@ func (s *sessionScreen) View() tea.View {
 		body = themedList(s.dubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)
+	case sessionStateFormat:
+		body = themedList(s.formatList)
 	case sessionStateBuffering:
 		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
 	case sessionStatePlaying:

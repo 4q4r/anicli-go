@@ -22,6 +22,8 @@ package providers
 //   - The RSS carries no seed counts; the size text ("1.66GB") rides
 //     the description HTML blob and is parsed fail-soft. (The HTML
 //     search table has S:/L: stats, but no seed data in the feed.)
+//     The PR44 seedless filter therefore has nothing to key on here —
+//     fail-soft: no field, no filter.
 
 import (
 	"bytes"

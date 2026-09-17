@@ -186,7 +186,9 @@ func (p *AnimeTosho) Search(ctx context.Context, query string) ([]contracts.Sear
 			},
 		})
 	}
-	return results, nil
+	// Seedless entries are dead results: drop them before they surface
+	// (fail-soft — items without a seed attr survive).
+	return filterSeedless(results), nil
 }
 
 // animeToshoResultLink picks the torrent link of one RSS item: a hex

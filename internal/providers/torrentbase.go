@@ -28,6 +28,28 @@ import (
 // session flow needs one dub slot; a torrent file has no dubs).
 const torrentDubLabel = "Торрент"
 
+// filterSeedless drops search results whose feed-reported seeder count
+// parses to 0 — a seedless torrent is a dead result, and surfacing it
+// only produces dead ends downstream. Fail-soft by design: a result
+// whose feed carries no (or an unparseable) seed field is kept — no
+// field, no filter. Torrent search providers apply it to their Search
+// output (PR44 owner ruling).
+func filterSeedless(results []contracts.SearchResult) []contracts.SearchResult {
+	out := results[:0:0]
+	for _, r := range results {
+		raw, ok := r.Meta[SearchMetaSeeders].(string)
+		if !ok {
+			out = append(out, r)
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || n > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // TorrentBase adapts one provider's links onto the torrent core. The
 // engine handle may be nil (the provider then fails loud on use —
 // kodik-parity: unconfigured providers never pretend to work).

@@ -126,7 +126,9 @@ func (p *AniLibriaTorrent) Search(ctx context.Context, query string) ([]contract
 			results = append(results, res)
 		}
 	}
-	return results, nil
+	// Seedless entries are dead results: drop them before they surface
+	// (the API's seeders int is authoritative; nothing to fail-soft).
+	return filterSeedless(results), nil
 }
 
 // releaseTorrents fetches one release's torrent list by numeric id. A

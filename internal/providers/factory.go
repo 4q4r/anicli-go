@@ -66,6 +66,14 @@ var allFactories = []struct {
 	{"nyaa", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newNyaa(NyaaBase, http, nil)
 	}},
+	// anilibria-torrent (PR37): the aniliberty.top API's per-release
+	// torrents on the same TorrentBase plumbing. Shares the release
+	// search endpoint with the anilibria stream provider and expands
+	// each hit into its torrent list; no credentials, engine injected
+	// by NewRegistry when [torrent] is enabled.
+	{"anilibria-torrent", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnilibriaTorrent(AniLibriaAPIBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

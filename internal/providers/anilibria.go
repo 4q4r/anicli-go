@@ -11,20 +11,27 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// AniLibria production endpoints. The API host differs from the site host:
-// streams must carry the site host as Referer (anicli-py
-// anicli/providers/anilibria.py:17-18).
+// AniLibria production endpoints (the aniliberty.top API — the third
+// domain generation; the old anilibria.top /api/v3 routes are dead).
+// The API host differs from the site host: streams carry the site
+// host as Referer. NOTE: the API filters content per requester IP —
+// some releases (and their search entries) are geo-hidden for certain
+// regions; from such networks `network.proxy_url` is required (same
+// convention as nyaa, PR36).
 const (
 	// AniLibriaAPIBase is the JSON API root (aniliberty.top).
 	AniLibriaAPIBase = "https://aniliberty.top/api/v1"
 	// AniLibriaHost is the site root used as the stream Referer.
-	AniLibriaHost = "https://anilibria.top"
+	AniLibriaHost = "https://aniliberty.top"
 )
 
-// AniLibria is the port of anicli-py anicli/providers/anilibria.py.
-// Source type BOTH, single fixed dub "AniLibria", HLS qualities carried
-// inside a hls_json: raw-embed payload between GetEpisodes and
-// ResolveStream (verbatim from the Python original).
+// AniLibria serves the aniliberty.top catalog (rebased in PR37 onto
+// the new Laravel API after the third domain migration; the old
+// anilibria.top v3 shapes are dead). Source type BOTH, single fixed
+// dub "AniLibria", HLS qualities carried inside a hls_json: raw-embed
+// payload between GetEpisodes and ResolveStream (the raw-embed
+// mechanism is the original Python port's; the payload values are the
+// new API's).
 type AniLibria struct {
 	Base
 	hostURL string
@@ -46,7 +53,9 @@ func newAnilibria(apiBase, hostURL string, http *netclient.Client) *AniLibria {
 	}
 }
 
-// anilibriaSearchItem mirrors the fields consumed by anilibria.py:27-33.
+// anilibriaSearchItem mirrors the fields the search parse consumes
+// from /app/search/releases (id/name.main/alias survive the rebase
+// unchanged; unknown fields are ignored).
 type anilibriaSearchItem struct {
 	ID    json.Number `json:"id"`
 	Alias string      `json:"alias"`
@@ -55,10 +64,13 @@ type anilibriaSearchItem struct {
 	} `json:"name"`
 }
 
-// anilibriaRelease mirrors the fields consumed by anilibria.py:41-56.
+// anilibriaRelease mirrors the fields consumed from the release
+// detail (GET /anime/releases/{alias}). Episodes are identified by
+// UUID strings in the aniliberty.top API (numeric ids in the old API
+// — PR37 rebase); ordinals stay numeric.
 type anilibriaRelease struct {
 	Episodes []struct {
-		ID      json.Number `json:"id"`
+		ID      string      `json:"id"`
 		Ordinal json.Number `json:"ordinal"`
 		HLS1080 string      `json:"hls_1080"`
 		HLS720  string      `json:"hls_720"`
@@ -146,12 +158,12 @@ func (p *AniLibria) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 		if err != nil {
 			// map[string]string is always marshalable; kept for honesty.
 			return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
-				fmt.Errorf("encode hls links for episode %s: %w", ep.ID.String(), err))
+				fmt.Errorf("encode hls links for episode %s: %w", ep.ID, err))
 		}
 
 		episodes = append(episodes, contracts.Episode{
 			Num:   pythonStr(ep.Ordinal),
-			RawID: pythonStr(ep.ID),
+			RawID: ep.ID,
 			RawEmbeds: map[string][]string{
 				"AniLibria": {"hls_json:" + string(payload)},
 			},

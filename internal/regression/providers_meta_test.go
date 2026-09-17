@@ -17,7 +17,8 @@ import (
 // (domain hijacked off the anime project, frozen 2025); anidub (no
 // frozen Python original) joined the roster the same PR; yanima
 // (PR33) joined after anidub; nyaa (PR36, first torrent search
-// provider) joined after yanima.
+// provider) joined after yanima; anilibria-torrent (PR37, the new
+// aniliberty.top API's per-release torrents) joined after nyaa.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -32,6 +33,7 @@ var expectedProviderOrder = []string{
 	"anidub",
 	"yanima",
 	"nyaa",
+	"anilibria-torrent",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

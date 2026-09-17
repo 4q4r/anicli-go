@@ -3,9 +3,11 @@ package providers
 // AllAnime v3 client crypto — a pure-Go port of the challenge layer
 // embedded in the mkissa.to player bundle, characterized live on
 // 2026-09-13 by sandboxing chunk 6_SNhjnz.js inside a real mkissa.to
-// page (dossier: .sdd/ledger.md "ALLANIME v3 PROTOCOL DOSSIER"). Every
-// constant and formula below is [LIVE-VERIFIED 2026-09-13]; the golden
-// vectors live in allanime_proto_test.go.
+// page and RE-VERIFIED on 2026-09-17 against chunk DhCxOiZl.js (the
+// rotated constants re-captured; the epoch-2958 bootstrap answered
+// 200 to a token built from this port). Every constant and formula
+// below is [LIVE-VERIFIED 2026-09-17]; the golden vectors live in
+// allanime_proto_test.go.
 //
 // Layers (bottom-up):
 //
@@ -49,36 +51,41 @@ import (
 // lane key (dossier/yuzono decrypt order).
 const aaLegacySecret = "Xot36i3lK3" //nolint:gosec // public protocol constant from the player bundle, not a credential
 
-// aaCrypto constants live-coded from the chunk's il() table.
-// [LIVE-VERIFIED 2026-09-13].
+// aaCrypto constants live-coded from the chunk's constants table.
+// [LIVE-VERIFIED 2026-09-17] (chunk DhCxOiZl.js on cdn.mkissa.net; the
+// 2026-09-13 values rotated — formula unchanged, all 56 sandbox inputs
+// re-verified byte-for-byte).
 const (
-	// aaSaltMul/aaSaltAdd fold the per-buildId seed (live saltMul=241,
-	// saltAdd=209): seed[l] = charCode(l%len) ^ ((l*saltMul+saltAdd)&255).
-	aaSaltMul = 241
-	aaSaltAdd = 209
-	// aaFragMul/aaFragAdd salt the mask blocks (live fragMul=210,
-	// fragAdd=42): mask[l*8+f] ^= ((l*fragMul + f*fragAdd) & 255).
-	aaFragMul = 210
-	aaFragAdd = 42
+	// aaSaltMul/aaSaltAdd fold the per-buildId seed (live saltMul=219,
+	// saltAdd=2): seed[l] = charCode(l%len) ^ ((l*saltMul+saltAdd)&255).
+	aaSaltMul = 219
+	aaSaltAdd = 2
+	// aaFragMul/aaFragAdd salt the mask blocks (live fragMul=72,
+	// fragAdd=143): mask[l*8+f] ^= ((l*fragMul + f*fragAdd) & 255).
+	aaFragMul = 72
+	aaFragAdd = 143
 	// aaBootPrefix is the fixed HMAC message prefix (live bootPrefix).
-	aaBootPrefix = "vmcFXS3Dmg:"
-	// aaEpochBucketMs is the epoch bucket width my (live 7 days).
+	aaBootPrefix = "4Itcfoti4u:" //nolint:gosec // public protocol constant from the player bundle, not a credential
+	// aaEpochBucketMs is the epoch bucket width my (live 7 days,
+	// re-confirmed by the 2026-09-17 bootstrap epochMs=604800000).
 	aaEpochBucketMs = int64(7 * 24 * time.Hour / time.Millisecond)
-	// aaEpochGraceMs is the early-bucket grace dT (live 24h): inside
-	// the first dT of a fresh week the previous epoch is the primary
-	// bootstrap candidate.
+	// aaEpochGraceMs is the early-bucket grace dT (live 24h, bootstrap
+	// graceMs=86400000): inside the first dT of a fresh week the
+	// previous epoch is the primary bootstrap candidate.
 	aaEpochGraceMs = int64(24 * time.Hour / time.Millisecond)
 	// aaReqWindowMillis is the aaReq ts bucket width rv (live 5 min).
 	aaReqWindowMillis = int64(5 * time.Minute / time.Millisecond)
 )
 
 // aaDMBase64 is the cy() base table dm: four 8-byte blocks the seed is
-// XOR-folded into. [LIVE-VERIFIED 2026-09-13] — chunk 6_SNhjnz.js.
+// XOR-folded into. [LIVE-VERIFIED 2026-09-17] — chunk DhCxOiZl.js
+// (sandbox my() re-captured for 56 inputs; the 2026-09-13 table is
+// dead: the live bootstrap rejects every token built from it).
 var aaDMBase64 = [4]string{
-	"Xe0sbWji894=",
-	"kDl8ZYLJjcY=",
-	"Zp9QHHse7BY=",
-	"UscVFCx+xrI=",
+	"6ACQAF2rRcU=",
+	"BWfbn4SQ+5U=",
+	"5SrrYqEpaUE=",
+	"7C7jIdx1zeM=",
 }
 
 // aaDMDelayed is aaDMBase64 decoded once at init; a malformed entry is
@@ -106,14 +113,14 @@ var errAAMaskBuildID = errors.New("allanime: empty build id")
 //	seed[l]  = charCodeUTF16(l % len) ^ ((l*saltMul + saltAdd) & 0xff)
 //	mask[i]  = (dm[i/8][i%8] ^ seed[i]) ^ (((i/8)*fragMul + (i%8)*fragAdd) & 0xff)
 //
-// The chunk applies an extra environment-XOR (Qk, constant envXor=142)
+// The chunk applies an extra environment-XOR (live envXor=27, was 142)
 // when its bot-detection (jk()) fires; in clean browsers jk() is false
-// and no XOR applies — the dossier x-aa-boot golden was captured in a
-// clean session and this port reproduces it byte-for-byte without the
-// XOR. Drift note: if a future chunk rotates these tables, aaMask
-// output diverges from the live cy(); the bridge fallback returns the
-// live mask bytes and key derivation switches to those (see
-// allanime_bridge.go) while the tables here await a re-port.
+// and no XOR applies — the 2026-09-17 server-validated boot token was
+// derived from the envXor-clean mask, and this port reproduces it
+// byte-for-byte without the XOR. Drift note: if a future chunk rotates
+// these tables, aaMask output diverges from the live cy(); the bridge
+// fallback returns the live mask bytes and key derivation switches to
+// those (see allanime_bridge.go) while the tables here await a re-port.
 func aaMask(buildID string) ([]byte, error) {
 	if buildID == "" {
 		return nil, errAAMaskBuildID
@@ -169,10 +176,14 @@ type aaBootParams struct {
 }
 
 // aaParamString ports aT(params): the second HMAC message — the five
-// parts joined with ":" in the live order
-// lane:buildId:group:host:epoch (empty lane kept: omitEmptyLane=false).
+// parts joined with "+" in the live order
+// lane:epoch:host:group:buildId — i.e. "+".join([lane, epoch, host,
+// group, buildId]) (live cl.join/cl.parts; empty lane kept:
+// omitEmptyLane=false). The 2026-09-13 shape (":" join,
+// lane:buildId:group:host:epoch) is dead — the live bootstrap rejects
+// every token built with it. [LIVE-VERIFIED 2026-09-17].
 func aaParamString(p aaBootParams) string {
-	return strings.Join([]string{p.Lane, p.BuildID, p.Group, p.Host, strconv.FormatInt(p.Epoch, 10)}, ":")
+	return strings.Join([]string{p.Lane, strconv.FormatInt(p.Epoch, 10), p.Host, p.Group, p.BuildID}, "+")
 }
 
 // aaBootHeader ports iT: the x-aa-boot value handed to the bootstrap

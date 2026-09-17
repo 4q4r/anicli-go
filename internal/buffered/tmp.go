@@ -54,7 +54,8 @@ func releaseTempDir(dir string) {
 	}
 }
 
-// CleanupAll removes every registered temp dir (application teardown).
+// CleanupAll removes every registered temp dir (application teardown);
+// the method form implements tui.BufferedService.
 func CleanupAll() {
 	activeMu.Lock()
 	dirs := make([]string, 0, len(activeDirs))
@@ -63,6 +64,14 @@ func CleanupAll() {
 	}
 	activeDirs = map[string]struct{}{}
 	activeMu.Unlock()
+	cleanupDirs(dirs)
+}
+
+// CleanupAll implements the tui.BufferedService teardown contract.
+func (d *Downloader) CleanupAll() { CleanupAll() }
+
+// cleanupDirs removes dirs, warning per failure.
+func cleanupDirs(dirs []string) {
 	for _, dir := range dirs {
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Warn("buffered: cleanup temp dir failed", "dir", dir, "error", err)

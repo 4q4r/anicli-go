@@ -213,6 +213,60 @@ func TestAnilibriaTorrentSearchCapsReleases(t *testing.T) {
 	}
 }
 
+// TestAnilibriaTorrentSearchToleratesGeoHiddenRelease404: the API
+// geo-hides content per requester IP, so a release stub can pass the
+// search while its torrent list answers 404 (live-verified: Dandadan
+// from a RU exit). That one release must contribute nothing while the
+// other hits' torrents survive — the search must not fail.
+func TestAnilibriaTorrentSearchToleratesGeoHiddenRelease404(t *testing.T) {
+	t.Parallel()
+
+	var search []map[string]any
+	for _, id := range []int{9789, 5555, 10277} {
+		search = append(search, map[string]any{
+			"id":    id,
+			"alias": fmt.Sprintf("release-%d", id),
+			"name":  map[string]any{"main": fmt.Sprintf("Release %d", id)},
+		})
+	}
+	broad, err := json.Marshal(search)
+	if err != nil {
+		t.Fatalf("marshal search fixture: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/app/search/releases":
+			_, _ = w.Write(broad)
+		case "/anime/torrents/release/9789":
+			_, _ = w.Write(fixture(t, "anilibria-torrent_release.json"))
+		case "/anime/torrents/release/5555":
+			// The geo-hidden release: hidden content answers 404.
+			w.WriteHeader(http.StatusNotFound)
+		case "/anime/torrents/release/10277":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+
+	results, err := p.Search(context.Background(), "dandadan")
+	if err != nil {
+		t.Fatalf("Search: %v (the geo-hidden release must not fail the search)", err)
+	}
+	// The two usable torrents of release 9789 survive the 404 of the
+	// middle hit; the empty 10277 contributes nothing.
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want the 2 surviving torrents of the healthy release", len(results))
+	}
+	if results[0].Title != "Dandadan - AniLiberty.TOP [WEBRip 1080p][AVC][1-12]" {
+		t.Errorf("title = %q", results[0].Title)
+	}
+}
+
 func TestAnilibriaTorrentSearchMalformedJSONTypedError(t *testing.T) {
 	t.Parallel()
 

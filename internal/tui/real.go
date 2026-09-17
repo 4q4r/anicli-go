@@ -72,6 +72,15 @@ func WithShikiPersister(p func(config.Shikimori) error) RealOption {
 	return func(o *realOptions) { o.shikiPersister = p }
 }
 
+// logf normalizes the optional diagnostics sink: nil degrades to a
+// discard logger (never stderr — it corrupts alt-screen).
+func logf(log *slog.Logger) *slog.Logger {
+	if log == nil {
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return log
+}
+
 // NewRealDeps wires the production core: registry, storage, player,
 // skip manager, downloader, offline index and the shikimori client.
 func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOption) (*RealDeps, error) {
@@ -80,7 +89,8 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		opt(&o)
 	}
 
-	registry, err := providers.NewRegistry(settings, store.ProviderStats)
+	registry, err := providers.NewRegistry(settings, store.ProviderStats,
+		providers.WithTorrentLogger(logf(o.logger)))
 	if err != nil {
 		return nil, fmt.Errorf("build provider registry: %w", err)
 	}
@@ -109,22 +119,16 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	real.downloadBridge = dlService
 	manager := download.NewManager(settings.Download.MaxConcurrency, real.runDownload)
 	dlService.manager = manager
-	// PR35: the torrent engine is built only when [torrent] is
-	// enabled and starts fully lazily (client + listeners on the
-	// first Refresh — an enabled subsystem never boots network
-	// machinery on its own).
+	// PR35: the torrent engine is fully lazy (client + listeners on
+	// the first link — an enabled subsystem never boots network
+	// machinery on its own). PR36: the engine is the registry's ONE
+	// shared client — the «Торренты» screen and the torrent search
+	// providers (nyaa) resolve through the same engine, so releases
+	// picked in search show up in the screen and vice versa.
 	var torrentSvc TorrentService
 	var rt *realTorrent
 	if settings.Torrent.Enabled {
-		log := o.logger
-		if log == nil {
-			log = slog.New(slog.NewTextHandler(io.Discard, nil))
-		}
-		torrentNet, err := netclient.New(settings.Network, netclient.WithProvider("torrent"))
-		if err != nil {
-			return nil, fmt.Errorf("build torrent transport: %w", err)
-		}
-		rt = newRealTorrent(settings.Torrent, torrentNet, log)
+		rt = newRealTorrent(settings.Torrent, registry.TorrentEngine(), logf(o.logger))
 		torrentSvc = rt
 	}
 	deps := &Deps{
@@ -673,29 +677,28 @@ func sanitizeFragment(s string) string {
 // --- TorrentService (PR35) ---
 
 // realTorrent adapts the torrent engine onto the TUI service
-// interface. The engine object is created on the FIRST use (not at
-// startup) and the torrent client on the FIRST link — an enabled
-// [torrent] section alone boots nothing.
+// interface. The engine is the registry's ONE shared lazy client
+// (PR36): search-picked nyaa releases and this screen's configured
+// links live in the same client. Nothing runs until the first link.
 type realTorrent struct {
 	cfg config.Torrent
-	net *netclient.Client
-	log *slog.Logger
 
 	mu       sync.Mutex
 	engine   *torrent.Engine
 	ingested bool
 }
 
-// newRealTorrent wires the service; engine and client come later.
-func newRealTorrent(cfg config.Torrent, net *netclient.Client, log *slog.Logger) *realTorrent {
-	return &realTorrent{cfg: cfg, net: net, log: log}
+// newRealTorrent wires the service over the shared engine (may be nil
+// when the wiring failed — every use then fails loud).
+func newRealTorrent(cfg config.Torrent, eng *torrent.Engine, _ *slog.Logger) *realTorrent {
+	return &realTorrent{cfg: cfg, engine: eng}
 }
 
 // Enabled implements TorrentService: mirrors the [torrent] section.
 func (s *realTorrent) Enabled() bool { return s.cfg.Enabled }
 
-// engineOrStart returns the engine, building it (never starting the
-// client) on first use. ErrDisabled when the section is off.
+// engineOrStart returns the shared engine; ErrDisabled when the
+// section is off.
 func (s *realTorrent) engineOrStart() (*torrent.Engine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -703,7 +706,7 @@ func (s *realTorrent) engineOrStart() (*torrent.Engine, error) {
 		return nil, torrent.ErrDisabled
 	}
 	if s.engine == nil {
-		s.engine = torrent.NewEngine(s.cfg, s.net, s.log)
+		return nil, torrent.ErrDisabled
 	}
 	return s.engine, nil
 }

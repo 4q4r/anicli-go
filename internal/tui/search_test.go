@@ -307,3 +307,61 @@ func topOf(model tea.Model) Screen {
 func drainCmds(model tea.Model) tea.Model {
 	return drive(model, tea.WindowSizeMsg{Width: 100, Height: 30})
 }
+
+// TestTorrentResultSuffix pins the torrent preview suffix (PR36):
+// results carrying torrent meta render " · quality · size · seeds↑/
+// leechers↓"; stream-provider results keep their plain labels.
+func TestTorrentResultSuffix(t *testing.T) {
+	t.Parallel()
+
+	full := contracts.SearchResult{Meta: map[string]any{
+		providers.SearchMetaQuality:  "1080p",
+		providers.SearchMetaSize:     "7.4 GiB",
+		providers.SearchMetaSeeders:  "421",
+		providers.SearchMetaLeechers: "33",
+	}}
+	want := " · 1080p · 7.4 GiB · 421↑/33↓"
+	if got := torrentResultSuffix(full); got != want {
+		t.Errorf("suffix = %q, want %q", got, want)
+	}
+
+	partial := contracts.SearchResult{Meta: map[string]any{
+		providers.SearchMetaSize:    "1.2 GiB",
+		providers.SearchMetaQuality: 42, // non-string values are ignored, not shown
+	}}
+	if got := torrentResultSuffix(partial); got != " · 1.2 GiB" {
+		t.Errorf("partial suffix = %q, want %q", got, " · 1.2 GiB")
+	}
+
+	plain := contracts.SearchResult{Title: "Naruto"}
+	if got := torrentResultSuffix(plain); got != "" {
+		t.Errorf("stream-provider suffix = %q, want empty", got)
+	}
+}
+
+// TestSearchGroupLabelsCarryTorrentSuffix: the grouping screen's rows
+// show the torrent preview for torrent results.
+func TestSearchGroupLabelsCarryTorrentSuffix(t *testing.T) {
+	t.Parallel()
+
+	results := []contracts.SearchResult{
+		{Title: "Batch Release", SourceID: "nyaa", Meta: map[string]any{
+			providers.SearchMetaSize:    "7.4 GiB",
+			providers.SearchMetaSeeders: "421",
+		}},
+		{Title: "Stream Release", SourceID: "anilibria"},
+	}
+	g := newSearchGroupNoted(nil, results, "")
+	for _, item := range g.check.items {
+		switch item.Value.(contracts.SearchResult).Title {
+		case "Batch Release":
+			if !strings.Contains(item.Label, "7.4 GiB · 421↑") {
+				t.Errorf("torrent label = %q, want the torrent suffix", item.Label)
+			}
+		case "Stream Release":
+			if strings.Contains(item.Label, "↑") || strings.Contains(item.Label, "GiB") {
+				t.Errorf("stream label = %q, want no torrent suffix", item.Label)
+			}
+		}
+	}
+}

@@ -403,6 +403,33 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	}
 }
 
+// torrentResultSuffix renders the torrent preview suffix for search
+// results that carry torrent metadata (PR36 — nyaa and the torrent
+// providers generally): " · quality · size · seeds↑/leechers↓".
+// Non-string meta values and absent keys are skipped; results without
+// torrent meta (every stream provider) keep their plain labels.
+func torrentResultSuffix(r contracts.SearchResult) string {
+	meta := func(key string) string {
+		s, _ := r.Meta[key].(string)
+		return s
+	}
+	parts := make([]string, 0, 3)
+	if q := meta(providers.SearchMetaQuality); q != "" {
+		parts = append(parts, q)
+	}
+	if size := meta(providers.SearchMetaSize); size != "" {
+		parts = append(parts, size)
+	}
+	seeds, leechers := meta(providers.SearchMetaSeeders), meta(providers.SearchMetaLeechers)
+	if seeds != "" || leechers != "" {
+		parts = append(parts, seeds+"↑/"+leechers+"↓")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " · " + strings.Join(parts, " · ")
+}
+
 // settleResults builds the below-table provider checklist (PR31):
 // EVERY settled result becomes its own row — no similarity grouping,
 // no dedup beyond an exact title+provider match (keep first). The
@@ -430,7 +457,7 @@ func (m *searchProgress) settleResults() {
 		}
 		items = append(items, Choice{
 			ID:    "r" + strconv.Itoa(len(items)),
-			Label: name + " — " + r.Title,
+			Label: name + " — " + r.Title + torrentResultSuffix(r),
 			Value: r,
 		})
 	}
@@ -550,7 +577,7 @@ func newSearchGroupNoted(deps *Deps, results []contracts.SearchResult, note stri
 	for i, r := range results {
 		items = append(items, Choice{
 			ID:    fmt.Sprintf("r%d", i),
-			Label: fmt.Sprintf("%s [%s]", r.Title, r.SourceID),
+			Label: fmt.Sprintf("%s [%s]", r.Title, r.SourceID) + torrentResultSuffix(r),
 			Value: r,
 		})
 	}

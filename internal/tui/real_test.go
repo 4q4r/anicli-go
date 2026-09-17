@@ -9,6 +9,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // TestRealDepsConstruction: the production wiring builds every service
@@ -178,4 +179,40 @@ func TestRealHistoryBindSource(t *testing.T) {
 	if got.Title != title || got.NeedsCorrection {
 		t.Fatalf("title must survive and correction flag drop: %+v", got)
 	}
+}
+
+// TestRealTorrentReusesSharedEngine pins the one-client rule (PR36):
+// realTorrent must serve the registry's shared engine, never boot a
+// second client of its own.
+func TestRealTorrentReusesSharedEngine(t *testing.T) {
+	t.Parallel()
+
+	cfg := testTorrentSettings(t)
+	eng := torrent.NewEngine(cfg, nil, nil)
+	t.Cleanup(func() { _ = eng.Close() })
+	rt := newRealTorrent(cfg, eng, nil)
+
+	got, err := rt.engineOrStart()
+	if err != nil {
+		t.Fatalf("engineOrStart: %v", err)
+	}
+	if got != eng {
+		t.Fatal("realTorrent must reuse the injected shared engine")
+	}
+}
+
+func TestRealTorrentDisabledFailsLoud(t *testing.T) {
+	t.Parallel()
+
+	cfg := testTorrentSettings(t)
+	cfg.Enabled = false
+	rt := newRealTorrent(cfg, nil, nil)
+	if _, err := rt.engineOrStart(); err == nil {
+		t.Fatal("engineOrStart on a disabled section must fail loud")
+	}
+}
+
+func testTorrentSettings(t *testing.T) config.Torrent {
+	t.Helper()
+	return config.Torrent{Enabled: true, Dir: t.TempDir(), Port: 0, ReadaheadMB: 1}
 }

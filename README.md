@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 11 провайдеров"]
+    subgraph sources["Источники — 13 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -118,6 +118,8 @@ graph TD
         P10[kodik]
         P11[allanime]
         P12[anidub]
+        P13[yanima]
+        P14[nyaa torrents]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -125,7 +127,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P9 & P10 & P11
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -241,6 +243,8 @@ max_concurrency = 2     # одновременные фоновые загруз
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
 | allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
 | anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
+| yanima | yanima.space | видео (рус. дубляж, до 4K) | ⚠️ нужны DDoS-куки (PR33) |
+| nyaa | nyaa.si | торрент-поиск (англ. переводы) | ✅ живой, анонимный RSS; не порт — написан по живому сайту (PR36); стрим через подсистему [torrent] |
 
 Не портированы / удалены (мёртвые):
 
@@ -262,7 +266,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: 11/11 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 12/13 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -274,7 +278,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 11, уникальны, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 13, уникальны, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

@@ -253,22 +253,9 @@ http://
 `
 }
 
-// trackerAnnounceStub is a loopback HTTP "tracker": it counts real
-// ANNOUNCE requests (the query carries info_hash — the health probe's
-// plain GET does not) and answers a minimal bencode failure (any
-// response proves the round trip).
-func trackerAnnounceStub(t *testing.T) (url string, hits func() int) {
-	t.Helper()
-	var count atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/announce") && r.URL.Query().Get("info_hash") != "" {
-			count.Add(1)
-		}
-		_, _ = w.Write([]byte("d14:failure reason4:teste"))
-	}))
-	t.Cleanup(srv.Close)
-	return srv.URL, func() int { return int(count.Load()) }
-}
+// trackerAnnounceStub (the package-wide one in trackers_magnet_test.go)
+// counts real announces; the list fixture above points at it so the
+// retro-attach announces stay observable after the PR45 merge.
 
 // fetchTrackerListsStatus waits until the engine's tracker-list
 // statuses become non-empty (the background fetch merged) and returns
@@ -348,6 +335,14 @@ func TestEngineFetchesAndMergesTrackerLists(t *testing.T) {
 	if len(tiers) != 1 || tiers[0][0] != alive.URL+"/announce" {
 		t.Errorf("tiers after prune = %v, want only the alive tracker %s", tiers, alive.URL+"/announce")
 	}
+
+	// PR45 integration: HealthyTrackers (the pool accessor synthesized
+	// magnets were built from) reflects the health-checked list
+	// entries too — tracker_lists feeds exactly this pool.
+	got := e.HealthyTrackers()
+	if len(got) != 1 || got[0] != alive.URL+"/announce" {
+		t.Errorf("HealthyTrackers() = %v, want the health-checked list tracker", got)
+	}
 }
 
 // TestEngineAddTrackersToLiveTorrent: a torrent added BEFORE the lists
@@ -360,7 +355,8 @@ func TestEngineAddTrackersToLiveTorrent(t *testing.T) {
 
 	trackerURL, trackerHits := trackerAnnounceStub(t)
 	list := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("http://" + strings.TrimPrefix(trackerURL, "http://") + "/announce\n"))
+		// The stub URL already carries the /announce path.
+		_, _ = w.Write([]byte(trackerURL + "\n"))
 	}))
 	defer list.Close()
 

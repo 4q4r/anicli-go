@@ -256,11 +256,11 @@ func (e *Engine) AddMetaInfo(mi *metainfo.MetaInfo) (Release, error) {
 }
 
 // HealthyTrackers returns the engine's current tracker pool as flat
-// announce URLs for magnet building (PR45): the configured
-// [torrent] trackers, health-pruned once a check has run (fail-open
+// announce URLs for pool consumers (PR45): the configured
+// [torrent] trackers plus the merged [torrent] tracker_lists entries
+// (PR41), health-pruned once a check has run (fail-open
 // before that), deduplicated, order-stable. An unconfigured engine
-// returns nothing — synthesized magnets stay tracker-less (no
-// invented defaults).
+// returns nothing — nothing is invented.
 func (e *Engine) HealthyTrackers() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()

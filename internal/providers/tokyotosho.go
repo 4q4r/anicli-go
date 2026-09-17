@@ -24,6 +24,7 @@ package providers
 //     search table has S:/L: stats, but no seed data in the feed.)
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -47,6 +48,20 @@ const ttCategoryAnime = "Anime"
 // ttSizeText matches the size line inside the description HTML blob
 // ("Size: 1.66GB"); the feed owns the format, so it rides verbatim.
 var ttSizeText = regexp.MustCompile(`Size:\s*([0-9.]+\s*[KMGTPE]?B)`)
+
+// ttEmptyFeedFooter reports the live-verified TT zero-result shape
+// (curl capture 2026-09-17, testdata/tokyotosho_empty.xml): the
+// search RSS backend answers an unmatched query with HTTP 200 and the
+// bare feed FOOTER — closing tags only, no <?xml/<rss/<channel
+// opening, no items. A trimmed body that is empty or opens with a
+// closing tag is definitionally not a feed: "not a feed at all"
+// settles as zero results, never as a raw XML-syntax crash. A body
+// that opens a real feed and breaks mid-stream fails this check and
+// stays a typed decode error.
+func ttEmptyFeedFooter(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	return len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte("</"))
+}
 
 // TokyoTosho is the tokyo-tosho.net torrent provider over the shared
 // Base identity and TorrentBase engine plumbing.
@@ -121,6 +136,11 @@ func (p *TokyoTosho) Search(ctx context.Context, query string) ([]contracts.Sear
 
 	var feed tokyoToshoRSS
 	if err := xml.Unmarshal(resp.Body, &feed); err != nil {
+		// TT's own zero-result shape (ttEmptyFeedFooter): an empty
+		// answer, not a malfunction — the row settles as "0 results".
+		if ttEmptyFeedFooter(resp.Body) {
+			return []contracts.SearchResult{}, nil
+		}
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
 			fmt.Errorf("decode rss: %w", err))
 	}

@@ -217,6 +217,49 @@ func TestTokyoToshoSearchEmptyQueryFailsLoud(t *testing.T) {
 	}
 }
 
+// TestTokyoToshoSearchEmptyFooterIsZeroResults pins the PR42 root
+// cause fix: TT's search RSS answers an unmatched query (Cyrillic
+// among them — the feed indexes latin release names only) with HTTP
+// 200 and a bare feed FOOTER — the captured real bytes ride the
+// fixture (tokyotosho_empty.xml, live curl 2026-09-17:
+// "</channel>\n</rss>\n"). That is the site's own zero-result shape:
+// it must settle as empty results, never leak a raw "XML syntax
+// error on line 1: unexpected end element </channel>".
+func TestTokyoToshoSearchEmptyFooterIsZeroResults(t *testing.T) {
+	t.Parallel()
+
+	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_empty.xml")), nil))
+	results, err := p.Search(context.Background(), "Пираты «Чёрной лагуны»")
+	if err != nil {
+		t.Fatalf("zero-result footer must not error, got: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %v, want none", results)
+	}
+}
+
+// TestTokyoToshoSearchMidStreamTruncationStaysTypedError guards the
+// classification boundary: a body that OPENS a real feed and breaks
+// mid-stream is a provider malfunction — it stays a typed
+// ProviderError, never silently degrades to "no results".
+func TestTokyoToshoSearchMidStreamTruncationStaysTypedError(t *testing.T) {
+	t.Parallel()
+
+	const truncated = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Tokyo Toshokan</title>
+    <item>
+      <category>Anime`
+	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, truncated, nil))
+	_, err := p.Search(context.Background(), "test")
+	if err == nil {
+		t.Fatal("a feed broken mid-stream must fail loud")
+	}
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) || perr.Provider != "tokyotosho" || perr.Op != contracts.OpSearch {
+		t.Errorf("error = %v, want a tokyotosho search ProviderError", err)
+	}
+}
+
 func TestTokyoToshoSearchMalformedXMLTypedError(t *testing.T) {
 	t.Parallel()
 

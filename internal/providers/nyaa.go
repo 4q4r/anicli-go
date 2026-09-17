@@ -138,9 +138,17 @@ func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResu
 		if title == "" {
 			continue
 		}
+		link := nyaaResultLink(title, item.InfoHash, item.Link)
+		if link == "" {
+			// No usable infohash and no .torrent URL: the item has
+			// nothing the engine could ingest — drop it like an
+			// empty title instead of handing downstream a dead
+			// result.
+			continue
+		}
 		results = append(results, contracts.SearchResult{
 			Title:    title,
-			URL:      nyaaResultLink(title, item.InfoHash, item.Link),
+			URL:      link,
 			SourceID: p.ID(),
 			Meta: map[string]any{
 				SearchMetaSize:     strings.TrimSpace(item.Size),
@@ -156,13 +164,14 @@ func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResu
 }
 
 // nyaaResultLink picks the torrent link of one RSS item: a magnet
-// from a well-formed 40-hex infoHash, the .torrent URL otherwise.
+// from a well-formed 40-hex infoHash, the .torrent URL otherwise, ""
+// when neither is usable (the caller drops such items).
 func nyaaResultLink(title, infoHash, torrentURL string) string {
 	hash := strings.ToLower(strings.TrimSpace(infoHash))
 	if len(hash) == nyaaInfoHashHexLen && isHex(hash) {
 		return "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(title)
 	}
-	return torrentURL
+	return strings.TrimSpace(torrentURL)
 }
 
 // isHex reports whether s is non-empty lowercase hexadecimal.

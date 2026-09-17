@@ -11,7 +11,6 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
-	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 func TestNyaaSearchParsesRSS(t *testing.T) {
@@ -114,6 +113,41 @@ func TestNyaaSearchEmptyQueryFailsLoud(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Errorf("server hits = %d, want 0 (no network on the guard)", hits)
+	}
+}
+
+// TestNyaaSearchSkipsLinklessItems: an item with neither a usable
+// infoHash nor a <link> has no torrent link at all — it is dropped
+// like an empty title, never handed downstream as a dead result.
+func TestNyaaSearchSkipsLinklessItems(t *testing.T) {
+	t.Parallel()
+
+	const body = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:nyaa="https://nyaa.si/xmlns/nyaa">
+  <channel>
+    <item>
+      <title>[Good] Show - 01 (1080p).mkv</title>
+      <link>https://nyaa.si/download/3333333.torrent</link>
+      <nyaa:infoHash>abcdef0123456789abcdef0123456789abcdef01</nyaa:infoHash>
+      <nyaa:size>1.0 GiB</nyaa:size>
+    </item>
+    <item>
+      <title>[Broken] No hash no link</title>
+      <nyaa:size>1.0 GiB</nyaa:size>
+    </item>
+  </channel>
+</rss>`
+
+	p := newNyaaFixtureAt(t, nyaaServer(t, body, nil))
+	results, err := p.Search(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1 (the linkless item must be skipped)", len(results))
+	}
+	if results[0].URL == "" {
+		t.Error("the kept result must carry its magnet link")
 	}
 }
 
@@ -229,7 +263,7 @@ func newNyaaFixtureAt(t *testing.T, baseURL string) *Nyaa {
 
 func newNyaaWithEngine(t *testing.T) *Nyaa {
 	t.Helper()
-	eng := torrent.NewEngine(testTorrentConfig(t), nil, nil)
+	eng := newOfflineTestEngine(t)
 	t.Cleanup(func() { _ = eng.Close() })
 	return newNyaa(NyaaBase, testClient(t, "nyaa"), eng)
 }

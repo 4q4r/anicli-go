@@ -165,6 +165,18 @@ func NewEngine(cfg config.Torrent, net *netclient.Client, log *slog.Logger) *Eng
 	}
 }
 
+// NewOfflineEngineForTests builds an engine with every external
+// discovery channel disabled (DHT bootstrap nodes, periodic DHT
+// announces, webtorrent, UPnP). TEST-ONLY by convention: provider- and
+// UI-package suites use it so the default `go test -race ./...` never
+// egresses to public infrastructure. Production code must construct
+// engines with NewEngine and the library defaults.
+func NewOfflineEngineForTests(cfg config.Torrent, net *netclient.Client, log *slog.Logger) *Engine {
+	eng := NewEngine(cfg, net, log)
+	eng.testNoExternal = true
+	return eng
+}
+
 // probeTimeout reports the effective per-tracker probe budget.
 func (e *Engine) probeTimeout() time.Duration {
 	if e.probeTimeoutOverride > 0 {

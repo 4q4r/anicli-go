@@ -248,6 +248,30 @@ func (e *Engine) AddMetaInfo(mi *metainfo.MetaInfo) (Release, error) {
 	return e.addSpec(torrent.TorrentSpecFromMetaInfo(mi))
 }
 
+// HealthyTrackers returns the engine's current tracker pool as flat
+// announce URLs for magnet building (PR45): the configured
+// [torrent] trackers, health-pruned once a check has run (fail-open
+// before that), deduplicated, order-stable. An unconfigured engine
+// returns nothing — synthesized magnets stay tracker-less (no
+// invented defaults).
+func (e *Engine) HealthyTrackers() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	tiers := e.trackerTiersLocked()
+	seen := make(map[string]struct{}, len(tiers))
+	out := make([]string, 0, len(tiers))
+	for _, tier := range tiers {
+		for _, tr := range tier {
+			if _, dup := seen[tr]; dup {
+				continue
+			}
+			seen[tr] = struct{}{}
+			out = append(out, tr)
+		}
+	}
+	return out
+}
+
 // addSpec validates the infohash (the library PANICS on zero —
 // AddTorrentOpt calls panicif.Zero), dedupes and registers the release.
 func (e *Engine) addSpec(spec *torrent.TorrentSpec) (Release, error) {

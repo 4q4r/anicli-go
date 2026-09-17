@@ -227,7 +227,26 @@ enabled = false         # интеграция с трекером
 
 [download]
 max_concurrency = 2     # одновременные фоновые загрузки
+
+[torrent]
+enabled = true          # подсистема торрентов (nyaa/animetosho/…)
+trackers = ["udp://tracker.opentrackr.org:1337/announce"]  # см. ниже
 ```
+
+**Медленно тянутся метаданные торрентов?** Настройте `[torrent] trackers` —
+это прямое лекарство: без трекеров магниты nyaa/animetosho ищут пиры только
+через DHT, что часто не успевает в бюджет ожидания. Одной строкой (список
+ngosang/trackerslist):
+
+```toml
+[torrent]
+trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.com:1337/announce", "udp://tracker.torrent.eu.org:451/announce"]
+```
+
+Движок проверяет здоровье трекеров и подставляет только живые; они же
+добавляются в синтезированные магниты (`&tr=`), а метаданные приходят через
+анонсы, а не DHT.
+
 
 ---
 

@@ -148,22 +148,22 @@ func (m *MenuScreen) View() tea.View {
 
 // Root screen ids and labels (RU vocabulary from the Python menu;
 // PR30: no free-text search entry — search happens strictly through
-// the catalog «📜 Списки»).
+// the catalog «📜 Списки»; PR40: no torrents entry either — the
+// torrent search providers superseded the PR35 menu).
 const (
-	rootScreenID      = "root"
-	rootListsLabel    = "📜 Списки"
-	rootTorrentsLabel = "🧲 Торренты"
-	rootOfflineLabel  = "📂 Скачанное"
-	rootDBLabel       = "🗄️ Управление БД"
-	rootHealthLabel   = "🛠 Проверка"
-	rootExitLabel     = "🚪 Выход"
-	rootBackHint      = "enter — выбрать · ctrl+c — выход"
+	rootScreenID     = "root"
+	rootListsLabel   = "📜 Списки"
+	rootOfflineLabel = "📂 Скачанное"
+	rootDBLabel      = "🗄️ Управление БД"
+	rootHealthLabel  = "🛠 Проверка"
+	rootExitLabel    = "🚪 Выход"
+	rootBackHint     = "enter — выбрать · ctrl+c — выход"
 )
 
-// NewRootScreen builds the root menu: six entries with «🚪 Выход» as
+// NewRootScreen builds the root menu: five entries with «🚪 Выход» as
 // the pinned BOTTOM row and NO «Назад» entry (there is nothing above
 // root to go back to, PR24); only here does Ctrl-C exit the app (I2
-// exception). PR35 adds «🧲 Торренты» (menu 5→6) right before it.
+// exception).
 func NewRootScreen(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
 		ID:      rootScreenID,
@@ -175,7 +175,6 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 			{ID: "downloads", Label: rootOfflineLabel},
 			{ID: "db", Label: rootDBLabel},
 			{ID: "check", Label: rootHealthLabel},
-			{ID: "torrents", Label: rootTorrentsLabel},
 			{ID: "exit", Label: rootExitLabel},
 		},
 		Status: rootBackHint,
@@ -193,8 +192,6 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 				return push(NewDBMenu(deps))
 			case "check":
 				return push(NewHealthScreen(deps))
-			case "torrents":
-				return push(NewTorrentReleases(deps))
 			case "exit":
 				return quit()
 			default:

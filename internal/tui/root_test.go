@@ -11,9 +11,10 @@ import (
 // until a flow actually calls one).
 func newTestDeps() *Deps { return &Deps{} }
 
-// TestRootMenuContents: the root menu shows the six RU entries (PR35
-// adds «🧲 Торренты» to the PR30 roster). Root shows NO «Назад» row:
-// «🚪 Выход» takes its place as the pinned BOTTOM row (PR24).
+// TestRootMenuContents: the root menu shows the five RU entries (PR40
+// removes the PR35 «🧲 Торренты» entry — torrent providers superseded
+// it). Root shows NO «Назад» row: «🚪 Выход» takes its place as the
+// pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
@@ -22,12 +23,14 @@ func TestRootMenuContents(t *testing.T) {
 		"📂 Скачанное",
 		"🗄️ Управление БД",
 		"🛠 Проверка",
-		"🧲 Торренты",
 		"🚪 Выход",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("root view must contain %q, got:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Торренты") {
+		t.Fatalf("root view must NOT contain the removed «Торренты» entry (PR40), got:\n%s", view)
 	}
 	if strings.Contains(view, "Поиск") {
 		t.Fatalf("root view must NOT contain the removed free-text search entry, got:\n%s", view)
@@ -35,9 +38,9 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, BackLabel) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel, view)
 	}
-	// Exactly six entries (PR35: torrents added).
-	if items := root.list.Menu().Items; len(items) != 6 {
-		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
+	// Exactly five entries (PR40: the torrents entry removed again).
+	if items := root.list.Menu().Items; len(items) != 5 {
+		t.Fatalf("root menu must hold 5 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Выход")

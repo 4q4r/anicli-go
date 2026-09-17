@@ -1,19 +1,24 @@
 [
   {
-    "id": 42,
-    "code": "re-zero",
-    "alias": "re-zero-kara-hajimeru-isekai-seikatsu",
-    "name": {
-      "main": "Re:Zero. Жизнь с нуля в другом мире",
-      "alternative": "Re:Zero kara Hajimeru Isekai Seikatsu"
-    }
+    "id": 9789,
+    "type": {"value": "TV", "description": "ТВ"},
+    "year": 2024,
+    "name": {"main": "Дандадан", "english": "Dandadan", "alternative": null},
+    "alias": "dandadan",
+    "season": {"value": "autumn", "description": "Осень"},
+    "shikimori": {"id": 57334, "url": "https://shikimori.io/animes/57334", "votes": 48367, "rating": 8.4},
+    "episodes_total": 12,
+    "is_ongoing": true
   },
   {
-    "id": 7,
-    "code": "cowboy-bebop",
-    "alias": "cowboy-bebop",
-    "name": {
-      "main": "Ковбой Бибоп"
-    }
+    "id": 10277,
+    "type": {"value": "TV", "description": "ТВ"},
+    "year": 2026,
+    "name": {"main": "Вперёд, отряд мистики!", "english": "Let's Go Kaiki-gumi", "alternative": null},
+    "alias": "lets-go-kaiki-gumi",
+    "season": {"value": "summer", "description": "Лето"},
+    "shikimori": {"id": 62683, "url": "https://shikimori.io/animes/62683", "votes": 138, "rating": 7.6},
+    "episodes_total": 11,
+    "is_ongoing": true
   }
 ]

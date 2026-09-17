@@ -1,20 +1,25 @@
 {
-  "id": 42,
-  "alias": "re-zero-kara-hajimeru-isekai-seikatsu",
+  "id": 9789,
+  "alias": "dandadan",
+  "name": {"main": "Дандадан", "english": "Dandadan"},
+  "episodes_total": 12,
+  "is_ongoing": true,
+  "torrents": [],
   "episodes": [
     {
-      "id": 1,
+      "id": "9d289417-5c5c-4c9a-b4c8-144a3368c100",
       "ordinal": 1,
-      "hls_1080": "//static-libria.top/public/videos/re_zero/1/1080.m3u8",
-      "hls_720": "//static-libria.top/public/videos/re_zero/1/720.m3u8",
-      "hls_480": ""
+      "name": "Вообще-то так зарождается любовь",
+      "hls_1080": "https://cache.libria.fun/videos/media/ts/9789/1/1080/572da4181b9e639b2728b5e34ec484b9.m3u8?countryIso=DE&isAuthorized=0&isWithVideoAds=1&isWithVideoAdsAlways=1",
+      "hls_720": "https://cache.libria.fun/videos/media/ts/9789/1/720/d642a952bae2536102273c68630c50ad.m3u8?countryIso=DE&isAuthorized=0&isWithVideoAds=1&isWithVideoAdsAlways=1",
+      "hls_480": "https://cache.libria.fun/videos/media/ts/9789/1/480/4174fec372b26c0575a72fc6405bb45e.m3u8?countryIso=DE&isAuthorized=0&isWithVideoAds=1&isWithVideoAdsAlways=1"
     },
     {
-      "id": 2,
+      "id": "9d36a9dc-4ddd-43d7-b27f-4b37afc69951",
       "ordinal": 2,
       "hls_1080": "",
-      "hls_720": "//static-libria.top/public/videos/re_zero/2/720.m3u8",
-      "hls_480": "//static-libria.top/public/videos/re_zero/2/480.m3u8"
+      "hls_720": "https://cache.libria.fun/videos/media/ts/9789/2/720/dfdb85f88f527930b1547bd550143606.m3u8?countryIso=DE&isAuthorized=0&isWithVideoAds=1&isWithVideoAdsAlways=1",
+      "hls_480": ""
     }
   ]
 }

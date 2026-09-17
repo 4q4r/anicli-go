@@ -232,7 +232,7 @@ max_concurrency = 2     # одновременные фоновые загруз
 
 | Провайдер | Сайт | Тип | Статус |
 |-----------|------|-----|--------|
-| anilibria | aniliberty.top | видео+аудио | ✅ живой |
+| anilibria | aniliberty.top | видео+аудио | ✅ живой (перебазирован на новый API в PR37); поисковая выдача и часть релизов фильтруются по IP региона — из таких сетей нужен `network.proxy_url` |
 | animevost | api.animevost.org | видео | ✅ живой |
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |

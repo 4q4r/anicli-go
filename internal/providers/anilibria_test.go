@@ -94,17 +94,19 @@ func TestAnilibriaSearch(t *testing.T) {
 		t.Fatalf("results = %d, want 2 (fixture anilibria_search.json)", len(results))
 	}
 	first := results[0]
-	if first.Title != "Re:Zero. Жизнь с нуля в другом мире" {
+	// Fixture values are verbatim live captures (aniliberty.top
+	// /api/v1/app/search/releases?query=dandadan, 2026-09-17).
+	if first.Title != "Дандадан" {
 		t.Errorf("Title = %q", first.Title)
 	}
-	if first.URL != "re-zero-kara-hajimeru-isekai-seikatsu" {
+	if first.URL != "dandadan" {
 		t.Errorf("URL = %q, want alias", first.URL)
 	}
 	if first.SourceID != "anilibria" {
 		t.Errorf("SourceID = %q", first.SourceID)
 	}
-	if id, ok := first.Meta["id"].(json.Number); !ok || id.String() != "42" {
-		t.Errorf("Meta[id] = %#v, want json.Number 42", first.Meta["id"])
+	if id, ok := first.Meta["id"].(json.Number); !ok || id.String() != "9789" {
+		t.Errorf("Meta[id] = %#v, want json.Number 9789", first.Meta["id"])
 	}
 
 	// The query must arrive URL-encoded (task ruling; Python used a raw
@@ -176,8 +178,10 @@ func TestAnilibriaGetEpisodes(t *testing.T) {
 	if len(episodes) != 2 {
 		t.Fatalf("episodes = %d, want 2", len(episodes))
 	}
+	// The new aniliberty.top API identifies episodes by UUID strings
+	// (the old libria API used numeric ids — the rebase in PR37).
 	first := episodes[0]
-	if first.Num != "1" || first.RawID != "1" {
+	if first.Num != "1" || first.RawID != "9d289417-5c5c-4c9a-b4c8-144a3368c100" {
 		t.Errorf("episode 1 Num/RawID = %q/%q", first.Num, first.RawID)
 	}
 	raw := first.RawEmbeds["AniLibria"]
@@ -185,16 +189,18 @@ func TestAnilibriaGetEpisodes(t *testing.T) {
 		t.Fatalf("RawEmbeds[AniLibria] = %#v, want one hls_json payload", raw)
 	}
 
-	// Truthy check: episode 1 must carry 1080+720 (empty hls_480 dropped),
-	// episode 2 must carry 720+480 (empty hls_1080 dropped).
+	// Episode 1 carries all three qualities with full signed URLs
+	// (live capture); episode 2 carries only 720 (its hls_1080/hls_480
+	// are blanked in the fixture to keep the empty-value drop
+	// coverage; every other value is a verbatim capture).
 	var links map[string]string
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(raw[0], "hls_json:")), &links); err != nil {
 		t.Fatalf("decode hls_json payload: %v", err)
 	}
-	if len(links) != 2 {
-		t.Errorf("episode 1 links = %v, want 2", links)
+	if len(links) != 3 {
+		t.Errorf("episode 1 links = %v, want 3", links)
 	}
-	if links["1080"] != "//static-libria.top/public/videos/re_zero/1/1080.m3u8" {
+	if links["1080"] != "https://cache.libria.fun/videos/media/ts/9789/1/1080/572da4181b9e639b2728b5e34ec484b9.m3u8?countryIso=DE&isAuthorized=0&isWithVideoAds=1&isWithVideoAdsAlways=1" {
 		t.Errorf("links[1080] = %q", links["1080"])
 	}
 
@@ -206,8 +212,11 @@ func TestAnilibriaGetEpisodes(t *testing.T) {
 	if _, has := links2["1080"]; has {
 		t.Errorf("episode 2 links = %v, empty hls_1080 must be dropped", links2)
 	}
-	if _, has := links2["480"]; !has {
-		t.Errorf("episode 2 links = %v, want 480 present", links2)
+	if _, has := links2["720"]; !has {
+		t.Errorf("episode 2 links = %v, want 720 present", links2)
+	}
+	if _, has := links2["480"]; has {
+		t.Errorf("episode 2 links = %v, empty hls_480 must be dropped", links2)
 	}
 }
 
@@ -243,15 +252,17 @@ func TestAnilibriaResolveStream(t *testing.T) {
 		t.Fatalf("Links missing 1080: %v", stream.Links)
 	}
 	// Protocol-relative and bare-relative URLs gain the https: prefix
-	// (Python: not url.startswith("http") -> "https:" + url).
+	// (Python: not url.startswith("http") -> "https:" + url). The new
+	// API emits full https URLs, but the legacy relative shapes stay
+	// supported (the Python port handled them the same way).
 	if hd.URL != "https://static-libria.top/v/1/1080.m3u8" {
 		t.Errorf("1080 URL = %q", hd.URL)
 	}
 	if hd.Quality != "1080" {
 		t.Errorf("1080 Quality = %q", hd.Quality)
 	}
-	if hd.Headers["Referer"] != "https://anilibria.top" {
-		t.Errorf("1080 Referer = %q, want the anilibria host", hd.Headers["Referer"])
+	if hd.Headers["Referer"] != "https://aniliberty.top" {
+		t.Errorf("1080 Referer = %q, want the aniliberty host", hd.Headers["Referer"])
 	}
 
 	sd, ok := stream.Links["480"]

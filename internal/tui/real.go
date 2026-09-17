@@ -202,6 +202,11 @@ func (s *realSearch) Search(ctx context.Context, providerID, query string) ([]co
 	return p.Search(ctx, query)
 }
 
+// NamePreference surfaces the provider's search-name preference (PR42).
+func (s *realSearch) NamePreference(providerID string) contracts.NamePreference {
+	return s.registry.NamePreference(providerID)
+}
+
 // --- EpisodeService ---
 
 type realEpisode struct{ registry *providers.Registry }
@@ -445,6 +450,11 @@ func (s *realShiki) UpdateStatus(ctx context.Context, shikimoriID, rateID int64,
 // SearchIDs maps candidate titles to shikimori anime ids.
 func (s *realShiki) SearchIDs(ctx context.Context, query string) (map[string]int64, error) {
 	return s.client.SearchIDs(ctx, query)
+}
+
+// Autocomplete resolves the rich autocomplete records (PR42).
+func (s *realShiki) Autocomplete(ctx context.Context, query string, limit int) ([]shikimori.AutocompleteItem, error) {
+	return s.client.Autocomplete(ctx, query, limit)
 }
 
 // --- DownloadService ---

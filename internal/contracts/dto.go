@@ -103,11 +103,12 @@ type TorrentProvider interface {
 type NamePreference int
 
 const (
-	// NamePrefDefault: no declared preference — the caller routes
-	// variants by content language and script only (existing PR24
-	// behavior).
+	// NamePrefDefault is the no-declared-preference value: the caller
+	// routes variants by content language and script only (existing
+	// PR24 behavior).
 	NamePrefDefault NamePreference = iota
-	// NamePrefLatin: the index matches romaji/english names only.
+	// NamePrefLatin is the preference of indexes matching
+	// romaji/english names only.
 	NamePrefLatin
 )
 

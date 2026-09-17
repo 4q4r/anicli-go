@@ -28,6 +28,8 @@ type fakeSearch struct {
 	queries        map[string][]string
 	disabled       []providers.DisabledProvider
 	block          map[string]time.Duration
+	// namePrefs carries the NamePreferenceProvider pins (PR42).
+	namePrefs map[string]contracts.NamePreference
 }
 
 func newFakeSearch() *fakeSearch {
@@ -44,10 +46,16 @@ func newFakeSearch() *fakeSearch {
 		queries:        map[string][]string{},
 		disabled:       nil,
 		block:          map[string]time.Duration{},
+		namePrefs:      map[string]contracts.NamePreference{},
 	}
 }
 
 func (f *fakeSearch) Providers() []ProviderMeta { return f.providers }
+
+// NamePreference surfaces the provider name-preference pins (PR42).
+func (f *fakeSearch) NamePreference(providerID string) contracts.NamePreference {
+	return f.namePrefs[providerID]
+}
 
 func (f *fakeSearch) DisabledProviders() []providers.DisabledProvider { return f.disabled }
 

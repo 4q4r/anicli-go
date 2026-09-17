@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
 // fakeMetadata implements MetadataService with per-query fixtures.
@@ -26,6 +27,25 @@ func (f *fakeMetadata) SearchAlternativeTitles(_ context.Context, query string) 
 }
 
 var _ MetadataService = (*fakeMetadata)(nil)
+
+// autocompleteItems builds autocomplete records from ru/en name pairs
+// (nil name = the field stays unset).
+func autocompleteItems(pairs ...[2]string) []shikimori.AutocompleteItem {
+	items := make([]shikimori.AutocompleteItem, 0, len(pairs))
+	for i, p := range pairs {
+		item := shikimori.AutocompleteItem{ShikimoriID: int64(100 + i)}
+		if p[0] != "" {
+			ru := p[0]
+			item.TitleRu = &ru
+		}
+		if p[1] != "" {
+			en := p[1]
+			item.TitleEn = &en
+		}
+		items = append(items, item)
+	}
+	return items
+}
 
 // hybridDeps builds the fake service set for the hybrid flow tests.
 // Nil fakes are left unset (a typed nil in an interface would panic).
@@ -79,9 +99,10 @@ func TestProviderQueryLanguageRouting(t *testing.T) {
 }
 
 // TestHybridSearchEnrichesViaShikimori: enabled Shikimori seeds the
-// variant set — SearchIDs finds the matched title, the metadata
-// manager contributes aliases, and the fan-out routes Cyrillic to ru
-// providers and Latin to non-ru ones (PR24 hybrid flow).
+// variant set — the autocomplete record binds the matched title, the
+// metadata manager contributes aliases, and the fan-out routes
+// Cyrillic to ru providers and Latin to non-ru ones (PR24 hybrid
+// flow).
 func TestHybridSearchEnrichesViaShikimori(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
@@ -91,7 +112,7 @@ func TestHybridSearchEnrichesViaShikimori(t *testing.T) {
 	fs.results["animego"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
 	fs.results["gogoanime"] = []contracts.SearchResult{{Title: "Naruto", URL: "u2", SourceID: "gogoanime"}}
 
-	shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Наруто": 21}}
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
 	md := &fakeMetadata{aliases: map[string][]string{
 		"Наруто": {"Naruto", "NARUTO"},
 	}}
@@ -188,7 +209,7 @@ func TestHybridSearchEarlyStop(t *testing.T) {
 		"Наруто": {{Title: "Наруто", URL: "u1", SourceID: "animego"}},
 	}
 
-	shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Наруто": 21}}
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", ""})}
 	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Наруто"}}}
 	deps := hybridDeps(fs, shiki, md, nil)
 
@@ -282,5 +303,139 @@ func TestSearchProgressScreenNotPinnedByEnrichment(t *testing.T) {
 	_, cmd := progress.Update(enter())
 	if cmd == nil {
 		t.Fatalf("enter on the settled progress must advance")
+	}
+}
+
+// TestBestShikiItemNameSelection pins the PR42 binding selection: the
+// query ratios against BOTH names of an autocomplete record — the
+// romaji/english one and the russian one — so a Cyrillic query binds
+// via its russian name (the latin-only data-text match was the PR42
+// root cause). Deterministic: record order wins ties, russian only /
+// english only / both / neither.
+func TestBestShikiItemNameSelection(t *testing.T) {
+	t.Run("russian only binds a Cyrillic query", func(t *testing.T) {
+		item, name := bestShikiItem("пираты «чёрной лагуны»",
+			autocompleteItems([2]string{"Пираты «Чёрной лагуны»", ""}))
+		if item == nil || name != "Пираты «Чёрной лагуны»" {
+			t.Fatalf("want a binding via the russian name, got item=%v name=%q", item, name)
+		}
+	})
+	t.Run("english only binds a latin query", func(t *testing.T) {
+		item, name := bestShikiItem("black lagoon", autocompleteItems([2]string{"", "Black Lagoon"}))
+		if item == nil || name != "Black Lagoon" {
+			t.Fatalf("want a binding via the english name, got item=%v name=%q", item, name)
+		}
+	})
+	t.Run("both names: the query picks the matching one", func(t *testing.T) {
+		items := autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"})
+		_, ruName := bestShikiItem("пираты «чёрной лагуны»", items)
+		if ruName != "Пираты «Чёрной лагуны»" {
+			t.Errorf("a Cyrillic query must win via the russian name, got %q", ruName)
+		}
+		_, enName := bestShikiItem("black lagoon", items)
+		if enName != "Black Lagoon" {
+			t.Errorf("a latin query must win via the english name, got %q", enName)
+		}
+	})
+	t.Run("neither name matches under the threshold", func(t *testing.T) {
+		item, name := bestShikiItem("совсем другое аниме",
+			autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"}))
+		if item != nil || name != "" {
+			t.Fatalf("a low-ratio match must not bind, got item=%v name=%q", item, name)
+		}
+	})
+}
+
+// TestProviderQueryLatinPreference pins the fan-out routing for the
+// latin-only providers (PR42): a NamePrefLatin provider is queried
+// with the latin variants ONLY — the Cyrillic ones are guaranteed-zero
+// there. Without any resolved latin variant it falls back to the full
+// set (fail-soft: search anyway, the provider returns 0); default
+// providers keep the existing PR24 language ordering.
+func TestProviderQueryLatinPreference(t *testing.T) {
+	variants := []string{"Пираты «Чёрной лагуны»", "Пираты Чёрной лагуны", "Black Lagoon", "Burakku Ragūn"}
+	fs := newFakeSearch()
+	fs.namePrefs = map[string]contracts.NamePreference{"nyaa": contracts.NamePrefLatin}
+	deps := hybridDeps(fs, nil, nil, map[string]string{"nyaa": "ja", "animego": "ru"})
+	m := &searchProgress{deps: deps, variants: variants}
+
+	t.Run("latin-only provider gets latin variants only", func(t *testing.T) {
+		got := m.providerQueries("nyaa")
+		for _, q := range got {
+			if hasCyrillic.MatchString(q) {
+				t.Errorf("latin-only provider must never see the Cyrillic query %q", q)
+			}
+		}
+		if len(got) == 0 || got[0] != "Black Lagoon" {
+			t.Fatalf("latin variants must ride in order, got %v", got)
+		}
+	})
+	t.Run("default provider keeps the full ordered set", func(t *testing.T) {
+		got := m.providerQueries("animego")
+		if len(got) != len(variants) {
+			t.Fatalf("routing must not drop variants for a default provider: %v", got)
+		}
+		if got[0] != variants[0] {
+			t.Fatalf("a ru provider must keep the Cyrillic-first order, got %v", got)
+		}
+	})
+	t.Run("no latin variants resolved falls back to the full set", func(t *testing.T) {
+		cyrOnly := &searchProgress{deps: deps, variants: []string{"Пираты «Чёрной лагуны»"}}
+		got := cyrOnly.providerQueries("nyaa")
+		if len(got) != 1 || got[0] != "Пираты «Чёрной лагуны»" {
+			t.Fatalf("fail-soft fallback must search anyway, got %v", got)
+		}
+	})
+}
+
+// TestHybridSearchCyrillicQueryRoutesLatinToTorrentProviders is the
+// PR42 flow pin: a Cyrillic query binds through the russian name of
+// the Shikimori record, and the resolved romaji/english name rides the
+// variant pool — so the latin-only torrent providers are searched with
+// the latin title (the owner's «Пираты «Чёрной лагуны»» → nyaa/
+// animetosho/tokyotosho get "Black Lagoon", never the Cyrillic string
+// that crashed tokyotosho's zero-result footer into a decode error).
+func TestHybridSearchCyrillicQueryRoutesLatinToTorrentProviders(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = []ProviderMeta{
+		{ID: "animego", Name: "AnimeGO"},
+		{ID: "nyaa", Name: "Nyaa"},
+	}
+	fs.namePrefs = map[string]contracts.NamePreference{"nyaa": contracts.NamePrefLatin}
+	fs.results["animego"] = []contracts.SearchResult{{Title: "Пираты «Чёрной лагуны»", URL: "u1", SourceID: "animego"}}
+	fs.results["nyaa"] = []contracts.SearchResult{{Title: "[Group] Black Lagoon", URL: "u2", SourceID: "nyaa"}}
+
+	shiki := &fakeShiki{
+		enabled: true,
+		items:   autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"}),
+	}
+	md := &fakeMetadata{}
+	deps := hybridDeps(fs, shiki, md, map[string]string{"animego": "ru", "nyaa": "ja"})
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "Пираты «Чёрной лагуны»")})
+	drainCmds(model)
+
+	// Shikimori was consulted with the original Cyrillic query.
+	if len(shiki.queries) != 1 || shiki.queries[0] != "Пираты «Чёрной лагуны»" {
+		t.Fatalf("shikimori must resolve the original query, got %v", shiki.queries)
+	}
+	// The latin-only provider saw ONLY the resolved latin names.
+	got := fs.queries["nyaa"]
+	if len(got) == 0 {
+		t.Fatal("nyaa must have been searched")
+	}
+	for _, q := range got {
+		if hasCyrillic.MatchString(q) {
+			t.Errorf("the latin-only provider must never see the Cyrillic query %q", q)
+		}
+	}
+	if got[0] != "Black Lagoon" {
+		t.Fatalf("nyaa must be searched with the resolved romaji/english name first, got %v", got)
+	}
+	// The RU provider keeps the Cyrillic-first order (original query).
+	ruQueries := fs.queries["animego"]
+	if len(ruQueries) == 0 || !hasCyrillic.MatchString(ruQueries[0]) {
+		t.Fatalf("the RU provider must be queried with Cyrillic first, got %v", ruQueries)
 	}
 }

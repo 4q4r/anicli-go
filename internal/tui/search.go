@@ -16,6 +16,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -115,9 +116,7 @@ func queriesForLanguage(variants []string, lang string) []string {
 // variants mean "no enrichment, run the bare query".
 type searchVariantsMsg struct {
 	variants []string
-}
-
-// shikiEnrichmentActive gates the hybrid enrichment (PR25 A): the
+} // shikiEnrichmentActive gates the hybrid enrichment (PR25 A): the
 // phase runs only with a wired, non-disabled Shikimori service — the
 // enrichment is a bonus, never a requirement of search.
 func shikiEnrichmentActive(deps *Deps) bool {
@@ -131,50 +130,76 @@ func shikiEnrichmentActive(deps *Deps) bool {
 }
 
 // resolveSearchVariants runs the hybrid enrichment (PR24): Shikimori
-// SearchIDs over the original query → best-ratio match above the
-// binding threshold → metadata aliases of the MATCHED title → the
-// capped variant set (original query first, max 8). Any failure — or
-// a nil/disabled Shikimori — quietly degrades to the bare query
-// (python parity; PR25 A: enrichment is optional).
+// autocomplete over the original query → best-ratio match above the
+// binding threshold → BOTH names of the matched title plus metadata
+// aliases of the winning name → the capped variant set (original
+// query first, max 8). Any failure — or a nil/disabled Shikimori —
+// quietly degrades to the bare query (python parity; PR25 A:
+// enrichment is optional).
+//
+// PR42: the binding ratios the query against BOTH names of a record
+// (romaji/english AND russian — a Cyrillic query binds through the
+// russian one), and both names seed the variant pool so the
+// latin-only torrent providers can be routed the latin title.
 func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 	if !shikiEnrichmentActive(deps) {
 		return searchVariantsMsg{}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
-	ids, err := deps.Shiki.SearchIDs(ctx, query)
-	if err != nil || len(ids) == 0 {
+	items, err := deps.Shiki.Autocomplete(ctx, query, shikiAutocompleteLimit)
+	if err != nil || len(items) == 0 {
 		return searchVariantsMsg{}
 	}
-	bestTitle, bestID := bestShikiCandidate(query, ids)
-	if bestID == 0 {
+	best, bestName := bestShikiItem(query, items)
+	if best == nil {
 		return searchVariantsMsg{}
 	}
-	aliases := []string{bestTitle}
+	aliases := make([]string, 0, 2)
+	for _, name := range []*string{best.TitleRu, best.TitleEn} {
+		if name != nil && strings.TrimSpace(*name) != "" {
+			aliases = append(aliases, *name)
+		}
+	}
 	if deps.Metadata != nil {
-		if more, err := deps.Metadata.SearchAlternativeTitles(ctx, bestTitle); err == nil {
+		if more, err := deps.Metadata.SearchAlternativeTitles(ctx, bestName); err == nil {
 			aliases = append(aliases, more...)
 		}
 	}
 	return searchVariantsMsg{variants: metadata.QueryVariants(query, aliases)}
 }
 
-// bestShikiCandidate picks the best SequenceMatcher-ratio match above
-// the binding threshold (the resolveShikiBinding criterion, reused for
-// the variant seed).
-func bestShikiCandidate(query string, ids map[string]int64) (string, int64) {
-	bestTitle, bestID := "", int64(0)
+// shikiAutocompleteLimit caps the autocomplete records parsed for the
+// enrichment binding (the endpoint returns a fixed handful per query;
+// the same wire request the SearchIDs path makes).
+const shikiAutocompleteLimit = 16
+
+// bestShikiItem picks the autocomplete record whose name best matches
+// the query above the binding threshold. Both names of a record
+// compete — the romaji/english one and the russian one — so a Cyrillic
+// query binds via its russian name (PR42 root cause: the latin-only
+// match left every provider the bare Cyrillic query). Deterministic:
+// record order wins ties, english before russian within a record.
+// Returns the record and the winning name; nil under the threshold.
+func bestShikiItem(query string, items []shikimori.AutocompleteItem) (*shikimori.AutocompleteItem, string) {
+	bestItem, bestName := (*shikimori.AutocompleteItem)(nil), ""
 	bestRatio := 0.0
-	for cand, id := range ids {
-		ratio := providers.SimilarityRatio(strings.ToLower(query), strings.ToLower(cand))
-		if ratio > bestRatio {
-			bestRatio, bestTitle, bestID = ratio, cand, id
+	for i := range items {
+		item := &items[i]
+		for _, name := range []*string{item.TitleEn, item.TitleRu} {
+			if name == nil || *name == "" {
+				continue
+			}
+			ratio := providers.SimilarityRatio(strings.ToLower(query), strings.ToLower(*name))
+			if ratio > bestRatio {
+				bestRatio, bestItem, bestName = ratio, item, *name
+			}
 		}
 	}
-	if bestID == 0 || bestRatio <= shikiBindMinRatio {
-		return "", 0
+	if bestItem == nil || bestRatio <= shikiBindMinRatio {
+		return nil, ""
 	}
-	return bestTitle, bestID
+	return bestItem, bestName
 }
 
 // searchProgress is the live fan-out table (python
@@ -300,13 +325,39 @@ func (m *searchProgress) startFanOut() tea.Cmd {
 }
 
 // providerQueries routes the active variants into the provider's
-// language order.
+// language order, then applies the name-preference rule (PR42): a
+// provider declaring NamePrefLatin (the latin-only torrent feeds) is
+// queried with the latin variants ONLY — a Cyrillic query there is
+// guaranteed-zero. Without any resolved latin variant the full set
+// rides anyway (fail-soft: search, the provider returns 0).
 func (m *searchProgress) providerQueries(providerID string) []string {
 	lang := ""
 	if m.deps != nil && m.deps.Episode != nil {
 		lang = m.deps.Episode.ContentLanguage(providerID)
 	}
-	return queriesForLanguage(m.variants, lang)
+	queries := queriesForLanguage(m.variants, lang)
+	if m.deps == nil || m.deps.Search == nil {
+		return queries
+	}
+	if m.deps.Search.NamePreference(providerID) != contracts.NamePrefLatin {
+		return queries
+	}
+	if latin := latinOnlyQueries(queries); len(latin) > 0 {
+		return latin
+	}
+	return queries
+}
+
+// latinOnlyQueries keeps the variants without Cyrillic characters, in
+// order.
+func latinOnlyQueries(queries []string) []string {
+	out := make([]string, 0, len(queries))
+	for _, q := range queries {
+		if !hasCyrillic.MatchString(q) {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // Update implements Screen.

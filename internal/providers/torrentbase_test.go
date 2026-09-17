@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -499,58 +498,15 @@ func (s *torrentProviderStub) ResolveStream(_ context.Context, _ contracts.Episo
 
 func (s *torrentProviderStub) IsTorrent() bool { return true }
 
-// TestTorrentBaseEnrichesSynthesizedMagnets pins the PR45 magnet
-// tracker enrichment: a synthesized tracker-less magnet gains the
-// engine's current healthy tracker pool as &tr= parameters; feed
-// magnets that already carry tr= stay verbatim (their own announces
-// ride); an engine with zero trackers adds nothing (no invented
-// defaults); non-magnet links pass through untouched.
-func TestTorrentBaseEnrichesSynthesizedMagnets(t *testing.T) {
-	t.Parallel()
-
-	cfg := testTorrentConfig(t)
-	cfg.Trackers = []string{
-		"udp://tracker.example.org:1337/announce",
-		"http://t.example.org/a?x=1",
-	}
-	base := NewTorrentBase(newOfflineTestEngineCfg(t, cfg))
-
-	magnet := "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98&dn=Title"
-	got := base.enrichMagnet(magnet)
-	for _, tr := range cfg.Trackers {
-		want := "&tr=" + url.QueryEscape(tr)
-		if !strings.Contains(got, want) {
-			t.Errorf("enriched magnet %q lacks %q", got, want)
-		}
-	}
-	if !strings.HasPrefix(got, magnet) {
-		t.Errorf("enriched magnet %q must keep the original form as prefix", got)
-	}
-
-	// A feed magnet with its own announces stays verbatim.
-	feed := magnet + "&tr=" + url.QueryEscape("udp://feed.example.org:6969/announce")
-	if got := base.enrichMagnet(feed); got != feed {
-		t.Errorf("feed magnet rewritten: %q", got)
-	}
-
-	// Zero trackers configured: nothing is invented.
-	bare := NewTorrentBase(newOfflineTestEngine(t))
-	if got := bare.enrichMagnet(magnet); got != magnet {
-		t.Errorf("zero-tracker magnet rewritten: %q", got)
-	}
-
-	// Non-magnet links pass through untouched.
-	const torrentURL = "https://torrent.example.org/a.torrent"
-	if got := base.enrichMagnet(torrentURL); got != torrentURL {
-		t.Errorf("non-magnet link rewritten: %q", got)
-	}
-}
-
-// TestTorrentBaseIngestEnrichedMagnetAnnounces: the enrichment rides
-// the whole ingest — a synthesized magnet added through the base ends
-// up announcing to a configured tracker (the metadata path that the
-// 12/23 animetosho smoke failure exposed).
-func TestTorrentBaseIngestEnrichedMagnetAnnounces(t *testing.T) {
+// TestTorrentBaseIngestMagnetAnnouncesConfiguredTracker pins the ONE
+// magnet-side tracker mechanism (PR45-review collapse): a synthesized
+// tracker-less magnet ingested through the base announces to a
+// configured tracker — delivered by the engine's addSpec pool attach
+// (PR45's engine-level pin proves the same path without TorrentBase).
+// PR41 tracker_lists entries join the same pool, so they ride every
+// ingest identically; feed magnets with their own tr= are passed
+// verbatim and keep both their announces and the pool attach.
+func TestTorrentBaseIngestMagnetAnnouncesConfiguredTracker(t *testing.T) {
 	t.Parallel()
 
 	trackerURL, hits := trackerAnnounceStubForProviders(t)

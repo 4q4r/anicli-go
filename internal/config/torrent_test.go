@@ -31,6 +31,9 @@ func TestTorrentDefaults(t *testing.T) {
 	if len(got.Trackers) != 0 {
 		t.Errorf("Torrent.Trackers = %v, want empty (no trackers injected by default)", got.Trackers)
 	}
+	if len(got.TrackerLists) != 0 {
+		t.Errorf("Torrent.TrackerLists = %v, want empty (no external lists fetched by default)", got.TrackerLists)
+	}
 }
 
 func TestTorrentLoadFile(t *testing.T) {
@@ -64,6 +67,61 @@ readahead_mb = 64
 	}
 	if tc.ReadaheadMB != 64 {
 		t.Errorf("Torrent.ReadaheadMB = %d, want 64", tc.ReadaheadMB)
+	}
+}
+
+func TestTorrentTrackerListsLoadFile(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, `
+[torrent]
+enabled = true
+tracker_lists = [
+    "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
+    "http://example.org/trackers_best.txt",
+]
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{
+		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
+		"http://example.org/trackers_best.txt",
+	}
+	if len(got.Torrent.TrackerLists) != len(want) {
+		t.Fatalf("Torrent.TrackerLists = %v, want %v", got.Torrent.TrackerLists, want)
+	}
+	for i := range want {
+		if got.Torrent.TrackerLists[i] != want[i] {
+			t.Errorf("Torrent.TrackerLists[%d] = %q, want %q", i, got.Torrent.TrackerLists[i], want[i])
+		}
+	}
+}
+
+// TestTorrentTrackerListsValidate pins the startup validation of the
+// PR41 list URLs: they are fetched with the shared netclient, so only
+// http(s) URLs with a host make sense — everything else fails loud at
+// startup instead of surfacing as a fetch error at first torrent add.
+func TestTorrentTrackerListsValidate(t *testing.T) {
+	t.Parallel()
+
+	for u, ok := range map[string]bool{
+		"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt": true,
+		"http://example.org/trackers_best.txt":                                           true,
+		"ftp://example.org/trackers.txt":                                                 false,
+		"example.org/trackers.txt":                                                       false,
+		"http://":                                                                        false,
+	} {
+		s := Default()
+		s.Torrent.TrackerLists = []string{u}
+		err := s.Validate()
+		if ok != (err == nil) {
+			t.Errorf("Validate tracker_lists %q: err = %v, want valid=%v", u, err, ok)
+		}
+		if !ok && err != nil && !strings.Contains(err.Error(), "torrent.tracker_lists") {
+			t.Errorf("Validate tracker_lists %q: error %v must name torrent.tracker_lists", u, err)
+		}
 	}
 }
 

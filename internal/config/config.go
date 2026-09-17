@@ -199,6 +199,15 @@ type Torrent struct {
 	// discovery. The engine health-checks them concurrently and keeps
 	// the responsive ones (recheck on demand).
 	Trackers []string `toml:"trackers"`
+	// TrackerLists are URLs of plain-text tracker lists (PR41): one
+	// announce URL per line, '#' comments, e.g. the ngosang/trackerslist
+	// feeds. Fetched ONCE per engine start through the shared netclient
+	// (network.proxy_url applies, not [torrent] proxy), parsed, deduped
+	// against [torrent] trackers and merged into the same health-checked
+	// pool. A failed list URL degrades (static trackers keep working);
+	// the per-URL outcome is visible via the engine's tracker-list
+	// statuses and the log.
+	TrackerLists []string `toml:"tracker_lists"`
 }
 
 // CF configures the embedded Cloudflare bypass (CloakBrowser stealth
@@ -468,6 +477,24 @@ func (s *Settings) Validate() error {
 		default:
 			return fmt.Errorf("torrent.trackers %q: unsupported scheme %q (want udp, http, https, ws or wss)",
 				tr, u.Scheme)
+		}
+	}
+	// Tracker-list feeds ride the shared netclient (http/https only —
+	// github is foreign, network.proxy_url is the route); a bad list
+	// URL must fail at startup, not as a fetch error at first add.
+	for _, listURL := range s.Torrent.TrackerLists {
+		u, err := url.Parse(listURL)
+		if err != nil {
+			return fmt.Errorf("torrent.tracker_lists %q: %w", listURL, err)
+		}
+		switch u.Scheme {
+		case "http", "https":
+			if u.Host == "" {
+				return fmt.Errorf("torrent.tracker_lists %q: missing host", listURL)
+			}
+		default:
+			return fmt.Errorf("torrent.tracker_lists %q: unsupported scheme %q (want http or https)",
+				listURL, u.Scheme)
 		}
 	}
 	return nil

@@ -150,12 +150,13 @@ func readFull(ctx context.Context, conn net.Conn, buf []byte) (int, error) {
 	}
 }
 
-// CheckTrackers probes every configured tracker with bounded
-// concurrency, prunes the dead ones from future torrents (logging
-// each with its reason) and returns the full report.
+// CheckTrackers probes the whole pool — static [torrent] trackers plus
+// the merged tracker_lists additions — with bounded concurrency,
+// prunes the dead ones from future torrents (logging each with its
+// reason) and returns the full report.
 func (e *Engine) CheckTrackers(ctx context.Context) []TrackerHealth {
 	e.mu.Lock()
-	all := append([]string(nil), e.cfg.Trackers...)
+	all := e.trackerPoolLocked()
 	proxyRaw := e.cfg.Proxy
 	e.mu.Unlock()
 	if len(all) == 0 {
@@ -220,14 +221,25 @@ func sortTrackers(sts []TrackerHealth) {
 	sort.Slice(sts, func(i, j int) bool { return sts[i].URL < sts[j].URL })
 }
 
-// trackerTiersLocked renders the trackers to inject into new torrents
-// as TorrentSpec tiers: every alive tracker (or ALL of them before the
-// first check finished — fail-open, the library tolerates dead
-// announce URLs anyway). Callers hold mu.
+// trackerPoolLocked renders the full tracker pool to probe and inject:
+// static [torrent] trackers first, then the merged [torrent]
+// tracker_lists additions (deduped at merge time). Callers hold mu.
+func (e *Engine) trackerPoolLocked() []string {
+	all := make([]string, 0, len(e.cfg.Trackers)+len(e.listTrackers))
+	all = append(all, e.cfg.Trackers...)
+	all = append(all, e.listTrackers...)
+	return all
+}
+
+// trackerTiersLocked renders the pool as TorrentSpec tiers for new
+// torrents: every alive tracker (or ALL of them before the first check
+// finished — fail-open, the library tolerates dead announce URLs
+// anyway). Callers hold mu.
 func (e *Engine) trackerTiersLocked() [][]string {
-	tiers := make([][]string, 0, len(e.cfg.Trackers))
+	all := e.trackerPoolLocked()
+	tiers := make([][]string, 0, len(all))
 	checked := len(e.trackerHealth) > 0
-	for _, tr := range e.cfg.Trackers {
+	for _, tr := range all {
 		if checked {
 			if st, ok := e.trackerHealth[tr]; ok && !st.Alive {
 				continue

@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,37 +83,18 @@ func (b *TorrentBase) SetEngine(engine *torrent.Engine) {
 	b.engine = engine
 }
 
-// enrichMagnet appends the engine's current healthy tracker pool as
-// &tr= parameters to a synthesized tracker-less magnet (PR45): PR41
-// pool semantics — [torrent] trackers, health-pruned once a check ran,
-// nothing invented when the pool is empty. Feed magnets that already
-// carry tr= stay verbatim (their own announces ride); non-magnet links
-// (.torrent URLs) pass through untouched.
-func (b *TorrentBase) enrichMagnet(link string) string {
-	if !strings.HasPrefix(link, "magnet:") || strings.Contains(link, "&tr=") {
-		return link
-	}
-	b.mu.Lock()
-	eng := b.engine
-	b.mu.Unlock()
-	if eng == nil {
-		return link
-	}
-	trackers := eng.HealthyTrackers()
-	if len(trackers) == 0 {
-		return link
-	}
-	enriched := link
-	for _, tr := range trackers {
-		enriched += "&tr=" + url.QueryEscape(tr)
-	}
-	return enriched
-}
-
 // Ingest adds the link to the core engine (idempotent, deduped by
 // infohash there) and records the link → release mapping. It returns
 // immediately with the fetching/ready snapshot: metadata arrives in
 // the engine's background.
+//
+// The link is passed VERBATIM (PR45-review collapse): the engine's
+// addSpec attaches the tracker pool to every ingest — magnet, .torrent
+// URL or metainfo alike — and health-prunes it, so PR41 tracker_lists
+// and [torrent] trackers reach every torrent through ONE mechanism.
+// Rewriting magnets here (the old enrichMagnet) double-attached the
+// pool and would have needed per-shape tr= sniffing to avoid stripping
+// pool trackers from feed magnets that carry their own announces.
 func (b *TorrentBase) Ingest(ctx context.Context, link string) (torrent.InfoHash, error) {
 	b.mu.Lock()
 	eng := b.engine
@@ -126,10 +106,7 @@ func (b *TorrentBase) Ingest(ctx context.Context, link string) (torrent.InfoHash
 	if eng == nil {
 		return torrent.InfoHash{}, errors.New("torrent provider: engine is not wired ([torrent] disabled?)")
 	}
-	// The engine's tracker pool rides the magnet itself (PR45): with
-	// [torrent] trackers configured, metadata arrives via announces
-	// instead of DHT-only (the animetosho/nyaa smoke failure).
-	rel, err := eng.AddLink(ctx, b.enrichMagnet(link))
+	rel, err := eng.AddLink(ctx, link)
 	if err != nil {
 		return torrent.InfoHash{}, fmt.Errorf("torrent provider: ingest %s: %w", link, err)
 	}

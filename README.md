@@ -225,6 +225,14 @@ bind = "127.0.0.1:8765" # только loopback по умолчанию
 [shikimori]
 enabled = false         # интеграция с трекером
 
+[torrent]
+trackers = [            # свои announce-URL (udp/http/https/ws/wss) к каждому торренту
+    "udp://tracker.opentrackr.org:1337/announce",
+]
+tracker_lists = [       # внешние списки трекеров: один GET на старте движка, парсинг,
+    "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
+]                       # дедуп и общая проверка здоровья вместе с trackers
+
 [download]
 max_concurrency = 2     # одновременные фоновые загрузки
 
@@ -243,9 +251,12 @@ ngosang/trackerslist):
 trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.com:1337/announce", "udp://tracker.torrent.eu.org:451/announce"]
 ```
 
-Движок проверяет здоровье трекеров и подставляет только живые; они же
-добавляются в синтезированные магниты (`&tr=`), а метаданные приходят через
-анонсы, а не DHT.
+Движок проверяет здоровье трекеров и подставляет только живые — к каждому
+торренту (магниты nyaa/animetosho, .torrent-ссылки, metainfo), поэтому
+метаданные приходят через анонсы, а не DHT. Ещё проще — не перечислять
+трекеры вручную, а отдать готовый список целиком: `tracker_lists` (см.
+пример конфига выше) скачивает его при старте движка и заливает в тот же
+пул с той же проверкой здоровья.
 
 
 ---

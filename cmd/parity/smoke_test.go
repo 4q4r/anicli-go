@@ -245,6 +245,28 @@ func TestSmokePerProviderBudget(t *testing.T) {
 	}
 }
 
+// TestSmokeDurationColumnHonest: the table's time column carries the
+// REAL chain duration (a regression guard for the named-return
+// timing defer — an unnamed copy made the column read 0s forever).
+func TestSmokeDurationColumnHonest(t *testing.T) {
+	slow := newParityProvider(t, "slow", false)
+	slow.resSleep = 60 * time.Millisecond
+	d := smokeDeps(t, 0, slow)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code != 0 {
+		t.Fatalf("slow-but-passing provider must pass, stdout:\n%s", out)
+	}
+	// The row's time cell must show at least the resolve sleep.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "slow") {
+			if !strings.Contains(line, "60ms") && !strings.Contains(line, "61ms") &&
+				!strings.Contains(line, "62ms") && !strings.Contains(line, "63ms") {
+				t.Fatalf("time cell does not reflect the chain duration: %q", line)
+			}
+		}
+	}
+}
+
 // TestSmokeSearchErrorFails: a failing search (transport etc.) is a
 // FAIL row naming the leg, not a panic (error paths settle honestly).
 func TestSmokeSearchErrorFails(t *testing.T) {

@@ -134,8 +134,9 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 }
 
 // smokeOne runs one provider's full chain under the per-provider
-// budget. Failures settle as FAIL rows — never panics.
-func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) smokeResult {
+// budget. Failures settle as FAIL rows — never panics. The named
+// return lets the timing defer see the final value.
+func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) (res smokeResult) {
 	budget := d.smokeTimeout
 	if budget <= 0 {
 		budget = smokeProviderTimeout
@@ -143,7 +144,7 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) sm
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 
-	res := smokeResult{id: p.ID(), route: env.route}
+	res = smokeResult{id: p.ID(), route: env.route}
 	start := time.Now()
 	defer func() { res.took = time.Since(start) }()
 

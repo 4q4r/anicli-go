@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,16 +39,26 @@ type parityProvider struct {
 	// Smoke knobs (additive; zero values keep the historical
 	// behaviour): searchEmpty returns an honest empty result set,
 	// epEmpty lists episodes with NO RawEmbeds, streamEmpty resolves
-	// zero links.
+	// zero links. searchResults widens the result set (URLs
+	// …/a0, /a1, …); deadEpIdx makes THAT result's GetEpisodes fail
+	// (-1 disables) — the every-surfaced-result-must-resolve rule.
 	searchEmpty bool
 	epEmpty     bool
 	streamEmpty bool
+	isTorrent   bool
+	torrentDead bool
+
+	searchResults int
+	deadEpIdx     int
+
+	mu      sync.Mutex
+	epCalls int
 }
 
 func newParityProvider(t *testing.T, id string, fail bool) *parityProvider {
 	t.Helper()
 
-	p := &parityProvider{id: id, fail: fail}
+	p := &parityProvider{id: id, fail: fail, deadEpIdx: -1}
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/search" {
 			http.NotFound(w, r)
@@ -83,6 +95,24 @@ func (p *parityProvider) Search(ctx context.Context, query string) ([]contracts.
 	if p.searchEmpty {
 		return nil, nil
 	}
+	// searchResults > 1 synthesises a wider surface locally (the
+	// every-surfaced-result-must-resolve scenarios); URLs are
+	// https://{id}.example/a{i}.
+	if p.searchResults > 1 {
+		out := make([]contracts.SearchResult, 0, p.searchResults)
+		for i := range p.searchResults {
+			suffix := ""
+			if i > 0 {
+				suffix = strconv.Itoa(i)
+			}
+			out = append(out, contracts.SearchResult{
+				Title:    p.id + " hit " + strconv.Itoa(i),
+				URL:      fmt.Sprintf("https://%s.example/a%s", p.id, suffix),
+				SourceID: p.id,
+			})
+		}
+		return out, nil
+	}
 	target := p.srv.URL + "/search?q=" + url.QueryEscape(query)
 	resp, err := p.http.Get(ctx, target, nil)
 	if err != nil {
@@ -108,10 +138,27 @@ func (p *parityProvider) GetEpisodes(ctx context.Context, animeURL string) ([]co
 	if p.fail {
 		return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0, errors.New("parity fake failure"))
 	}
+	p.mu.Lock()
+	p.epCalls++
+	p.mu.Unlock()
+	// deadEpIdx: the surfaced result at that index fails its episode
+	// leg (every-surfaced-result-must-resolve scenarios).
+	if p.deadEpIdx >= 0 {
+		if idx := resultIndexOfURL(animeURL); idx == p.deadEpIdx {
+			return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0,
+				fmt.Errorf("dead result %d", idx))
+		}
+	}
 	if !sleepCtx(ctx, p.epSleep) {
 		return nil, ctx.Err()
 	}
+	if p.torrentDead {
+		return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0,
+			errors.New("торренты: метаданные не готовы"))
+	}
+	p.mu.Lock()
 	p.epURL = animeURL
+	p.mu.Unlock()
 	embeds := map[string][]string{"1080": {"https://" + p.id + ".example/embed/1"}}
 	if p.epEmpty {
 		embeds = map[string][]string{}
@@ -131,6 +178,25 @@ func (p *parityProvider) GetEpisodes(ctx context.Context, animeURL string) ([]co
 		},
 	}, nil
 }
+
+// resultIndexOfURL maps a synthesised result URL back onto its index
+// ("https://id.example/a" → 0, "…/a3" → 3); foreign URLs index 0.
+func resultIndexOfURL(animeURL string) int {
+	const marker = "/a"
+	i := strings.LastIndex(animeURL, marker)
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(animeURL[i+len(marker):])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// IsTorrent makes the fake exercise the smoke's torrent leg
+// (metadata-ready + files≥1, no stream resolve).
+func (p *parityProvider) IsTorrent() bool { return p.isTorrent }
 
 func (p *parityProvider) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	if _, ok := episode.RawEmbeds[dubID]; !ok {

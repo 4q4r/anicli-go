@@ -267,6 +267,65 @@ func TestSmokeDurationColumnHonest(t *testing.T) {
 	}
 }
 
+// TestSmokeEverySurfacedResultMustResolve pins the corrected PASS
+// rule: not just the first result — EVERY surfaced result must carry
+// its full chain; one dead result fails the provider with the result
+// named.
+func TestSmokeEverySurfacedResultMustResolve(t *testing.T) {
+	mixed := newParityProvider(t, "mixed", false)
+	mixed.searchResults = 3
+	mixed.deadEpIdx = 1 // the SECOND surfaced result is dead
+	d := smokeDeps(t, 0, mixed)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code == 0 {
+		t.Fatalf("a dead surfaced result must fail the provider, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "2/3") {
+		t.Fatalf("FAIL row must name the dead result 2 of 3:\n%s", out)
+	}
+}
+
+// TestSmokeSurfacesBoundedHead: the smoke resolves a bounded head of
+// the filtered results (smokeSurfaceLimit), not the whole feed —
+// bounded-concurrent, within the provider budget.
+func TestSmokeSurfacesBoundedHead(t *testing.T) {
+	wide := newParityProvider(t, "wide", false)
+	wide.searchResults = 50
+	d := smokeDeps(t, 0, wide)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code != 0 {
+		t.Fatalf("a healthy wide feed must pass, stdout:\n%s", out)
+	}
+	if wide.epCalls != smokeSurfaceLimit {
+		t.Fatalf("episode legs = %d, want the surfaced head of %d", wide.epCalls, smokeSurfaceLimit)
+	}
+	if !strings.Contains(out, "smoke PASSED: 1/1") {
+		t.Fatalf("summary missing:\n%s", out)
+	}
+}
+
+// TestSmokeTorrentMetadataRule: for torrent providers the resolve IS
+// metadata-ready + files≥1 — no stream resolve; a torrent whose
+// metadata never arrives fails its surfaced result honestly.
+func TestSmokeTorrentMetadataRule(t *testing.T) {
+	seeding := newParityProvider(t, "seeding", false)
+	seeding.isTorrent = true
+	dead := newParityProvider(t, "deadtor", false)
+	dead.isTorrent = true
+	dead.torrentDead = true
+	d := smokeDeps(t, 0, seeding, dead)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code == 0 {
+		t.Fatalf("a metadata-dead torrent must fail, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "seeding") || !strings.Contains(out, "PASS") {
+		t.Fatalf("the seeding torrent must PASS:\n%s", out)
+	}
+	if !strings.Contains(out, "deadtor") || !strings.Contains(out, "FAIL") || !strings.Contains(out, "episodes") {
+		t.Fatalf("the metadata-dead torrent must FAIL with the episodes leg:\n%s", out)
+	}
+}
+
 // TestSmokeSearchErrorFails: a failing search (transport etc.) is a
 // FAIL row naming the leg, not a panic (error paths settle honestly).
 func TestSmokeSearchErrorFails(t *testing.T) {

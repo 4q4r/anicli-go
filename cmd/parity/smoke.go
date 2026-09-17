@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -30,6 +31,11 @@ import (
 // smokeProviderTimeout is the default per-provider budget of the
 // whole chain, so one corpse cannot hang the run.
 const smokeProviderTimeout = 90 * time.Second
+
+// smokeSurfaceLimit bounds the surfaced head of the (filtered) search
+// results the smoke resolves: EVERY surfaced result must resolve, and
+// the head is what fits the per-provider budget bounded-concurrently.
+const smokeSurfaceLimit = 3
 
 // The smoke probe title: a release KNOWN to exist broadly. Latin for
 // the NamePrefLatin feeds, Russian for everyone else (the anicli
@@ -82,6 +88,13 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 
 			target := args[0]
 			var results []smokeResult
+			// The torrent roster once (wrapper layers peeled by the
+			// registry): torrent results resolve by metadata+files,
+			// not by stream links.
+			torrentIDs := map[string]bool{}
+			for _, id := range env.reg.TorrentProviderIDs() {
+				torrentIDs[id] = true
+			}
 			switch target {
 			case "all":
 				seen := map[string]bool{}
@@ -91,7 +104,7 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 						results = append(results, smokeResult{id: p.ID(), status: "SKIP", route: env.route, reason: reason})
 						continue
 					}
-					results = append(results, smokeOne(cmd.Context(), d, env, p))
+					results = append(results, smokeOne(cmd.Context(), d, env, p, torrentIDs))
 				}
 				// The static gated roster stays visible even when the
 				// config did not register it (unconfigured credentials).
@@ -111,7 +124,7 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 				if err != nil {
 					return err
 				}
-				results = append(results, smokeOne(cmd.Context(), d, env, p))
+				results = append(results, smokeOne(cmd.Context(), d, env, p, torrentIDs))
 			}
 
 			printSmokeTable(cmd.OutOrStdout(), results)
@@ -133,10 +146,15 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 	}
 }
 
-// smokeOne runs one provider's full chain under the per-provider
-// budget. Failures settle as FAIL rows — never panics. The named
-// return lets the timing defer see the final value.
-func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) (res smokeResult) {
+// smokeOne runs one provider's smoke: search (NamePreference-routed),
+// then resolve EVERY surfaced result (the bounded head of the
+// provider-filtered list) — stream providers need dubs≥1 AND
+// streams≥1 per result; torrent providers need metadata-ready with
+// files≥1. The surfaced fan runs bounded-concurrent under the
+// per-provider budget; budget exhaustion is an honest FAIL, never a
+// silent pass. The named return lets the timing defer see the final
+// value.
+func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, torrentIDs map[string]bool) (res smokeResult) {
 	budget := d.smokeTimeout
 	if budget <= 0 {
 		budget = smokeProviderTimeout
@@ -180,14 +198,71 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) (r
 		return fail("search: 0 results for %q", res.query)
 	}
 
-	first := results[0]
-	episodes, err := p.GetEpisodes(ctx, first.URL)
+	// Surface the bounded head; every surfaced result must resolve.
+	surfaced := results
+	if len(surfaced) > smokeSurfaceLimit {
+		surfaced = surfaced[:smokeSurfaceLimit]
+	}
+	legs := make([]smokeLeg, len(surfaced))
+	var wg sync.WaitGroup
+	for i, r := range surfaced {
+		wg.Add(1)
+		go func(i int, r contracts.SearchResult) {
+			defer wg.Done()
+			legs[i] = smokeResolveResult(ctx, p, torrentIDs[p.ID()], r)
+		}(i, r)
+	}
+	wg.Wait()
+
+	minDubs, minStreams := -1, -1
+	for i, leg := range legs {
+		if !leg.ok {
+			return fail("result %d/%d: %s", i+1, len(legs), leg.reason)
+		}
+		if minDubs < 0 || leg.dubs < minDubs {
+			minDubs = leg.dubs
+		}
+		if minStreams < 0 || leg.streams < minStreams {
+			minStreams = leg.streams
+		}
+	}
+	res.dubs, res.streams = minDubs, minStreams
+	res.status = "PASS"
+	return res
+}
+
+// smokeLeg is one surfaced result's resolution outcome.
+type smokeLeg struct {
+	ok      bool
+	reason  string
+	dubs    int
+	streams int
+}
+
+// smokeResolveResult resolves ONE surfaced result: torrent providers
+// resolve by metadata-ready + files≥1 (the engine ingested the link
+// and the release carries files — the really-seeding property the
+// provider-level filter promises); stream providers need dubs≥1 (the
+// DubsHydrator capability fills lazy listings) and ≥1 stream link.
+func smokeResolveResult(ctx context.Context, p contracts.Provider, torrent bool, r contracts.SearchResult) smokeLeg {
+	fail := func(format string, args ...any) smokeLeg {
+		return smokeLeg{reason: fmt.Sprintf(format, args...)}
+	}
+
+	episodes, err := p.GetEpisodes(ctx, r.URL)
 	if err != nil {
 		return fail("episodes: %s", shorten(err.Error(), 80))
 	}
 	if len(episodes) == 0 {
-		return fail("episodes: 0 for %q", first.URL)
+		return fail("episodes: 0 for %q", r.URL)
 	}
+	if torrent {
+		// Metadata arrived and the release carries files — the torrent
+		// resolve is complete here (dubs: the single «Торрент» slot,
+		// streams: the file count).
+		return smokeLeg{ok: true, dubs: 1, streams: len(episodes)}
+	}
+
 	ep := episodes[0]
 	if len(ep.RawEmbeds) == 0 {
 		hydrator, ok := p.(contracts.DubsHydrator)
@@ -202,8 +277,8 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) (r
 			ep = *out
 		}
 	}
-	res.dubs = len(ep.RawEmbeds)
-	if res.dubs == 0 {
+	dubs := len(ep.RawEmbeds)
+	if dubs == 0 {
 		return fail("dubs: 0 after hydration")
 	}
 
@@ -212,17 +287,16 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider) (r
 	if err != nil {
 		return fail("resolve: %s", shorten(err.Error(), 80))
 	}
+	streams := 0
 	for _, src := range stream.Links {
 		if src.URL != "" {
-			res.streams++
+			streams++
 		}
 	}
-	if res.streams == 0 {
+	if streams == 0 {
 		return fail("streams: 0 for dub %q", dub)
 	}
-
-	res.status = "PASS"
-	return res
+	return smokeLeg{ok: true, dubs: dubs, streams: streams}
 }
 
 // printSmokeTable renders the damage table: provider / status / route

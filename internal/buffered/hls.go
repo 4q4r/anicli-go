@@ -43,7 +43,7 @@ func (d *Downloader) bufferHLS(ctx context.Context, src Source, dir string, tr *
 	var plan hlsMedia
 	// One master hop maximum: a master pointing at another master is
 	// outside the minimal downloader's contract.
-	for level := 0; level < 2; level++ {
+	for level := range 2 {
 		body, finalURL, err := d.fetchPlaylist(ctx, playlistURL, src.Headers)
 		if err != nil {
 			return "", err
@@ -71,7 +71,7 @@ func (d *Downloader) bufferHLS(ctx context.Context, src Source, dir string, tr *
 
 	name := hlsName(src.Name, playlistURL)
 	path := filepath.Join(dir, name)
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is our MkdirTemp dir + a sanitized name — no user-controlled inclusion
 	if err != nil {
 		return "", fmt.Errorf("buffered: create temp file: %w", err)
 	}

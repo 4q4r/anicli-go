@@ -180,7 +180,7 @@ func (d *Downloader) bufferProgressive(ctx context.Context, src Source, dir stri
 
 	name := localName(src.Name, src.URL, ".mp4")
 	path := filepath.Join(dir, name)
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is our MkdirTemp dir + a sanitized name — no user-controlled inclusion
 	if err != nil {
 		return "", fmt.Errorf("buffered: create temp file: %w", err)
 	}

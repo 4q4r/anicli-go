@@ -78,7 +78,7 @@ func (r *slowReader) Read(p []byte) (int, error) {
 		n = r.left
 	}
 	r.left -= n
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p[i] = byte(i % 251)
 	}
 	return n, nil
@@ -197,12 +197,6 @@ func newHLSServer(files map[string]string) *hlsServer {
 		_, _ = w.Write([]byte(body))
 	}))
 	return h
-}
-
-func (h *hlsServer) paths() []string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]string(nil), h.served...)
 }
 
 // TestBufferHLSConcatenatesSegments: a plain media playlist downloads
@@ -382,8 +376,4 @@ func TestHeadersForwarded(t *testing.T) {
 	if len(seen) != 2 || seen[0] != "https://example.org/" || seen[1] != "https://example.org/" {
 		t.Fatalf("Referer headers seen = %v, want it on playlist and segment", seen)
 	}
-}
-
-func itoa(n int) string {
-	return strconv.Itoa(n)
 }

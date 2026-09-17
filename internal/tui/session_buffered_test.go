@@ -45,7 +45,7 @@ func (b *realFileBuffered) Buffer(ctx context.Context, src buffered.Source, prog
 	b.dirs = append(b.dirs, dir)
 	b.mu.Unlock()
 	path := filepath.Join(dir, "video.mp4")
-	f, err := os.Create(path)
+	f, err := os.Create(path) //nolint:gosec // path is our MkdirTemp dir — no user-controlled inclusion
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return buffered.Handle{}, err

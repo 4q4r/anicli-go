@@ -74,6 +74,13 @@ var allFactories = []struct {
 	{"anilibria-torrent", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilibriaTorrent(AniLibriaAPIBase, http, nil)
 	}},
+	// animetosho (PR38): the animetosho.org newznab search on the same
+	// TorrentBase plumbing — hex-infohash magnets, .torrent enclosure
+	// fallback; no credentials, engine injected by NewRegistry when
+	// [torrent] is enabled.
+	{"animetosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnimeTosho(AnimeToshoFeedBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

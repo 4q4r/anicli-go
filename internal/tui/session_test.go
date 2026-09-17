@@ -119,9 +119,9 @@ func TestSessionEpisodesMerged(t *testing.T) {
 }
 
 // TestSessionMenuActions: the action menu covers the Python
-// session_loop entries PLUS the PR43 additions (refresh sources,
-// format toggle), in order, with the pinned exit row last; exit pops
-// to root.
+// session_loop entries PLUS the PR43 «🔄 Обновить источники» recovery
+// action (the PR44 «Формат» toggle moved into the pre-play selector),
+// in order, with the pinned exit row last; exit pops to root.
 func TestSessionMenuActions(t *testing.T) {
 	s := newSessionForTests(t)
 	v := s.View().Content
@@ -134,18 +134,20 @@ func TestSessionMenuActions(t *testing.T) {
 		"📝 Изменить инфо",
 		"⬇ Скачать серии",
 		"🔄 Обновить источники",
-		"Формат: [потоковый]",
 		"🚪 Выход",
 	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("session menu must contain %q:\n%s", want, v)
 		}
 	}
-	// 10 actions + the pinned Back row (I1).
-	if got := len(s.list.Menu().Items); got != 11 {
-		t.Fatalf("session menu rows = %d, want 11 (10 actions + Back)", got)
+	if strings.Contains(v, "Формат:") {
+		t.Fatalf("session menu must NOT carry the format toggle:\n%s", v)
 	}
-	last := s.list.Menu().Items[10]
+	// 9 actions + the pinned Back row (I1).
+	if got := len(s.list.Menu().Items); got != 10 {
+		t.Fatalf("session menu rows = %d, want 10 (9 actions + Back)", got)
+	}
+	last := s.list.Menu().Items[9]
 	if last.ID != BackID {
 		t.Fatalf("last menu row = %q, want the pinned Back entry", last.ID)
 	}
@@ -239,16 +241,11 @@ func TestSessionDubSelect(t *testing.T) {
 	s := NewSessionScreen(deps, group[0], group)
 	s.loadEpisodesSync()
 
-	// Смотреть without dubs → video dub select.
-	idx := sessionActionIndex(s, "watch")
-	s.list.Jump(idx)
-	next, _ := s.Update(enter())
-	if next.(*sessionScreen).state != sessionStateDubVideo {
-		t.Fatalf("watch without dubs must open the video dub select, got %v", next.(*sessionScreen).state)
+	// Смотреть without dubs → format selector → video dub select.
+	ss := watchStreaming(t, s)
+	if ss.state != sessionStateDubVideo {
+		t.Fatalf("watch without dubs must open the video dub select, got %v", ss.state)
 	}
-
-	// Pick the animego dub (episode 1 embeds: [animego] Дубль 1, [anilib] AniLib).
-	ss := next.(*sessionScreen)
 	found := false
 	for i, c := range ss.dubList.Menu().Items {
 		if c.ID == "[animego] Дубль 1" {
@@ -260,7 +257,7 @@ func TestSessionDubSelect(t *testing.T) {
 	if !found {
 		t.Fatalf("video dub list must contain the animego dub: %+v", ss.dubList.Menu().Items)
 	}
-	next, _ = ss.Update(enter())
+	next, _ := ss.Update(enter())
 	if next.(*sessionScreen).state != sessionStateDubAudio {
 		t.Fatalf("after video dub the audio dub select opens, got %v", next.(*sessionScreen).state)
 	}
@@ -679,15 +676,29 @@ func (f *errDownload) Download(_ context.Context, _ DownloadTask) error {
 	return errors.New("disk full")
 }
 
-// watchToQuality drives the dub video→audio picks and the stream
-// resolve, landing on the quality picker with links loaded.
-func watchToQuality(t *testing.T, s *sessionScreen) *sessionScreen {
+// watchStreaming drives «▶ Смотреть» through the PR44 format selector
+// picking «Потоковый»; returns the screen at the next substate (the
+// video dub select for a fresh watch).
+func watchStreaming(t *testing.T, s *sessionScreen) *sessionScreen {
 	t.Helper()
 	s.list.Jump(sessionActionIndex(s, "watch"))
 	next, _ := s.Update(enter())
 	ss := next.(*sessionScreen)
-	ss.dubList.Jump(0)
+	if ss.state != sessionStateFormat {
+		t.Fatalf("watch must open the format selector, got %v", ss.state)
+	}
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
 	next, _ = ss.Update(enter())
+	return next.(*sessionScreen)
+}
+
+// watchToQuality drives the dub video→audio picks and the stream
+// resolve, landing on the quality picker with links loaded.
+func watchToQuality(t *testing.T, s *sessionScreen) *sessionScreen {
+	t.Helper()
+	ss := watchStreaming(t, s)
+	ss.dubList.Jump(0)
+	next, _ := ss.Update(enter())
 	ss = next.(*sessionScreen)
 	ss.dubList.Jump(0)
 	next, cmd := ss.Update(enter())
@@ -740,8 +751,16 @@ func TestSessionQualityMemory(t *testing.T) {
 		t.Fatalf("quality must be remembered on the model, got %q", ss.lastQuality)
 	}
 
-	// Second watch: auto quality must resolve to the remembered 720.
+	// Second watch: the format selector opens again (dubs remembered,
+	// so the streaming pick goes straight to the resolve); auto
+	// quality must resolve to the remembered 720.
 	ss.list.Jump(sessionActionIndex(ss, "watch"))
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateFormat {
+		t.Fatalf("watch must open the format selector, got %v", ss.state)
+	}
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
 	next, cmd = ss.Update(enter())
 	srMsg := cmd()
 	if _, ok := srMsg.(streamResolvedMsg); !ok {
@@ -863,10 +882,17 @@ func TestSessionResumeCarriesShikimoriBinding(t *testing.T) {
 		t.Fatalf("resume must carry the shikimori binding, got %d", s.shikimoriID())
 	}
 
-	// Watch straight to dispatch: dubs are already set, so watch goes
-	// directly to the stream resolve.
+	// Watch straight to dispatch: dubs are already set, so the
+	// format selector's streaming pick goes directly to the stream
+	// resolve.
 	s.list.Jump(sessionActionIndex(s, "watch"))
-	next, cmd := s.Update(enter())
+	next, _ := s.Update(enter())
+	ss0 := next.(*sessionScreen)
+	if ss0.state != sessionStateFormat {
+		t.Fatalf("watch must open the format selector, got %v", ss0.state)
+	}
+	ss0.formatList.Jump(indexOfDayFormatList(ss0, "stream"))
+	next, cmd := ss0.Update(enter())
 	msg := cmd()
 	if _, ok := msg.(streamResolvedMsg); !ok {
 		t.Fatalf("stream resolve expected, got %T", msg)

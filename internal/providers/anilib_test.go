@@ -176,10 +176,20 @@ func TestAnilibSearchHTTPErrorReturnsEmpty(t *testing.T) {
 func TestAnilibGetEpisodes(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	// Route-aware stub: the episodes list, then the PR44 tier-1 dub-
+	// list fetch of the FIRST episode's players.
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture(t, "anilib_episodes.json"))
-	})
+		paths = append(paths, r.URL.RequestURI())
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/episodes/"):
+			_, _ = w.Write(fixture(t, "anilib_episode_players.json"))
+		default:
+			_, _ = w.Write(fixture(t, "anilib_episodes.json"))
+		}
+	}))
+	t.Cleanup(srv.Close)
 	p := newAnilib(srv.URL, testClient(t, "anilib"))
 
 	episodes, err := p.GetEpisodes(context.Background(), "16488--bleach-sennen-kessen-hen")
@@ -187,13 +197,11 @@ func TestAnilibGetEpisodes(t *testing.T) {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	// The numeric anime id is extracted from the slug prefix
-	// (anilib.py:91).
-	if got := rec.Query; got != "anime_id=16488" {
-		t.Errorf("query = %q, want anime_id=16488", got)
-	}
-	if rec.Path != "/episodes" {
-		t.Errorf("path = %q", rec.Path)
+	// The request sequence proves the numeric id was extracted from
+	// the slug prefix (anilib.py:91): the list rode ?anime_id=16488,
+	// the tier-1 dub-list fetch hit the first episode's detail.
+	if len(paths) != 2 || paths[0] != "/episodes?anime_id=16488" || paths[1] != "/episodes/13" {
+		t.Errorf("requests = %v, want the list fetch then the tier-1 /episodes/13", paths)
 	}
 
 	if len(episodes) != 4 {
@@ -217,8 +225,16 @@ func TestAnilibGetEpisodes(t *testing.T) {
 	if episodes[2].RawID != "11" {
 		t.Errorf("episodes[2].RawID = %q", episodes[2].RawID)
 	}
-	if len(episodes[1].RawEmbeds) != 0 {
-		t.Errorf("RawEmbeds = %v, want empty until dubs are fetched", episodes[1].RawEmbeds)
+	// The release's dub list (tier-1) rides every episode; episode one
+	// keeps its real links.
+	if len(episodes[1].RawEmbeds) != 2 {
+		t.Errorf("RawEmbeds = %v, want the release dub keys", episodes[1].RawEmbeds)
+	}
+	if links := episodes[1].RawEmbeds["AniLib (AnimeLib)"]; links == nil || len(links) != 0 {
+		t.Errorf("episode 0.5 AniLib links = %v, want an empty list (on-demand resolve)", links)
+	}
+	if len(episodes[0].RawEmbeds["AniLib (AnimeLib)"]) == 0 {
+		t.Errorf("episode one embeds = %v, want the real links from the tier-1 fetch", episodes[0].RawEmbeds)
 	}
 }
 

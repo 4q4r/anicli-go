@@ -28,6 +28,7 @@ const (
 	sessionStateDubVideo      sessionState = "dub_video"
 	sessionStateDubAudio      sessionState = "dub_audio"
 	sessionStateQuality       sessionState = "quality"
+	sessionStateFormat        sessionState = "format"
 	sessionStateBuffering     sessionState = "buffering"
 	sessionStatePlaying       sessionState = "playing"
 	sessionStateInfoMenu      sessionState = "info_menu"
@@ -59,7 +60,10 @@ var ruStatuses = []struct{ Key, Label string }{
 	{"dropped", "Брошено"},
 }
 
-// episodePartMsg settles one source's episode fetch.
+// episodePartMsg settles one source's episode fetch. The list
+// surfaces as-is — hydration is NOT part of the fetch phase (PR44
+// owner model: the list shows immediately; streams resolve on
+// demand for the opened episode only).
 type episodePartMsg struct {
 	sourceID string
 	episodes []contracts.Episode
@@ -160,11 +164,15 @@ type sessionScreen struct {
 	// (0 = none yet); PATCHed instead of re-created on updates (I10).
 	shikiRateID int64
 
-	// PR43 hydration state: lazily-hydrating providers (anilib,
-	// animego) list episodes with empty RawEmbeds, so the session
-	// hydrates the current episode on demand — once per episode, with
-	// «🔄 Обновить источники» as the explicit recovery. The per-
-	// episode/merge errors feed the header cause line.
+	// PR43/PR44 hydration state: hydration is strictly ON-DEMAND —
+	// the fetch phase never resolves streams in bulk (the owner
+	// model: the list surfaces immediately, the release-scoped dub
+	// lists ride the episodes from the provider, and the heavy
+	// per-episode hydration happens only for the episode being
+	// opened, via «Смотреть» or «🔄 Обновить источники»). `hydrated`
+	// marks the episodes an attempt was made for; `hydrateErrs`
+	// carries the per-episode/per-provider failures feeding the
+	// header cause.
 	hydrated    map[string]bool
 	hydrating   bool
 	hydrateGen  int
@@ -174,10 +182,10 @@ type sessionScreen struct {
 	// header breakdown («Ист: 3 (AnimeLib, Nyaa)»).
 	providerNames map[string]string
 
-	// PR43 buffered watch mode: per-session toggle (no config scope),
-	// the active download's cancel func, generation counter for
-	// stale-message drops, and its progress channel (the pump re-arms
-	// through bufferedProgressMsg).
+	// PR43 buffered watch mode; PR44 arms it from the pre-play format
+	// selector (no config scope). Plus the active download's cancel
+	// func, generation counter for stale-message drops, and its
+	// progress channel (the pump re-arms through bufferedProgressMsg).
 	buffered     bool
 	bufferCancel context.CancelFunc
 	bufferGen    int
@@ -189,6 +197,10 @@ type sessionScreen struct {
 	episodeList *PinList // «Перейти к серии»
 	dubList     *PinList // video/audio dub pickers
 	qualityList *PinList
+	// formatList is the pre-play format selector (PR44): «▶ Смотреть»
+	// opens it with exactly two items («Потоковый», «Буферный»); the
+	// pick arms the buffered mode and continues the watch pipeline.
+	formatList *PinList
 	// infoList/statusList/modeList persist their submenus for the
 	// whole substate visit: rebuilding per keypress reset the cursor
 	// and made Enter always resolve Back (C2).
@@ -326,34 +338,22 @@ func (s *sessionScreen) loadEpisodesSync() {
 	s.Update(episodesDoneMsg{})
 }
 
-// maybeHydrateCurrent schedules the hydration of the current episode
-// when it carries no sources yet and no attempt was made (PR43): the
-// lazily-hydrating providers list episodes with empty RawEmbeds, and
-// without this step such episodes showed «Ист: 0» forever.
-func (s *sessionScreen) maybeHydrateCurrent() tea.Cmd {
-	if s.hydrating {
-		return nil
-	}
-	ep := s.currentEpisodeData()
-	if ep == nil || len(ep.RawEmbeds) > 0 || s.hydrated[ep.Num] {
-		return nil
-	}
-	return s.hydrateEpisode(ep.Num)
-}
-
-// hydrateEpisode issues one hydration round for the episode num: the
-// status line reports the work (the legitimate progress display), the
-// settle message merges the results under the provider prefixes.
+// hydrateEpisode issues one hydration round for the episode num (the
+// PR43 on-demand trigger behind «Смотреть» and the «🔄 Обновить
+// источники» recovery): the status line reports the work (the
+// legitimate progress display), the settle message merges the results
+// under the provider prefixes. The attempt is recorded so the header
+// cause can distinguish unopened episodes from genuinely empty ones.
 func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	if num == "" {
 		s.status = "Нет серий"
 		return nil
 	}
-	s.hydrating = true
 	if s.hydrated == nil {
 		s.hydrated = map[string]bool{}
 	}
 	s.hydrated[num] = true
+	s.hydrating = true
 	s.status = "Ищу источники…"
 	s.hydrateGen++
 	gen := s.hydrateGen
@@ -396,10 +396,14 @@ func hydrateEpisodeCmd(deps *Deps, num string, ep contracts.Episode, gen int, ct
 	return hydrateDoneMsg{num: num, gen: gen, embeds: embeds, errs: errs}
 }
 
-// hasProviderEmbeds reports whether any embed key belongs to prov.
+// hasProviderEmbeds reports whether prov already contributes embeds
+// with ACTUAL links to the episode. The release-scope tier-1 dub list
+// rides every episode as keys with EMPTY lists — that state is NOT
+// hydrated, and counting it here turned «🔄 Обновить источники» into
+// a no-op (review MAJOR): only keys carrying ≥1 link count.
 func hasProviderEmbeds(embeds map[string][]string, prov string) bool {
-	for key := range embeds {
-		if providerOfTrackKey(key) == prov {
+	for key, links := range embeds {
+		if providerOfTrackKey(key) == prov && len(links) > 0 {
 			return true
 		}
 	}
@@ -465,7 +469,7 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case episodesDoneMsg:
 		s.finalizeMerge()
-		return s, s.maybeHydrateCurrent()
+		return s, nil
 	case hydrateDoneMsg:
 		return s, s.applyHydration(msg)
 	case bufferReadyMsg:
@@ -545,6 +549,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleDubKey(key)
 	case sessionStateQuality:
 		return s.handleQualityKey(key)
+	case sessionStateFormat:
+		return s.handleFormatKey(key)
 	case sessionStateInfoMenu:
 		return s.handleInfoMenuKey(key)
 	case sessionStateInfoStatus:
@@ -601,13 +607,13 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			s.currentIdx++
 			s.buildActionMenu()
 		}
-		return s, s.maybeHydrateCurrent()
+		return s, nil
 	case "prev":
 		if s.currentIdx > 0 {
 			s.currentIdx--
 			s.buildActionMenu()
 		}
-		return s, s.maybeHydrateCurrent()
+		return s, nil
 	case "jump":
 		s.state = sessionStateEpisodeList
 		return s, nil
@@ -616,15 +622,6 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return s, nil // a round is already running; its settle will report
 		}
 		return s, s.hydrateEpisode(s.currentEpisode())
-	case "format":
-		s.buffered = !s.buffered
-		s.buildActionMenu()
-		if s.buffered {
-			s.status = "Формат просмотра: буферный"
-		} else {
-			s.status = "Формат просмотра: потоковый"
-		}
-		return s, nil
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
 		s.status = "Озвучка сброшена — выберите заново при просмотре"
@@ -651,12 +648,13 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 }
 
-// startWatch launches the watch pipeline: interactive dub selection
-// when preferences are missing or unavailable, else straight to
-// stream resolution. A sourceless episode resolves (hydrates) first —
+// startWatch launches the watch pipeline at the PR44 pre-play format
+// selector («Потоковый» / «Буферный» — the python per-episode format
+// choice pattern). A sourceless episode resolves (hydrates) first —
 // the lazily-hydrating providers list empty embeds (PR43) — and an
 // episode whose hydration already found nothing explains the recovery
-// path instead of silently doing nothing.
+// path instead of silently doing nothing; the selector never opens
+// without sources (the dimmed «Смотреть» row keeps it unreachable).
 func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
@@ -664,12 +662,66 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 		return s, nil
 	}
 	if len(ep.RawEmbeds) == 0 {
+		// PR43's on-demand trigger, scoped to the opened episode: the
+		// first watch hydrates THIS episode once; the steady state
+		// after an attempt that found nothing points at the recovery
+		// item (PR44 owner model — resolving never runs bulk).
 		if !s.hydrated[ep.Num] && !s.hydrating {
 			return s, s.hydrateEpisode(ep.Num)
 		}
 		if !s.hydrating {
 			s.status = "Нет источников — выполните «🔄 Обновить источники»"
 		}
+		return s, nil
+	}
+	s.state = sessionStateFormat
+	s.formatList = NewPinList(NewMenu("Формат просмотра:", "", []Choice{
+		{ID: "stream", Label: "Потоковый", Value: "stream"},
+		{ID: "buffer", Label: "Буферный", Value: "buffer"},
+	}...), defaultListHeight)
+	return s, nil
+}
+
+// handleFormatKey resolves the format selector: the pick arms the
+// watch mode and continues the pipeline; Back/Esc returns to the
+// episode menu without playing. A buffered pick without the buffered
+// service explains honestly and keeps the selector open (streaming
+// remains pickable).
+func (s *sessionScreen) handleFormatKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.formatList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.formatList.Menu(), s.formatList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.state = sessionStateMenu
+		return s, nil
+	}
+	choice, _ := resolved.(string)
+	switch choice {
+	case "buffer":
+		if s.deps == nil || s.deps.Buffered == nil {
+			s.status = "Буферный режим недоступен"
+			return s, nil
+		}
+		s.buffered = true
+	case "stream":
+		s.buffered = false
+	default:
+		return s, nil
+	}
+	return s.proceedWatch()
+}
+
+// proceedWatch continues the watch pipeline after the format pick:
+// interactive dub selection when preferences are missing or
+// unavailable, else straight to stream resolution.
+func (s *sessionScreen) proceedWatch() (Screen, tea.Cmd) {
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		s.status = "Нет серий"
 		return s, nil
 	}
 	if s.videoDub == "" || ep.RawEmbeds[s.videoDub] == nil {
@@ -1192,7 +1244,7 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 	}
 	s.state = sessionStateMenu
 	s.buildActionMenu()
-	return s, s.maybeHydrateCurrent()
+	return s, nil
 }
 
 // handleInfoMenuKey drives the «Изменить инфо» submenu over the
@@ -1493,11 +1545,12 @@ func (s *sessionScreen) restoreResume() {
 
 // buildActionMenu renders the python session_loop choices plus the
 // PR43 additions («🔄 Обновить источники» recovery action). «Смотреть»
-// is disabled while the current episode carries no sources (the dimmed
-// row explains on an attempt — never a silent dead end).
+// is disabled only for an episode whose hydration attempt already
+// found nothing — an unopened episode stays clickable, because
+// clicking it IS the on-demand trigger (PR44 owner model).
 func (s *sessionScreen) buildActionMenu() {
 	watchDisabled := false
-	if ep := s.currentEpisodeData(); ep != nil && len(ep.RawEmbeds) == 0 {
+	if ep := s.currentEpisodeData(); ep != nil && s.hydrated[ep.Num] && len(ep.RawEmbeds) == 0 {
 		watchDisabled = true
 	}
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", []Choice{
@@ -1509,18 +1562,8 @@ func (s *sessionScreen) buildActionMenu() {
 		{ID: "info", Label: "📝 Изменить инфо"},
 		{ID: "download", Label: "⬇ Скачать серии"},
 		{ID: "refresh", Label: "🔄 Обновить источники"},
-		{ID: "format", Label: s.formatLabel()},
 		{ID: "exit", Label: "🚪 Выход"},
 	}...), defaultListHeight)
-}
-
-// formatLabel renders the buffered-mode toggle («Формат: [потоковый]» /
-// «Формат: [буферный]», PR43 C: per-session preference, no config).
-func (s *sessionScreen) formatLabel() string {
-	if s.buffered {
-		return "Формат: [буферный]"
-	}
-	return "Формат: [потоковый]"
 }
 
 // buildEpisodeList builds the jump list with local markers.
@@ -1666,11 +1709,12 @@ func (s *sessionScreen) providerDisplayName(prov string) string {
 const causeLineMax = 160
 
 // episodeCause builds the one-line «why no sources» explanation for
-// the header (PR41 B1): resolve not performed, the per-provider error
-// summary (truncated), or the providers-finished-empty verdict.
+// the header (PR41 B1, PR44 wording): an unopened episode says so
+// (sources load on open), an attempted one shows the per-provider
+// error summary (truncated) or the genuine no-results verdict.
 func (s *sessionScreen) episodeCause(ep *contracts.Episode) string {
 	if !s.hydrated[ep.Num] {
-		return "резолв не выполнен"
+		return "источники не запрашивались — откроется при просмотре"
 	}
 	var parts []string
 	for prov, err := range s.hydrateErrs[ep.Num] {
@@ -1738,6 +1782,8 @@ func (s *sessionScreen) View() tea.View {
 		body = themedList(s.dubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)
+	case sessionStateFormat:
+		body = themedList(s.formatList)
 	case sessionStateBuffering:
 		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
 	case sessionStatePlaying:

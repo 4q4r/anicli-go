@@ -1,0 +1,164 @@
+package providers
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+
+	"github.com/an0nx/anicli-go/internal/contracts"
+)
+
+// seedersOf extracts the SearchMetaSeeders meta of a result.
+func seedersOf(r contracts.SearchResult) string {
+	if r.Meta == nil {
+		return ""
+	}
+	s, _ := r.Meta[SearchMetaSeeders].(string)
+	return s
+}
+
+func resultTitles(rs []contracts.SearchResult) []string {
+	out := make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, r.Title)
+	}
+	return out
+}
+
+// TestNyaaSearchFiltersSeedless: seedless RSS items are dead results —
+// the provider drops them at search level; seeded items and items
+// without a parsable seed field (fail-soft) stay.
+func TestNyaaSearchFiltersSeedless(t *testing.T) {
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel>
+<item><title>Seeded Release</title><link>https://nyaa.si/download/1.torrent</link>
+<nyaa:seeders>42</nyaa:seeders><nyaa:infoHash>0123456789012345678901234567890123456789</nyaa:infoHash></item>
+<item><title>Dead Release</title><link>https://nyaa.si/download/2.torrent</link>
+<nyaa:seeders>0</nyaa:seeders><nyaa:infoHash>0123456789012345678901234567890123456788</nyaa:infoHash></item>
+<item><title>NoSeedField Release</title><link>https://nyaa.si/download/3.torrent</link>
+<nyaa:infoHash>0123456789012345678901234567890123456787</nyaa:infoHash></item>
+</channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	p := newNyaa(srv.URL, testClient(t, "nyaa"), nil)
+
+	results, err := p.Search(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	titles := resultTitles(results)
+	if len(titles) != 2 || titles[0] != "Seeded Release" || titles[1] != "NoSeedField Release" {
+		t.Fatalf("results = %v, want the seeded + fail-soft items, seedless dropped", titles)
+	}
+	if got := seedersOf(results[0]); got != "42" {
+		t.Fatalf("seeders meta = %q, want 42", got)
+	}
+}
+
+// TestAnimeToshoSearchFiltersSeedless: same rule over the newznab
+// attribute twins.
+func TestAnimeToshoSearchFiltersSeedless(t *testing.T) {
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel>
+<item><title>Seeded AT</title><enclosure url="https://x/1.torrent" type="application/x-bittorrent"/>
+<newznab:attr name="seeders" value="7"/><newznab:attr name="infohash" value="0123456789012345678901234567890123456789"/></item>
+<item><title>Dead AT</title><enclosure url="https://x/2.torrent" type="application/x-bittorrent"/>
+<newznab:attr name="seeders" value="0"/><newznab:attr name="infohash" value="0123456789012345678901234567890123456788"/></item>
+</channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	p := newAnimeTosho(srv.URL, testClient(t, "animetosho"), nil)
+
+	results, err := p.Search(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if titles := resultTitles(results); len(titles) != 1 || titles[0] != "Seeded AT" {
+		t.Fatalf("results = %v, want only the seeded item", titles)
+	}
+}
+
+// TestAnilibriaTorrentSearchFiltersSeedless: the API's seeders int
+// rides Meta; zero-seed torrents never surface.
+func TestAnilibriaTorrentSearchFiltersSeedless(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/app/search/releases":
+			_, _ = w.Write([]byte(`[{"id":5,"alias":"rel","name":{"main":"Rel"}}]`))
+		case "/anime/torrents/release/5":
+			_, _ = w.Write([]byte(`[
+				{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","label":"Seeded AT rel","seeders":5,"leechers":1,"size":100},
+				{"hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","label":"Dead AT rel","seeders":0,"leechers":0,"size":100}
+			]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := newAnilibriaTorrent(srv.URL, testClient(t, "anilibria-torrent"), nil)
+
+	results, err := p.Search(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	for _, r := range results {
+		if seedersOf(r) == "0" {
+			t.Fatalf("seedless result surfaced: %+v", r)
+		}
+	}
+	if titles := resultTitles(results); len(titles) != 1 || titles[0] != "Seeded AT rel" {
+		t.Fatalf("results = %v, want only the seeded torrent", titles)
+	}
+}
+
+// TestTokyotoshoSearchFailSoftNoSeedField: the TT feed carries no seed
+// counts (live-verified) — the fail-soft rule keeps every anime item.
+func TestTokyotoshoSearchFailSoftNoSeedField(t *testing.T) {
+	body := `<?xml version="1.0"?><rss><channel>
+<item><category>Anime</category><title>TT A</title><link>https://x/a.torrent</link>
+<description>&lt;b&gt;Size: 1.66GB&lt;/b&gt;</description></item>
+<item><category>Anime</category><title>TT B</title><link>https://x/b.torrent</link>
+<description>&lt;b&gt;Size: 700MB&lt;/b&gt;</description></item>
+</channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	p := newTokyoTosho(srv.URL, testClient(t, "tokyotosho"), nil)
+
+	results, err := p.Search(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("fail-soft: no seed field means no filtering, got %v", resultTitles(results))
+	}
+}
+
+// TestFilterSeedlessUnit pins the rule directly: only a parsable
+// seeders value of 0 drops a result; garbage/absent stays.
+func TestFilterSeedlessUnit(t *testing.T) {
+	mk := func(seeders string) contracts.SearchResult {
+		return contracts.SearchResult{Title: "t", Meta: map[string]any{SearchMetaSeeders: seeders}}
+	}
+	out := filterSeedless([]contracts.SearchResult{
+		mk("5"), mk("0"), mk(""), mk("garbage"), {Title: "nometa"},
+	})
+	if len(out) != 4 {
+		t.Fatalf("filterSeedless kept %d, want 4 (only the explicit 0 dropped)", len(out))
+	}
+}
+
+// filterSeedless is referenced from the providers package; pin that
+// the helper (not the callers) owns the rule.
+var (
+	_ = filterSeedless
+	_ sync.Mutex
+)

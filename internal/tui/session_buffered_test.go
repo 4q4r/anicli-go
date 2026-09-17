@@ -107,29 +107,132 @@ func newBufferedSession(t *testing.T) (*sessionScreen, *realFileBuffered, *fakeP
 	return s, deps.Buffered.(*realFileBuffered), deps.Playback.(*fakePlayback), payload
 }
 
-// TestSessionFormatToggle: the menu carries «Формат: [потоковый]» and
-// Enter toggles it to буферный (per-session preference).
-func TestSessionFormatToggle(t *testing.T) {
+// TestWatchOpensFormatSelector pins the PR44 entry interaction:
+// the action menu has NO «Формат:» toggle item, and «▶ Смотреть»
+// opens a selector with EXACTLY two items («Потоковый», «Буферный»).
+func TestWatchOpensFormatSelector(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 
-	if v := s.View().Content; !strings.Contains(v, "Формат: [потоковый]") {
-		t.Fatalf("menu view = %q, want the streaming format item", v)
+	if v := s.View().Content; strings.Contains(v, "Формат:") {
+		t.Fatalf("menu view = %q, the format toggle item must be gone", v)
 	}
-	s.list.Jump(indexOfDayActionMenu(s, "format"))
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("toggle must stay in place, got cmd %T", cmd)
+		t.Fatalf("watch must open the selector in place, got cmd %T", cmd)
 	}
-	if v := s.View().Content; !strings.Contains(v, "Формат: [буферный]") {
-		t.Fatalf("menu view = %q, want the buffered format item", v)
+	if s.state != sessionStateFormat {
+		t.Fatalf("state = %s, want the format selector", s.state)
 	}
-	// buildActionMenu resets the cursor; aim at the toggle again.
-	s.list.Jump(indexOfDayActionMenu(s, "format"))
+	items := s.formatList.Menu().Items
+	if len(items) != 3 { // two formats + the pinned Back row
+		t.Fatalf("selector rows = %d, want 3 (two formats + Back)", len(items))
+	}
+	if items[0].Label != "Потоковый" || items[1].Label != "Буферный" {
+		t.Fatalf("selector labels = %q, %q; want «Потоковый», «Буферный»",
+			items[0].Label, items[1].Label)
+	}
+}
+
+// TestFormatSelectorStreamPickProceeds: Enter on «Потоковый» starts
+// the watch pipeline in streaming mode (dub selection follows).
+func TestFormatSelectorStreamPickProceeds(t *testing.T) {
+	s, _, _, _ := newBufferedSession(t)
+
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(0) // «Потоковый»
 	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("second toggle must stay in place, got cmd %T", cmd)
+		t.Fatalf("stream pick cmd: %T", cmd)
 	}
-	if v := s.View().Content; !strings.Contains(v, "Формат: [потоковый]") {
-		t.Fatalf("menu view = %q, want the streaming format item back", v)
+	if s.buffered {
+		t.Fatal("stream pick must clear the buffered mode")
 	}
+	if s.state != sessionStateDubVideo {
+		t.Fatalf("state = %s, want the video dub picker", s.state)
+	}
+}
+
+// TestFormatSelectorBufferedPickProceeds: Enter on «Буферный» starts
+// the watch pipeline in buffered mode.
+func TestFormatSelectorBufferedPickProceeds(t *testing.T) {
+	s, _, _, _ := newBufferedSession(t)
+
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(1) // «Буферный»
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("buffered pick cmd: %T", cmd)
+	}
+	if !s.buffered {
+		t.Fatal("buffered pick must arm the buffered mode")
+	}
+	if s.state != sessionStateDubVideo {
+		t.Fatalf("state = %s, want the video dub picker", s.state)
+	}
+}
+
+// TestFormatSelectorBufferedUnavailable: without a BufferedService the
+// «Буферный» pick explains honestly and the selector stays open so
+// «Потоковый» remains pickable.
+func TestFormatSelectorBufferedUnavailable(t *testing.T) {
+	s, _, _, _ := newBufferedSession(t)
+	s.deps.Buffered = nil
+
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(1) // «Буферный»
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("unavailable pick must stay in place, got cmd %T", cmd)
+	}
+	if s.buffered {
+		t.Fatal("buffered mode must not arm without the service")
+	}
+	if s.state != sessionStateFormat {
+		t.Fatalf("state = %s, want the selector to stay open", s.state)
+	}
+	if !strings.Contains(s.status, "Буферный режим недоступен") {
+		t.Fatalf("status = %q, want the honest unavailability note", s.status)
+	}
+}
+
+// TestFormatSelectorBackReturnsToMenu: Esc/Back from the selector
+// returns to the episode menu WITHOUT playing anything.
+func TestFormatSelectorBackReturnsToMenu(t *testing.T) {
+	s, bufSrv, playback, _ := newBufferedSession(t)
+
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEsc}); cmd != nil {
+		t.Fatalf("esc must stay in place, got cmd %T", cmd)
+	}
+	if s.state != sessionStateMenu {
+		t.Fatalf("state = %s, want the menu after Esc", s.state)
+	}
+	// The pinned Back row behaves the same.
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(indexOfDayFormatList(s, "buffer"))
+	s.formatList.Jump(len(s.formatList.Menu().Items) - 1) // Back row
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("back pick cmd: %T", cmd)
+	}
+	if s.state != sessionStateMenu {
+		t.Fatalf("state = %s, want the menu after Back", s.state)
+	}
+	if len(playback.played) != 0 || bufSrv.wrote != nil {
+		t.Fatal("cancelling the selector must not play or buffer")
+	}
+}
+
+// indexOfDayFormatList returns the cursor index of a format selector
+// item id.
+func indexOfDayFormatList(s *sessionScreen, id string) int {
+	for i, item := range s.formatList.Menu().Items {
+		if item.ID == id {
+			return i
+		}
+	}
+	return 0
 }
 
 // TestSessionBufferedWatchDownloadsPlaysCleans: in buffered mode the
@@ -137,8 +240,6 @@ func TestSessionFormatToggle(t *testing.T) {
 // path and deletes the file once the player exits.
 func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 	s, bufSrv, playback, payload := newBufferedSession(t)
-	s.buffered = true
-	s.buildActionMenu()
 
 	// Existence at play time is polled (transient fd churn must not
 	// fail the check); content equality is asserted against the fake's
@@ -150,8 +251,9 @@ func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 		return nil
 	}
 
-	// ▶ Смотреть → dub pickers (embeds exist) → straight to quality.
-	pickVideoDub(t, s, "[anidub] AniDUB")
+	// ▶ Смотреть → format selector («Буферный») → dub pickers →
+	// straight to quality.
+	pickVideoDubBuffered(t, s, "[anidub] AniDUB")
 	pickAudioDub(t, s)
 
 	// Enter on «Авто» starts the buffered pipeline.
@@ -269,9 +371,7 @@ func TestFormatBufferedProgress(t *testing.T) {
 // download, returns to the menu with the verdict and leaves no file.
 func TestSessionBufferedCancelCleans(t *testing.T) {
 	s, _, playback, _ := newBufferedSession(t)
-	s.buffered = true
-	s.buildActionMenu()
-	pickVideoDub(t, s, "[anidub] AniDUB")
+	pickVideoDubBuffered(t, s, "[anidub] AniDUB")
 	pickAudioDub(t, s)
 	s.qualityList.Jump(0)
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -339,11 +439,34 @@ func runBufferedBatch(t *testing.T, cmd tea.Cmd) tea.Msg {
 	return nil
 }
 
-// pickVideoDub drives the watch flow to the video dub pick.
-func pickVideoDub(t *testing.T, s *sessionScreen, dub string) {
+// pickFormat drives the watch entry through the PR44 format selector:
+// Enter on «Смотреть», then the chosen mode («Потоковый» unless
+// buffered).
+func pickFormat(t *testing.T, s *sessionScreen, buffered bool) {
 	t.Helper()
 	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatalf("watch cmd: %T", cmd)
+	}
+	if s.state != sessionStateFormat {
+		t.Fatalf("state = %s, want the format selector", s.state)
+	}
+	idx := 0
+	if buffered {
+		idx = indexOfDayFormatList(s, "buffer")
+	}
+	s.formatList.Jump(idx)
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("format pick cmd: %T", cmd)
+	}
+}
+
+// pickVideoDubBuffered drives the watch flow through the buffered
+// format pick to the video dub pick.
+func pickVideoDubBuffered(t *testing.T, s *sessionScreen, dub string) {
+	t.Helper()
+	pickFormat(t, s, true)
+	if !s.buffered {
+		t.Fatal("buffered format pick must arm the buffered mode")
 	}
 	if s.state != sessionStateDubVideo {
 		t.Fatalf("state = %s, want dub video", s.state)

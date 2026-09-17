@@ -59,10 +59,15 @@ type EpisodeService interface {
 	// ("ru", "ja", …) used to tag its dubs in the pickers; "" when
 	// unknown (PR23).
 	ContentLanguage(providerID string) string
-	// HydrateDubs fetches the lazily-loaded dub list of one
-	// PROVIDER-LOCAL episode (anilib/animego list episodes with empty
-	// RawEmbeds and hydrate per episode — contracts.DubsHydrator).
-	// Providers without the capability return the episode unchanged.
+	// HydrateDubs fetches the dub list of one PROVIDER-LOCAL episode
+	// (anilib/animego list episodes with empty RawEmbeds and hydrate
+	// per episode — contracts.DubsHydrator). The session runs it
+	// strictly ON DEMAND — only for the episode being opened
+	// («Смотреть») or via «🔄 Обновить источники» recovery; the
+	// release-scoped dub-provider lists ride the episodes from
+	// GetEpisodes without resolving (PR44 owner model: streams are
+	// temporary, resolving is never bulk). Providers without the
+	// capability return the episode unchanged.
 	HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error)
 }
 

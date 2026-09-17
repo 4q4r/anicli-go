@@ -165,7 +165,9 @@ func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResu
 			},
 		})
 	}
-	return results, nil
+	// Seedless items are dead results: drop them before they surface
+	// (fail-soft — items without a seed field survive).
+	return filterSeedless(results), nil
 }
 
 // nyaaResultLink picks the torrent link of one RSS item: a magnet

@@ -38,11 +38,15 @@ type Provider interface {
 }
 
 // DubsHydrator is the optional capability of providers whose episode
-// listings arrive with EMPTY RawEmbeds and hydrate the dub list lazily
-// per episode (anilib, animego; python fetch_dubs_for_episode). The
-// session flow asks for it when an episode carries no sources — the
-// PR43 root cause was exactly this hydration never running. Providers
-// without the capability list their dubs eagerly.
+// listings arrive with EMPTY RawEmbeds and hydrate the dub list per
+// episode (anilib, animego; python fetch_dubs_for_episode). Since
+// PR44 the session runs the hydration EAGERLY in the episode-fetch
+// phase (bounded-concurrent, one request per episode — the verified
+// API shape of both providers): the steady flow never surfaces an
+// episode whose embeds are not hydrated. The capability stays
+// exported for the «🔄 Обновить источники» recovery, which re-runs
+// the hydration after a transient failure. Providers without the
+// capability list their dubs eagerly.
 //
 // FetchDubs fills episode.RawEmbeds in place (a copy is passed by
 // callers) and returns the same episode. A transport failure returns

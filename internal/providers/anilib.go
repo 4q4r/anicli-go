@@ -206,6 +206,18 @@ func (p *Anilib) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 	sort.SliceStable(episodes, func(i, j int) bool {
 		return pythonFloatKey(episodes[i].Num) < pythonFloatKey(episodes[j].Num)
 	})
+
+	// PR44 owner model: one request per RELEASE covers the dub-
+	// provider list — the first episode's players name every team
+	// voicing the release. Apply the key set to all episodes (episode
+	// one keeps its real links, the rest carry EMPTY lists). Fail-soft:
+	// a failed tier-1 fetch only means the dub lists stay unknown
+	// until an episode is opened.
+	if len(episodes) > 0 {
+		if _, err := p.FetchDubs(ctx, &episodes[0]); err == nil {
+			applyReleaseDubKeys(episodes)
+		}
+	}
 	return episodes, nil
 }
 
@@ -214,7 +226,7 @@ func (p *Anilib) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.
 // stashed as their embed src; AnimeLib players as an internal: JSON
 // payload. The Python original swallows transport/decode failures and
 // returns the episode unchanged; this port FAILS LOUD instead — the
-// caller (the session hydration step, PR43) logs the failure to the
+// caller (the on-demand resolve step, PR44) logs the failure to the
 // diagnostics file and continues with no dubs, which is the same UX
 // without the silent path. Callers that prefer the Python semantics
 // ignore the error and keep the unchanged episode.
@@ -264,10 +276,23 @@ func (p *Anilib) FetchDubs(ctx context.Context, episode *contracts.Episode) (*co
 // keyed VideoSources (port of anilib.py:141-163): internal: payloads
 // resolve to the video1.cdnlibs.org CDN with the v3.animelib.org
 // Referer; embed URLs go through the extractor factory.
+//
+// PR44 owner model: the release's dub list rides every episode as
+// keys with EMPTY lists (streams are temporary — the srcs are not
+// fetched until needed). A known-but-empty dub self-hydrates that ONE
+// episode here (a single /episodes/{id} request), so resolving never
+// runs bulk and never pre-fetches unopened episodes. An unknown dub
+// key hydrates nothing.
 func (p *Anilib) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
 		Links:   map[string]contracts.VideoSource{},
+	}
+
+	if links, ok := episode.RawEmbeds[dubID]; ok && len(links) == 0 {
+		if _, err := p.FetchDubs(ctx, &episode); err != nil {
+			return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
+		}
 	}
 
 	for _, link := range episode.RawEmbeds[dubID] {
@@ -349,4 +374,26 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// applyReleaseDubKeys distributes the FIRST episode's dub keys onto
+// every other episode of the release as keys with EMPTY link lists
+// (PR44 owner model: the dub-provider list is release-scoped — one
+// request covers it — while the streams are per-episode and resolve
+// on demand). Episodes already carrying a key keep it untouched.
+func applyReleaseDubKeys(episodes []contracts.Episode) {
+	if len(episodes) == 0 {
+		return
+	}
+	first := episodes[0].RawEmbeds
+	for i := 1; i < len(episodes); i++ {
+		if episodes[i].RawEmbeds == nil {
+			episodes[i].RawEmbeds = map[string][]string{}
+		}
+		for dub := range first {
+			if _, ok := episodes[i].RawEmbeds[dub]; !ok {
+				episodes[i].RawEmbeds[dub] = []string{}
+			}
+		}
+	}
 }

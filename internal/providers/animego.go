@@ -168,6 +168,17 @@ func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 				RawEmbeds: map[string][]string{},
 			})
 		})
+		// PR44 owner model: one request per RELEASE covers the dub-
+		// provider list (the first episode's series fragment names
+		// every dubbing studio). Episode one keeps its real links, the
+		// rest carry the keys with EMPTY lists; fail-soft — a failed
+		// tier-1 fetch only means the dub lists stay unknown until an
+		// episode is opened.
+		if len(episodes) > 0 {
+			if _, err := p.FetchDubs(ctx, &episodes[0]); err == nil {
+				applyReleaseDubKeys(episodes)
+			}
+		}
 		return episodes, nil
 	}
 
@@ -183,10 +194,12 @@ func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 }
 
 // FetchDubs hydrates episode.RawEmbeds from /anime/series (port of
-// animego.py:93-105 fetch_dubs_for_episode). Episodes that already carry
-// embeds are returned untouched (the Python guard at animego.py:94).
+// animego.py:93-105 fetch_dubs_for_episode). Episodes that already
+// carry actual embed LINKS are returned untouched (the python guard
+// at animego.py:94, PR44 refinement: release-scope dub KEYS with
+// empty lists are exactly the state hydration must fill in).
 func (p *AnimeGo) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
-	if len(episode.RawEmbeds) > 0 {
+	if hasAnyEmbedLinks(episode.RawEmbeds) {
 		return episode, nil
 	}
 
@@ -261,13 +274,35 @@ func (p *AnimeGo) parseEmbeds(doc *goquery.Document, episode *contracts.Episode)
 	episode.RawEmbeds = embeds
 }
 
+// hasAnyEmbedLinks reports whether any dub key carries at least one
+// link (release-scope KEYS with empty lists do not count — they are
+// the tier-1 state hydration exists to fill).
+func hasAnyEmbedLinks(embeds map[string][]string) bool {
+	for _, links := range embeds {
+		if len(links) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveStream resolves the embed URLs of the chosen dub (port of
 // animego.py:131-138) through the extractor factory; direct media URLs
 // resolve via the factory fallback.
+//
+// PR44 owner model: a known-but-empty dub self-hydrates that ONE
+// episode here (a single /anime/series request) — resolving never
+// runs bulk. An unknown dub key hydrates nothing.
 func (p *AnimeGo) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
 		Links:   map[string]contracts.VideoSource{},
+	}
+
+	if links, ok := episode.RawEmbeds[dubID]; ok && len(links) == 0 {
+		if _, err := p.FetchDubs(ctx, &episode); err != nil {
+			return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
+		}
 	}
 
 	sources, err := resolveEmbeds(ctx, p.http, episode.RawEmbeds[dubID])

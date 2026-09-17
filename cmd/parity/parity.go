@@ -31,6 +31,9 @@ import (
 type env struct {
 	reg     *providers.Registry
 	timeout time.Duration
+	// route records the effective network route of the run ("direct"
+	// or "proxy") — the smoke table notes it per row.
+	route string
 }
 
 // close releases the registry's shared resources (the CF bypass stack
@@ -54,7 +57,8 @@ var probeQueries = []string{"test", "naruto"}
 
 // deps carries the injectable seams: registry construction (tests
 // substitute fakes), the clock (stable capture timestamps in tests),
-// the capture save directory and the capture sequence counter.
+// the capture save directory, the capture sequence counter and the
+// smoke suite's per-provider budget (0 keeps the production default).
 type deps struct {
 	buildRegistry func(config.Settings) (*providers.Registry, error)
 	now           func() time.Time
@@ -64,6 +68,9 @@ type deps struct {
 	// captures. Shared by pointer across the deps value copies handed
 	// to the subcommands; both constructors initialize it.
 	seq *atomic.Uint64
+	// smokeTimeout bounds ONE provider's whole smoke chain
+	// (search → dubs → stream); 0 means smokeProviderTimeout.
+	smokeTimeout time.Duration
 }
 
 func realDeps() deps {
@@ -132,7 +139,11 @@ func run(args []string, out, errOut io.Writer, d deps) int {
 		if err != nil {
 			return nil, fmt.Errorf("build provider registry: %w", err)
 		}
-		return &env{reg: reg, timeout: timeout}, nil
+		route := "direct"
+		if settings.Network.ProxyURL != "" {
+			route = "proxy"
+		}
+		return &env{reg: reg, timeout: timeout, route: route}, nil
 	}
 
 	root.AddCommand(
@@ -140,6 +151,7 @@ func run(args []string, out, errOut io.Writer, d deps) int {
 		parityEpisodesCommand(d, setup),
 		parityResolveCommand(d, setup),
 		parityAllCommand(setup),
+		paritySmokeCommand(d, setup),
 	)
 
 	if err := root.Execute(); err != nil {

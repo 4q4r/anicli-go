@@ -10,9 +10,14 @@
 // is overwritten by the client timeout — see tls-client connect.go
 // newDirectDialer), so this wrapper feeds it Network.RequestTimeout (30s,
 // verbatim) and additionally applies the same value as a per-attempt
-// context deadline. A separate dial budget cannot be expressed against
-// tls-client v1.16.0 and is not faked here; Network.ConnectTimeout stays
-// available in config for layers that can honor it.
+// context deadline. The connect half of the Python pair is restored by
+// the no-first-byte watchdog (attempt/doWithWatchdog): an attempt that
+// produces no response headers within Network.ConnectTimeout is abandoned
+// so the retry policy can dial a fresh connection. That is not cosmetic —
+// flaky fronting (e.g. nyaa.si behind DDoS-Guard soft-tarpitting a proxy
+// exit) silently stalls a large fraction of fresh connections, and
+// without the early cut one dead attempt burns the whole per-operation
+// budget before Do could ever retry.
 package netclient
 
 import (
@@ -140,6 +145,14 @@ type Client struct {
 // Chrome_150 profile, HTTP/3 always disabled (known H3-racing data race,
 // design spec §2), cookie jar, optional proxy.
 func New(cfg config.Network, opts ...Option) (*Client, error) {
+	// The watchdog cannot fire before the per-attempt deadline: a
+	// ConnectTimeout at or above RequestTimeout silently disables the
+	// fast-fail. Normalize onto RequestTimeout so config cannot
+	// degrade the guard by accident; cfg is a value copy, the
+	// caller's settings stay untouched.
+	if cfg.RequestTimeout > 0 && cfg.ConnectTimeout >= cfg.RequestTimeout {
+		cfg.ConnectTimeout = cfg.RequestTimeout
+	}
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutMilliseconds(int(cfg.RequestTimeout.Milliseconds())),
 		tls_client.WithClientProfile(profiles.Chrome_150),
@@ -263,7 +276,7 @@ func (c *Client) attempt(ctx context.Context, req Request, payload []byte) (*Res
 		freq.Header.Set(k, v)
 	}
 
-	resp, err := c.http.Do(freq)
+	resp, err := c.doWithWatchdog(freq, cancel)
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +307,68 @@ func (c *Client) attempt(ctx context.Context, req Request, payload []byte) (*Res
 		Body:       data,
 		FinalURL:   finalURL,
 	}, nil
+}
+
+// doWithWatchdog runs one tls-client round trip. When ConnectTimeout
+// is armed it bounds the SILENT-CONNECTION window — dial, proxy
+// CONNECT, TLS handshake, request write and the wait for response
+// headers — and abandons the attempt once it elapses, so Do's retry
+// policy can dial a fresh connection instead of burning the whole
+// per-attempt (and, in every production caller, the whole
+// per-operation) budget on a connection that will never answer.
+// Response bodies are NOT bounded by the watchdog: headers inside the
+// budget prove the connection alive, and the remainder of the
+// per-attempt request timeout governs the body read.
+//
+// cancel is attempt's per-attempt context cancellation; the watchdog
+// uses it to tear the abandoned round trip down.
+func (c *Client) doWithWatchdog(freq *http.Request, cancel context.CancelFunc) (*http.Response, error) {
+	budget := c.cfg.ConnectTimeout
+	if budget <= 0 {
+		return c.http.Do(freq)
+	}
+
+	type attemptResult struct {
+		resp *http.Response
+		err  error
+	}
+	// Buffered: after an abandoned attempt the goroutine must be able
+	// to finish on its own instead of blocking forever on the send.
+	ch := make(chan attemptResult, 1)
+	go func() {
+		resp, err := c.http.Do(freq)
+		ch <- attemptResult{resp: resp, err: err}
+	}()
+
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res.resp, res.err
+	case <-timer.C:
+		// A result may land in the same instant the timer fires;
+		// prefer it over failing the attempt. The worker sends
+		// EXACTLY ONCE: consuming its result here means it has
+		// finished, so return it directly — falling through would
+		// block forever on a second send (review-blocker deadlock).
+		select {
+		case res := <-ch:
+			return res.resp, res.err
+		default:
+		}
+		// Channel empty: the worker is still inside Do. Kill the
+		// in-flight round trip (the transport closes the connection
+		// on context cancellation, which unblocks Do) and drain the
+		// now-guaranteed single send.
+		cancel()
+		if res := <-ch; res.err == nil && res.resp != nil && res.resp.Body != nil {
+			// Headers raced the timer and lost the race above:
+			// release the response so the connection is not leaked.
+			_, _ = io.Copy(io.Discard, res.resp.Body)
+			_ = res.resp.Body.Close()
+		}
+		return nil, fmt.Errorf("no response within %s (silent connection)", budget)
+	}
 }
 
 // mapStatus routes an HTTP failure onto the contracts taxonomy.

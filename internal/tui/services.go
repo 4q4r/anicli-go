@@ -58,6 +58,11 @@ type EpisodeService interface {
 	// ("ru", "ja", …) used to tag its dubs in the pickers; "" when
 	// unknown (PR23).
 	ContentLanguage(providerID string) string
+	// HydrateDubs fetches the lazily-loaded dub list of one
+	// PROVIDER-LOCAL episode (anilib/animego list episodes with empty
+	// RawEmbeds and hydrate per episode — contracts.DubsHydrator).
+	// Providers without the capability return the episode unchanged.
+	HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error)
 }
 
 // PlaybackService plays a resolved stream through mpv with skip

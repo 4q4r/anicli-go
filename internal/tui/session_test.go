@@ -31,6 +31,11 @@ func (f *fakeEpisode) ContentLanguage(providerID string) string {
 	return f.langs[providerID]
 }
 
+// HydrateDubs is a no-op: by default test fixtures list eager embeds.
+func (f *fakeEpisode) HydrateDubs(_ context.Context, _ string, episode contracts.Episode) (contracts.Episode, error) {
+	return episode, nil
+}
+
 func (f *fakeEpisode) ResolveStream(_ context.Context, _ string, _ contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	if s, ok := f.streams[dubID]; ok {
 		return s, nil

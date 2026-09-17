@@ -231,6 +231,27 @@ func (s *realEpisode) ContentLanguage(providerID string) string {
 	return s.registry.ContentLanguage(providerID)
 }
 
+// HydrateDubs fetches the lazily-loaded dub list of one
+// provider-local episode (contracts.DubsHydrator capability). The
+// registry hands out the dubFilteredProvider wrapper, which forwards
+// the capability; providers without it return the episode unchanged
+// (their listings are eager — nothing to hydrate).
+func (s *realEpisode) HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error) {
+	p, ok := s.registry.Get(providerID)
+	if !ok {
+		return episode, fmt.Errorf("tui: unknown provider %q", providerID)
+	}
+	hydrator, ok := p.(contracts.DubsHydrator)
+	if !ok {
+		return episode, nil
+	}
+	out, err := hydrator.FetchDubs(ctx, &episode)
+	if out != nil {
+		episode = *out
+	}
+	return episode, err
+}
+
 // --- PlaybackService ---
 
 type realPlayback struct {

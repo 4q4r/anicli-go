@@ -396,10 +396,14 @@ func hydrateEpisodeCmd(deps *Deps, num string, ep contracts.Episode, gen int, ct
 	return hydrateDoneMsg{num: num, gen: gen, embeds: embeds, errs: errs}
 }
 
-// hasProviderEmbeds reports whether any embed key belongs to prov.
+// hasProviderEmbeds reports whether prov already contributes embeds
+// with ACTUAL links to the episode. The release-scope tier-1 dub list
+// rides every episode as keys with EMPTY lists — that state is NOT
+// hydrated, and counting it here turned «🔄 Обновить источники» into
+// a no-op (review MAJOR): only keys carrying ≥1 link count.
 func hasProviderEmbeds(embeds map[string][]string, prov string) bool {
-	for key := range embeds {
-		if providerOfTrackKey(key) == prov {
+	for key, links := range embeds {
+		if providerOfTrackKey(key) == prov && len(links) > 0 {
 			return true
 		}
 	}

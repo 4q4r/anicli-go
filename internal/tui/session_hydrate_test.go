@@ -317,6 +317,47 @@ func TestSessionRefreshSources(t *testing.T) {
 	}
 }
 
+// TestRefreshSourcesHydratesKeyOnlyTier1Episodes (review MAJOR): the
+// tier-1 dub list rides every episode as keys with EMPTY lists — that
+// is the NORMAL post-GetEpisodes state, and «🔄 Обновить источники»
+// must still call HydrateDubs for it (the skip guard counts only
+// embeds with actual LINKS, not key-only entries).
+func TestRefreshSourcesHydratesKeyOnlyTier1Episodes(t *testing.T) {
+	fix := &hydrateFixture{}
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
+		"anilib": {{
+			Num:       "1",
+			RawID:     "17166",
+			RawEmbeds: map[string][]string{"AniLib (AnimeLib)": {}},
+		}},
+	})
+	fix.mu.Lock()
+	before := len(fix.calls)
+	fix.mu.Unlock()
+
+	s.list.Jump(indexOfDayActionMenu(s, "refresh"))
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("refresh must schedule a re-resolve")
+	}
+	msg := cmd()
+	done, ok := msg.(hydrateDoneMsg)
+	if !ok {
+		t.Fatalf("refresh settled %T, want hydrateDoneMsg", msg)
+	}
+	s.Update(done)
+
+	fix.mu.Lock()
+	calls := len(fix.calls)
+	fix.mu.Unlock()
+	if calls <= before {
+		t.Fatalf("HydrateDubs calls = %d, want > %d: key-only tier-1 episodes must not be skipped as already-hydrated", calls, before)
+	}
+	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1 (AnimeLib)") {
+		t.Fatalf("post-refresh header = %q, want the recovered source", got)
+	}
+}
+
 // indexOfDayActionMenu returns the cursor index of a menu item id.
 func indexOfDayActionMenu(s *sessionScreen, id string) int {
 	for i, item := range s.list.Menu().Items {

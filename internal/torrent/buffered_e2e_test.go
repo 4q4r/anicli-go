@@ -14,8 +14,8 @@ import (
 // seeder and a leecher in one process (magnet x.pe), the leecher's
 // loopback stream URL buffered through the buffered pipeline to a real
 // local file, byte-identical to the seed — and Cleanup (player exit)
-// erases the temp dir. This is the path «Формат: [буферный]» rides for
-// torrent sources.
+// erases the temp dir. This is the path the PR44 pre-play format
+// selector's «Буферный» pick rides for torrent sources.
 func TestBufferedTorrentE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("E2E in short mode")

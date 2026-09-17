@@ -62,8 +62,11 @@ type EpisodeService interface {
 	// HydrateDubs fetches the dub list of one PROVIDER-LOCAL episode
 	// (anilib/animego list episodes with empty RawEmbeds and hydrate
 	// per episode — contracts.DubsHydrator). The session runs it
-	// eagerly in the episode-fetch phase (PR44) and again per episode
-	// via «🔄 Обновить источники» recovery. Providers without the
+	// strictly ON DEMAND — only for the episode being opened
+	// («Смотреть») or via «🔄 Обновить источники» recovery; the
+	// release-scoped dub-provider lists ride the episodes from
+	// GetEpisodes without resolving (PR44 owner model: streams are
+	// temporary, resolving is never bulk). Providers without the
 	// capability return the episode unchanged.
 	HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error)
 }

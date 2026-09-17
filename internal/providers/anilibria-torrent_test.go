@@ -313,11 +313,30 @@ func TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
+	// Ephemeral listen port (the testTorrentConfig convention): the
+	// default 42069 collides across concurrent test PROCESSES — full
+	// suite runs against each other fail on "bind: address already in
+	// use" before any wait budget matters.
+	cfg.Torrent.Port = 0
 	eng := newOfflineTestEngineCfg(t, cfg.Torrent)
 	p := newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, "anilibria-torrent"), eng)
 
 	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	// Pre-ingest under a generous ceiling (PR38 reviewer disclosure):
+	// under full-suite -race contention the old single 150ms budget
+	// could expire inside Ingest — BEFORE the wait loop starts — and
+	// GetEpisodes surfaced the ingest failure without the «торренты»
+	// wait error. The deduped ingest here returns instantly, so the
+	// budget below only ever bounds the metadata wait itself. The
+	// assertion semantics are unchanged: unreachable metadata fails
+	// loud on the caller's deadline (the nyaa contract).
+	ingestCtx, ingestCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer ingestCancel()
+	if _, err := p.Ingest(ingestCtx, dead); err != nil {
+		t.Fatalf("pre-ingest the dead magnet: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	eps, err := p.GetEpisodes(ctx, dead)

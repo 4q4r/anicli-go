@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -50,31 +52,164 @@ func FilterHistory(items []storage.AnimeProgress, status string) []storage.Anime
 	return out
 }
 
+// historyFilterHint is the static key hint on the library screen (the
+// binding itself stays silent — see historyFilter.Update).
+const historyFilterHint = "s — проверить обновления списков"
+
+// historyRefreshMsg settles one background library refresh (key «s»
+// on the history filter screen): the reloaded snapshot, or the error
+// that must surface on the status line.
+type historyRefreshMsg struct {
+	items []storage.AnimeProgress
+	err   error
+}
+
+// historyFilter is the library screen («📜 Списки» → status filter,
+// the per-status counts surface). The PR39 background refresh rides
+// ON TOP of the generic menu: the wrapper owns the items snapshot and
+// the refresh lifecycle, the embedded MenuScreen keeps the §5
+// rendering and navigation unchanged (the rebindProgress embedding
+// pattern).
+type historyFilter struct {
+	*MenuScreen
+	deps  *Deps
+	items []storage.AnimeProgress
+	// status mirrors the wrapped screen's bottom line (the hint, or a
+	// refresh error): applyRefresh needs it to notice that a fresh
+	// success must supersede a prior failure.
+	status string
+	// refreshing dedups «s» while a check is in flight. It is cleared
+	// by the refresh COMMAND itself — not by the message handler — so
+	// a settled result dropped while the user navigated elsewhere
+	// cannot wedge the key; the atomic keeps the flag race-clean
+	// between the command goroutine and the update loop.
+	refreshing atomic.Bool
+}
+
 // NewHistoryFilter builds the status filter screen — always the FIRST
-// step of «📜 Списки» (python history_menu), with Back (I1) and the
-// empty state when history is empty (I3).
-func NewHistoryFilter(deps *Deps) *MenuScreen {
+// step of «📜 Списки» (python history_menu), with Back (I1), the
+// empty state when history is empty (I3) and the «s» silent
+// background list refresh (PR39).
+func NewHistoryFilter(deps *Deps) Screen { return newHistoryFilter(deps) }
+
+// newHistoryFilter builds the wrapper; the exported constructor hides
+// the concrete type (the newHistoryList/NewHistoryList pattern).
+func newHistoryFilter(deps *Deps) *historyFilter {
 	items, err := loadHistory(deps)
 	if err != nil {
 		items = nil
 	}
+	h := &historyFilter{deps: deps, items: items, status: historyFilterHint}
+	h.MenuScreen = NewMenuScreen(h.config(historyFilterHint))
+	return h
+}
+
+// config renders the wrapped menu config for the current snapshot;
+// status is the bottom hint (or error) line.
+func (h *historyFilter) config(status string) MenuScreenConfig {
 	emptyMsg := ""
-	if len(items) == 0 {
+	if len(h.items) == 0 {
 		emptyMsg = "История пуста"
 	}
-	return NewMenuScreen(MenuScreenConfig{
+	return MenuScreenConfig{
 		ID:       historyFilterID,
 		Title:    "Фильтр списка:",
 		EmptyMsg: emptyMsg,
-		Choices:  historyStatusChoices(items),
+		Choices:  historyStatusChoices(h.items),
+		Status:   status,
 		OnPick: func(pick any) tea.Cmd {
 			if pick == Back {
 				return pop()
 			}
-			status, _ := pick.(string)
-			return push(newHistoryList(deps, status, items))
+			key, _ := pick.(string)
+			return push(newHistoryList(h.deps, key, h.items))
 		},
-	})
+	}
+}
+
+// Update implements Screen: «s» dispatches the silent background
+// refresh (a check already running makes it a no-op — no second
+// fetch, no UI hint); the settled message applies the verdict;
+// everything else is the wrapped menu.
+func (h *historyFilter) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	switch m := msg.(type) {
+	case historyRefreshMsg:
+		h.applyRefresh(m)
+		return h, nil
+	case tea.KeyPressMsg:
+		if m.Code == 's' && m.Mod == 0 {
+			if !h.refreshing.CompareAndSwap(false, true) {
+				return h, nil // a check is already running: silent no-op
+			}
+			return h, safeCmd(historyFilterID, h.refreshCmd())
+		}
+	}
+	next, cmd := h.MenuScreen.Update(msg)
+	if next == Screen(h.MenuScreen) {
+		return h, cmd
+	}
+	return next, cmd
+}
+
+// refreshCmd runs ONE background check pass: the two-way sync (the
+// startup-sync seam reused as-is — one pass covers every list at
+// once), then a fresh history reload. The verdict rides back as a
+// single message; the in-flight flag clears HERE, in the command
+// goroutine, so the re-arm never depends on the message reaching this
+// screen. The command owns its timeout context (see the App.ctx note)
+// and SyncFull's progress callback stays nil: no progress surfaces.
+func (h *historyFilter) refreshCmd() tea.Cmd {
+	deps := h.deps
+	return func() tea.Msg {
+		defer h.refreshing.Store(false)
+		if deps == nil || deps.SyncFull == nil {
+			return historyRefreshMsg{err: errSyncUnavailable}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), syncBudget)
+		defer cancel()
+		if _, err := deps.SyncFull(ctx, nil); err != nil {
+			return historyRefreshMsg{err: err}
+		}
+		items, err := loadHistory(deps)
+		if err != nil {
+			return historyRefreshMsg{err: err}
+		}
+		return historyRefreshMsg{items: items}
+	}
+}
+
+// applyRefresh applies one settled check: an error lands on the status
+// line (fail loud) and keeps the rendered data; identical data keeps
+// the screen untouched (zero visual noise) unless an error was
+// showing — a fresh success supersedes a stale failure; changed data
+// re-renders the counts («досчитались») with the cursor preserved.
+func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
+	if m.err != nil {
+		h.deps.logger().Error("tui: history refresh failed",
+			"screen", historyFilterID, "error", m.err)
+		h.swap(h.items, "⚠ Не удалось обновить списки: "+m.err.Error())
+		return
+	}
+	if reflect.DeepEqual(h.items, m.items) {
+		// Identical data: zero visual noise — EXCEPT that a fresh
+		// success supersedes a prior failure (the stale error line
+		// must not outlive the check that disproved it).
+		if h.status != historyFilterHint {
+			h.swap(h.items, historyFilterHint)
+		}
+		return
+	}
+	h.swap(m.items, historyFilterHint)
+}
+
+// swap rebuilds the wrapped menu screen for a new snapshot + status
+// line, preserving the cursor position.
+func (h *historyFilter) swap(items []storage.AnimeProgress, status string) {
+	cursor := h.list.Cursor()
+	h.items = items
+	h.status = status
+	h.MenuScreen = NewMenuScreen(h.config(status))
+	h.list.Jump(cursor)
 }
 
 // loadHistory loads the full history once for the whole flow.

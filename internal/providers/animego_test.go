@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -101,9 +102,25 @@ func TestAnimegoSearchSendsSiteHeaders(t *testing.T) {
 func TestAnimegoGetEpisodesSeries(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := animegoServer(t,
-		string(fixture(t, "animego_anime.html")),
-		string(fixture(t, "animego_player_series.json")), http.StatusOK)
+	// Route-aware stub: page, player API, then the PR44 tier-1 dub-
+	// list fetch (/anime/series for the first episode).
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.RequestURI())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/anime/series"):
+			_, _ = w.Write(fixture(t, "animego_series.json"))
+		case strings.HasSuffix(r.URL.Path, "/player"):
+			_, _ = w.Write(fixture(t, "animego_player_series.json"))
+		default:
+			_, _ = w.Write(fixture(t, "animego_anime.html"))
+		}
+	}))
+	t.Cleanup(srv.Close)
 	p := newAnimego(srv.URL, testClient(t, "animego"))
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/re-zero-1469")
@@ -111,13 +128,19 @@ func TestAnimegoGetEpisodesSeries(t *testing.T) {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	// The player API URL carries the extracted numeric id and _allow=true
-	// (animego.py:61).
-	if want := "/anime/1469/player"; rec.Path != want {
-		t.Errorf("player path = %q, want %q", rec.Path, want)
+	// The request sequence: the anime page carries the numeric id, the
+	// player API URL carries it plus _allow=true (animego.py:61), the
+	// tier-1 dub-list fetch rides /anime/series?id=901.
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"/anime/re-zero-1469", "/anime/1469/player?_allow=true", "/anime/series?id=901"}
+	if len(paths) != len(want) {
+		t.Fatalf("requests = %v, want %v", paths, want)
 	}
-	if got := rec.Query; got != "_allow=true" {
-		t.Errorf("player query = %q, want _allow=true", got)
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("request[%d] = %q, want %q", i, paths[i], want[i])
+		}
 	}
 
 	if len(episodes) != 2 {
@@ -132,8 +155,13 @@ func TestAnimegoGetEpisodesSeries(t *testing.T) {
 	if episodes[1].Title != "Ускорение" {
 		t.Errorf("episode 2 Title = %q", episodes[1].Title)
 	}
-	if len(episodes[0].RawEmbeds) != 0 {
-		t.Errorf("RawEmbeds = %v, want empty (dubs are lazy via FetchDubs)", episodes[0].RawEmbeds)
+	// Episode one keeps its real player links; episode two carries the
+	// release's dub keys with EMPTY lists (on-demand resolve).
+	if len(episodes[0].RawEmbeds["AniLib"]) == 0 {
+		t.Errorf("episode 1 embeds = %v, want the real links from the tier-1 fetch", episodes[0].RawEmbeds)
+	}
+	if links := episodes[1].RawEmbeds["AniLib"]; links == nil || len(links) != 0 {
+		t.Errorf("episode 2 AniLib links = %v, want an empty list", links)
 	}
 }
 

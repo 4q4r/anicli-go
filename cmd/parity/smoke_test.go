@@ -285,22 +285,42 @@ func TestSmokeEverySurfacedResultMustResolve(t *testing.T) {
 	}
 }
 
-// TestSmokeSurfacesBoundedHead: the smoke resolves a bounded head of
-// the filtered results (smokeSurfaceLimit), not the whole feed —
-// bounded-concurrent, within the provider budget.
-func TestSmokeSurfacesBoundedHead(t *testing.T) {
+// TestSmokeResolvesAllSurfacedResults (review MAJOR): NO head cap —
+// every surfaced result is resolved (bounded-concurrent), and a
+// healthy wide feed passes only when all its legs completed.
+func TestSmokeResolvesAllSurfacedResults(t *testing.T) {
 	wide := newParityProvider(t, "wide", false)
-	wide.searchResults = 50
+	wide.searchResults = 5
 	d := smokeDeps(t, 0, wide)
 	out, _, code := runSmoke(t, d, "smoke", "all")
 	if code != 0 {
 		t.Fatalf("a healthy wide feed must pass, stdout:\n%s", out)
 	}
-	if wide.epCalls != smokeSurfaceLimit {
-		t.Fatalf("episode legs = %d, want the surfaced head of %d", wide.epCalls, smokeSurfaceLimit)
+	if wide.epCalls != 5 {
+		t.Fatalf("episode legs = %d, want ALL 5 surfaced results resolved", wide.epCalls)
+	}
+	if !strings.Contains(out, "5/5") {
+		t.Fatalf("row must show surfaced/resolved 5/5:\n%s", out)
 	}
 	if !strings.Contains(out, "smoke PASSED: 1/1") {
 		t.Fatalf("summary missing:\n%s", out)
+	}
+}
+
+// TestSmokeBudgetExhaustionNamesProgress: when the per-provider budget
+// expires before every surfaced result resolved, the FAIL names the
+// progress (resolved N/M) instead of silently certifying a head.
+func TestSmokeBudgetExhaustionNamesProgress(t *testing.T) {
+	slow := newParityProvider(t, "slowfeed", false)
+	slow.searchResults = 12
+	slow.epSleep = 100 * time.Millisecond // two waves of 8 under a 150ms budget
+	d := smokeDeps(t, 150*time.Millisecond, slow)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code == 0 {
+		t.Fatalf("budget-exhausted resolution must fail, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "resolved") || !strings.Contains(out, "/12") {
+		t.Fatalf("FAIL row must name resolved progress out of 12:\n%s", out)
 	}
 }
 

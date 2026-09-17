@@ -1,11 +1,15 @@
-// Live smoke suite (PR44): for every registered provider EXCEPT the
-// credential-gated ones, run the full consumption chain against the
-// live site — search a known-broad title (per the provider's
-// NamePreference), take the first result, resolve the dubs of an
-// episode, then resolve ONE stream link. A provider PASSES only when
-// search > 0 AND dubs ≥ 1 AND ≥ 1 stream link came back; anything
-// else is a FAIL row with the reason (dead providers are the desired
-// visibility — never excluded, never special-cased).
+// Live smoke suite (PR44, review-corrected): for every registered
+// provider EXCEPT the credential-gated ones, run the full consumption
+// chain against the live site — search a known-broad title (per the
+// provider's NamePreference), then resolve EVERY surfaced result
+// bounded-concurrent under the per-provider budget: stream providers
+// need dubs ≥ 1 AND ≥ 1 stream link per result; torrent providers
+// need metadata-ready with files ≥ 1 (their Search filters seedless
+// entries, so what surfaces is really seeding). A provider PASSES
+// only when search > 0 AND every surfaced result resolved; anything
+// else is a FAIL row with the reason and the resolved/surfaced
+// progress (dead providers are the desired visibility — never
+// excluded, never special-cased).
 //
 // The same core backs `parity smoke [provider|all]` and the
 // //go:build live test file (smoke_live_test.go); the default
@@ -32,10 +36,13 @@ import (
 // whole chain, so one corpse cannot hang the run.
 const smokeProviderTimeout = 90 * time.Second
 
-// smokeSurfaceLimit bounds the surfaced head of the (filtered) search
-// results the smoke resolves: EVERY surfaced result must resolve, and
-// the head is what fits the per-provider budget bounded-concurrently.
-const smokeSurfaceLimit = 3
+// smokeResolveConcurrency bounds the parallel per-result resolution
+// of one provider's surfaced results (the same bounded-pool pattern
+// the TUI's hydration used): the fan stays polite to the site while
+// the whole surface resolves inside the per-provider budget. A
+// surface that still exceeds the budget is an honest FAIL naming the
+// progress.
+const smokeResolveConcurrency = 8
 
 // The smoke probe title: a release KNOWN to exist broadly. Latin for
 // the NamePrefLatin feeds, Russian for everyone else (the anicli
@@ -56,15 +63,17 @@ var smokeSkipped = map[string]string{
 
 // smokeResult is one provider's row of the damage table.
 type smokeResult struct {
-	id      string
-	status  string // PASS / FAIL / SKIP
-	query   string
-	search  int
-	dubs    int
-	streams int
-	took    time.Duration
-	route   string
-	reason  string
+	id       string
+	status   string // PASS / FAIL / SKIP
+	query    string
+	search   int
+	surfaced int
+	resolved int
+	dubs     int
+	streams  int
+	took     time.Duration
+	route    string
+	reason   string
 }
 
 // paritySmokeCommand builds `parity smoke [provider|all]`.
@@ -73,11 +82,14 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 		Use:   "smoke [provider|all]",
 		Short: "Live smoke chain (search → dubs → stream) per provider; all = every non-credential provider",
 		Long: "smoke runs the full consumption chain against live sites per provider: search a\n" +
-			"known-broad title (NamePreference-routed), take the first result, resolve an\n" +
-			"episode's dubs (through the DubsHydrator capability when the listing is lazy)\n" +
-			"and resolve one stream link. PASS needs search>0 AND dubs>=1 AND streams>=1.\n" +
-			"Credential-gated providers (kodik, yanima) and the unimplemented rutracker\n" +
-			"are skipped with a visible reason. Exits non-zero when any provider FAILs.",
+			"known-broad title (NamePreference-routed), then resolve EVERY surfaced result\n" +
+			"bounded-concurrent under the per-provider budget — stream providers need\n" +
+			"dubs>=1 AND >=1 stream link per result; torrent providers need\n" +
+			"metadata-ready with files>=1 (their Search filters seedless entries). PASS\n" +
+			"needs search>0 AND all surfaced results resolved; a budget exhaustion is an\n" +
+			"honest FAIL naming the resolved/surfaced progress. Credential-gated\n" +
+			"providers (kodik, yanima) and the unimplemented rutracker are skipped with\n" +
+			"a visible reason. Exits non-zero when any provider FAILs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := setup(cmd)
@@ -147,13 +159,13 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 }
 
 // smokeOne runs one provider's smoke: search (NamePreference-routed),
-// then resolve EVERY surfaced result (the bounded head of the
-// provider-filtered list) — stream providers need dubs≥1 AND
-// streams≥1 per result; torrent providers need metadata-ready with
-// files≥1. The surfaced fan runs bounded-concurrent under the
-// per-provider budget; budget exhaustion is an honest FAIL, never a
-// silent pass. The named return lets the timing defer see the final
-// value.
+// then resolve EVERY surfaced result — the whole (provider-filtered)
+// list — bounded-concurrent under the per-provider budget: stream
+// providers need dubs≥1 AND streams≥1 per result; torrent providers
+// need metadata-ready with files≥1. Budget exhaustion before the
+// surface completes is an honest FAIL naming the progress. Failures
+// settle as FAIL rows — never panics. The named return lets the
+// timing defer see the final value.
 func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, torrentIDs map[string]bool) (res smokeResult) {
 	budget := d.smokeTimeout
 	if budget <= 0 {
@@ -198,33 +210,50 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, to
 		return fail("search: 0 results for %q", res.query)
 	}
 
-	// Surface the bounded head; every surfaced result must resolve.
-	surfaced := results
-	if len(surfaced) > smokeSurfaceLimit {
-		surfaced = surfaced[:smokeSurfaceLimit]
-	}
-	legs := make([]smokeLeg, len(surfaced))
-	var wg sync.WaitGroup
-	for i, r := range surfaced {
+	// Resolve the WHOLE surfaced surface, bounded-concurrent. The
+	// first failure is kept as the row's reason; a budget expiry
+	// mid-surface surfaces as that leg's deadline error, and the
+	// progress fields show how far the run got.
+	res.surfaced = len(results)
+	legs := make([]smokeLeg, len(results))
+	var (
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, smokeResolveConcurrency)
+	)
+	for i, r := range results {
 		wg.Add(1)
 		go func(i int, r contracts.SearchResult) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			legs[i] = smokeResolveResult(ctx, p, torrentIDs[p.ID()], r)
 		}(i, r)
 	}
 	wg.Wait()
 
 	minDubs, minStreams := -1, -1
+	firstFailure := ""
 	for i, leg := range legs {
 		if !leg.ok {
-			return fail("result %d/%d: %s", i+1, len(legs), leg.reason)
+			if firstFailure == "" {
+				firstFailure = fmt.Sprintf("result %d/%d: %s", i+1, len(legs), leg.reason)
+			}
+			continue
 		}
+		res.resolved++
 		if minDubs < 0 || leg.dubs < minDubs {
 			minDubs = leg.dubs
 		}
 		if minStreams < 0 || leg.streams < minStreams {
 			minStreams = leg.streams
 		}
+	}
+	if res.resolved < res.surfaced {
+		if minDubs < 0 {
+			minDubs, minStreams = 0, 0
+		}
+		res.dubs, res.streams = minDubs, minStreams
+		return fail("resolved %d/%d: %s", res.resolved, res.surfaced, firstFailure)
 	}
 	res.dubs, res.streams = minDubs, minStreams
 	res.status = "PASS"
@@ -300,14 +329,19 @@ func smokeResolveResult(ctx context.Context, p contracts.Provider, torrent bool,
 }
 
 // printSmokeTable renders the damage table: provider / status / route
-// / query / counts (search/dubs/streams) / duration / reason.
+// / query / counts (search/dubs/streams) / surfaced-resolved progress
+// / duration / reason.
 func printSmokeTable(out io.Writer, results []smokeResult) {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "provider\tstatus\troute\tquery\tsearch/dubs/streams\ttime\tfailure")
+	_, _ = fmt.Fprintln(w, "provider\tstatus\troute\tquery\tsearch/dubs/streams\tsurfaced/resolved\ttime\tfailure")
 	for _, r := range results {
 		counts := fmt.Sprintf("%d/%d/%d", r.search, r.dubs, r.streams)
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.id, r.status, r.route, r.query, counts, r.took.Round(time.Millisecond), r.reason)
+		progress := ""
+		if r.surfaced > 0 {
+			progress = fmt.Sprintf("%d/%d", r.surfaced, r.resolved)
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.id, r.status, r.route, r.query, counts, progress, r.took.Round(time.Millisecond), r.reason)
 	}
 	_ = w.Flush()
 }

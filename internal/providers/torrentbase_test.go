@@ -28,6 +28,22 @@ func testTorrentConfig(t *testing.T) config.Torrent {
 	return config.Torrent{Enabled: true, Dir: t.TempDir(), Port: 0, ReadaheadMB: 1}
 }
 
+// newOfflineTestEngine builds a hermetic engine for provider tests:
+// every external discovery channel is stripped (DHT bootstrap/announce,
+// webtorrent, UPnP), so the default suite never egresses. The engine
+// closes on cleanup (idempotent with the base-owned Close).
+func newOfflineTestEngine(t *testing.T) *torrent.Engine {
+	t.Helper()
+	return newOfflineTestEngineCfg(t, testTorrentConfig(t))
+}
+
+func newOfflineTestEngineCfg(t *testing.T, cfg config.Torrent) *torrent.Engine {
+	t.Helper()
+	eng := torrent.NewOfflineEngineForTests(cfg, nil, nil)
+	t.Cleanup(func() { _ = eng.Close() })
+	return eng
+}
+
 const (
 	linkA = "https://torrent.example.org/batch.torrent"
 	linkB = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
@@ -101,7 +117,7 @@ func TestTorrentBaseEpisodesCarryIngestLink(t *testing.T) {
 func TestTorrentBaseResolveStreamReadsLinkFromEmbeds(t *testing.T) {
 	t.Parallel()
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 	base.streamWait = 50 * time.Millisecond
 
@@ -135,7 +151,7 @@ func TestTorrentBaseResolveStreamReadsLinkFromEmbeds(t *testing.T) {
 func TestTorrentBaseResolveStreamWithoutEmbedsFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 
 	episode := contracts.Episode{Num: "1", RawID: "0"}
@@ -150,7 +166,7 @@ func TestTorrentBaseResolveStreamWithoutEmbedsFailsLoud(t *testing.T) {
 func TestTorrentBaseEpisodesWaitTimesOutFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
@@ -182,10 +198,9 @@ func TestTorrentBaseEpisodesWaitAfterMetadataArrives(t *testing.T) {
 	dirSeed := t.TempDir()
 	_, mi, ih := seedReleaseFile(t, dirSeed, "Test Show - 01.mkv", 256*1024)
 
-	engSeed := torrent.NewEngine(config.Torrent{
+	engSeed := newOfflineTestEngineCfg(t, config.Torrent{
 		Enabled: true, Dir: dirSeed, Port: 0, ReadaheadMB: 1,
-	}, nil, nil)
-	t.Cleanup(func() { _ = engSeed.Close() })
+	})
 	if _, err := engSeed.AddMetaInfo(mi); err != nil {
 		t.Fatalf("seeder AddMetaInfo: %v", err)
 	}
@@ -194,7 +209,7 @@ func TestTorrentBaseEpisodesWaitAfterMetadataArrives(t *testing.T) {
 		t.Fatal("seeder client has no listen port")
 	}
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 
 	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=Test%%20Show&x.pe=127.0.0.1:%d", ih.HexString(), port)
@@ -222,7 +237,7 @@ func TestTorrentBaseEpisodesWaitAfterMetadataArrives(t *testing.T) {
 func TestTorrentBaseRefreshesReleaseFromEngine(t *testing.T) {
 	t.Parallel()
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 
 	ih, err := base.Ingest(context.Background(), linkB)
@@ -293,7 +308,7 @@ func TestTorrentBaseEpisodesUnknownLinkFailsLoud(t *testing.T) {
 
 func TestTorrentBaseIngestRecordsLink(t *testing.T) {
 	t.Parallel()
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 
 	ih, err := base.Ingest(context.Background(), linkB)
@@ -312,7 +327,7 @@ func TestTorrentBaseIngestRecordsLink(t *testing.T) {
 func TestTorrentBaseStreamFailsLoudWithoutServer(t *testing.T) {
 	t.Parallel()
 
-	base := NewTorrentBase(torrent.NewEngine(testTorrentConfig(t), nil, nil))
+	base := NewTorrentBase(newOfflineTestEngine(t))
 	t.Cleanup(func() { _ = base.Close() })
 	base.streamWait = 50 * time.Millisecond
 
@@ -401,6 +416,34 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		}
 		if _, ok := reg.Get("nyaa"); ok {
 			t.Error("nyaa must not register when the torrent subsystem is off")
+		}
+	})
+
+	// nyaa excluded while [torrent] stays on: the shared engine must
+	// survive (it is lazy — zero idle cost) because the «Торренты»
+	// screen and the configured [torrent].links resolve through it
+	// even with no torrent SEARCH provider registered.
+	t.Run("nyaa-excluded", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.Default()
+		cfg.Network.ProxyURL = ""
+		cfg.Providers.Kodik.Token = "test-token"
+		cfg.Providers.Yanima.DDoSP1 = "test-p1"
+		cfg.Providers.Yanima.DDoSP2 = "test-p2"
+		cfg.Providers.Exclude = []string{"nyaa"}
+
+		reg, err := NewRegistry(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewRegistry: %v", err)
+		}
+		t.Cleanup(func() { _ = reg.Close() })
+
+		eng := reg.TorrentEngine()
+		if eng == nil {
+			t.Fatal("TorrentEngine() = nil with nyaa excluded; «Торренты» links would die with a false disabled verdict")
+		}
+		if _, ok := reg.Get("nyaa"); ok {
+			t.Error("excluded nyaa must not register")
 		}
 	})
 }

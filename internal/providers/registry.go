@@ -70,25 +70,21 @@ func (r *Registry) TorrentEngine() *torrent.Engine {
 // wireTorrentEngine builds the shared lazy torrent engine (NewEngine
 // starts nothing) and injects it into every torrent provider via
 // SetEngine. A broken torrent transport fails registry construction
-// loud — the same contract as any provider client.
+// loud — the same contract as any provider client. The engine is
+// owned unconditionally: even when no torrent provider is registered
+// (e.g. nyaa in [providers].exclude) it stays — the «Торренты» screen
+// and the configured [torrent].links resolve through it, it costs
+// nothing while idle, and Registry.Close tears it down.
 func (r *Registry) wireTorrentEngine(cfg config.Settings, bare []contracts.Provider, log *slog.Logger) error {
 	net, err := netclient.New(cfg.Network, netclient.WithProvider("torrent"))
 	if err != nil {
 		return fmt.Errorf("build torrent transport: %w", err)
 	}
 	r.engine = torrent.NewEngine(cfg.Torrent, net, log)
-	injected := 0
 	for _, p := range bare {
 		if se, ok := p.(interface{ SetEngine(*torrent.Engine) }); ok {
 			se.SetEngine(r.engine)
-			injected++
 		}
-	}
-	if injected == 0 {
-		// No consumer: tear the (idle) engine down and go on without
-		// it instead of owning machinery nothing can reach.
-		_ = r.engine.Close()
-		r.engine = nil
 	}
 	return nil
 }

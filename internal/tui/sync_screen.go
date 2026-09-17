@@ -25,6 +25,8 @@ const syncScreenID = "shikimori_sync"
 // syncBudget bounds the whole startup two-way sync: the rates fetch,
 // the metadata chunks of a possibly-large first list and the dirty
 // replay (commands own their timeout contexts — see the App.ctx note).
+// The PR39 background library refresh reuses it: one check pass is
+// the same shape of work.
 const syncBudget = 5 * time.Minute
 
 // syncSummaryHold is how long the settled summary stays on screen

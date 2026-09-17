@@ -34,6 +34,13 @@ type parityProvider struct {
 	epURL    string
 	epSleep  time.Duration
 	resSleep time.Duration
+	// Smoke knobs (additive; zero values keep the historical
+	// behaviour): searchEmpty returns an honest empty result set,
+	// epEmpty lists episodes with NO RawEmbeds, streamEmpty resolves
+	// zero links.
+	searchEmpty bool
+	epEmpty     bool
+	streamEmpty bool
 }
 
 func newParityProvider(t *testing.T, id string, fail bool) *parityProvider {
@@ -71,6 +78,11 @@ func (p *parityProvider) Search(ctx context.Context, query string) ([]contracts.
 	if p.fail {
 		return nil, contracts.WrapProvider(p.id, contracts.OpSearch, 0, errors.New("parity fake failure"))
 	}
+	// searchEmpty is the smoke zero-results leg; default keeps the
+	// single loopback hit.
+	if p.searchEmpty {
+		return nil, nil
+	}
 	target := p.srv.URL + "/search?q=" + url.QueryEscape(query)
 	resp, err := p.http.Get(ctx, target, nil)
 	if err != nil {
@@ -100,12 +112,16 @@ func (p *parityProvider) GetEpisodes(ctx context.Context, animeURL string) ([]co
 		return nil, ctx.Err()
 	}
 	p.epURL = animeURL
+	embeds := map[string][]string{"1080": {"https://" + p.id + ".example/embed/1"}}
+	if p.epEmpty {
+		embeds = map[string][]string{}
+	}
 	return []contracts.Episode{
 		{
 			Num:       "1",
 			Title:     "Episode 1",
 			RawID:     "ep-1",
-			RawEmbeds: map[string][]string{"1080": {"https://" + p.id + ".example/embed/1"}},
+			RawEmbeds: embeds,
 		},
 		{
 			Num:       "2",
@@ -124,12 +140,29 @@ func (p *parityProvider) ResolveStream(ctx context.Context, episode contracts.Ep
 	if !sleepCtx(ctx, p.resSleep) {
 		return contracts.MediaStream{}, ctx.Err()
 	}
-	return contracts.MediaStream{
-		DubName: dubID,
-		Links: map[string]contracts.VideoSource{
-			dubID: {URL: "https://" + p.id + ".example/media/" + episode.Num + ".m3u8", Quality: dubID, Type: "m3u8"},
-		},
-	}, nil
+	links := map[string]contracts.VideoSource{
+		dubID: {URL: "https://" + p.id + ".example/media/" + episode.Num + ".m3u8", Quality: dubID, Type: "m3u8"},
+	}
+	if p.streamEmpty {
+		links = map[string]contracts.VideoSource{}
+	}
+	return contracts.MediaStream{DubName: dubID, Links: links}, nil
+}
+
+// smokeHydrator wraps a parityProvider with the DubsHydrator
+// capability (smoke hydrator leg): FetchDubs fills the dub the smoke
+// asserts on. fail makes the hydration error.
+type smokeHydrator struct {
+	*parityProvider
+	fail bool
+}
+
+func (h *smokeHydrator) FetchDubs(_ context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
+	if h.fail {
+		return episode, errors.New("hydration boom")
+	}
+	episode.RawEmbeds["Hydrated Dub"] = []string{"https://" + h.id + ".example/embed/h1"}
+	return episode, nil
 }
 
 // newToolDeps builds run() dependencies over n fake providers inside a

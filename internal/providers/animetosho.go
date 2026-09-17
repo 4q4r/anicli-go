@@ -20,6 +20,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -199,11 +200,13 @@ func animeToshoResultLink(title, magnetURL, infoHash, enclosureURL string) strin
 
 // humanBytesAttr renders a byte-count attribute ("23175675801") in the
 // TUI torrent-suffix convention; non-numeric input stays verbatim
-// (fail-soft: the feed owns the format).
+// (fail-soft: the feed owns the format). The parse is strict — a
+// numeric-prefixed value like "123abc" is garbage, not 123.
 func humanBytesAttr(raw string) string {
-	var n int64
-	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &n); err != nil {
-		return strings.TrimSpace(raw)
+	trimmed := strings.TrimSpace(raw)
+	n, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return trimmed
 	}
 	return humanBytes(n)
 }

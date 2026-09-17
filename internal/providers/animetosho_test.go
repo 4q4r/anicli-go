@@ -350,3 +350,24 @@ func TestAnimeToshoDisabledWhenTorrentOff(t *testing.T) {
 		t.Errorf("reason = %q, want the torrent-subsystem wording", found.Reason)
 	}
 }
+
+// TestAnimeToshoHumanBytesAttr pins the byte-count attribute parse:
+// strict integers convert to the TUI convention, anything else —
+// including numeric-prefixed garbage, which a lenient prefix parse
+// would silently truncate — rides verbatim (fail-soft).
+func TestAnimeToshoHumanBytesAttr(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ raw, want string }{
+		{"23175675801", "21.6 GiB"},
+		{"0", "0 B"},
+		{"  1024  ", "1.0 KiB"},
+		{"abc", "abc"},
+		{"123abc", "123abc"},
+		{"", ""},
+	} {
+		if got := humanBytesAttr(tc.raw); got != tc.want {
+			t.Errorf("humanBytesAttr(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}

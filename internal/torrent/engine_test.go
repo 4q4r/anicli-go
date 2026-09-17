@@ -208,7 +208,9 @@ func TestAddLinkURLServesMetainfoWithoutTorrentSuffix(t *testing.T) {
 
 // TestAddLinkURLNonMetainfoTypedError: a URL that answers HTML (a
 // topic page, a login wall) must fail loud on the parse — the old
-// URL-suffix precheck is gone, the content check is the guard.
+// URL-suffix precheck is gone, the content check is the guard. The
+// failure maps to the ErrNotMetainfo sentinel (errors.Is) so callers
+// can tell "garbage content" apart from transport failures.
 func TestAddLinkURLNonMetainfoTypedError(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +223,9 @@ func TestAddLinkURLNonMetainfoTypedError(t *testing.T) {
 	_, err := eng.AddLink(context.Background(), srv.URL+"/forum/viewtopic.php?t=1")
 	if err == nil {
 		t.Fatal("non-metainfo body must fail loud")
+	}
+	if !errors.Is(err, ErrNotMetainfo) {
+		t.Errorf("err = %v, want ErrNotMetainfo", err)
 	}
 	if !strings.Contains(err.Error(), "parse .torrent") {
 		t.Errorf("err = %v, want the metainfo parse failure", err)

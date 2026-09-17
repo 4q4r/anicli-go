@@ -98,10 +98,14 @@ var (
 	// (AddTorrentOpt → panicif.Zero): links without a usable btih are
 	// rejected before they ever reach the client.
 	ErrZeroInfoHash = errors.New("torrent: link has no usable infohash")
-	// ErrUnsupportedLink reports links outside the PR35 surface
-	// (magnet:, https://…/*.torrent, bare infohash); rutracker topic
-	// URLs and RSS feeds land in PR37/PR38.
+	// ErrUnsupportedLink reports links that are neither a magnet: URI,
+	// an http(s) URL nor a bare 40-hex infohash.
 	ErrUnsupportedLink = errors.New("torrent: unsupported link")
+	// ErrNotMetainfo reports an http(s) link whose response body did
+	// not parse as bencode metainfo (a topic page, a login wall — the
+	// content check IS the URL-ingest guard since PR38; there is no
+	// URL-shape precheck).
+	ErrNotMetainfo = errors.New("torrent: content is not bencode metainfo")
 	// ErrUnknownRelease is Resolve/AddLink on an infohash never added.
 	ErrUnknownRelease = errors.New("torrent: release not added")
 	// ErrBadFileIndex is Resolve with an out-of-bounds file index.
@@ -186,9 +190,11 @@ func (e *Engine) probeTimeout() time.Duration {
 }
 
 // AddLink ingests a magnet: URI (with optional dn= display name and
-// x.pe peers), an https://…/*.torrent URL (fetched through the shared
-// netclient) or a bare 40-hex infohash. Links dedupe by infohash:
-// adding a known one returns its current Release unchanged.
+// x.pe peers), an http(s) URL whose response body parses as bencode
+// metainfo (fetched through the shared netclient — the content check
+// is the guard, the URL shape is not) or a bare 40-hex infohash. Links
+// dedupe by infohash: adding a known one returns its current Release
+// unchanged.
 func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 	link = strings.TrimSpace(link)
 	switch {
@@ -211,11 +217,10 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 			return Release{}, fmt.Errorf("torrent: %s needs a transport but the engine has no netclient", link)
 		}
 		// The PR35 URL-suffix precheck (path must end in .torrent) is
-		// gone as of PR38: the TokyoTosho feed's real .torrent links
-		// rarely carry the suffix (anirena.com/dl/N,
-		// nyaa.si/view/N/torrent), so the guard is the fetched
-		// CONTENT now — anything that is not bencode metainfo fails
-		// loud on the parse below (topic pages, login walls).
+		// gone as of PR38: real-world .torrent links rarely carry the
+		// suffix (anirena.com/dl/N, nyaa.si/view/N/torrent), so the
+		// guard is the fetched CONTENT — anything that is not bencode
+		// metainfo fails loud below (topic pages, login walls).
 		// This fetch rides the shared netclient — i.e.
 		// network.proxy_url — NOT [torrent] proxy, which only covers
 		// the library's own HTTP layer (announces, webseeds).
@@ -225,11 +230,11 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 		}
 		mi, err := metainfo.Load(bytes.NewReader(resp.Body))
 		if err != nil {
-			return Release{}, fmt.Errorf("torrent: parse .torrent from %s: %w", link, err)
+			return Release{}, fmt.Errorf("torrent: parse .torrent from %s: %w: %w", link, ErrNotMetainfo, err)
 		}
 		return e.AddMetaInfo(mi)
 	default:
-		return Release{}, fmt.Errorf("%w: %q (want magnet:, https://…/*.torrent or a bare infohash)",
+		return Release{}, fmt.Errorf("%w: %q (want magnet:, an http(s) metainfo URL or a bare infohash)",
 			ErrUnsupportedLink, link)
 	}
 }

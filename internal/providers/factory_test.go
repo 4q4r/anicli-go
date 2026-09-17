@@ -12,7 +12,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
-func TestAllReturnsTwelveProviders(t *testing.T) {
+func TestAllRosterComplete(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()

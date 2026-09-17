@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -47,18 +46,6 @@ const sessionScreenID = "session"
 // session commands; the mpv lifetime itself is governed by the player.
 const lookupTimeout = 30 * time.Second
 
-// Eager hydration budget of the episode-fetch phase (PR44).
-const (
-	// eagerHydrateConcurrency caps the parallel per-episode hydration
-	// requests of one source (AnimeLib/AnimeGo dubs are per-episode
-	// API shapes — verified live; the cap keeps one release's roster
-	// from hammering the site).
-	eagerHydrateConcurrency = 8
-	// eagerHydrateTimeout bounds the WHOLE eager hydration of one
-	// source, so a large roster (10³ episodes) still settles.
-	eagerHydrateTimeout = 90 * time.Second
-)
-
 // statWriteTimeout bounds progress writes (mirrors the registry's
 // stat-write cap).
 const statWriteTimeout = 5 * time.Second
@@ -73,14 +60,14 @@ var ruStatuses = []struct{ Key, Label string }{
 	{"dropped", "Брошено"},
 }
 
-// episodePartMsg settles one source's episode fetch (and, PR44, the
-// eager dub hydration of its empty-embed episodes): hydrateErrs maps
-// the per-episode hydration failures feeding the header cause line.
+// episodePartMsg settles one source's episode fetch. The list
+// surfaces as-is — hydration is NOT part of the fetch phase (PR44
+// owner model: the list shows immediately; streams resolve on
+// demand for the opened episode only).
 type episodePartMsg struct {
-	sourceID    string
-	episodes    []contracts.Episode
-	err         error
-	hydrateErrs map[string]error
+	sourceID string
+	episodes []contracts.Episode
+	err      error
 }
 
 // episodesDoneMsg finalizes the merge after every source settled.
@@ -177,13 +164,16 @@ type sessionScreen struct {
 	// (0 = none yet); PATCHed instead of re-created on updates (I10).
 	shikiRateID int64
 
-	// PR43/PR44 hydration state: the episode-fetch phase hydrates
-	// every empty-embed episode eagerly (the invariant: the session
-	// never surfaces an unhydrated episode), so the steady flow has no
-	// «Ист: 0» state — the map below only carries the transient
-	// per-episode/per-provider failures «🔄 Обновить источники»
-	// recovers from. The refresh re-runs one merged episode's
-	// hydration with a generation guard against superseded rounds.
+	// PR43/PR44 hydration state: hydration is strictly ON-DEMAND —
+	// the fetch phase never resolves streams in bulk (the owner
+	// model: the list surfaces immediately, the release-scoped dub
+	// lists ride the episodes from the provider, and the heavy
+	// per-episode hydration happens only for the episode being
+	// opened, via «Смотреть» or «🔄 Обновить источники»). `hydrated`
+	// marks the episodes an attempt was made for; `hydrateErrs`
+	// carries the per-episode/per-provider failures feeding the
+	// header cause.
+	hydrated    map[string]bool
 	hydrating   bool
 	hydrateGen  int
 	hydrateErrs map[string]map[string]error
@@ -273,88 +263,17 @@ func (s *sessionScreen) Init() tea.Cmd {
 	cmds := []tea.Cmd{}
 	for _, res := range s.group {
 		s.pending[res.SourceID] = true
-		deps := s.deps
-		sourceID, url := res.SourceID, res.URL
 		cmds = append(cmds, safeCmd(sessionScreenID, func() tea.Msg {
-			return fetchEpisodesCmd(deps, sourceID, url)
+			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+			defer cancel()
+			eps, err := s.deps.Episode.GetEpisodes(ctx, res.SourceID, res.URL)
+			return episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err}
 		}))
 	}
 	if resolve := s.maybeShikiResolve(); resolve != nil {
 		cmds = append(cmds, resolve)
 	}
 	return tea.Batch(cmds...)
-}
-
-// fetchEpisodesCmd runs one source's episode-fetch phase: GetEpisodes
-// first, then — for episodes that arrived with empty RawEmbeds — the
-// EAGER dub hydration (PR44 invariant: the session never surfaces an
-// unhydrated episode, so hydration happens here, before the merge,
-// bounded-concurrently per eagerHydrateConcurrency with the whole
-// phase under eagerHydrateTimeout). Per-episode failures travel back
-// on the message; they feed the header cause and stay recoverable via
-// «🔄 Обновить источники».
-func fetchEpisodesCmd(deps *Deps, sourceID, animeURL string) episodePartMsg {
-	epCtx, cancelEp := context.WithTimeout(context.Background(), lookupTimeout)
-	eps, err := deps.Episode.GetEpisodes(epCtx, sourceID, animeURL)
-	cancelEp()
-	if err != nil {
-		return episodePartMsg{sourceID: sourceID, err: err}
-	}
-	hydCtx, cancelHyd := context.WithTimeout(context.Background(), eagerHydrateTimeout)
-	defer cancelHyd()
-	eps, hydrateErrs := eagerHydrateEpisodes(hydCtx, deps, sourceID, eps)
-	return episodePartMsg{sourceID: sourceID, episodes: eps, hydrateErrs: hydrateErrs}
-}
-
-// eagerHydrateEpisodes hydrates every episode whose RawEmbeds are
-// empty (the lazily-hydrating providers' shape), at most
-// eagerHydrateConcurrency requests in flight. Episodes already
-// carrying embeds are untouched; results are written back in place so
-// the caller's slice stays ordered. Per-episode failures are collected
-// keyed by episode num — the merged aggregate surfaces them in the
-// header cause (fail loud over silent swallow, PR43 rule).
-func eagerHydrateEpisodes(ctx context.Context, deps *Deps, sourceID string, episodes []contracts.Episode) ([]contracts.Episode, map[string]error) {
-	var need []int
-	for i, ep := range episodes {
-		if len(ep.RawEmbeds) == 0 {
-			need = append(need, i)
-		}
-	}
-	if len(need) == 0 {
-		return episodes, nil
-	}
-
-	errs := make(map[string]error)
-	var (
-		mu  sync.Mutex
-		wg  sync.WaitGroup
-		sem = make(chan struct{}, eagerHydrateConcurrency)
-	)
-	for _, i := range need {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				mu.Lock()
-				errs[episodes[i].Num] = ctx.Err()
-				mu.Unlock()
-				return
-			}
-			defer func() { <-sem }()
-			out, err := deps.Episode.HydrateDubs(ctx, sourceID, episodes[i])
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				errs[episodes[i].Num] = err
-				return
-			}
-			episodes[i] = out
-		}()
-	}
-	wg.Wait()
-	return episodes, errs
 }
 
 // maybeShikiResolve schedules the background shikimori binding for
@@ -420,14 +339,20 @@ func (s *sessionScreen) loadEpisodesSync() {
 }
 
 // hydrateEpisode issues one hydration round for the episode num (the
-// «🔄 Обновить источники» recovery): the status line reports the work
-// (the legitimate progress display), the settle message merges the
-// results under the provider prefixes.
+// PR43 on-demand trigger behind «Смотреть» and the «🔄 Обновить
+// источники» recovery): the status line reports the work (the
+// legitimate progress display), the settle message merges the results
+// under the provider prefixes. The attempt is recorded so the header
+// cause can distinguish unopened episodes from genuinely empty ones.
 func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	if num == "" {
 		s.status = "Нет серий"
 		return nil
 	}
+	if s.hydrated == nil {
+		s.hydrated = map[string]bool{}
+	}
+	s.hydrated[num] = true
 	s.hydrating = true
 	s.status = "Ищу источники…"
 	s.hydrateGen++
@@ -530,17 +455,6 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				s.sourceErrs = map[string]error{}
 			}
 			s.sourceErrs[msg.sourceID] = msg.err
-		}
-		if len(msg.hydrateErrs) > 0 {
-			if s.hydrateErrs == nil {
-				s.hydrateErrs = map[string]map[string]error{}
-			}
-			for num, err := range msg.hydrateErrs {
-				if s.hydrateErrs[num] == nil {
-					s.hydrateErrs[num] = map[string]error{}
-				}
-				s.hydrateErrs[num][msg.sourceID] = err
-			}
 		}
 		if msg.err == nil && len(msg.episodes) > 0 {
 			s.parts = append(s.parts, SourceEpisodes{SourceID: msg.sourceID, Episodes: msg.episodes})
@@ -744,10 +658,16 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 		return s, nil
 	}
 	if len(ep.RawEmbeds) == 0 {
-		// The eager fetch-phase hydration covers the normal flow; this
-		// state now means genuine no-results or a transient failure —
-		// the recovery item is the way out (PR44).
-		s.status = "Нет источников — выполните «🔄 Обновить источники»"
+		// PR43's on-demand trigger, scoped to the opened episode: the
+		// first watch hydrates THIS episode once; the steady state
+		// after an attempt that found nothing points at the recovery
+		// item (PR44 owner model — resolving never runs bulk).
+		if !s.hydrated[ep.Num] && !s.hydrating {
+			return s, s.hydrateEpisode(ep.Num)
+		}
+		if !s.hydrating {
+			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+		}
 		return s, nil
 	}
 	s.state = sessionStateFormat
@@ -1621,11 +1541,12 @@ func (s *sessionScreen) restoreResume() {
 
 // buildActionMenu renders the python session_loop choices plus the
 // PR43 additions («🔄 Обновить источники» recovery action). «Смотреть»
-// is disabled while the current episode carries no sources (the dimmed
-// row explains on an attempt — never a silent dead end).
+// is disabled only for an episode whose hydration attempt already
+// found nothing — an unopened episode stays clickable, because
+// clicking it IS the on-demand trigger (PR44 owner model).
 func (s *sessionScreen) buildActionMenu() {
 	watchDisabled := false
-	if ep := s.currentEpisodeData(); ep != nil && len(ep.RawEmbeds) == 0 {
+	if ep := s.currentEpisodeData(); ep != nil && s.hydrated[ep.Num] && len(ep.RawEmbeds) == 0 {
 		watchDisabled = true
 	}
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", []Choice{
@@ -1784,10 +1705,13 @@ func (s *sessionScreen) providerDisplayName(prov string) string {
 const causeLineMax = 160
 
 // episodeCause builds the one-line «why no sources» explanation for
-// the header (PR41 B1, PR44 wording): with the eager fetch-phase
-// hydration the 0-embed state means genuine no-results or the
-// per-provider error summary (truncated) — never «резолв не выполнен».
+// the header (PR41 B1, PR44 wording): an unopened episode says so
+// (sources load on open), an attempted one shows the per-provider
+// error summary (truncated) or the genuine no-results verdict.
 func (s *sessionScreen) episodeCause(ep *contracts.Episode) string {
+	if !s.hydrated[ep.Num] {
+		return "источники не запрашивались — откроется при просмотре"
+	}
 	var parts []string
 	for prov, err := range s.hydrateErrs[ep.Num] {
 		parts = append(parts, prov+": "+err.Error())

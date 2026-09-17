@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,11 +45,11 @@ func (h *hydratingEpisode) HydrateDubs(_ context.Context, providerID string, epi
 
 var _ EpisodeService = (*hydratingEpisode)(nil)
 
-// newEagerSession builds a single-source AnimeLib-style session whose
-// episodes carry NO embeds (the lazy-hydration provider reality) and
-// runs the REAL Init fetch phase: the returned session has its merge
-// finalized, i.e. it is exactly what the user is shown after loading.
-func newEagerSession(t *testing.T, fix *hydrateFixture, eps map[string][]contracts.Episode) *sessionScreen {
+// newLazySession builds a single-source session whose provider lists
+// episodes with NO embeds (the lazily-hydrating reality) and runs the
+// REAL Init fetch phase: the returned session is exactly what the user
+// is shown after loading — the list surfaced, nothing resolved.
+func newLazySession(t *testing.T, fix *hydrateFixture, eps map[string][]contracts.Episode) *sessionScreen {
 	t.Helper()
 	deps := &Deps{
 		Episode: &hydratingEpisode{
@@ -102,166 +101,124 @@ func settleInit(t *testing.T, s *sessionScreen) {
 	}
 }
 
-// TestInitEagerlyHydratesEmptyEmbeds pins the PR44 invariant: the
-// episode-fetch phase hydrates lazily-listed episodes EAGERLY, so the
-// merge finalizes with embeds in place and the header shows the real
-// source count — the «Ист: 0» steady state is gone from the flow.
-func TestInitEagerlyHydratesEmptyEmbeds(t *testing.T) {
+// TestEpisodeListSurfacesWithoutHydration pins the PR44 owner model:
+// the episode LIST surfaces immediately — the fetch phase performs NO
+// hydration (streams are temporary; resolving 1000+ episodes up front
+// is pointless). The honest 0-state names its cause.
+func TestEpisodeListSurfacesWithoutHydration(t *testing.T) {
 	fix := &hydrateFixture{}
-	s := newEagerSession(t, fix, map[string][]contracts.Episode{
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
 		"anilib": {
 			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
 			{Num: "2", RawID: "17167", RawEmbeds: map[string][]string{}},
 		},
 	})
 
-	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1 (AnimeLib)") {
-		t.Fatalf("header = %q, want the hydrated source count", got)
+	if s.state != sessionStateMenu {
+		t.Fatalf("state = %s, want the menu right after loading", s.state)
 	}
-	ep := s.episodes["1"]
-	if len(ep.RawEmbeds) != 1 || ep.RawEmbeds["[anilib] AniLib (AnimeLib)"] == nil {
-		t.Fatalf("hydrated embeds not merged with provider prefix: %v", ep.RawEmbeds)
+	if len(s.order) != 2 {
+		t.Fatalf("episode order = %v, want the full list surfaced", s.order)
 	}
-	if s.dubStats["[anilib] AniLib (AnimeLib)"] != 2 {
-		t.Fatalf("hydrated dub missing from stats: %v", s.dubStats)
+	fix.mu.Lock()
+	calls := len(fix.calls)
+	fix.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("hydration calls = %d, want 0 (nothing resolves in bulk)", calls)
+	}
+	got := s.renderHeader()
+	if !strings.Contains(got, "Ист: 0") {
+		t.Fatalf("header = %q, want the honest 0-state", got)
+	}
+	if !strings.Contains(got, "источники не запрашивались") {
+		t.Fatalf("header = %q, want the not-attempted cause", got)
 	}
 }
 
-// TestInitEagerHydrationIsBounded pins the concurrency cap: the eager
-// hydration of one source never fires more than
-// eagerHydrateConcurrency parallel requests, yet hydrates EVERY empty
-// episode.
-func TestInitEagerHydrationIsBounded(t *testing.T) {
-	fix := &hydrateFixture{embeds: map[string]map[string][]string{
-		"anilib": {"AniLib (AnimeLib)": {"internal:x"}},
-	}}
-	eps := make([]contracts.Episode, 0, 20)
-	for i := range 20 {
-		eps = append(eps, contracts.Episode{
-			Num:       itoa2(i + 1),
-			RawID:     itoa2(17166 + i),
-			RawEmbeds: map[string][]string{},
-		})
-	}
-	probe := &flightProbe{EpisodeService: &hydratingEpisode{
-		fakeEpisode: fakeEpisode{episodes: map[string][]contracts.Episode{"anilib": eps}},
-		fix:         fix,
-	}}
-	deps := &Deps{
-		Episode: probe,
-		Search:  &fakeSearch{providers: []ProviderMeta{{ID: "anilib", Name: "AnimeLib"}}},
-		Log:     discardLogger(),
-	}
-	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "anilib"}}
-	s := NewSessionScreen(deps, group[0], group)
-	settleInit(t, s)
+// TestWatchTriggersOnDemandHydration: «▶ Смотреть» on an unopened
+// episode triggers the hydration of THAT episode only; after it
+// settles, the next watch opens the format selector.
+func TestWatchTriggersOnDemandHydration(t *testing.T) {
+	fix := &hydrateFixture{}
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
+		"anilib": {
+			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
+			{Num: "2", RawID: "17167", RawEmbeds: map[string][]string{}},
+		},
+	})
 
-	if probe.max > eagerHydrateConcurrency {
-		t.Fatalf("max parallel hydration = %d, want ≤ %d", probe.max, eagerHydrateConcurrency)
-	}
-	if probe.max < 2 {
-		t.Fatalf("max parallel hydration = %d, want > 1 (the cap must allow concurrency)", probe.max)
-	}
-	for i := range 20 {
-		ep, ok := s.episodes[itoa2(i+1)]
-		if !ok || len(ep.RawEmbeds) == 0 {
-			t.Fatalf("episode %s was not hydrated: %v", itoa2(i+1), ep.RawEmbeds)
+	// First watch: the on-demand hydration of episode 1.
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	for _, item := range s.list.Menu().Items {
+		if item.ID == "watch" && item.Disabled {
+			t.Fatal("«Смотреть» must stay enabled before an attempt")
 		}
 	}
-}
-
-// flightProbe wraps an EpisodeService counting the in-flight
-// HydrateDubs calls (bounded-concurrency assertion).
-type flightProbe struct {
-	EpisodeService
-
-	mu    sync.Mutex
-	cur   int
-	max   int
-	total int
-}
-
-func (p *flightProbe) HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error) {
-	p.mu.Lock()
-	p.cur++
-	p.total++
-	if p.cur > p.max {
-		p.max = p.cur
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("watch on an unopened episode must schedule hydration")
 	}
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		p.cur--
-		p.mu.Unlock()
-	}()
-	return p.EpisodeService.HydrateDubs(ctx, providerID, episode)
-}
-
-// itoa2 formats n in base 10 for episode fixtures (strconv.Itoa with
-// a local name to avoid clashing with the pinlist test helper).
-func itoa2(n int) string { return strconv.Itoa(n) }
-
-// TestInitEagerHydrationFailureSurfacesCause: a failing eager
-// hydration surfaces the per-provider error summary in the header
-// cause — never the retired «резолв не выполнен» line.
-func TestInitEagerHydrationFailureSurfacesCause(t *testing.T) {
-	fix := &hydrateFixture{
-		embeds: map[string]map[string][]string{},
-		errs:   map[string]error{"anilib": errors.New("boom")},
+	if s.status != "Ищу источники…" {
+		t.Fatalf("status = %q, want «Ищу источники…»", s.status)
 	}
-	s := newEagerSession(t, fix, map[string][]contracts.Episode{
-		"anilib": {
-			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
-		},
-	})
+	msg := cmd()
+	done, ok := msg.(hydrateDoneMsg)
+	if !ok {
+		t.Fatalf("watch settled %T, want hydrateDoneMsg", msg)
+	}
+	if _, cmd := s.Update(done); cmd != nil {
+		t.Fatalf("hydration settle returned unexpected cmd %T", cmd)
+	}
+	fix.mu.Lock()
+	calls := len(fix.calls)
+	fix.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("hydration calls = %d, want 1 (the opened episode only)", calls)
+	}
+	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1 (AnimeLib)") {
+		t.Fatalf("post-hydration header = %q, want the real source count", got)
+	}
 
-	got := s.renderHeader()
-	if !strings.Contains(got, "Ист: 0 — источники не найдены") {
-		t.Fatalf("header = %q, want the honest 0-state", got)
+	// Second watch: embeds are known — the format selector opens
+	// WITHOUT another hydration.
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("watch cmd: %T", cmd)
 	}
-	if !strings.Contains(got, "anilib") || !strings.Contains(got, "boom") {
-		t.Fatalf("header = %q, want the per-provider error summary", got)
+	if s.state != sessionStateFormat {
+		t.Fatalf("state = %s, want the format selector", s.state)
 	}
-	if strings.Contains(got, "резолв не выполнен") {
-		t.Fatalf("header = %q, the retired cause must be gone", got)
+	fix.mu.Lock()
+	calls = len(fix.calls)
+	fix.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("hydration calls = %d, want still 1", calls)
 	}
 }
 
-// TestEagerGenuineNoResultsCause: an eager hydration that succeeds
-// with zero embeds means the provider genuinely has nothing — the
-// no-results verdict, not an error.
-func TestEagerGenuineNoResultsCause(t *testing.T) {
+// TestWatchAttemptedEmptyDimsAndHints: a hydration that legitimately
+// found nothing dims «Смотреть», names the genuine no-results cause
+// and routes recovery through «🔄 Обновить источники».
+func TestWatchAttemptedEmptyDimsAndHints(t *testing.T) {
 	fix := &hydrateFixture{embeds: map[string]map[string][]string{"anilib": {}}}
-	s := newEagerSession(t, fix, map[string][]contracts.Episode{
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
 		"anilib": {
 			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
 		},
 	})
 
-	got := s.renderHeader()
-	if !strings.Contains(got, "Ист: 0 — источники не найдены") {
-		t.Fatalf("header = %q, want the honest 0-state", got)
-	}
-	if !strings.Contains(got, "все провайдеры завершились без результатов") {
-		t.Fatalf("header = %q, want the no-results cause", got)
-	}
-}
-
-// TestStartWatchWithoutSourcesNeverOpensSelector: a sourceless
-// episode keeps «Смотреть» dimmed; an attempt explains the recovery
-// path and the format selector never opens.
-func TestStartWatchWithoutSourcesNeverOpensSelector(t *testing.T) {
-	fix := &hydrateFixture{embeds: map[string]map[string][]string{"anilib": {}}}
-	s := newEagerSession(t, fix, map[string][]contracts.Episode{
-		"anilib": {
-			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
-		},
-	})
+	// The attempt: watch triggers the on-demand hydration.
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.Update(cmd())
 
 	for _, item := range s.list.Menu().Items {
 		if item.ID == "watch" && !item.Disabled {
-			t.Fatal("«Смотреть» must be disabled when no sources exist")
+			t.Fatal("«Смотреть» must be dimmed after an empty attempt")
 		}
+	}
+	if got := s.renderHeader(); !strings.Contains(got, "все провайдеры завершились без результатов") {
+		t.Fatalf("header = %q, want the genuine no-results cause", got)
 	}
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -269,16 +226,71 @@ func TestStartWatchWithoutSourcesNeverOpensSelector(t *testing.T) {
 		t.Fatal("the format selector must never open without sources")
 	}
 	if !strings.Contains(s.status, "Обновить источники") {
-		t.Fatalf("status after disabled watch attempt = %q, want the refresh hint", s.status)
+		t.Fatalf("status = %q, want the refresh hint", s.status)
+	}
+}
+
+// TestWatchHydrationErrorSurfacesCause: a failing watch-triggered
+// hydration surfaces the per-provider error summary.
+func TestWatchHydrationErrorSurfacesCause(t *testing.T) {
+	fix := &hydrateFixture{
+		embeds: map[string]map[string][]string{},
+		errs:   map[string]error{"anilib": errors.New("boom")},
+	}
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
+		"anilib": {
+			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
+		},
+	})
+
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.Update(cmd())
+
+	got := s.renderHeader()
+	if !strings.Contains(got, "anilib") || !strings.Contains(got, "boom") {
+		t.Fatalf("header = %q, want the per-provider error summary", got)
+	}
+	if strings.Contains(got, "источники не запрашивались") {
+		t.Fatalf("header = %q, the not-attempted cause must be gone after an attempt", got)
+	}
+}
+
+// TestKnownDubKeysNeedNoHydration: with the release-scope dub keys
+// (the tier-1 shape — keys with empty lists) the Ист count is known
+// without resolving, and watch goes straight to the format selector.
+func TestKnownDubKeysNeedNoHydration(t *testing.T) {
+	fix := &hydrateFixture{}
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
+		"anilib": {
+			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{"AniLib (AnimeLib)": {}, "Studio Band (Kodik)": {}}},
+		},
+	})
+
+	if got := s.renderHeader(); !strings.Contains(got, "Ист: 2 (AnimeLib)") {
+		t.Fatalf("header = %q, want the tier-1 dub count", got)
+	}
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("watch cmd: %T", cmd)
+	}
+	if s.state != sessionStateFormat {
+		t.Fatalf("state = %s, want the format selector", s.state)
+	}
+	fix.mu.Lock()
+	calls := len(fix.calls)
+	fix.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("hydration calls = %d, want 0 (resolving happens in ResolveStream, not bulk)", calls)
 	}
 }
 
 // TestSessionRefreshSources: «🔄 Обновить источники» re-runs the
 // per-episode hydration for the current episode (the recovery path
-// for transient eager failures) and reports progress while running.
+// for transient failures) and reports progress while running.
 func TestSessionRefreshSources(t *testing.T) {
 	fix := &hydrateFixture{embeds: map[string]map[string][]string{"anilib": {}}}
-	s := newEagerSession(t, fix, map[string][]contracts.Episode{
+	s := newLazySession(t, fix, map[string][]contracts.Episode{
 		"anilib": {
 			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
 		},

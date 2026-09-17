@@ -755,7 +755,7 @@ func TestSessionQualityMemory(t *testing.T) {
 	// so the streaming pick goes straight to the resolve); auto
 	// quality must resolve to the remembered 720.
 	ss.list.Jump(sessionActionIndex(ss, "watch"))
-	next, cmd = ss.Update(enter())
+	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateFormat {
 		t.Fatalf("watch must open the format selector, got %v", ss.state)

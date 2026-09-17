@@ -460,30 +460,6 @@ func pickFormat(t *testing.T, s *sessionScreen, buffered bool) {
 	}
 }
 
-// pickVideoDub drives the watch flow (streaming format) to the video
-// dub pick.
-func pickVideoDub(t *testing.T, s *sessionScreen, dub string) {
-	t.Helper()
-	pickFormat(t, s, false)
-	if s.state != sessionStateDubVideo {
-		t.Fatalf("state = %s, want dub video", s.state)
-	}
-	idx := -1
-	for i, item := range s.dubList.Menu().Items {
-		if item.Value == dub {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatalf("dub %q not in picker", dub)
-	}
-	s.dubList.Jump(idx)
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("video dub cmd: %T", cmd)
-	}
-}
-
 // pickVideoDubBuffered drives the watch flow through the buffered
 // format pick to the video dub pick.
 func pickVideoDubBuffered(t *testing.T, s *sessionScreen, dub string) {

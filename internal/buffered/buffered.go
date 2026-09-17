@@ -77,6 +77,13 @@ type Handle struct {
 	cleanup func()
 }
 
+// NewHandle builds a Handle over a local file with its cleanup func
+// (service adapters and tests construct handles; idempotent cleanups
+// are the builder's responsibility — releaseTempDir already is).
+func NewHandle(path string, cleanup func()) Handle {
+	return Handle{Path: path, cleanup: cleanup}
+}
+
 // Cleanup removes the buffered file and its temp dir; idempotent —
 // releaseTempDir forgets the dir on the first call, so repeats are
 // no-ops.

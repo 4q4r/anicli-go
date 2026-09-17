@@ -56,7 +56,7 @@ func newHydrateSession(t *testing.T, fix *hydrateFixture) (*sessionScreen, tea.C
 			fix: fix,
 		},
 		Search: &fakeSearch{providers: []ProviderMeta{{ID: "anilib", Name: "AnimeLib"}}},
-		Log:     discardLogger(),
+		Log:    discardLogger(),
 	}
 	if fix.embeds == nil {
 		fix.embeds = map[string]map[string][]string{

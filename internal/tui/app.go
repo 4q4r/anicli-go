@@ -303,6 +303,9 @@ type Deps struct {
 	Health   HealthService
 	Shiki    ShikimoriService
 	Download DownloadService
+	// Buffered powers «Формат: [буферный]» (PR43 C); nil makes the
+	// buffered toggle unavailable with an honest status note.
+	Buffered BufferedService
 	// Metadata expands the hybrid search variants (PR24); nil skips
 	// enrichment.
 	Metadata MetadataService

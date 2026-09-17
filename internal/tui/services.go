@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 
+	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/providers"
@@ -194,4 +195,16 @@ type DownloadService interface {
 	// ActiveBanner renders the background-task summary line ("" when
 	// idle).
 	ActiveBanner() string
+}
+
+// BufferedService backs the buffered watch mode (PR43 C): one source
+// downloaded to a temporary local file, played, deleted on exit.
+type BufferedService interface {
+	// Buffer downloads src to completion, reporting throttled
+	// progress; the returned handle's Cleanup removes the file (the
+	// player-exit step).
+	Buffer(ctx context.Context, src buffered.Source, progress func(buffered.Progress)) (buffered.Handle, error)
+	// CleanupAll removes the temp files of any in-flight download
+	// (application teardown).
+	CleanupAll()
 }

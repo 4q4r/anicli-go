@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/providers"
@@ -26,6 +28,7 @@ const (
 	sessionStateDubVideo      sessionState = "dub_video"
 	sessionStateDubAudio      sessionState = "dub_audio"
 	sessionStateQuality       sessionState = "quality"
+	sessionStateBuffering     sessionState = "buffering"
 	sessionStatePlaying       sessionState = "playing"
 	sessionStateInfoMenu      sessionState = "info_menu"
 	sessionStateInfoStatus    sessionState = "info_status"
@@ -104,6 +107,25 @@ type hydrateDoneMsg struct {
 	errs   map[string]error
 }
 
+// bufferReadyMsg settles one buffered download (PR43 C). On success
+// the handle's file plays locally and is cleaned up after the player
+// exits; stale generations clean the handle up immediately instead.
+type bufferReadyMsg struct {
+	gen     int
+	handle  buffered.Handle
+	quality string
+	err     error
+}
+
+// bufferedProgressMsg is one throttled progress sample of the active
+// download; bufferedProgressEnd closes the pump (channel drained).
+type bufferedProgressMsg struct {
+	gen int
+	p   buffered.Progress
+}
+
+type bufferedProgressEnd struct{ gen int }
+
 // downloadSettledMsg reports a finished foreground download batch
 // (I8).
 type downloadSettledMsg struct {
@@ -153,11 +175,13 @@ type sessionScreen struct {
 	providerNames map[string]string
 
 	// PR43 buffered watch mode: per-session toggle (no config scope),
-	// the active download's cancel func and its generation counter for
-	// stale-message drops.
+	// the active download's cancel func, generation counter for
+	// stale-message drops, and its progress channel (the pump re-arms
+	// through bufferedProgressMsg).
 	buffered     bool
 	bufferCancel context.CancelFunc
 	bufferGen    int
+	bufferProgCh chan buffered.Progress
 
 	state sessionState
 
@@ -444,6 +468,16 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, s.maybeHydrateCurrent()
 	case hydrateDoneMsg:
 		return s, s.applyHydration(msg)
+	case bufferReadyMsg:
+		return s, s.applyBufferReady(msg)
+	case bufferedProgressMsg:
+		if msg.gen != s.bufferGen {
+			return s, nil
+		}
+		s.status = formatBufferedProgress(msg.p)
+		return s, waitBufferedProgress(s.bufferProgCh, msg.gen)
+	case bufferedProgressEnd:
+		return s, nil
 	case streamResolvedMsg:
 		if msg.err != nil {
 			s.status = "Ошибка: " + msg.err.Error()
@@ -529,13 +563,17 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 // handleCancel applies I2 per state: substates return to the session
-// menu; the menu itself pops (root via «Выход»).
+// menu; the menu itself pops (root via «Выход»). Cancelling the
+// buffering state stops the download and cleans its temp file (PR43 C).
 func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	switch s.state {
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
 	case sessionStateLoading:
 		return s, pop()
+	case sessionStateBuffering:
+		s.stopBuffering("Буферизация отменена")
+		return s, nil
 	default:
 		s.state = sessionStateMenu
 		return s, nil
@@ -578,6 +616,15 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return s, nil // a round is already running; its settle will report
 		}
 		return s, s.hydrateEpisode(s.currentEpisode())
+	case "format":
+		s.buffered = !s.buffered
+		s.buildActionMenu()
+		if s.buffered {
+			s.status = "Формат просмотра: буферный"
+		} else {
+			s.status = "Формат просмотра: потоковый"
+		}
+		return s, nil
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
 		s.status = "Озвучка сброшена — выберите заново при просмотре"
@@ -733,6 +780,186 @@ func (s *sessionScreen) beginStreamResolve() (Screen, tea.Cmd) {
 	})
 }
 
+// handleQualityKey buffered branch (PR43 C): buffer the chosen stream
+// to a local file, play the file, delete it on exit.
+func (s *sessionScreen) startBuffered(qualityChoice string) (Screen, tea.Cmd) {
+	snapshot := *s
+	ctx, cancel := context.WithCancel(context.Background())
+	s.bufferCancel = cancel
+	s.bufferGen++
+	gen := s.bufferGen
+	s.state = sessionStateBuffering
+	s.status = "Буферизация: подготовка…"
+	progCh := make(chan buffered.Progress, 16)
+	s.bufferProgCh = progCh
+	download := safeCmd(sessionScreenID, func() tea.Msg {
+		defer close(progCh)
+		return snapshot.runBuffered(ctx, qualityChoice, gen, progCh)
+	})
+	return s, tea.Batch(download, waitBufferedProgress(progCh, gen))
+}
+
+// runBuffered resolves the stream choice and buffers it to completion,
+// pumping progress onto the channel (non-blocking: a full channel just
+// drops samples — the throttle keeps them coming).
+func (s *sessionScreen) runBuffered(ctx context.Context, qualityChoice string, gen int, progCh chan<- buffered.Progress) tea.Msg {
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		return bufferReadyMsg{gen: gen, err: fmt.Errorf("нет серий")}
+	}
+	video, quality, err := s.pickVideo(ctx, ep, qualityChoice)
+	if err != nil {
+		return bufferReadyMsg{gen: gen, err: err}
+	}
+	handle, err := s.deps.Buffered.Buffer(ctx, buffered.Source{
+		URL:     video.URL,
+		Headers: video.Headers,
+	}, func(p buffered.Progress) {
+		select {
+		case progCh <- p:
+		default:
+		}
+	})
+	if err != nil {
+		return bufferReadyMsg{gen: gen, err: err}
+	}
+	return bufferReadyMsg{gen: gen, handle: handle, quality: quality}
+}
+
+// waitBufferedProgress is the re-arming pump of the buffering phase.
+func waitBufferedProgress(ch <-chan buffered.Progress, gen int) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return bufferedProgressEnd{gen: gen}
+		}
+		return bufferedProgressMsg{gen: gen, p: p}
+	}
+}
+
+// applyBufferReady transitions from buffering into playback. Stale
+// generations (a cancel or a newer round superseded this one) clean
+// their handle up and vanish.
+func (s *sessionScreen) applyBufferReady(msg bufferReadyMsg) tea.Cmd {
+	if msg.gen != s.bufferGen {
+		if msg.handle.Path != "" {
+			msg.handle.Cleanup()
+		}
+		return nil
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return nil // the cancel handler owns the status line
+		}
+		s.status = "Ошибка буферизации: " + msg.err.Error()
+		s.state = sessionStateMenu
+		return nil
+	}
+	s.state = sessionStatePlaying
+	s.status = "▶ Запуск mpv…"
+	snapshot := *s
+	handle := msg.handle
+	quality := msg.quality
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		return snapshot.doPlayBuffered(handle, quality)
+	})
+}
+
+// doPlayBuffered plays the buffered local file through the usual
+// plumbing (audio track, skip chapters, title) and deletes the file
+// when the player exits — python buffered parity.
+func (s *sessionScreen) doPlayBuffered(handle buffered.Handle, quality string) tea.Msg {
+	defer handle.Cleanup() // the deletion is logged by the downloader
+	ctx := context.Background()
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		return playedMsg{err: fmt.Errorf("нет серий")}
+	}
+
+	audioURL := ""
+	audio, err := s.pickAudio(ctx, ep)
+	if err != nil {
+		return playedMsg{err: err}
+	}
+	if audio != nil {
+		audioURL = audio.URL
+	}
+
+	chapters := ""
+	if s.deps != nil && s.deps.Playback != nil {
+		var cleanup func()
+		chapters, cleanup, err = s.deps.Playback.ResolveSkips(ctx, s.shikimoriID(), EpisodeSortKey(ep.Num))
+		if err == nil && cleanup != nil {
+			defer cleanup()
+		}
+		if err != nil {
+			chapters = "" // skips are best-effort
+		}
+	}
+
+	title := fmt.Sprintf("[%s - %s] %s - %s",
+		stripProviderTag(s.videoDub), stripProviderTag(s.audioDub),
+		BestDisplayTitle(s.group), ep.Num)
+
+	if s.deps == nil || s.deps.Playback == nil {
+		return playedMsg{err: errNoPlayback}
+	}
+	// Headers stay unset: the source is a local file.
+	err = s.deps.Playback.Play(ctx, PlayRequest{
+		URL:          handle.Path,
+		AudioURL:     audioURL,
+		Title:        title,
+		ExtraMPVOpts: nil,
+		ChaptersFile: chapters,
+	})
+	if err != nil {
+		return playedMsg{err: err}
+	}
+	return playedMsg{quality: quality}
+}
+
+// stopBuffering cancels the active download and returns to the menu;
+// the downloader removes its temp file on cancellation.
+func (s *sessionScreen) stopBuffering(note string) {
+	if s.bufferCancel != nil {
+		s.bufferCancel()
+		s.bufferCancel = nil
+	}
+	s.bufferGen++ // stale progress/ready messages drop
+	s.state = sessionStateMenu
+	s.status = note
+}
+
+// formatBufferedProgress renders the minimal progress line: percent by
+// bytes (or segment count for HLS) plus the smoothed speed.
+func formatBufferedProgress(p buffered.Progress) string {
+	speed := fmt.Sprintf("%.1f МБ/с", p.SpeedBPS/(1<<20))
+	switch {
+	case p.SegmentsTotal > 0:
+		pct := 100 * p.SegmentsDone / p.SegmentsTotal
+		return fmt.Sprintf("Буферизация: %d%% (сегмент %d/%d) · %s", pct, p.SegmentsDone, p.SegmentsTotal, speed)
+	case p.Total > 0:
+		pct := 100 * p.Done / p.Total
+		return fmt.Sprintf("Буферизация: %d%% · %s", pct, speed)
+	default:
+		return fmt.Sprintf("Буферизация: %s · %s", humanBytes(p.Done), speed)
+	}
+}
+
+// humanBytes renders a byte count in the largest sensible unit.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f ГБ", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f МБ", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f КБ", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d Б", n)
+	}
+}
+
 // buildQualityList renders the picker from resolved links (or the
 // auto option while unresolved).
 func (s *sessionScreen) buildQualityList() {
@@ -758,6 +985,13 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 		return s, nil
 	}
 	choice, _ := resolved.(string)
+	if s.buffered {
+		if s.deps == nil || s.deps.Buffered == nil {
+			s.status = "Буферный режим недоступен"
+			return s, nil
+		}
+		return s.startBuffered(choice)
+	}
 	s.state = sessionStatePlaying
 	s.status = "▶ Запуск mpv…"
 	return s, s.playCmd(choice)
@@ -1268,6 +1502,7 @@ func (s *sessionScreen) buildActionMenu() {
 		{ID: "info", Label: "📝 Изменить инфо"},
 		{ID: "download", Label: "⬇ Скачать серии"},
 		{ID: "refresh", Label: "🔄 Обновить источники"},
+		{ID: "format", Label: s.formatLabel()},
 		{ID: "exit", Label: "🚪 Выход"},
 	}...), defaultListHeight)
 }
@@ -1496,6 +1731,8 @@ func (s *sessionScreen) View() tea.View {
 		body = themedList(s.dubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)
+	case sessionStateBuffering:
+		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
 	case sessionStatePlaying:
 		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
 	case sessionStateInfoMenu:

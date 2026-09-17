@@ -51,6 +51,9 @@ type fakePlayback struct {
 	skipIDs  []int64 // shikimori ids seen by ResolveSkips
 	skipPath string
 	err      error
+	// playHook runs before the request is recorded; returning an error
+	// fails the play (tests capture at-play-time file state here).
+	playHook func(PlayRequest) error
 }
 
 func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), error) {
@@ -62,7 +65,12 @@ func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ floa
 	return "", cleanup, nil
 }
 
-func (f *fakePlayback) Play(_ context.Context, req PlayRequest) error {
+func (f *fakePlayback) Play(ctx context.Context, req PlayRequest) error {
+	if f.playHook != nil {
+		if err := f.playHook(req); err != nil {
+			return err
+		}
+	}
 	f.played = append(f.played, req)
 	return f.err
 }

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
@@ -41,6 +45,9 @@ type RealDeps struct {
 	// bypass stack when [cf] is enabled, and tears down the shared
 	// torrent engine when it was ever started).
 	registry *providers.Registry
+	// buffered is the PR43 buffered-watch downloader; Close sweeps its
+	// active temp dirs.
+	buffered *buffered.Downloader
 }
 
 // RealOption customizes the production wiring of NewRealDeps.
@@ -111,6 +118,20 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		settings: settings,
 	}
 
+	// PR43 C: the buffered watch pipeline. Playlists ride their own
+	// netclient (browser parity + proxy + CF solver); media bytes
+	// stream through plain net/http honoring the same proxy, because
+	// netclient.Do buffers every response body by design.
+	bufNet, err := netclient.New(settings.Network, netclient.WithProvider("buffered"))
+	if err != nil {
+		return nil, fmt.Errorf("build buffered transport: %w", err)
+	}
+	bufStream, err := streamingHTTPClient(settings.Network.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("build buffered stream client: %w", err)
+	}
+	real.buffered = buffered.New(bufNet, bufStream, logf(o.logger))
+
 	dlService := &realDownload{manager: nil, core: real}
 	real.downloadBridge = dlService
 	manager := download.NewManager(settings.Download.MaxConcurrency, real.runDownload)
@@ -131,6 +152,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		Health:   &realHealth{registry: registry, timeout: settings.Network.ConnectTimeout},
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
 		Download: &realDownload{manager: manager, core: real},
+		Buffered: real.buffered,
 		Metadata: realMetadata{manager: metaManager},
 		// The per-provider fan-out ceiling (network.search_timeout,
 		// default 30s — PR24).
@@ -138,7 +160,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	}
 	return &RealDeps{
 		Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet,
-		registry: registry,
+		registry: registry, buffered: real.buffered,
 	}, nil
 }
 
@@ -153,11 +175,14 @@ func (m realMetadata) SearchAlternativeTitles(ctx context.Context, query string)
 
 // Close releases the background resources. The netclient needs no
 // teardown (it owns no goroutines), so only the download manager, the
-// registry (CF bypass stack + shared torrent engine) and the store
-// are settled.
+// buffered temp dirs, the registry (CF bypass stack + shared torrent
+// engine) and the store are settled.
 func (r *RealDeps) Close() {
 	if r.Downloads != nil {
 		_ = r.Downloads.Close()
+	}
+	if r.buffered != nil {
+		r.buffered.CleanupAll()
 	}
 	if r.registry != nil {
 		_ = r.registry.Close()
@@ -171,9 +196,33 @@ type realCore struct {
 	player         *player.Player
 	skips          *skip.Manager
 	dl             *download.Downloader
+	buffered       *buffered.Downloader
 	shiki          *shikimori.Client
 	settings       config.Settings
 	downloadBridge *realDownload
+}
+
+// streamingHTTPClient builds the media-byte transport of the buffered
+// pipeline: dial/TLS/header budgets for the connection phase, no whole
+// transfer timeout (a feature-length download must never be cut by
+// one), and the user's proxy honored when configured.
+func streamingHTTPClient(proxyURL string) (*http.Client, error) {
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse proxy url: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(u)
+	}
+	return &http.Client{Transport: transport}, nil
 }
 
 // --- SearchService ---

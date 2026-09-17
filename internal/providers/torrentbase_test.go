@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -494,3 +498,94 @@ func (s *torrentProviderStub) ResolveStream(_ context.Context, _ contracts.Episo
 }
 
 func (s *torrentProviderStub) IsTorrent() bool { return true }
+
+// TestTorrentBaseEnrichesSynthesizedMagnets pins the PR45 magnet
+// tracker enrichment: a synthesized tracker-less magnet gains the
+// engine's current healthy tracker pool as &tr= parameters; feed
+// magnets that already carry tr= stay verbatim (their own announces
+// ride); an engine with zero trackers adds nothing (no invented
+// defaults); non-magnet links pass through untouched.
+func TestTorrentBaseEnrichesSynthesizedMagnets(t *testing.T) {
+	t.Parallel()
+
+	cfg := testTorrentConfig(t)
+	cfg.Trackers = []string{
+		"udp://tracker.example.org:1337/announce",
+		"http://t.example.org/a?x=1",
+	}
+	base := NewTorrentBase(newOfflineTestEngineCfg(t, cfg))
+
+	magnet := "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98&dn=Title"
+	got := base.enrichMagnet(magnet)
+	for _, tr := range cfg.Trackers {
+		want := "&tr=" + url.QueryEscape(tr)
+		if !strings.Contains(got, want) {
+			t.Errorf("enriched magnet %q lacks %q", got, want)
+		}
+	}
+	if !strings.HasPrefix(got, magnet) {
+		t.Errorf("enriched magnet %q must keep the original form as prefix", got)
+	}
+
+	// A feed magnet with its own announces stays verbatim.
+	feed := magnet + "&tr=" + url.QueryEscape("udp://feed.example.org:6969/announce")
+	if got := base.enrichMagnet(feed); got != feed {
+		t.Errorf("feed magnet rewritten: %q", got)
+	}
+
+	// Zero trackers configured: nothing is invented.
+	bare := NewTorrentBase(newOfflineTestEngine(t))
+	if got := bare.enrichMagnet(magnet); got != magnet {
+		t.Errorf("zero-tracker magnet rewritten: %q", got)
+	}
+
+	// Non-magnet links pass through untouched.
+	const torrentURL = "https://torrent.example.org/a.torrent"
+	if got := base.enrichMagnet(torrentURL); got != torrentURL {
+		t.Errorf("non-magnet link rewritten: %q", got)
+	}
+}
+
+// TestTorrentBaseIngestEnrichedMagnetAnnounces: the enrichment rides
+// the whole ingest — a synthesized magnet added through the base ends
+// up announcing to a configured tracker (the metadata path that the
+// 12/23 animetosho smoke failure exposed).
+func TestTorrentBaseIngestEnrichedMagnetAnnounces(t *testing.T) {
+	t.Parallel()
+
+	trackerURL, hits := trackerAnnounceStubForProviders(t)
+	cfg := testTorrentConfig(t)
+	cfg.Trackers = []string{trackerURL}
+	eng := newOfflineTestEngineCfg(t, cfg)
+	base := NewTorrentBase(eng)
+
+	const ih = "fedcba9876543210fedcba9876543210fedcba98"
+	if _, err := base.Ingest(context.Background(), "magnet:?xt=urn:btih:"+ih+"&dn=PR45"); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for hits() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("ingested synthesized magnet never announced the configured tracker")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// trackerAnnounceStubForProviders is the torrent-package announce
+// stub, mirrored here: counts real announces (info_hash present) and
+// answers a bencode failure (a dead torrent is fine — the announce is
+// the proof). The URL carries the /announce path.
+func trackerAnnounceStubForProviders(t *testing.T) (url string, hits func() int) {
+	t.Helper()
+	var count atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/announce") && r.URL.Query().Get("info_hash") != "" {
+			count.Add(1)
+		}
+		_, _ = w.Write([]byte("d14:failure reason4:teste"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/announce", func() int { return int(count.Load()) }
+}

@@ -516,6 +516,109 @@ func TestAllAnimeResolveStreamKeyRefreshOnRotation(t *testing.T) {
 	}
 }
 
+// TestAllAnimeResolveStreamRateLimitRetry pins the live rate-limit
+// contract of the episode query: the site answers "Too many requests,
+// please try again in 5 seconds." (and NEED_CAPTCHA) when the client
+// resolves too fast — observed live 2026-09-17 on concurrent resolves.
+// The provider must back off once (aaRateLimitBackoff) and retry the
+// SAME query; a persisting limit still fails loud, with exactly one
+// retry (no hammering).
+func TestAllAnimeResolveStreamRateLimitRetry(t *testing.T) {
+	t.Parallel()
+
+	// Per-instance override: a package-level knob would race with the
+	// package's parallel tests under -race (PR45 gate lesson).
+	const fastBackoff = 5 * time.Millisecond
+
+	t.Run("recovers after backoff", func(t *testing.T) {
+		t.Parallel()
+		env := newAAEnv(t)
+		var posts, limits atomic.Int32
+		env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+			if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+				return false
+			}
+			posts.Add(1)
+			if limits.Add(1) == 1 {
+				// Verbatim live body (2026-09-17).
+				_, _ = w.Write([]byte(`{"errors":[{"message":"Too many requests, please try again in 5 seconds.","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}`))
+				return true
+			}
+			return false
+		})
+		p := env.provider()
+		p.rateLimitBackoff = fastBackoff
+
+		stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+		if err != nil {
+			t.Fatalf("ResolveStream after one rate-limit: %v", err)
+		}
+		if len(stream.Links) == 0 {
+			t.Fatal("no links after rate-limit retry")
+		}
+		if got := posts.Load(); got != 2 {
+			t.Errorf("episode requests = %d, want 2 (initial + one retry)", got)
+		}
+	})
+
+	t.Run("NEED_CAPTCHA as transient limiter", func(t *testing.T) {
+		t.Parallel()
+		env := newAAEnv(t)
+		var posts, limits atomic.Int32
+		env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+			if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+				return false
+			}
+			posts.Add(1)
+			if limits.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"errors":[{"message":"NEED_CAPTCHA","extensions":{"code":"NEED_CAPTCHA"}}]}`))
+				return true
+			}
+			return false
+		})
+		p := env.provider()
+		p.rateLimitBackoff = fastBackoff
+
+		stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+		if err != nil {
+			t.Fatalf("ResolveStream after transient NEED_CAPTCHA: %v", err)
+		}
+		if len(stream.Links) == 0 {
+			t.Fatal("no links after NEED_CAPTCHA retry")
+		}
+		if got := posts.Load(); got != 2 {
+			t.Errorf("episode requests = %d, want 2", got)
+		}
+	})
+
+	t.Run("persisting limit fails loud with one retry", func(t *testing.T) {
+		t.Parallel()
+		env := newAAEnv(t)
+		var posts atomic.Int32
+		env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
+			if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
+				return false
+			}
+			posts.Add(1)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"Too many requests, please try again in 5 seconds.","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}`))
+			return true
+		})
+		p := env.provider()
+		p.rateLimitBackoff = fastBackoff
+
+		_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+		if err == nil {
+			t.Fatal("persisting rate limit must fail loud")
+		}
+		if !errors.Is(err, contracts.ErrExtractFailed) {
+			t.Errorf("error = %v, want ErrExtractFailed chain", err)
+		}
+		if got := posts.Load(); got != 2 {
+			t.Errorf("episode requests = %d, want exactly 2 (initial + one retry)", got)
+		}
+	})
+}
+
 // TestAllAnimeResolveStreamLoudOnCryptoFailure pins the no-silent-empty
 // policy: when the material never works (no bridge), resolve fails
 // with the typed rotation error chained under ErrExtractFailed.

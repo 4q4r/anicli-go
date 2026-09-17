@@ -28,10 +28,13 @@ import (
 )
 
 // aaDefaultBuildID is the buildId embedded in the live player chunk
-// (const sd) at characterization time. The site rotates it rarely; the
-// cache (newAABuildIDCache) persists a discovered replacement and the
-// bridge re-discovers it on rotation. [LIVE-VERIFIED 2026-09-13].
-const aaDefaultBuildID = "168"
+// (obfuscated const cd, decoded via the sandbox as gy()). The site
+// rotates it rarely; the cache (newAABuildIDCache) persists a
+// discovered replacement and the bridge re-discovers it on rotation.
+// [LIVE-VERIFIED 2026-09-17]: page bundles "173" (was "168" on
+// 2026-09-13 — the live bootstrap now answers unknown_build_id 404 for
+// the old value).
+const aaDefaultBuildID = "173"
 
 // Typed crypto failures for the AllAnime resolve chain. Callers
 // classify with isAACryptoFailure; ResolveStream routes the

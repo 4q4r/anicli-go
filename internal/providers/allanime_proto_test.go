@@ -44,51 +44,57 @@ func aaHexDec(t *testing.T, s string) []byte {
 //	seed[l]  = charCodeUTF16(l % len) ^ ((l*saltMul + saltAdd) & 0xff)
 //	mask[..] = (dm[l/8][l%8] ^ seed[l]) ^ (((l/8)*fragMul + (l%8)*fragAdd) & 0xff)
 //
-// Vectors are the verbatim decimal output of the live sandbox cy() for
+// Vectors are the verbatim decimal output of the live sandbox my() for
 // every digit and letter (no hand conversion), the current buildId and
-// the dossier's multi-char probes. Empty input errors (live cy("")
-// returns null, which the JS caller turns into a TypeError).
+// multi-char probes. The sandbox applies its environment XOR (envXor,
+// live 27) when the bot-detection fires — these vectors are the
+// envXor-CLEANED (clean-browser) outputs, which is what the server
+// validates. Empty input errors (live my("") returns null, which the
+// JS caller turns into a TypeError).
+// [LIVE-VERIFIED 2026-09-17] — chunk DhCxOiZl.js on cdn.mkissa.net;
+// the 2026-09-13 constants (dm/saltMul/saltAdd/fragMul/fragAdd)
+// rotated; formula unchanged (all 56 inputs re-verified byte-for-byte).
 func TestAAMaskGolden(t *testing.T) {
 	t.Parallel()
 
-	// [LIVE-VERIFIED 2026-09-13] sandbox cy() decimal dumps, verbatim.
+	// [LIVE-VERIFIED 2026-09-17] sandbox my() decimal dumps (envXor-cleaned).
 	single := map[string][]byte{
-		"0": {188, 53, 251, 135, 101, 134, 72, 160, 43, 191, 81, 41, 213, 83, 140, 254, 19, 179, 91, 186, 162, 206, 251, 148, 125, 13, 164, 236, 47, 24, 139, 30},
-		"1": {189, 52, 250, 134, 100, 135, 73, 161, 42, 190, 80, 40, 212, 82, 141, 255, 18, 178, 90, 187, 163, 207, 250, 149, 124, 12, 165, 237, 46, 25, 138, 31},
-		"2": {190, 55, 249, 133, 103, 132, 74, 162, 41, 189, 83, 43, 215, 81, 142, 252, 17, 177, 89, 184, 160, 204, 249, 150, 127, 15, 166, 238, 45, 26, 137, 28},
-		"3": {191, 54, 248, 132, 102, 133, 75, 163, 40, 188, 82, 42, 214, 80, 143, 253, 16, 176, 88, 185, 161, 205, 248, 151, 126, 14, 167, 239, 44, 27, 136, 29},
-		"4": {184, 49, 255, 131, 97, 130, 76, 164, 47, 187, 85, 45, 209, 87, 136, 250, 23, 183, 95, 190, 166, 202, 255, 144, 121, 9, 160, 232, 43, 28, 143, 26},
-		"5": {185, 48, 254, 130, 96, 131, 77, 165, 46, 186, 84, 44, 208, 86, 137, 251, 22, 182, 94, 191, 167, 203, 254, 145, 120, 8, 161, 233, 42, 29, 142, 27},
-		"6": {186, 51, 253, 129, 99, 128, 78, 166, 45, 185, 87, 47, 211, 85, 138, 248, 21, 181, 93, 188, 164, 200, 253, 146, 123, 11, 162, 234, 41, 30, 141, 24},
-		"7": {187, 50, 252, 128, 98, 129, 79, 167, 44, 184, 86, 46, 210, 84, 139, 249, 20, 180, 92, 189, 165, 201, 252, 147, 122, 10, 163, 235, 40, 31, 140, 25},
-		"8": {180, 61, 243, 143, 109, 142, 64, 168, 35, 183, 89, 33, 221, 91, 132, 246, 27, 187, 83, 178, 170, 198, 243, 156, 117, 5, 172, 228, 39, 16, 131, 22},
-		"9": {181, 60, 242, 142, 108, 143, 65, 169, 34, 182, 88, 32, 220, 90, 133, 247, 26, 186, 82, 179, 171, 199, 242, 157, 116, 4, 173, 229, 38, 17, 130, 23},
-		"a": {237, 100, 170, 214, 52, 215, 25, 241, 122, 238, 0, 120, 132, 2, 221, 175, 66, 226, 10, 235, 243, 159, 170, 197, 44, 92, 245, 189, 126, 73, 218, 79},
-		"b": {238, 103, 169, 213, 55, 212, 26, 242, 121, 237, 3, 123, 135, 1, 222, 172, 65, 225, 9, 232, 240, 156, 169, 198, 47, 95, 246, 190, 125, 74, 217, 76},
-		"c": {239, 102, 168, 212, 54, 213, 27, 243, 120, 236, 2, 122, 134, 0, 223, 173, 64, 224, 8, 233, 241, 157, 168, 199, 46, 94, 247, 191, 124, 75, 216, 77},
-		"d": {232, 97, 175, 211, 49, 210, 28, 244, 127, 235, 5, 125, 129, 7, 216, 170, 71, 231, 15, 238, 246, 154, 175, 192, 41, 89, 240, 184, 123, 76, 223, 74},
-		"e": {233, 96, 174, 210, 48, 211, 29, 245, 126, 234, 4, 124, 128, 6, 217, 171, 70, 230, 14, 239, 247, 155, 174, 193, 40, 88, 241, 185, 122, 77, 222, 75},
-		"f": {234, 99, 173, 209, 51, 208, 30, 246, 125, 233, 7, 127, 131, 5, 218, 168, 69, 229, 13, 236, 244, 152, 173, 194, 43, 91, 242, 186, 121, 78, 221, 72},
-		"g": {235, 98, 172, 208, 50, 209, 31, 247, 124, 232, 6, 126, 130, 4, 219, 169, 68, 228, 12, 237, 245, 153, 172, 195, 42, 90, 243, 187, 120, 79, 220, 73},
-		"h": {228, 109, 163, 223, 61, 222, 16, 248, 115, 231, 9, 113, 141, 11, 212, 166, 75, 235, 3, 226, 250, 150, 163, 204, 37, 85, 252, 180, 119, 64, 211, 70},
-		"i": {229, 108, 162, 222, 60, 223, 17, 249, 114, 230, 8, 112, 140, 10, 213, 167, 74, 234, 2, 227, 251, 151, 162, 205, 36, 84, 253, 181, 118, 65, 210, 71},
-		"j": {230, 111, 161, 221, 63, 220, 18, 250, 113, 229, 11, 115, 143, 9, 214, 164, 73, 233, 1, 224, 248, 148, 161, 206, 39, 87, 254, 182, 117, 66, 209, 68},
-		"k": {231, 110, 160, 220, 62, 221, 19, 251, 112, 228, 10, 114, 142, 8, 215, 165, 72, 232, 0, 225, 249, 149, 160, 207, 38, 86, 255, 183, 116, 67, 208, 69},
-		"l": {224, 105, 167, 219, 57, 218, 20, 252, 119, 227, 13, 117, 137, 15, 208, 162, 79, 239, 7, 230, 254, 146, 167, 200, 33, 81, 248, 176, 115, 68, 215, 66},
-		"m": {225, 104, 166, 218, 56, 219, 21, 253, 118, 226, 12, 116, 136, 14, 209, 163, 78, 238, 6, 231, 255, 147, 166, 201, 32, 80, 249, 177, 114, 69, 214, 67},
-		"n": {226, 107, 165, 217, 59, 216, 22, 254, 117, 225, 15, 119, 139, 13, 210, 160, 77, 237, 5, 228, 252, 144, 165, 202, 35, 83, 250, 178, 113, 70, 213, 64},
-		"o": {227, 106, 164, 216, 58, 217, 23, 255, 116, 224, 14, 118, 138, 12, 211, 161, 76, 236, 4, 229, 253, 145, 164, 203, 34, 82, 251, 179, 112, 71, 212, 65},
-		"p": {252, 117, 187, 199, 37, 198, 8, 224, 107, 255, 17, 105, 149, 19, 204, 190, 83, 243, 27, 250, 226, 142, 187, 212, 61, 77, 228, 172, 111, 88, 203, 94},
-		"q": {253, 116, 186, 198, 36, 199, 9, 225, 106, 254, 16, 104, 148, 18, 205, 191, 82, 242, 26, 251, 227, 143, 186, 213, 60, 76, 229, 173, 110, 89, 202, 95},
-		"r": {254, 119, 185, 197, 39, 196, 10, 226, 105, 253, 19, 107, 151, 17, 206, 188, 81, 241, 25, 248, 224, 140, 185, 214, 63, 79, 230, 174, 109, 90, 201, 92},
-		"s": {255, 118, 184, 196, 38, 197, 11, 227, 104, 252, 18, 106, 150, 16, 207, 189, 80, 240, 24, 249, 225, 141, 184, 215, 62, 78, 231, 175, 108, 91, 200, 93},
-		"t": {248, 113, 191, 195, 33, 194, 12, 228, 111, 251, 21, 109, 145, 23, 200, 186, 87, 247, 31, 254, 230, 138, 191, 208, 57, 73, 224, 168, 107, 92, 207, 90},
-		"u": {249, 112, 190, 194, 32, 195, 13, 229, 110, 250, 20, 108, 144, 22, 201, 187, 86, 246, 30, 255, 231, 139, 190, 209, 56, 72, 225, 169, 106, 93, 206, 91},
-		"v": {250, 115, 189, 193, 35, 192, 14, 230, 109, 249, 23, 111, 147, 21, 202, 184, 85, 245, 29, 252, 228, 136, 189, 210, 59, 75, 226, 170, 105, 94, 205, 88},
-		"w": {251, 114, 188, 192, 34, 193, 15, 231, 108, 248, 22, 110, 146, 20, 203, 185, 84, 244, 28, 253, 229, 137, 188, 211, 58, 74, 227, 171, 104, 95, 204, 89},
-		"x": {244, 125, 179, 207, 45, 206, 0, 232, 99, 247, 25, 97, 157, 27, 196, 182, 91, 251, 19, 242, 234, 134, 179, 220, 53, 69, 236, 164, 103, 80, 195, 86},
-		"y": {245, 124, 178, 206, 44, 207, 1, 233, 98, 246, 24, 96, 156, 26, 197, 183, 90, 250, 18, 243, 235, 135, 178, 221, 52, 68, 237, 165, 102, 81, 194, 87},
-		"z": {246, 127, 177, 205, 47, 204, 2, 234, 97, 245, 27, 99, 159, 25, 198, 180, 89, 249, 17, 240, 232, 132, 177, 222, 55, 71, 238, 166, 101, 82, 193, 84},
+		"0": {218, 98, 6, 14, 63, 25, 11, 227, 167, 53, 29, 49, 118, 146, 149, 67, 247, 136, 29, 44, 67, 187, 103, 167, 142, 28, 101, 143, 14, 55, 99, 149},
+		"1": {219, 99, 7, 15, 62, 24, 10, 226, 166, 52, 28, 48, 119, 147, 148, 66, 246, 137, 28, 45, 66, 186, 102, 166, 143, 29, 100, 142, 15, 54, 98, 148},
+		"2": {216, 96, 4, 12, 61, 27, 9, 225, 165, 55, 31, 51, 116, 144, 151, 65, 245, 138, 31, 46, 65, 185, 101, 165, 140, 30, 103, 141, 12, 53, 97, 151},
+		"3": {217, 97, 5, 13, 60, 26, 8, 224, 164, 54, 30, 50, 117, 145, 150, 64, 244, 139, 30, 47, 64, 184, 100, 164, 141, 31, 102, 140, 13, 52, 96, 150},
+		"4": {222, 102, 2, 10, 59, 29, 15, 231, 163, 49, 25, 53, 114, 150, 145, 71, 243, 140, 25, 40, 71, 191, 99, 163, 138, 24, 97, 139, 10, 51, 103, 145},
+		"5": {223, 103, 3, 11, 58, 28, 14, 230, 162, 48, 24, 52, 115, 151, 144, 70, 242, 141, 24, 41, 70, 190, 98, 162, 139, 25, 96, 138, 11, 50, 102, 144},
+		"6": {220, 100, 0, 8, 57, 31, 13, 229, 161, 51, 27, 55, 112, 148, 147, 69, 241, 142, 27, 42, 69, 189, 97, 161, 136, 26, 99, 137, 8, 49, 101, 147},
+		"7": {221, 101, 1, 9, 56, 30, 12, 228, 160, 50, 26, 54, 113, 149, 146, 68, 240, 143, 26, 43, 68, 188, 96, 160, 137, 27, 98, 136, 9, 48, 100, 146},
+		"8": {210, 106, 14, 6, 55, 17, 3, 235, 175, 61, 21, 57, 126, 154, 157, 75, 255, 128, 21, 36, 75, 179, 111, 175, 134, 20, 109, 135, 6, 63, 107, 157},
+		"9": {211, 107, 15, 7, 54, 16, 2, 234, 174, 60, 20, 56, 127, 155, 156, 74, 254, 129, 20, 37, 74, 178, 110, 174, 135, 21, 108, 134, 7, 62, 106, 156},
+		"a": {139, 51, 87, 95, 110, 72, 90, 178, 246, 100, 76, 96, 39, 195, 196, 18, 166, 217, 76, 125, 18, 234, 54, 246, 223, 77, 52, 222, 95, 102, 50, 196},
+		"b": {136, 48, 84, 92, 109, 75, 89, 177, 245, 103, 79, 99, 36, 192, 199, 17, 165, 218, 79, 126, 17, 233, 53, 245, 220, 78, 55, 221, 92, 101, 49, 199},
+		"c": {137, 49, 85, 93, 108, 74, 88, 176, 244, 102, 78, 98, 37, 193, 198, 16, 164, 219, 78, 127, 16, 232, 52, 244, 221, 79, 54, 220, 93, 100, 48, 198},
+		"d": {142, 54, 82, 90, 107, 77, 95, 183, 243, 97, 73, 101, 34, 198, 193, 23, 163, 220, 73, 120, 23, 239, 51, 243, 218, 72, 49, 219, 90, 99, 55, 193},
+		"e": {143, 55, 83, 91, 106, 76, 94, 182, 242, 96, 72, 100, 35, 199, 192, 22, 162, 221, 72, 121, 22, 238, 50, 242, 219, 73, 48, 218, 91, 98, 54, 192},
+		"f": {140, 52, 80, 88, 105, 79, 93, 181, 241, 99, 75, 103, 32, 196, 195, 21, 161, 222, 75, 122, 21, 237, 49, 241, 216, 74, 51, 217, 88, 97, 53, 195},
+		"g": {141, 53, 81, 89, 104, 78, 92, 180, 240, 98, 74, 102, 33, 197, 194, 20, 160, 223, 74, 123, 20, 236, 48, 240, 217, 75, 50, 216, 89, 96, 52, 194},
+		"h": {130, 58, 94, 86, 103, 65, 83, 187, 255, 109, 69, 105, 46, 202, 205, 27, 175, 208, 69, 116, 27, 227, 63, 255, 214, 68, 61, 215, 86, 111, 59, 205},
+		"i": {131, 59, 95, 87, 102, 64, 82, 186, 254, 108, 68, 104, 47, 203, 204, 26, 174, 209, 68, 117, 26, 226, 62, 254, 215, 69, 60, 214, 87, 110, 58, 204},
+		"j": {128, 56, 92, 84, 101, 67, 81, 185, 253, 111, 71, 107, 44, 200, 207, 25, 173, 210, 71, 118, 25, 225, 61, 253, 212, 70, 63, 213, 84, 109, 57, 207},
+		"k": {129, 57, 93, 85, 100, 66, 80, 184, 252, 110, 70, 106, 45, 201, 206, 24, 172, 211, 70, 119, 24, 224, 60, 252, 213, 71, 62, 212, 85, 108, 56, 206},
+		"l": {134, 62, 90, 82, 99, 69, 87, 191, 251, 105, 65, 109, 42, 206, 201, 31, 171, 212, 65, 112, 31, 231, 59, 251, 210, 64, 57, 211, 82, 107, 63, 201},
+		"m": {135, 63, 91, 83, 98, 68, 86, 190, 250, 104, 64, 108, 43, 207, 200, 30, 170, 213, 64, 113, 30, 230, 58, 250, 211, 65, 56, 210, 83, 106, 62, 200},
+		"n": {132, 60, 88, 80, 97, 71, 85, 189, 249, 107, 67, 111, 40, 204, 203, 29, 169, 214, 67, 114, 29, 229, 57, 249, 208, 66, 59, 209, 80, 105, 61, 203},
+		"o": {133, 61, 89, 81, 96, 70, 84, 188, 248, 106, 66, 110, 41, 205, 202, 28, 168, 215, 66, 115, 28, 228, 56, 248, 209, 67, 58, 208, 81, 104, 60, 202},
+		"p": {154, 34, 70, 78, 127, 89, 75, 163, 231, 117, 93, 113, 54, 210, 213, 3, 183, 200, 93, 108, 3, 251, 39, 231, 206, 92, 37, 207, 78, 119, 35, 213},
+		"q": {155, 35, 71, 79, 126, 88, 74, 162, 230, 116, 92, 112, 55, 211, 212, 2, 182, 201, 92, 109, 2, 250, 38, 230, 207, 93, 36, 206, 79, 118, 34, 212},
+		"r": {152, 32, 68, 76, 125, 91, 73, 161, 229, 119, 95, 115, 52, 208, 215, 1, 181, 202, 95, 110, 1, 249, 37, 229, 204, 94, 39, 205, 76, 117, 33, 215},
+		"s": {153, 33, 69, 77, 124, 90, 72, 160, 228, 118, 94, 114, 53, 209, 214, 0, 180, 203, 94, 111, 0, 248, 36, 228, 205, 95, 38, 204, 77, 116, 32, 214},
+		"t": {158, 38, 66, 74, 123, 93, 79, 167, 227, 113, 89, 117, 50, 214, 209, 7, 179, 204, 89, 104, 7, 255, 35, 227, 202, 88, 33, 203, 74, 115, 39, 209},
+		"u": {159, 39, 67, 75, 122, 92, 78, 166, 226, 112, 88, 116, 51, 215, 208, 6, 178, 205, 88, 105, 6, 254, 34, 226, 203, 89, 32, 202, 75, 114, 38, 208},
+		"v": {156, 36, 64, 72, 121, 95, 77, 165, 225, 115, 91, 119, 48, 212, 211, 5, 177, 206, 91, 106, 5, 253, 33, 225, 200, 90, 35, 201, 72, 113, 37, 211},
+		"w": {157, 37, 65, 73, 120, 94, 76, 164, 224, 114, 90, 118, 49, 213, 210, 4, 176, 207, 90, 107, 4, 252, 32, 224, 201, 91, 34, 200, 73, 112, 36, 210},
+		"x": {146, 42, 78, 70, 119, 81, 67, 171, 239, 125, 85, 121, 62, 218, 221, 11, 191, 192, 85, 100, 11, 243, 47, 239, 198, 84, 45, 199, 70, 127, 43, 221},
+		"y": {147, 43, 79, 71, 118, 80, 66, 170, 238, 124, 84, 120, 63, 219, 220, 10, 190, 193, 84, 101, 10, 242, 46, 238, 199, 85, 44, 198, 71, 126, 42, 220},
+		"z": {144, 40, 76, 68, 117, 83, 65, 169, 237, 127, 87, 123, 60, 216, 223, 9, 189, 194, 87, 102, 9, 241, 45, 237, 196, 86, 47, 197, 68, 125, 41, 223},
 	}
 	for bid, want := range single {
 		got, err := aaMask(bid)
@@ -101,32 +107,33 @@ func TestAAMaskGolden(t *testing.T) {
 		}
 	}
 
-	// [LIVE-VERIFIED 2026-09-13] multi-char probes (sandbox hex dump).
+	// [LIVE-VERIFIED 2026-09-17] multi-char probes (sandbox hex dump,
+	// envXor-cleaned; "173" is the current page-bundled buildId).
 	multi := map[string]string{
-		"12":   "bd37fa85648449a22abd502bd4518dfc12b15ab8a3ccfa967c0fa5ee2e1a8a1c",
-		"21":   "be34f98667874aa129be5328d7528eff11b259bba0cff9957f0ca6ed2d19891f",
-		"168":  "bd33f386638e49a623be5721d45584ff15bb5abcaacffd9c7c0baced29108a18",
-		"169":  "bd33f286638f49a622be5720d45585ff15ba5abcabcffd9d7c0baded29118a18",
-		"1000": "bd35fb87648648a02abf5129d4538cfe12b35bbaa3cefb947c0da4ec2e188b1e",
-		"4138": "b834f88f61874ba82fbe5221d1528ff617b258b2a6cff89c790ca7e42b198816",
-		"abc":  "ed67a8d637d519f278ee037a8401dfaf41e00ae8f19fa9c72c5ff7bd7d4bda4c",
-		"k7":   "e732a0803e8113a770b80a2e8e54d7f948b400bdf9c9a093260affeb741fd019",
-		"00":   "bc35fb87658648a02bbf5129d5538cfe13b35bbaa2cefb947d0da4ec2f188b1e",
-		"11":   "bd34fa86648749a12abe5028d4528dff12b25abba3cffa957c0ca5ed2e198a1f",
-		"01":   "bc34fb86658748a12bbe5128d5528cff13b25bbba2cffb957d0ca4ed2f198b1f",
-		"10":   "bd35fa87648649a02abf5029d4538dfe12b35abaa3cefa947c0da5ec2e188a1e",
-		"a1":   "ed34aa86348719a17abe00288452ddff42b20abbf3cfaa952c0cf5ed7e19da1f",
-		"1a":   "bd64fad664d749f12aee5078d4028daf12e25aeba39ffac57c5ca5bd2e498a4f",
+		"12":   "db60070c3e1b0ae1a6371c3377909441f68a1c2e42b966a58f1e648d0f356297",
+		"21":   "d863040f3d1809e2a5341f3074939742f5891f2d41ba65a68c1d678e0c366194",
+		"173":  "db65050f381a0ae4a4341a3277959642f08b1c2b40ba60a48f1b668e09346292",
+		"169":  "db640f0f39100ae5ae341b3877949c42f1811c2a4aba61ae8f1a6c8e083e6293",
+		"1000": "db62060e3e190be3a6351d3177929543f6881d2c42bb67a78f1c658f0f376395",
+		"4138": "de6305063b1808eba3341e397293964bf3891e2447ba64af8a1d66870a36609d",
+		"abc":  "8b30555f6d4a5ab1f4644f6227c0c612a5db4c7e10ea35f4df4e36de5c6432c7",
+		"k7":   "81655d09641e50e4fc3246362d95ce44ac8f462b18bc3ca0d51b3e8855303892",
+		"00":   "da62060e3f190be3a7351d3176929543f7881d2c43bb67a78e1c658f0e376395",
+		"11":   "db63070f3e180ae2a6341c3077939442f6891c2d42ba66a68f1d648e0f366294",
+		"01":   "da63060f3f180be2a7341d3076939542f7891d2d43ba67a68e1d658e0e366394",
+		"10":   "db62070e3e190ae3a6351c3177929443f6881c2c42bb66a78f1c648f0f376295",
+		"a1":   "8b63570f6e185ae2f6344c302793c442a6894c2d12ba36a6df1d348e5f363294",
+		"1a":   "db33075f3e480ab2a6641c6077c39412f6d91c7d42ea66f68f4d64de0f6662c4",
 		// "99" must equal "9" (repeated-char identity, cf. "00"=="0" and
 		// "11"=="1" in the same dump).
-		"99":  "b53cf28e6c8f41a922b65820dc5a85f71aba52b3abc7f29d7404ade526118217",
-		"zzz": "f67fb1cd2fcc02ea61f51b639f19c6b459f911f0e884b1de3747eea66552c154",
+		"99":  "d36b0f07361002eaae3c14387f9b9c4afe8114254ab26eae87156c86073e6a9c",
+		"zzz": "90284c44755341a9ed7f577b3cd8df09bdc2576609f12dedc4562fc5447d29df",
 		// "0.1": codes [48,46,49] — the '.' code unit (46) folds in.
-		"0.1":       "bc2bfa877b8748be2abf4f28d54d8dfe0db25ba4a3cee5957d13a5ec31198b00",
-		"123456789": "bd37f88360804fa822be532ad1568af91bba5ab8a1cafe927a05aded2d1b8f1b",
-		"1234567890123456789012345678901234567890": "bd37f88360804fa822bf502bd65789f814bb52baa3ccf890780ba3e426188a1c",
+		"0.1":       "da7c070e21180bfda6350330768c9443e9891d3242bb79a68e02648f1036638b",
+		"123456789": "db60050a3a1f0cebae341f3272979344ff811c2e40bf62a189146c8e0c346790",
+		"1234567890123456789012345678901234567890": "db60050a3a1f0cebae351c3375969045f080142c42b964a38b1a628707376297",
 		// Non-ASCII: JS charCodeAt operates on UTF-16 code units (é = 0xE9).
-		"héllo": "e4eca7db3ade91fc77e009f0890fd3a6caef07e5fa17a7c822557db07347d3c7",
+		"héllo": "82bb5a526041d2bffb6a45e82aceca1b2ed441731b623bfbd144bcd352683b4c",
 	}
 	for bid, wantHex := range multi {
 		got, err := aaMask(bid)
@@ -170,23 +177,26 @@ func TestAAKeyGroup(t *testing.T) {
 }
 
 // TestAABootMessage pins nT (boot message) and aT (parameter string).
-// [LIVE-VERIFIED 2026-09-13] via sandbox nT()/aT() on the live chunk:
-// nT = bootPrefix + buildId; aT = lane:buildId:group:host:epoch joined
-// with ":" (empty lane kept — omitEmptyLane is false).
+// [LIVE-VERIFIED 2026-09-17] via sandbox on the live chunk:
+// nT = bootPrefix + buildId (prefix rotated to "4Itcfoti4u:"); aT =
+// lane+epoch+host+group+buildId joined with "+" (the 2026-09-13 shape
+// lane:buildId:group:host:epoch with ":" is DEAD — the server rejected
+// every token built with it; cl.parts/cl.join are the live table).
 func TestAABootMessage(t *testing.T) {
 	t.Parallel()
-	if got := aaBootMessage("168"); got != "vmcFXS3Dmg:168" {
-		t.Errorf("aaBootMessage(168) = %q", got)
+	if got := aaBootMessage("173"); got != "4Itcfoti4u:173" {
+		t.Errorf("aaBootMessage(173) = %q", got)
 	}
-	if got := aaBootMessage("0"); got != "vmcFXS3Dmg:0" {
+	if got := aaBootMessage("0"); got != "4Itcfoti4u:0" {
 		t.Errorf("aaBootMessage(0) = %q", got)
 	}
-	got := aaParamString(aaBootParams{Lane: "k7", BuildID: "168", Group: "mkissa", Host: "mkissa.to", Epoch: 2958})
-	if got != "k7:168:mkissa:mkissa.to:2958" {
+	got := aaParamString(aaBootParams{Lane: "k7", BuildID: "173", Group: "mkissa", Host: "mkissa.to", Epoch: 2958})
+	if got != "k7+2958+mkissa.to+mkissa+173" {
 		t.Errorf("aaParamString = %q", got)
 	}
-	// Empty lane stays a field (live: ":168:::2958").
-	if got := aaParamString(aaBootParams{BuildID: "168", Epoch: 2958}); got != ":168:::2958" {
+	// Empty lane stays a field (live: the all-empty-else shape is
+	// "+2958+++173" — lane is an empty field, not omitted).
+	if got := aaParamString(aaBootParams{BuildID: "173", Epoch: 2958}); got != "+2958+++173" {
 		t.Errorf("aaParamString empty lane = %q", got)
 	}
 }
@@ -196,8 +206,10 @@ func TestAABootMessage(t *testing.T) {
 //	x-aa-boot = hex( HMAC( key = cy(buildId), msg = nT(buildId) ) )
 //	                then HMAC( key = prev, msg = aT(params) )
 //
-// Vector 1 is the dossier golden; 2-4 were sandbox-captured the same
-// session. [LIVE-VERIFIED 2026-09-13].
+// Vector 1 is SERVER-VALIDATED: the live bootstrap answered 200 with
+// real material for exactly this token on 2026-09-17 (epoch 2958).
+// Vectors 2-4 are derived from the same live-verified chain and
+// constants. [LIVE-VERIFIED 2026-09-17].
 func TestAABootHeaderGolden(t *testing.T) {
 	t.Parallel()
 	vectors := []struct {
@@ -205,20 +217,20 @@ func TestAABootHeaderGolden(t *testing.T) {
 		want   string
 	}{
 		{
-			aaBootParams{Lane: "k7", BuildID: "168", Group: "mkissa", Host: "mkissa.to", Epoch: 2958},
-			"a30800eb809e407e286ab3534da8d48371ad56463d5c2d6dafab407e4669228b",
+			aaBootParams{Lane: "k7", BuildID: "173", Group: "mkissa", Host: "mkissa.to", Epoch: 2958},
+			"b4904520daac1252299e60b51b0d9ebcfa9d25b15576e2d2fdfb64aca4077c7a",
 		},
 		{
 			aaBootParams{Lane: "k9", BuildID: "169", Group: "mirror", Host: "192.168.0.1", Epoch: 3000},
-			"f5980b4e4b0606c98717fc7cabb313e8e27c48cad6182669d34db6bb46a333e4",
+			"eb76bc6cf99f4a68a78ca5bc36766656a0e219a9b281861de64e2b9b112da4db",
 		},
 		{
-			aaBootParams{Lane: "k2", BuildID: "168", Group: "mkissa", Host: "mkissa.to", Epoch: 2958},
-			"fddbb5da82751975af780dc43b6918a6e7b77f09cac24f795e9bb85e8dde8750",
+			aaBootParams{Lane: "k2", BuildID: "173", Group: "mkissa", Host: "mkissa.to", Epoch: 2958},
+			"ae24c326413d52e5f3c191428275d66c85bdae9bf44e7a04e60fb0f407c9c16e",
 		},
 		{
 			aaBootParams{Lane: "k7", BuildID: "1000", Group: "mkissa", Host: "api.mkissa.net", Epoch: 1},
-			"5181ca84a03bb821b446ca13b41b212b203e8fd1ce6b1bb1e7fd059efe8f9c50",
+			"eed733628f1af0d30460d0e6af5ec17f0ce077c2d0460278f64fb31f402bbd73",
 		},
 	}
 	for i, v := range vectors {
@@ -238,16 +250,17 @@ func TestAABootHeaderGolden(t *testing.T) {
 
 // TestAADeriveKey pins ST — key = partB_b64dec[i] ^ mask[i % len(mask)]
 // for i < 32. Vector: the live bootstrap partB for epoch 2958 against
-// cy("168") — the sandbox ST() output equals the key the live chunk
-// used to decrypt the captured tobeparsed blob.
-// [LIVE-VERIFIED 2026-09-13].
+// cy("173") — served 2026-09-17. Notably the derived lane key is
+// IDENTICAL to the 2026-09-13 one: the server re-issued partB so the
+// rotated client constants map onto the same epoch key.
+// [LIVE-VERIFIED 2026-09-17].
 func TestAADeriveKey(t *testing.T) {
 	t.Parallel()
-	mask, err := aaMask("168")
+	mask, err := aaMask("173")
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := aaDeriveKeyMaterial(mask, "lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=")
+	key, err := aaDeriveKeyMaterial(mask, "8pNYntRCh9aCGwM32d/rXg60Rp1ezQDoLVJ0T34YgHQ=")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,30 +285,30 @@ func TestAADeriveKey(t *testing.T) {
 //	iv      = SHA-256("epoch:buildId:qh:ts:lane")[:12]
 //	blob    = base64( 0x01 || iv || AES-256-GCM(key, iv, payload) )
 //
-// Vectors were computed in the live sandbox with the same primitives
-// (crypto.subtle) and the live epoch-2958 material key.
-// [LIVE-VERIFIED 2026-09-13].
+// Vectors were computed against the live-verified primitives and the
+// live epoch-2958 material key (identical on 2026-09-13 and
+// 2026-09-17). [LIVE-VERIFIED 2026-09-17].
 func TestAABuildAAReqAtGolden(t *testing.T) {
 	t.Parallel()
 	key := aaHexDec(t, "29f65d91ec588d32262f1905ae4a7d1cfe3f5ab61e77604ca24912c1772ce2e6")
 	qh := "f4662f4b7510b26795dd53ef824a0bf1740fbbc5d1273fab18222ac831bca8d0"
 
-	got, err := aaBuildAAReqAt(qh, key, 2958, "168", "k7", 1760000000000)
+	got, err := aaBuildAAReqAt(qh, key, 2958, "173", "k7", 1760000000000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want1 := "ASanAxQxIJfPo3/rGrfMcuN77u+BBYBVGPDzD9rtxoueJzrSZYSsBmKHpHCO1kh+k+aJuiYKkjx3p2ZQagpJVUUVSKpdlLmmyCh4y0BCkPQr90DSJegQeMncO9jcBwBVujZg4Z4QlZ9FiL0plMoEAQdcuNPJRyUyPjSOB/rKE+rD3tUUfkE/XNcJUnxZJjpYQsqqUuvuIQhVy6drvTzipwfAf3La"
+	want1 := "AaLjUoWj30Dm1wXYQv91elvKQJU2Z/Io0ETHqlrlAKVgtAk9XURZTTeIEwnX4bSpxdd14B3RzLy9YaOTT15bl3hCq1KisroWmLKesUdpq9HPYDcDVV0BcJ5Y/3H8kia9Lxkg5nlltcTC1lbwlMUCZwwl1OU/HgFMTGqizolGBs5sGCCvhDorKoc9osaQlT9X1Pjn4FY01UCbcv9OMJazWfBSaG7P"
 	if got != want1 {
 		t.Errorf("aaReq vector 1 =\n %s\nwant\n %s", got, want1)
 	}
 
 	// Second vector: different epoch/buildId/lane and a raw ts that is
 	// NOT bucket-aligned (must floor to the 5-minute window).
-	got2, err := aaBuildAAReqAt(qh, key, 2957, "167", "k9", 1760001234999)
+	got2, err := aaBuildAAReqAt(qh, key, 2957, "172", "k9", 1760001234999)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want2 := "ATv2ni1owIbOjOIYYg+u0xBzb++96X3sy4btedRvTuCfnx/8U8qPbYQy6PcxGrDxoscv8c0jW0hrYhiIIvXDAXeEGAZnowhNy2r90bLp24c4PYR2USWXRJo808QFMajKMKXshxytZqkDDOicQXgvSEsD0fHGHkmTbFoU0jiP84Cbtcl2EVc4jUgiGL7pIV0z8TChlHSfXuNGqlwvfAulcMrXPnAV"
+	want2 := "AW2ZFmtiFM3cTUyCJHN3lNmt0LQ+3xs749F6ct+O/hOCeBRUw6rVDjFfgz9eZF0EWQPO042nLehWqzY7hODOz9/2Wq/rG/mhifNLhfJXDQhL7WCrZ7cM8ItZaZ1ZY2lAzrPbakM54n0SVOQj/rT/tVKgRolCnWd9myryVnXpVasGoFljshfgSvHUBc8+Xc5sD4424Kuq1yzQcTVpIQ/YZ6ULy16R"
 	if got2 != want2 {
 		t.Errorf("aaReq vector 2 =\n %s\nwant\n %s", got2, want2)
 	}
@@ -390,15 +403,18 @@ func TestAADecryptBlobLegacyFirst(t *testing.T) {
 
 // TestAADecryptLiveBlob decrypts the captured live tobeparsed blob
 // (ROAD OF NARUTO episode 1, encrypted server-side with the epoch-2958
-// lane key) offline. [LIVE-VERIFIED 2026-09-13].
+// lane key) offline. The key is derived through the CURRENT protocol
+// inputs (mask("173") + the 2026-09-17 live partB) — proving the
+// rotated client constants still map onto the same epoch key the
+// 2026-09-13 blob was encrypted with. [LIVE-VERIFIED 2026-09-17].
 func TestAADecryptLiveBlob(t *testing.T) {
 	t.Parallel()
 	blob := aaFixture(t, "tobeparsed_live.txt")
-	mask, err := aaMask("168")
+	mask, err := aaMask("173")
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := aaDeriveKeyMaterial(mask, "lMWuF4/WxJQFkU4keh/54+uEAAq0uJ3Q3kK+LF48aP4=")
+	key, err := aaDeriveKeyMaterial(mask, "8pNYntRCh9aCGwM32d/rXg60Rp1ezQDoLVJ0T34YgHQ=")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -256,11 +257,19 @@ func TestSmokeDurationColumnHonest(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("slow-but-passing provider must pass, stdout:\n%s", out)
 	}
-	// The row's time cell must show at least the resolve sleep.
+	// The row's time cell must show at least the resolve sleep. The
+	// accepted window is a range, not a fixed set of strings: under
+	// -race the chain overhead pushes 60ms past 63 (PR45 gate flake).
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "slow") {
-			if !strings.Contains(line, "60ms") && !strings.Contains(line, "61ms") &&
-				!strings.Contains(line, "62ms") && !strings.Contains(line, "63ms") {
+			reflected := false
+			for ms := 60; ms <= 200; ms++ {
+				if strings.Contains(line, fmt.Sprintf("%dms", ms)) {
+					reflected = true
+					break
+				}
+			}
+			if !reflected {
 				t.Fatalf("time cell does not reflect the chain duration: %q", line)
 			}
 		}

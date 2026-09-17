@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"regexp"
 	"sort"
@@ -188,6 +189,10 @@ type AllAnime struct {
 	// bridge re-derives crypto material in a real browser when the
 	// pure-Go path fails (nil = disabled; typed errors then).
 	bridge aaBridgeSource
+	// rateLimitBackoff overrides the rate-limit retry wait (tests);
+	// 0 keeps the default. Per-instance so tests never mutate shared
+	// state (a package var raced under -race).
+	rateLimitBackoff time.Duration
 }
 
 // newAllAnime builds the provider against the API base, the referer
@@ -505,8 +510,9 @@ func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Ep
 	}
 
 	var (
-		refreshed bool
-		bridged   bool
+		refreshed        bool
+		bridged          bool
+		rateLimitRetried bool
 	)
 	for range 4 {
 		token, err := aaBuildAAReqAt(aaEpisodeQueryHash, mat.Key, mat.Epoch, mat.BuildID, aaContentLane, time.Now().UnixMilli())
@@ -548,6 +554,25 @@ func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Ep
 				return nil, err
 			}
 			continue
+		}
+
+		// The live limiter throttles the episode query ("Too many
+		// requests, please try again in 5 seconds." and NEED_CAPTCHA —
+		// both observed live 2026-09-17 on back-to-back resolves).
+		// Back off once and retry the same query; a persisting limit
+		// falls through to the decode path and fails loud.
+		if aaIsAARateLimited(body) {
+			if !rateLimitRetried {
+				rateLimitRetried = true
+				timer := time.NewTimer(aaRateLimitWait(p.rateLimitBackoff))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil, ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			}
 		}
 
 		if blob := aaExtractToBeParsedBlob(body); blob != "" {
@@ -714,6 +739,35 @@ func (p *AllAnime) fetchText(ctx context.Context, url string) (string, error) {
 		return "", err
 	}
 	return string(resp.Body), nil
+}
+
+// aaRateLimitBackoff is the default wait before the single rate-limit
+// retry on the episode query (the live limiter's own "try again in 5
+// seconds" contract). Instances override via rateLimitBackoff.
+const aaRateLimitBackoff = 5 * time.Second
+
+// aaRateLimitWait renders the effective wait: the base plus a small
+// jitter that de-synchronizes concurrent resolves — without it all
+// throttled retries land in the same instant and form a second burst.
+func aaRateLimitWait(base time.Duration) time.Duration {
+	if base <= 0 {
+		base = aaRateLimitBackoff
+	}
+	jitter := time.Duration(rand.Int63n(int64(2 * time.Second))) //nolint:gosec // non-crypto jitter to de-synchronize retry bursts — not a security boundary
+	return base + jitter
+}
+
+// aaIsAARateLimited reports the live episode-query throttle signals:
+// the explicit "Too many requests, please try again in 5 seconds."
+// message and NEED_CAPTCHA (the site's anti-abuse verdict, transient
+// under burst resolve). [LIVE-VERIFIED 2026-09-17].
+func aaIsAARateLimited(body []byte) bool {
+	for _, msg := range aaGraphQLErrorMessages(body) {
+		if strings.HasPrefix(msg, "Too many requests") || strings.HasPrefix(msg, "NEED_CAPTCHA") {
+			return true
+		}
+	}
+	return false
 }
 
 // aaHasAACryptoError reports the server-side crypto error signals:

@@ -145,6 +145,14 @@ type Client struct {
 // Chrome_150 profile, HTTP/3 always disabled (known H3-racing data race,
 // design spec §2), cookie jar, optional proxy.
 func New(cfg config.Network, opts ...Option) (*Client, error) {
+	// The watchdog cannot fire before the per-attempt deadline: a
+	// ConnectTimeout at or above RequestTimeout silently disables the
+	// fast-fail. Normalize onto RequestTimeout so config cannot
+	// degrade the guard by accident; cfg is a value copy, the
+	// caller's settings stay untouched.
+	if cfg.RequestTimeout > 0 && cfg.ConnectTimeout >= cfg.RequestTimeout {
+		cfg.ConnectTimeout = cfg.RequestTimeout
+	}
 	options := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutMilliseconds(int(cfg.RequestTimeout.Milliseconds())),
 		tls_client.WithClientProfile(profiles.Chrome_150),
@@ -309,8 +317,8 @@ func (c *Client) attempt(ctx context.Context, req Request, payload []byte) (*Res
 // per-attempt (and, in every production caller, the whole
 // per-operation) budget on a connection that will never answer.
 // Response bodies are NOT bounded by the watchdog: headers inside the
-// budget prove the connection alive, and the full request timeout
-// governs the body read.
+// budget prove the connection alive, and the remainder of the
+// per-attempt request timeout governs the body read.
 //
 // cancel is attempt's per-attempt context cancellation; the watchdog
 // uses it to tear the abandoned round trip down.
@@ -338,18 +346,20 @@ func (c *Client) doWithWatchdog(freq *http.Request, cancel context.CancelFunc) (
 	case res := <-ch:
 		return res.resp, res.err
 	case <-timer.C:
-		// A completed result may land in the same instant the timer
-		// fires; prefer it over discarding a good response.
+		// A result may land in the same instant the timer fires;
+		// prefer it over failing the attempt. The worker sends
+		// EXACTLY ONCE: consuming its result here means it has
+		// finished, so return it directly — falling through would
+		// block forever on a second send (review-blocker deadlock).
 		select {
 		case res := <-ch:
-			if res.err == nil {
-				return res.resp, nil
-			}
+			return res.resp, res.err
 		default:
 		}
-		// Silent connection: kill the in-flight round trip (the
-		// transport closes the connection on context cancellation,
-		// which unblocks Do) and drain the goroutine.
+		// Channel empty: the worker is still inside Do. Kill the
+		// in-flight round trip (the transport closes the connection
+		// on context cancellation, which unblocks Do) and drain the
+		// now-guaranteed single send.
 		cancel()
 		if res := <-ch; res.err == nil && res.resp != nil && res.resp.Body != nil {
 			// Headers raced the timer and lost the race above:

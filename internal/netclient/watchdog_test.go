@@ -30,6 +30,9 @@ import (
 	"testing"
 	"time"
 
+	fhttp "github.com/bogdanfinn/fhttp"
+	tls_client "github.com/bogdanfinn/tls-client"
+
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
@@ -205,5 +208,96 @@ func TestConfigDefaultConnectTimeoutArmsWatchdog(t *testing.T) {
 
 	if d := config.Default().Network.ConnectTimeout; d <= 0 {
 		t.Errorf("config default ConnectTimeout = %v, want > 0 (watchdog armed by default)", d)
+	}
+}
+
+// TestNewNormalizesConnectTimeout pins the clamp: a ConnectTimeout at
+// or above RequestTimeout could never fire before the per-attempt
+// deadline, silently disabling the fast-fail — New normalizes it onto
+// RequestTimeout instead.
+func TestNewNormalizesConnectTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig()
+	cfg.RequestTimeout = 5 * time.Second
+	cfg.ConnectTimeout = 30 * time.Second
+
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := c.cfg.ConnectTimeout; got != cfg.RequestTimeout {
+		t.Errorf("ConnectTimeout = %v, want normalized to RequestTimeout %v", got, cfg.RequestTimeout)
+	}
+	if c.cfg.RequestTimeout != 5*time.Second {
+		t.Errorf("RequestTimeout = %v, want untouched", c.cfg.RequestTimeout)
+	}
+}
+
+// stubHTTP replaces the tls-client transport so the worker's result can
+// be scheduled deterministically around the watchdog boundary — the
+// deadlock under test lives in a scheduler-timing window that real
+// httptest traffic only crosses by luck.
+type stubHTTP struct {
+	tls_client.HttpClient // embedded nil: only Do is ever called
+	do                    func(*fhttp.Request) (*fhttp.Response, error)
+}
+
+func (s *stubHTTP) Do(r *fhttp.Request) (*fhttp.Response, error) { return s.do(r) }
+
+// TestDoWatchdogReturnsWhenAttemptErrorsJustPastBudget pins the
+// deadlock race at the watchdog boundary: when the worker's own error
+// lands a hair AFTER the budget elapses, the timer branch must return
+// that error instead of falling through to a blocking drain that waits
+// for a second channel send that never comes (the worker sends exactly
+// once). Review-blocker regression, reproduced with the error scheduled
+// ε past the timer across a sweep of ε values and repeats — every call
+// must RETURN, never hang.
+func TestDoWatchdogReturnsWhenAttemptErrorsJustPastBudget(t *testing.T) {
+	t.Parallel()
+
+	const (
+		budget = 30 * time.Millisecond
+		guard  = 2 * time.Second
+		reps   = 8
+	)
+
+	cfg := testConfig()
+	cfg.RequestTimeout = 80 * time.Millisecond // attempt ctx dies LATER than the watchdog
+	cfg.ConnectTimeout = budget
+	c, _ := newTestClient(t, cfg)
+
+	delays := []time.Duration{0, 100 * time.Microsecond, 500 * time.Microsecond, 1 * time.Millisecond, 5 * time.Millisecond}
+	for _, delay := range delays {
+		for rep := range reps {
+			errBoom := fmt.Errorf("boom %v %d", delay, rep)
+			c.http = &stubHTTP{do: func(*fhttp.Request) (*fhttp.Response, error) {
+				time.Sleep(budget + delay)
+				return nil, errBoom
+			}}
+
+			actx, cancel := context.WithTimeout(context.Background(), cfg.RequestTimeout)
+			freq, err := fhttp.NewRequestWithContext(actx, fhttp.MethodGet, "http://stub.invalid/", nil)
+			if err != nil {
+				cancel()
+				t.Fatalf("build request: %v", err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.doWithWatchdog(freq, cancel)
+				done <- err
+			}()
+
+			select {
+			case <-done:
+				// Returned: the only contract under test. Either the
+				// worker's own error (race won) or the watchdog error
+				// (drain path) is a valid outcome.
+			case <-time.After(guard):
+				cancel()
+				t.Fatalf("delay %v rep %d: doWithWatchdog did not return within %v: watchdog deadlock (worker send consumed, then blocked on drain)", delay, rep, guard)
+			}
+			cancel()
+		}
 	}
 }

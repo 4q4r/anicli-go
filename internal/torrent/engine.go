@@ -145,6 +145,13 @@ type Engine struct {
 	// trackerHealth is the latest probe verdict per configured
 	// tracker URL (empty until the first CheckTrackers ran).
 	trackerHealth map[string]TrackerHealth
+	// listTrackers are the announce URLs parsed from [torrent]
+	// tracker_lists (PR41) and merged into the pool; empty until the
+	// first fetch ran. Guarded by mu.
+	listTrackers []string
+	// trackerListStatuses is the per-URL fetch outcome (empty until
+	// the first fetch ran). Guarded by mu.
+	trackerListStatuses []TrackerListStatus
 	// probeTimeoutOverride lets tests shrink the per-tracker probe
 	// budget; 0 keeps the default.
 	probeTimeoutOverride time.Duration
@@ -573,10 +580,13 @@ func (e *Engine) startClientLocked() error {
 		return err
 	}
 	e.client = cl
-	// Kick the tracker health check in the background: the verdicts
-	// prune dead announce URLs for every torrent added afterwards and
-	// never delay startup (per-probe timeouts bound the goroutine).
-	if len(e.cfg.Trackers) > 0 {
+	// PR41: external list feeds ride the same lazy start. They must
+	// merge BEFORE the health check so the check prunes the merged
+	// pool (static + lists) in one round; with no lists configured
+	// the static-only kick stays as it was.
+	if len(e.cfg.TrackerLists) > 0 {
+		e.kickTrackerListFetch()
+	} else if len(e.cfg.Trackers) > 0 {
 		e.kickTrackerCheck()
 	}
 	e.log.Info("torrent: client started", "dir", dir, "port", e.cfg.Port)

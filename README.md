@@ -225,6 +225,14 @@ bind = "127.0.0.1:8765" # только loopback по умолчанию
 [shikimori]
 enabled = false         # интеграция с трекером
 
+[torrent]
+trackers = [            # свои announce-URL (udp/http/https/ws/wss) к каждому торренту
+    "udp://tracker.opentrackr.org:1337/announce",
+]
+tracker_lists = [       # внешние списки трекеров: один GET на старте движка, парсинг,
+    "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
+]                       # дедуп и общая проверка здоровья вместе с trackers
+
 [download]
 max_concurrency = 2     # одновременные фоновые загрузки
 

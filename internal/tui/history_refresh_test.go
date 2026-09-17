@@ -211,6 +211,37 @@ func TestHistoryFilterRefreshNilSeamFailsLoud(t *testing.T) {
 	}
 }
 
+// TestHistoryFilterRefreshSuccessSupersedesStaleError: a failed check
+// leaves the error on the status line, but the NEXT successful check —
+// even with unchanged data — must supersede it and restore the hint.
+func TestHistoryFilterRefreshSuccessSupersedesStaleError(t *testing.T) {
+	sync := &fakeSyncFull{}
+	deps := &Deps{History: &fakeHistory{items: historyItems()}, SyncFull: sync.sync}
+	filter := newHistoryFilter(deps)
+
+	// First check fails: the error lands on the status line.
+	sync.err = errors.New("shikimori недоступен")
+	_, failCmd := filter.Update(keyS())
+	failMsg := failCmd()
+	filter.Update(failMsg)
+	if v := filter.View().Content; !strings.Contains(v, "Не удалось обновить списки") {
+		t.Fatalf("precondition: the failed check must show its error:\n%s", v)
+	}
+
+	// Second check succeeds, data unchanged: the stale error must go.
+	sync.err = nil
+	_, okCmd := filter.Update(keyS())
+	okMsg := okCmd()
+	filter.Update(okMsg)
+	v := filter.View().Content
+	if strings.Contains(v, "Не удалось обновить списки") {
+		t.Fatalf("a fresh success must supersede the stale error:\n%s", v)
+	}
+	if !strings.Contains(v, historyFilterHint) {
+		t.Fatalf("the hint line must be restored after the supersede:\n%s", v)
+	}
+}
+
 // TestHistoryFilterRefreshRearmsAfterDroppedResult: the re-arm lives
 // in the refresh command itself, so a result dropped while the user
 // navigated elsewhere cannot permanently wedge the key.

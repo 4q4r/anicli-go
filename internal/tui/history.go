@@ -74,6 +74,10 @@ type historyFilter struct {
 	*MenuScreen
 	deps  *Deps
 	items []storage.AnimeProgress
+	// status mirrors the wrapped screen's bottom line (the hint, or a
+	// refresh error): applyRefresh needs it to notice that a fresh
+	// success must supersede a prior failure.
+	status string
 	// refreshing dedups «s» while a check is in flight. It is cleared
 	// by the refresh COMMAND itself — not by the message handler — so
 	// a settled result dropped while the user navigated elsewhere
@@ -95,7 +99,7 @@ func newHistoryFilter(deps *Deps) *historyFilter {
 	if err != nil {
 		items = nil
 	}
-	h := &historyFilter{deps: deps, items: items}
+	h := &historyFilter{deps: deps, items: items, status: historyFilterHint}
 	h.MenuScreen = NewMenuScreen(h.config(historyFilterHint))
 	return h
 }
@@ -133,7 +137,7 @@ func (h *historyFilter) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		h.applyRefresh(m)
 		return h, nil
 	case tea.KeyPressMsg:
-		if m.Code == 's' {
+		if m.Code == 's' && m.Mod == 0 {
 			if !h.refreshing.CompareAndSwap(false, true) {
 				return h, nil // a check is already running: silent no-op
 			}
@@ -176,8 +180,9 @@ func (h *historyFilter) refreshCmd() tea.Cmd {
 
 // applyRefresh applies one settled check: an error lands on the status
 // line (fail loud) and keeps the rendered data; identical data keeps
-// the screen untouched (zero visual noise); changed data re-renders
-// the counts («досчитались») with the cursor preserved.
+// the screen untouched (zero visual noise) unless an error was
+// showing — a fresh success supersedes a stale failure; changed data
+// re-renders the counts («досчитались») with the cursor preserved.
 func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
 	if m.err != nil {
 		h.deps.logger().Error("tui: history refresh failed",
@@ -186,6 +191,12 @@ func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
 		return
 	}
 	if reflect.DeepEqual(h.items, m.items) {
+		// Identical data: zero visual noise — EXCEPT that a fresh
+		// success supersedes a prior failure (the stale error line
+		// must not outlive the check that disproved it).
+		if h.status != historyFilterHint {
+			h.swap(h.items, historyFilterHint)
+		}
 		return
 	}
 	h.swap(m.items, historyFilterHint)
@@ -196,6 +207,7 @@ func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
 func (h *historyFilter) swap(items []storage.AnimeProgress, status string) {
 	cursor := h.list.Cursor()
 	h.items = items
+	h.status = status
 	h.MenuScreen = NewMenuScreen(h.config(status))
 	h.list.Jump(cursor)
 }

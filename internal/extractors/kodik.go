@@ -155,8 +155,11 @@ func (e *kodikExtractor) Extract(ctx context.Context, rawURL string) (map[string
 	return results, nil
 }
 
-// scrapeParams ports _extract_params (extractors.py:163-179): three
-// regex shapes per key, first hit wins.
+// scrapeParams ports _extract_params (extractors.py:163-179): regex
+// shapes per key, first hit wins. The 2026-09 kodik redesign renamed
+// the params object to `vInfo` (python's `videoInfo\.` regex misses it
+// too — site-side change breaking both implementations); the shape is
+// matched here additively.
 func (e *kodikExtractor) scrapeParams(html string) map[string]string {
 	params := map[string]string{}
 	for _, key := range kodikParamKeys {
@@ -164,6 +167,7 @@ func (e *kodikExtractor) scrapeParams(html string) map[string]string {
 		for _, pattern := range []string{
 			`var\s+` + q + `\s*=\s*["']([^"']+)["']`,
 			`videoInfo\.` + q + `\s*=\s*["']([^"']+)["']`,
+			`vInfo\.` + q + `\s*=\s*["']([^"']+)["']`,
 			`["']` + q + `["']\s*:\s*["']([^"']+)["']`,
 		} {
 			if m := regexp.MustCompile(pattern).FindStringSubmatch(html); m != nil {

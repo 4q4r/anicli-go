@@ -210,6 +210,18 @@ func (d SearchDelegator) Search(ctx context.Context, query string) ([]contracts.
 	return results, nil
 }
 
+// FetchDubs forwards the lazy-dub capability (contracts.DubsHydrator)
+// of the wrapped provider: without the forwarding the delegator HIDES
+// the capability from every consumer (PR43 root-cause layer). No
+// recording wraps it — hydration is an episode lookup, not a search.
+func (d SearchDelegator) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
+	hydrator, ok := d.Provider.(contracts.DubsHydrator)
+	if !ok {
+		return episode, nil
+	}
+	return hydrator.FetchDubs(ctx, episode)
+}
+
 // recordStat folds one outcome into the stats repository. Every failure
 // is logged and swallowed: stat bookkeeping must never break a search.
 func (d SearchDelegator) recordStat(ctx context.Context, success bool, latencyMS float64) {

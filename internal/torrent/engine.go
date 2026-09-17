@@ -204,17 +204,18 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 		ih := metainfo.NewHashFromHex(link)
 		return e.addSpec(&torrent.TorrentSpec{InfoHash: ih})
 	case strings.HasPrefix(link, "http://"), strings.HasPrefix(link, "https://"):
-		u, err := url.Parse(link)
-		if err != nil {
+		if _, err := url.Parse(link); err != nil {
 			return Release{}, fmt.Errorf("torrent: parse URL: %w", err)
-		}
-		if !strings.HasSuffix(strings.ToLower(u.Path), ".torrent") {
-			return Release{}, fmt.Errorf("%w: %q (only .torrent URLs in PR35; rutracker topic pages land in PR38)",
-				ErrUnsupportedLink, link)
 		}
 		if e.net == nil {
 			return Release{}, fmt.Errorf("torrent: %s needs a transport but the engine has no netclient", link)
 		}
+		// The PR35 URL-suffix precheck (path must end in .torrent) is
+		// gone as of PR38: the TokyoTosho feed's real .torrent links
+		// rarely carry the suffix (anirena.com/dl/N,
+		// nyaa.si/view/N/torrent), so the guard is the fetched
+		// CONTENT now — anything that is not bencode metainfo fails
+		// loud on the parse below (topic pages, login walls).
 		// This fetch rides the shared netclient — i.e.
 		// network.proxy_url — NOT [torrent] proxy, which only covers
 		// the library's own HTTP layer (announces, webseeds).
@@ -224,7 +225,7 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 		}
 		mi, err := metainfo.Load(bytes.NewReader(resp.Body))
 		if err != nil {
-			return Release{}, fmt.Errorf("torrent: parse .torrent: %w", err)
+			return Release{}, fmt.Errorf("torrent: parse .torrent from %s: %w", link, err)
 		}
 		return e.AddMetaInfo(mi)
 	default:

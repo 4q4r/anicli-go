@@ -81,6 +81,13 @@ var allFactories = []struct {
 	{"animetosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeTosho(AnimeToshoFeedBase, http, nil)
 	}},
+	// tokyotosho (PR38): the tokyo-tosho.net search RSS on the same
+	// TorrentBase plumbing — direct .torrent <link> URLs; no
+	// credentials, engine injected by NewRegistry when [torrent] is
+	// enabled.
+	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newTokyoTosho(TokyoToshoBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

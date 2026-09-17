@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,12 +22,35 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 const testHexIH = "0123456789abcdef0123456789abcdef01234567"
 
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// newNetTestEngine is newTestEngine with a real netclient wired, so
+// URL-ingest tests can fetch from httptest servers (still no DHT/UPnP
+// egress: the offline guard stays on).
+func newNetTestEngine(t *testing.T) *Engine {
+	t.Helper()
+	cfg := config.Default().Network
+	cfg.ProxyURL = ""
+	net, err := netclient.New(cfg, netclient.WithProvider("torrent-test"))
+	if err != nil {
+		t.Fatalf("netclient.New: %v", err)
+	}
+	eng := NewEngine(config.Torrent{
+		Enabled:     true,
+		Dir:         t.TempDir(),
+		Port:        0,
+		ReadaheadMB: 1,
+	}, net, quietLogger())
+	eng.testNoExternal = true
+	t.Cleanup(func() { _ = eng.Close() })
+	return eng
 }
 
 // newTestEngine builds an engine over a temp dir with external network
@@ -143,9 +167,63 @@ func TestAddLinkUnsupported(t *testing.T) {
 	t.Parallel()
 	eng := newTestEngine(t, true)
 
-	_, err := eng.AddLink(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	// Not a magnet, not a bare infohash: typed loud rejection before
+	// any transport is consulted.
+	_, err := eng.AddLink(context.Background(), "ftp://example.org/release")
 	if !errors.Is(err, ErrUnsupportedLink) {
-		t.Errorf("err = %v, want ErrUnsupportedLink (rutracker lands in PR38)", err)
+		t.Errorf("err = %v, want ErrUnsupportedLink", err)
+	}
+}
+
+// TestAddLinkURLServesMetainfoWithoutTorrentSuffix pins the PR38
+// relaxation the TokyoTosho feed forced: real-world .torrent links
+// rarely end in ".torrent" (anirena.com/dl/N, nyaa.si/view/N/torrent),
+// so the engine validates the RESPONSE CONTENT (bencode metainfo)
+// instead of the URL suffix. A live dandadan search on TokyoTosho
+// returned exactly such links for its top Anime hits.
+func TestAddLinkURLServesMetainfoWithoutTorrentSuffix(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, mi, ih := seedTorrent(t, dir, 32*1024)
+	body, err := bencode.Marshal(mi)
+	if err != nil {
+		t.Fatalf("marshal metainfo: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	eng := newNetTestEngine(t)
+	// A deliberately suffix-less URL (the TokyoTosho shape).
+	rel, err := eng.AddLink(context.Background(), srv.URL+"/dl/200716")
+	if err != nil {
+		t.Fatalf("AddLink(suffix-less metainfo URL): %v", err)
+	}
+	if rel.InfoHash != ih {
+		t.Errorf("InfoHash = %s, want %s (parsed from the served metainfo)", rel.InfoHash.HexString(), ih.HexString())
+	}
+}
+
+// TestAddLinkURLNonMetainfoTypedError: a URL that answers HTML (a
+// topic page, a login wall) must fail loud on the parse — the old
+// URL-suffix precheck is gone, the content check is the guard.
+func TestAddLinkURLNonMetainfoTypedError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html><body>not a torrent</body></html>"))
+	}))
+	t.Cleanup(srv.Close)
+
+	eng := newNetTestEngine(t)
+	_, err := eng.AddLink(context.Background(), srv.URL+"/forum/viewtopic.php?t=1")
+	if err == nil {
+		t.Fatal("non-metainfo body must fail loud")
+	}
+	if !strings.Contains(err.Error(), "parse .torrent") {
+		t.Errorf("err = %v, want the metainfo parse failure", err)
 	}
 }
 

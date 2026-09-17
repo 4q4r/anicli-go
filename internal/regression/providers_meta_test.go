@@ -19,7 +19,8 @@ import (
 // (PR33) joined after anidub; nyaa (PR36, first torrent search
 // provider) joined after yanima; anilibria-torrent (PR37, the new
 // aniliberty.top API's per-release torrents) joined after nyaa;
-// animetosho (PR38, the newznab feed) joined after anilibria-torrent.
+// animetosho (PR38, the newznab feed) joined after anilibria-torrent;
+// tokyotosho (PR38, the search RSS) joined after animetosho.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -36,6 +37,7 @@ var expectedProviderOrder = []string{
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",
+	"tokyotosho",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

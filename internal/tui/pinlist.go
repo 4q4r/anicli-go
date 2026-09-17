@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // PinList is the menu list component enforcing the viewport half of
@@ -194,16 +195,26 @@ func (l *PinList) Render() string {
 // renderRow draws one item line with the pointer and marker.
 func renderRow(item Choice, index, cursor int, marker string) string {
 	pointer := "  "
-	style := theme.Item
 	if index == cursor {
 		pointer = "▸ "
-		style = theme.Cursor
 	}
 	text := item.Label
 	if marker != "" {
 		text = marker + " " + text
 	}
-	return style.Render(pointer+text) + "\n"
+	return rowStyle(item, index, cursor).Render(pointer+text) + "\n"
+}
+
+// rowStyle picks the row style (PR41 B2): disabled rows render dimmed
+// regardless of the cursor so the non-actionable state stays visible.
+func rowStyle(item Choice, index, cursor int) lipgloss.Style {
+	if item.Disabled {
+		return theme.Dim
+	}
+	if index == cursor {
+		return theme.Cursor
+	}
+	return theme.Item
 }
 
 func clamp(v, lo, hi int) int {

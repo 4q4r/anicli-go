@@ -94,6 +94,16 @@ type shikiBoundMsg struct {
 	title string
 }
 
+// hydrateDoneMsg settles one episode's source hydration (PR43): the
+// embeds arrive provider-prefixed, errs carries the per-provider
+// failures that feed the header cause line.
+type hydrateDoneMsg struct {
+	num    string
+	gen    int
+	embeds map[string][]string
+	errs   map[string]error
+}
+
 // downloadSettledMsg reports a finished foreground download batch
 // (I8).
 type downloadSettledMsg struct {
@@ -127,6 +137,27 @@ type sessionScreen struct {
 	// shikiRateID is the known shikimori rate id of the bound anime
 	// (0 = none yet); PATCHed instead of re-created on updates (I10).
 	shikiRateID int64
+
+	// PR43 hydration state: lazily-hydrating providers (anilib,
+	// animego) list episodes with empty RawEmbeds, so the session
+	// hydrates the current episode on demand — once per episode, with
+	// «🔄 Обновить источники» as the explicit recovery. The per-
+	// episode/merge errors feed the header cause line.
+	hydrated    map[string]bool
+	hydrating   bool
+	hydrateGen  int
+	hydrateErrs map[string]map[string]error
+	sourceErrs  map[string]error
+	// providerNames caches the provider id → display name map for the
+	// header breakdown («Ист: 3 (AnimeLib, Nyaa)»).
+	providerNames map[string]string
+
+	// PR43 buffered watch mode: per-session toggle (no config scope),
+	// the active download's cancel func and its generation counter for
+	// stale-message drops.
+	buffered     bool
+	bufferCancel context.CancelFunc
+	bufferGen    int
 
 	state sessionState
 
@@ -271,11 +302,136 @@ func (s *sessionScreen) loadEpisodesSync() {
 	s.Update(episodesDoneMsg{})
 }
 
+// maybeHydrateCurrent schedules the hydration of the current episode
+// when it carries no sources yet and no attempt was made (PR43): the
+// lazily-hydrating providers list episodes with empty RawEmbeds, and
+// without this step such episodes showed «Ист: 0» forever.
+func (s *sessionScreen) maybeHydrateCurrent() tea.Cmd {
+	if s.hydrating {
+		return nil
+	}
+	ep := s.currentEpisodeData()
+	if ep == nil || len(ep.RawEmbeds) > 0 || s.hydrated[ep.Num] {
+		return nil
+	}
+	return s.hydrateEpisode(ep.Num)
+}
+
+// hydrateEpisode issues one hydration round for the episode num: the
+// status line reports the work (the legitimate progress display), the
+// settle message merges the results under the provider prefixes.
+func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
+	if num == "" {
+		s.status = "Нет серий"
+		return nil
+	}
+	s.hydrating = true
+	if s.hydrated == nil {
+		s.hydrated = map[string]bool{}
+	}
+	s.hydrated[num] = true
+	s.status = "Ищу источники…"
+	s.hydrateGen++
+	gen := s.hydrateGen
+	ep := s.episodes[num]
+	deps := s.deps
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		defer cancel()
+		return hydrateEpisodeCmd(deps, num, ep, gen, ctx)
+	})
+}
+
+// hydrateEpisodeCmd hydrates every contributing provider of one merged
+// episode: the merged RawID composes "prov1:id1|prov2:id2", providers
+// that already carry embeds are skipped. The results come back
+// provider-prefixed, ready to merge into the aggregate.
+func hydrateEpisodeCmd(deps *Deps, num string, ep contracts.Episode, gen int, ctx context.Context) hydrateDoneMsg {
+	embeds := map[string][]string{}
+	errs := map[string]error{}
+	for _, part := range strings.Split(ep.RawID, "|") {
+		prov, id, found := strings.Cut(part, ":")
+		if !found || prov == "" || id == "" {
+			continue
+		}
+		if hasProviderEmbeds(ep.RawEmbeds, prov) {
+			continue
+		}
+		local := contracts.Episode{Num: ep.Num, RawID: id, RawEmbeds: map[string][]string{}}
+		out, err := deps.Episode.HydrateDubs(ctx, prov, local)
+		if err != nil {
+			errs[prov] = err
+			deps.logger().Warn("tui: hydration failed",
+				"provider", prov, "episode", num, "error", err)
+			continue
+		}
+		for dub, links := range out.RawEmbeds {
+			embeds["["+prov+"] "+dub] = links
+		}
+	}
+	return hydrateDoneMsg{num: num, gen: gen, embeds: embeds, errs: errs}
+}
+
+// hasProviderEmbeds reports whether any embed key belongs to prov.
+func hasProviderEmbeds(embeds map[string][]string, prov string) bool {
+	for key := range embeds {
+		if providerOfTrackKey(key) == prov {
+			return true
+		}
+	}
+	return false
+}
+
+// applyHydration merges the settled hydration into the aggregate: new
+// embeds join the episode and the dub stats, failures feed the header
+// cause. Stale generations (a refresh superseded an earlier round) are
+// dropped.
+func (s *sessionScreen) applyHydration(msg hydrateDoneMsg) tea.Cmd {
+	if msg.gen != s.hydrateGen {
+		return nil
+	}
+	s.hydrating = false
+	if ep, ok := s.episodes[msg.num]; ok {
+		if ep.RawEmbeds == nil {
+			ep.RawEmbeds = map[string][]string{}
+		}
+		for dub, links := range msg.embeds {
+			ep.RawEmbeds[dub] = links
+		}
+		s.episodes[msg.num] = ep
+		for dub := range msg.embeds {
+			s.dubStats[dub]++
+		}
+	}
+	if len(msg.errs) > 0 {
+		if s.hydrateErrs == nil {
+			s.hydrateErrs = map[string]map[string]error{}
+		}
+		s.hydrateErrs[msg.num] = msg.errs
+	}
+	s.buildActionMenu()
+	switch {
+	case len(msg.embeds) > 0:
+		s.status = fmt.Sprintf("Источники найдены: %d", len(msg.embeds))
+	case len(msg.errs) > 0:
+		s.status = "Источники не найдены — причина в заголовке"
+	default:
+		s.status = "Источники не найдены"
+	}
+	return nil
+}
+
 // Update implements Screen: the substate machine.
 func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case episodePartMsg:
 		delete(s.pending, msg.sourceID)
+		if msg.err != nil {
+			if s.sourceErrs == nil {
+				s.sourceErrs = map[string]error{}
+			}
+			s.sourceErrs[msg.sourceID] = msg.err
+		}
 		if msg.err == nil && len(msg.episodes) > 0 {
 			s.parts = append(s.parts, SourceEpisodes{SourceID: msg.sourceID, Episodes: msg.episodes})
 		}
@@ -285,7 +441,9 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case episodesDoneMsg:
 		s.finalizeMerge()
-		return s, nil
+		return s, s.maybeHydrateCurrent()
+	case hydrateDoneMsg:
+		return s, s.applyHydration(msg)
 	case streamResolvedMsg:
 		if msg.err != nil {
 			s.status = "Ошибка: " + msg.err.Error()
@@ -403,16 +561,23 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "next":
 		if s.currentIdx < len(s.order)-1 {
 			s.currentIdx++
+			s.buildActionMenu()
 		}
-		return s, nil
+		return s, s.maybeHydrateCurrent()
 	case "prev":
 		if s.currentIdx > 0 {
 			s.currentIdx--
+			s.buildActionMenu()
 		}
-		return s, nil
+		return s, s.maybeHydrateCurrent()
 	case "jump":
 		s.state = sessionStateEpisodeList
 		return s, nil
+	case "refresh":
+		if s.hydrating {
+			return s, nil // a round is already running; its settle will report
+		}
+		return s, s.hydrateEpisode(s.currentEpisode())
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
 		s.status = "Озвучка сброшена — выберите заново при просмотре"
@@ -441,11 +606,23 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 
 // startWatch launches the watch pipeline: interactive dub selection
 // when preferences are missing or unavailable, else straight to
-// stream resolution.
+// stream resolution. A sourceless episode resolves (hydrates) first —
+// the lazily-hydrating providers list empty embeds (PR43) — and an
+// episode whose hydration already found nothing explains the recovery
+// path instead of silently doing nothing.
 func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
 		s.status = "Нет серий"
+		return s, nil
+	}
+	if len(ep.RawEmbeds) == 0 {
+		if !s.hydrated[ep.Num] && !s.hydrating {
+			return s, s.hydrateEpisode(ep.Num)
+		}
+		if !s.hydrating {
+			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+		}
 		return s, nil
 	}
 	if s.videoDub == "" || ep.RawEmbeds[s.videoDub] == nil {
@@ -773,7 +950,8 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 		}
 	}
 	s.state = sessionStateMenu
-	return s, nil
+	s.buildActionMenu()
+	return s, s.maybeHydrateCurrent()
 }
 
 // handleInfoMenuKey drives the «Изменить инфо» submenu over the
@@ -1072,18 +1250,35 @@ func (s *sessionScreen) restoreResume() {
 	s.buildActionMenu()
 }
 
-// buildActionMenu renders the python session_loop choices.
+// buildActionMenu renders the python session_loop choices plus the
+// PR43 additions («🔄 Обновить источники» recovery action). «Смотреть»
+// is disabled while the current episode carries no sources (the dimmed
+// row explains on an attempt — never a silent dead end).
 func (s *sessionScreen) buildActionMenu() {
+	watchDisabled := false
+	if ep := s.currentEpisodeData(); ep != nil && len(ep.RawEmbeds) == 0 {
+		watchDisabled = true
+	}
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", []Choice{
-		{ID: "watch", Label: "▶ Смотреть"},
+		{ID: "watch", Label: "▶ Смотреть", Disabled: watchDisabled},
 		{ID: "next", Label: "⏭ След."},
 		{ID: "prev", Label: "⏮ Пред."},
 		{ID: "jump", Label: "🔢 Перейти к серии"},
 		{ID: "redub", Label: "🎨 Сменить озвучку"},
 		{ID: "info", Label: "📝 Изменить инфо"},
 		{ID: "download", Label: "⬇ Скачать серии"},
+		{ID: "refresh", Label: "🔄 Обновить источники"},
 		{ID: "exit", Label: "🚪 Выход"},
 	}...), defaultListHeight)
+}
+
+// formatLabel renders the buffered-mode toggle («Формат: [потоковый]» /
+// «Формат: [буферный]», PR43 C: per-session preference, no config).
+func (s *sessionScreen) formatLabel() string {
+	if s.buffered {
+		return "Формат: [буферный]"
+	}
+	return "Формат: [потоковый]"
 }
 
 // buildEpisodeList builds the jump list with local markers.
@@ -1155,7 +1350,11 @@ func (s *sessionScreen) currentEpisodeData() *contracts.Episode {
 	return &ep
 }
 
-// renderHeader composes the session status header.
+// renderHeader composes the session status header (PR41 breakdown):
+// «Ист: N (Provider, Provider)» when sources exist, otherwise the
+// honest «Ист: 0 — источники не найдены» with the known one-line cause
+// (resolve not performed / per-provider errors / providers finished
+// without results).
 func (s *sessionScreen) renderHeader() string {
 	ep := s.currentEpisodeData()
 	embeds := 0
@@ -1163,6 +1362,18 @@ func (s *sessionScreen) renderHeader() string {
 		embeds = len(ep.RawEmbeds)
 	}
 	h := fmt.Sprintf("📺 %s | Эп. %s | Ист: %d", BestDisplayTitle(s.group), s.currentEpisode(), embeds)
+	if ep != nil {
+		if embeds > 0 {
+			if names := s.embedProviderNames(ep); len(names) > 0 {
+				h += fmt.Sprintf(" (%s)", strings.Join(names, ", "))
+			}
+		} else {
+			h += " — источники не найдены"
+			if cause := s.episodeCause(ep); cause != "" {
+				h += ": " + cause
+			}
+		}
+	}
 	if s.videoDub != "" {
 		h += fmt.Sprintf(" | 🔊 %s", s.videoDub)
 	}
@@ -1170,6 +1381,74 @@ func (s *sessionScreen) renderHeader() string {
 		h += fmt.Sprintf(" | локально: %d", total)
 	}
 	return h
+}
+
+// embedProviderNames lists the deduplicated display names of the
+// providers contributing to the episode's embeds (the data is already
+// in hand — the keys carry the provider ids; no extra API calls).
+func (s *sessionScreen) embedProviderNames(ep *contracts.Episode) []string {
+	ids := map[string]bool{}
+	for key := range ep.RawEmbeds {
+		if prov := providerOfTrackKey(key); prov != "" {
+			ids[prov] = true
+		}
+	}
+	names := make([]string, 0, len(ids))
+	for prov := range ids {
+		names = append(names, s.providerDisplayName(prov))
+	}
+	sort.Strings(names)
+	return names
+}
+
+// providerDisplayName resolves the human-readable provider name,
+// falling back to the raw id (the lookup is lazily cached from the
+// search service roster).
+func (s *sessionScreen) providerDisplayName(prov string) string {
+	if s.providerNames == nil {
+		s.providerNames = map[string]string{}
+		if s.deps != nil && s.deps.Search != nil {
+			for _, meta := range s.deps.Search.Providers() {
+				s.providerNames[meta.ID] = meta.Name
+			}
+		}
+	}
+	if name := s.providerNames[prov]; name != "" {
+		return name
+	}
+	return prov
+}
+
+// causeCauseLineMax bounds the header error summary so a long provider
+// failure list cannot push the menu off-screen.
+const causeLineMax = 160
+
+// episodeCause builds the one-line «why no sources» explanation for
+// the header (PR41 B1): resolve not performed, the per-provider error
+// summary (truncated), or the providers-finished-empty verdict.
+func (s *sessionScreen) episodeCause(ep *contracts.Episode) string {
+	if !s.hydrated[ep.Num] {
+		return "резолв не выполнен"
+	}
+	var parts []string
+	for prov, err := range s.hydrateErrs[ep.Num] {
+		parts = append(parts, prov+": "+err.Error())
+	}
+	for srcID, err := range s.sourceErrs {
+		if !hasProviderEmbeds(ep.RawEmbeds, srcID) && !strings.Contains(ep.RawID, srcID+":") {
+			parts = append(parts, srcID+": "+err.Error())
+		}
+	}
+	if len(parts) == 0 {
+		return "все провайдеры завершились без результатов"
+	}
+	sort.Strings(parts)
+	summary := strings.Join(parts, "; ")
+	runes := []rune(summary)
+	if len(runes) > causeLineMax {
+		summary = string(runes[:causeLineMax]) + "…"
+	}
+	return summary
 }
 
 // renderEpisodeList renders the jump list surface, recomputing the

@@ -54,6 +54,10 @@ type Choice struct {
 	// Value is the payload resolved by ResolveKey; nil means the ID is
 	// the payload.
 	Value any
+	// Disabled renders the row dimmed and non-actionable (PR41 B2):
+	// resolving it is the OWNER SCREEN's job — it must answer with a
+	// status-line reason instead of acting (never silently nothing).
+	Disabled bool
 }
 
 // Menu is a navigation prompt: the caller's choices with the Back

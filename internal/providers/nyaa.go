@@ -77,6 +77,11 @@ func newNyaa(baseURL string, http *netclient.Client, engine *torrent.Engine) *Ny
 // IsTorrent implements contracts.TorrentProvider.
 func (p *Nyaa) IsTorrent() bool { return true }
 
+// NamePreference implements contracts.NamePreferenceProvider (PR42):
+// nyaa's index matches romaji/english release names only — the search
+// fan-out must route it the latin variants, never the Cyrillic ones.
+func (p *Nyaa) NamePreference() contracts.NamePreference { return contracts.NamePrefLatin }
+
 // nyaaRSS is the RSS 2.0 envelope of the search feed.
 type nyaaRSS struct {
 	Channel struct {

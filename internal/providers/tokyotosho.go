@@ -90,6 +90,11 @@ func newTokyoTosho(baseURL string, http *netclient.Client, engine *torrent.Engin
 // IsTorrent implements contracts.TorrentProvider.
 func (p *TokyoTosho) IsTorrent() bool { return true }
 
+// NamePreference implements contracts.NamePreferenceProvider (PR42):
+// TT indexes romaji/english release names only — the search fan-out
+// must route it the latin variants, never the Cyrillic ones.
+func (p *TokyoTosho) NamePreference() contracts.NamePreference { return contracts.NamePrefLatin }
+
 // tokyoToshoRSS is the RSS 2.0 envelope of the search feed.
 type tokyoToshoRSS struct {
 	Channel struct {

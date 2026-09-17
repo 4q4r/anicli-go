@@ -165,20 +165,19 @@ type Providers struct {
 
 // Torrent configures the BitTorrent subsystem (PR35): realtime
 // streaming playback over a local HTTP server, no external programs
-// (pure-Go client). The engine stays idle until a link is added —
-// enabling it never starts network machinery on app boot by itself.
+// (pure-Go client). The engine stays idle until a torrent provider
+// adds a link — enabling it never starts network machinery on app
+// boot by itself. The PR40 removal of the [torrent] links ingestion
+// list took the only direct-config consumer with it: links now enter
+// the engine exclusively through the torrent search providers.
 type Torrent struct {
 	// Enabled turns the torrent subsystem on. Default true by design
 	// ruling (commissioned feature, Shikimori-enabled precedent):
-	// combined with the lazy engine this is inert without Links —
-	// nothing boots until a link is added — and no_upload=false only
-	// means ethical seeding after playback (flip no_upload for
-	// leech-only).
+	// combined with the lazy engine this is inert until a torrent
+	// provider resolves a release — nothing boots on its own — and
+	// no_upload=false only means ethical seeding after playback (flip
+	// no_upload for leech-only).
 	Enabled bool `toml:"enabled"`
-	// Links is the ingestion list: magnet:?xt=urn:btih:… URIs (with
-	// optional &dn= display name), https://…/*.torrent URLs and plain
-	// 40-hex-char infohashes. Deduplicated by infohash.
-	Links []string `toml:"links"`
 	// Dir is the torrent data directory; empty means
 	// DataDir()/torrents (created on demand).
 	Dir string `toml:"dir"`
@@ -316,7 +315,6 @@ func Default() Settings {
 		Web: Web{Users: map[string]WebUser{}},
 		Torrent: Torrent{
 			Enabled:     true,
-			Links:       []string{},
 			Dir:         "",
 			Port:        42069,
 			NoUpload:    false,

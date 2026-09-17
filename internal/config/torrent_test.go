@@ -11,10 +11,7 @@ func TestTorrentDefaults(t *testing.T) {
 	got := Default().Torrent
 
 	if !got.Enabled {
-		t.Error("Torrent.Enabled = false, want true (usable out of the box; empty links keep the engine idle)")
-	}
-	if len(got.Links) != 0 {
-		t.Errorf("Torrent.Links = %v, want empty (engine stays idle until links are configured)", got.Links)
+		t.Error("Torrent.Enabled = false, want true (usable out of the box; the lazy engine stays idle until a torrent provider resolves)")
 	}
 	if got.Dir != "" {
 		t.Errorf("Torrent.Dir = %q, want empty (auto-resolve under DataDir)", got.Dir)
@@ -42,10 +39,6 @@ func TestTorrentLoadFile(t *testing.T) {
 	path := writeTOML(t, `
 [torrent]
 enabled = false
-links = [
-    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Title",
-    "https://example.org/release.torrent",
-]
 dir = "/tmp/torrent-data"
 port = 42070
 no_upload = true
@@ -60,12 +53,6 @@ readahead_mb = 64
 	if tc.Enabled {
 		t.Error("Torrent.Enabled = true, want false (file override)")
 	}
-	if len(tc.Links) != 2 {
-		t.Fatalf("Torrent.Links = %v, want 2 links", tc.Links)
-	}
-	if tc.Links[0] != "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Title" {
-		t.Errorf("Torrent.Links[0] = %q, want magnet link verbatim", tc.Links[0])
-	}
 	if tc.Dir != "/tmp/torrent-data" {
 		t.Errorf("Torrent.Dir = %q, want override", tc.Dir)
 	}
@@ -77,6 +64,28 @@ readahead_mb = 64
 	}
 	if tc.ReadaheadMB != 64 {
 		t.Errorf("Torrent.ReadaheadMB = %d, want 64", tc.ReadaheadMB)
+	}
+}
+
+// TestTorrentLinksKeyFailsLoud pins the PR40 removal: the `links`
+// ingestion list is gone (its only consumer, the «Торренты» menu, was
+// superseded by the torrent search providers), so a settings file that
+// still carries the key must fail loud with the offending key path —
+// never silently ignored.
+func TestTorrentLinksKeyFailsLoud(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, `
+[torrent]
+enabled = true
+links = ["magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"]
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load with the removed torrent.links key must fail loud")
+	}
+	if !strings.Contains(err.Error(), "torrent.links") {
+		t.Errorf("error = %v, want it to name the removed key torrent.links", err)
 	}
 }
 

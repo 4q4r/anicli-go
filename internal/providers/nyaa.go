@@ -181,7 +181,7 @@ func isHex(s string) bool {
 // releases yield one playable entry, batches one per file with the
 // parsed episode numbers).
 func (p *Nyaa) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	return p.TorrentBase.EpisodesWait(ctx, animeURL)
+	return p.EpisodesWait(ctx, animeURL)
 }
 
 // ResolveStream resolves playback through the torrent core: the link

@@ -545,3 +545,65 @@ func trackerAnnounceStubForProviders(t *testing.T) (url string, hits func() int)
 	t.Cleanup(srv.Close)
 	return srv.URL + "/announce", func() int { return int(count.Load()) }
 }
+
+// TestTorrentBaseIngestMetaInfoRecordsLinkMapping pins the PR53
+// preflight handoff: parsing a pre-fetched .torrent into the engine
+// under the ORIGINAL link records the link→release mapping, so the
+// later Ingest(link) is a dedupe hit — the resolve leg never re-fetches
+// what the preflight already carried.
+func TestTorrentBaseIngestMetaInfoRecordsLinkMapping(t *testing.T) {
+	if testing.Short() {
+		t.Skip("engine-based ingest in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, mi, ih := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+	base := NewTorrentBase(newOfflineTestEngine(t))
+	t.Cleanup(func() { _ = base.Close() })
+
+	got, err := base.IngestMetaInfo(context.Background(), linkA, mi)
+	if err != nil {
+		t.Fatalf("IngestMetaInfo: %v", err)
+	}
+	if got != ih {
+		t.Errorf("infohash = %s, want %s", got.HexString(), ih.HexString())
+	}
+
+	// The mapping: Ingest on the same link must be a dedupe hit.
+	again, err := base.Ingest(context.Background(), linkA)
+	if err != nil {
+		t.Fatalf("Ingest after preflight ingest: %v", err)
+	}
+	if again != ih {
+		t.Errorf("Ingest infohash = %s, want the preflight's %s", again.HexString(), ih.HexString())
+	}
+
+	// The release is already usable (metadata was complete).
+	eps, err := base.Episodes(linkA)
+	if err != nil {
+		t.Fatalf("Episodes: %v", err)
+	}
+	if len(eps) != 1 || eps[0].Title != "Test Show - 01.mkv" {
+		t.Fatalf("episodes = %+v, want the seeded file", eps)
+	}
+}
+
+// TestTorrentBaseIngestMetaInfoNilEngineFailsLoud: without the engine
+// there is nothing to ingest into — typed loud failure, never a silent
+// pretend-success (kodik-parity convention).
+func TestTorrentBaseIngestMetaInfoNilEngineFailsLoud(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, mi, _ := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+	base := NewTorrentBase(nil)
+
+	_, err := base.IngestMetaInfo(context.Background(), linkA, mi)
+	if err == nil {
+		t.Fatal("nil engine must fail loud")
+	}
+	if !strings.Contains(err.Error(), "engine is not wired") {
+		t.Errorf("err = %v, want the not-wired wording", err)
+	}
+}

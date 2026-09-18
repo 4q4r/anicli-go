@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anacrolix/torrent/metainfo"
+
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/torrent"
 )
@@ -115,6 +117,43 @@ func (b *TorrentBase) Ingest(ctx context.Context, link string) (torrent.InfoHash
 	b.releases[rel.InfoHash] = rel
 	b.mu.Unlock()
 	return rel.InfoHash, nil
+}
+
+// IngestMetaInfo ingests already-fetched metainfo under the ORIGINAL
+// provider link (the PR53 preflight handoff): the bytes were carried by
+// the search-time dead-host preflight, so the later Ingest(link) on the
+// resolve leg is a dedupe hit — the .torrent is never re-fetched.
+// Engine nil fails loud (the not-wired convention).
+func (b *TorrentBase) IngestMetaInfo(_ context.Context, link string, mi *metainfo.MetaInfo) (torrent.InfoHash, error) {
+	b.mu.Lock()
+	eng := b.engine
+	if ih, ok := b.links[link]; ok {
+		b.mu.Unlock()
+		return ih, nil
+	}
+	b.mu.Unlock()
+	if eng == nil {
+		return torrent.InfoHash{}, errors.New("torrent provider: engine is not wired ([torrent] disabled?)")
+	}
+	if mi == nil {
+		return torrent.InfoHash{}, errors.New("torrent provider: nil metainfo")
+	}
+	rel, err := eng.AddMetaInfo(mi)
+	if err != nil {
+		return torrent.InfoHash{}, fmt.Errorf("torrent provider: ingest %s: %w", link, err)
+	}
+	b.mu.Lock()
+	b.links[link] = rel.InfoHash
+	b.releases[rel.InfoHash] = rel
+	b.mu.Unlock()
+	return rel.InfoHash, nil
+}
+
+// engineSnapshot returns the wired engine (or nil) under the lock.
+func (b *TorrentBase) engineSnapshot() *torrent.Engine {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.engine
 }
 
 // torrentEpisodePollInterval is the release-status poll cadence inside

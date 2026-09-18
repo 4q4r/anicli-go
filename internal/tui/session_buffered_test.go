@@ -454,27 +454,6 @@ func runBufferedBatch(t *testing.T, cmd tea.Cmd) tea.Msg {
 	return nil
 }
 
-// pickFormat drives the watch entry through the PR44 format selector:
-// Enter on «Смотреть», then the chosen mode («Потоковый» unless
-// buffered).
-func pickFormat(t *testing.T, s *sessionScreen, buffered bool) {
-	t.Helper()
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("watch cmd: %T", cmd)
-	}
-	if s.state != sessionStateFormat {
-		t.Fatalf("state = %s, want the format selector", s.state)
-	}
-	idx := 0
-	if buffered {
-		idx = indexOfDayFormatList(s, "buffer")
-	}
-	s.formatList.Jump(idx)
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("format pick cmd: %T", cmd)
-	}
-}
-
 // pickMergedStream settles the post-format merged resolve (PR61) and
 // picks the entry at idx, landing on the audio prompt.
 func pickMergedStream(t *testing.T, s *sessionScreen, cmd tea.Cmd, idx int) {

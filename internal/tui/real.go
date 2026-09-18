@@ -562,6 +562,20 @@ func (s *realShiki) UpdateStatus(ctx context.Context, shikimoriID, rateID int64,
 	return s.client.CreateRate(ctx, shikimoriID, input)
 }
 
+// UpdateEpisodes pushes the watch-progress counter (PR61, python
+// extract_and_play's update_rate parity): PATCH the stored rate or
+// create one, sending {episodes: N, status}.
+func (s *realShiki) UpdateEpisodes(ctx context.Context, shikimoriID, rateID int64, episodes int, status string) (int64, error) {
+	input := shikimori.RateInput{
+		Episodes: &episodes,
+		Status:   shikimori.CanonicalStatus(status),
+	}
+	if rateID > 0 {
+		return s.client.UpdateRate(ctx, rateID, input)
+	}
+	return s.client.CreateRate(ctx, shikimoriID, input)
+}
+
 // SearchIDs maps candidate titles to shikimori anime ids.
 func (s *realShiki) SearchIDs(ctx context.Context, query string) (map[string]int64, error) {
 	return s.client.SearchIDs(ctx, query)

@@ -910,3 +910,43 @@ func TestWhoAmIReturnsNickname(t *testing.T) {
 		}
 	})
 }
+
+// TestUpdateRateWatchProgressPayload (PR61) pins the exact wire body
+// of the on-start watch-progress push: PATCH wrapped as
+// {"user_rate":{"episodes":N,"status":"watching"}} — no other fields.
+func TestUpdateRateWatchProgressPayload(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestClient(t, cookieCfg("s"), func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/users/sign_in":
+			_, _ = w.Write([]byte(`<html><head><meta name="csrf-token" content="tok"></head></html>`))
+		case "/api/v2/user_rates/55":
+			if r.Method != http.MethodPatch {
+				t.Errorf("method = %s, want PATCH", r.Method)
+			}
+			var payload struct {
+				UserRate map[string]any `json:"user_rate"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode payload: %v", err)
+			}
+			if len(payload.UserRate) != 2 {
+				t.Errorf("payload = %+v, want exactly episodes+status", payload.UserRate)
+			}
+			if payload.UserRate["episodes"] != float64(3) {
+				t.Errorf("episodes = %v, want 3", payload.UserRate["episodes"])
+			}
+			if payload.UserRate["status"] != "watching" {
+				t.Errorf("status = %v, want watching", payload.UserRate["status"])
+			}
+			writeJSON(w, map[string]any{"id": 55})
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	})
+
+	if _, err := c.UpdateRate(context.Background(), 55, RateInput{Episodes: intPtr(3), Status: "watching"}); err != nil {
+		t.Fatalf("UpdateRate: %v", err)
+	}
+}

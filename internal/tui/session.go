@@ -15,6 +15,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -115,6 +116,18 @@ type shikiUpdatedMsg struct {
 	err    error
 	rateID int64
 }
+
+// shikiSyncedMsg settles the on-start watch-progress push (PR61):
+// note carries the status-line verdict (synced / typed skip), err a
+// hard failure.
+type shikiSyncedMsg struct {
+	err  error
+	note string
+}
+
+// shikiSyncTimeout bounds the on-start progress push (3c: non-blocking,
+// bounded context alongside playback).
+const shikiSyncTimeout = 15 * time.Second
 
 // shikiBoundMsg settles the background shikimori id resolution (I5);
 // id 0 means "no confident match, binding skipped".
@@ -571,6 +584,15 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		s.status = "Информация обновлена"
 		return s, nil
+	case shikiSyncedMsg:
+		if msg.err != nil {
+			s.status = msg.err.Error()
+			return s, nil
+		}
+		if msg.note != "" {
+			s.status = msg.note
+		}
+		return s, nil
 	case shikiBoundMsg:
 		if msg.id != 0 {
 			s.setShikimoriBinding(msg.id)
@@ -953,7 +975,7 @@ func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Epi
 	}
 	entries := make([]streamEntry, 0, pending)
 	var firstErr error
-	for i := 0; i < pending; i++ {
+	for range pending {
 		r := <-ch
 		if r.err != nil {
 			if firstErr == nil {
@@ -1255,7 +1277,9 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 // launchPlayback continues after the video (and, when fresh, audio)
 // picks: buffered mode buffers the picked stream, streaming launches
 // mpv. The skip verdict fetched during the resolve (PR61) composes
-// into the launch line and auto-clears on the playback settle.
+// into the launch line and auto-clears on the playback settle. The
+// shikimori watch-progress push (PR61) runs ALONGSIDE playback —
+// python extract_and_play's update_rate at the launch moment.
 func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
@@ -1269,7 +1293,102 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	if s.skipNote != "" && s.skipEpisode == s.currentEpisode() {
 		s.status += " · ⏭ " + s.skipNote
 	}
-	return s, s.playCmd()
+	play := s.playCmd()
+	if s.deps == nil || s.deps.Shiki == nil {
+		return s, play
+	}
+	if id := s.shikimoriID(); id != 0 {
+		if episode := parseWatchEpisode(s.currentEpisode()); episode > 0 {
+			return s, tea.Batch(play, syncWatchProgressCmd(s.deps, id, episode))
+		}
+	}
+	return s, play
+}
+
+// parseWatchEpisode reads the episode counter for the progress push;
+// 0 marks a non-numeric episode (OVA/special) that must not zero the
+// remote counter.
+func parseWatchEpisode(num string) int {
+	f := EpisodeSortKey(num)
+	if f <= 0 {
+		return 0
+	}
+	return int(f)
+}
+
+// syncWatchProgressCmd schedules the bounded, non-blocking push.
+func syncWatchProgressCmd(deps *Deps, shikimoriID int64, episode int) tea.Cmd {
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
+		defer cancel()
+		return syncWatchProgress(ctx, deps, shikimoriID, episode)
+	})
+}
+
+// syncWatchProgress pushes {episodes: N, status} to shikimori with
+// python parity: the stored status is kept (planned → watching), the
+// counter only ever moves forward, and every verdict — synced, typed
+// skip or failure — is logged.
+func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episode int) shikiSyncedMsg {
+	log := deps.logger()
+	if deps.Shiki == nil || !deps.Shiki.Enabled() {
+		log.Info("tui: shiki: tracker disabled; progress push skipped", "episode", episode)
+		return shikiSyncedMsg{note: "шики: трекер отключён — прогресс не отправлен"}
+	}
+	if mode := deps.Shiki.Mode(); mode == "none" || mode == "disabled" {
+		log.Info("tui: shiki: no auth; progress push skipped",
+			"episode", episode, "mode", mode)
+		return shikiSyncedMsg{note: "шики: нет авторизации — прогресс не отправлен"}
+	}
+
+	var (
+		rateID  int64
+		animeID int64
+		prior   int
+		status  = "watching"
+	)
+	if deps.History != nil {
+		rec, err := deps.History.GetByShikimoriID(ctx, shikimoriID)
+		if err != nil {
+			log.Warn("tui: shiki: local row lookup failed", "error", err)
+		}
+		if rec != nil {
+			animeID = rec.ID
+			prior = parseWatchEpisode(rec.CurrentEpisode)
+			if rec.ShikimoriRateID != nil {
+				rateID = *rec.ShikimoriRateID
+			}
+			if st := shikimori.CanonicalStatus(rec.ShikimoriStatus); st != "" {
+				if st == "plan_to_watch" || st == "planned" {
+					st = "watching" // python: planned → watching on play
+				}
+				status = st
+			}
+		}
+	}
+	if prior > episode {
+		log.Info("tui: shiki: episode behind local progress; push skipped",
+			"episode", episode, "prior", prior)
+		return shikiSyncedMsg{note: fmt.Sprintf(
+			"шики: серия %d — прогресс уже %d, счётчик не откатывается", episode, prior)}
+	}
+
+	newRate, err := deps.Shiki.UpdateEpisodes(ctx, shikimoriID, rateID, episode, status)
+	if err != nil {
+		log.Warn("tui: shiki: progress push failed", "episode", episode, "error", err)
+		return shikiSyncedMsg{err: fmt.Errorf("шики: ошибка синхронизации: %w", err)}
+	}
+	// A created rate id is persisted so the next push PATCHes instead
+	// of duplicating (SyncEpisodeProgress pattern: the id write
+	// survives caller cancellation).
+	if rateID == 0 && newRate != 0 && animeID != 0 && deps.History != nil {
+		if err := deps.History.SetRateID(context.WithoutCancel(ctx), animeID, newRate); err != nil {
+			log.Warn("tui: shiki: persist rate id failed", "anime", animeID, "error", err)
+		}
+	}
+	log.Info("tui: shiki: progress synced",
+		"episode", episode, "rate", newRate, "status", status)
+	return shikiSyncedMsg{note: fmt.Sprintf("шики: прогресс синхронизирован (эп %d)", episode)}
 }
 
 // playCmd runs the player; it settles into playedMsg.

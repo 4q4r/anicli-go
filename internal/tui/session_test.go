@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -1104,7 +1106,7 @@ func TestSessionResumeCarriesShikimoriBinding(t *testing.T) {
 	if _, ok := msg.(streamResolvedMsg); !ok {
 		t.Fatalf("stream resolve expected, got %T", msg)
 	}
-	next, play := next.Update(msg)
+	_, play := next.Update(msg)
 	if play == nil {
 		t.Fatalf("the scoped settle must launch playback")
 	}
@@ -1265,5 +1267,259 @@ func TestSessionSkipNoteAbsentKeepsPlainLaunch(t *testing.T) {
 	ss.Update(enter())
 	if ss.status != "▶ Запуск mpv…" {
 		t.Fatalf("launch line = %q, want the plain form", ss.status)
+	}
+}
+
+// shikiWatchSession builds a bound, watch-ready session: streams for
+// the animego dub, shikimori binding id 21, the given shiki/history
+// fakes and a captured log buffer.
+func shikiWatchSession(t *testing.T, shiki *fakeShiki, hist *fakeHistory, logs *bytes.Buffer) *sessionScreen {
+	t.Helper()
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+				}},
+			},
+		},
+		Playback: &fakePlayback{},
+		Shiki:    shiki,
+		History:  hist,
+		Log:      slog.New(slog.NewTextHandler(logs, nil)),
+	}
+	group := []contracts.SearchResult{{
+		Title: "Тайтл", URL: "u1", SourceID: "animego",
+		Meta: map[string]any{"shikimori_id": int64(21)},
+	}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	return s
+}
+
+// shikiPlayToLaunch drives the fresh watch through the merged list and
+// the ⭐ audio pick, returning the launch commands' messages.
+func shikiPlayToLaunch(t *testing.T, s *sessionScreen) []tea.Msg {
+	t.Helper()
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", cmd())
+	}
+	next, _ = ss.Update(sr)
+	ss = next.(*sessionScreen)
+	ss.qualityList.Jump(0)
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	ss.dubList.Jump(0)
+	_, launch := ss.Update(enter())
+	if launch == nil {
+		t.Fatalf("the audio pick must launch playback")
+	}
+	msg := launch()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	out := []tea.Msg{}
+	for _, c := range batch {
+		out = append(out, c())
+	}
+	return out
+}
+
+// TestSessionWatchSyncsShikiProgress (PR61): the launch pushes
+// {episodes: N, status: watching} — the CREATE path when no rate id is
+// known — and the verdict lands on the status line.
+func TestSessionWatchSyncsShikiProgress(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	logs := &bytes.Buffer{}
+	s := shikiWatchSession(t, shiki, &fakeHistory{}, logs)
+
+	msgs := shikiPlayToLaunch(t, s)
+	synced := false
+	for _, m := range msgs {
+		if sm, ok := m.(shikiSyncedMsg); ok {
+			synced = true
+			if sm.err != nil {
+				t.Fatalf("sync must succeed, got %v", sm.err)
+			}
+			if !strings.Contains(sm.note, "прогресс синхронизирован (эп 1)") {
+				t.Fatalf("note = %q, want the synced verdict", sm.note)
+			}
+		}
+	}
+	if !synced {
+		t.Fatalf("the launch batch must carry shikiSyncedMsg, got %v", msgs)
+	}
+	if len(shiki.epPushes) != 1 {
+		t.Fatalf("exactly one push expected, got %+v", shiki.epPushes)
+	}
+	push := shiki.epPushes[0]
+	if push.shikimoriID != 21 || push.rateID != 0 || push.episodes != 1 || push.status != "watching" {
+		t.Fatalf("push = %+v, want {21 0 1 watching}", push)
+	}
+	if !strings.Contains(logs.String(), "shiki: progress synced") {
+		t.Fatalf("success must reach the file logger, got:\n%s", logs.String())
+	}
+}
+
+// TestSessionWatchSyncCreatePersistsRateID (PR61): the created rate id
+// is persisted on the history row so the next push PATCHes it.
+func TestSessionWatchSyncCreatePersistsRateID(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	hist := &fakeHistory{byShiki: map[int64]*storage.AnimeProgress{
+		21: {ID: 7},
+	}}
+	s := shikiWatchSession(t, shiki, hist, &bytes.Buffer{})
+
+	shikiPlayToLaunch(t, s)
+	if shiki.epPushes[0].rateID != 0 {
+		t.Fatalf("first push must CREATE (rate 0), got %+v", shiki.epPushes[0])
+	}
+	if hist.rateIDs[7] == 0 {
+		t.Fatalf("the created rate id must be persisted, got %v", hist.rateIDs)
+	}
+}
+
+// TestSessionWatchSyncPatchKnownRate (PR61): a known rate id rides the
+// push — the PATCH path (idempotent SET, no duplicate rates).
+func TestSessionWatchSyncPatchKnownRate(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	rate := int64(55)
+	hist := &fakeHistory{byShiki: map[int64]*storage.AnimeProgress{
+		21: {ID: 7, CurrentEpisode: "1", ShikimoriRateID: &rate},
+	}}
+	s := shikiWatchSession(t, shiki, hist, &bytes.Buffer{})
+
+	shikiPlayToLaunch(t, s)
+	if len(shiki.epPushes) != 1 || shiki.epPushes[0].rateID != 55 {
+		t.Fatalf("pushes = %+v, want one PATCH with rate 55", shiki.epPushes)
+	}
+}
+
+// TestSessionWatchSyncSkipsUnauthenticated (PR61): an authenticated-
+// lacking integration is a typed skip — one status line, no push, a
+// file-logger note.
+func TestSessionWatchSyncSkipsUnauthenticated(t *testing.T) {
+	shiki := &fakeShiki{enabled: true, mode: "none"}
+	logs := &bytes.Buffer{}
+	s := shikiWatchSession(t, shiki, &fakeHistory{}, logs)
+
+	msgs := shikiPlayToLaunch(t, s)
+	for _, m := range msgs {
+		if sm, ok := m.(shikiSyncedMsg); ok {
+			if !strings.Contains(sm.note, "нет авторизации") {
+				t.Fatalf("note = %q, want the typed unauth skip", sm.note)
+			}
+		}
+	}
+	if len(shiki.epPushes) != 0 {
+		t.Fatalf("no push may run unauthenticated, got %+v", shiki.epPushes)
+	}
+	if !strings.Contains(logs.String(), "shiki: no auth") {
+		t.Fatalf("the skip must reach the file logger, got:\n%s", logs.String())
+	}
+}
+
+// TestSessionWatchSyncDisabledTyped (PR61): a disabled tracker is a
+// typed skip with a status note and a log entry — never silent.
+func TestSessionWatchSyncDisabledTyped(t *testing.T) {
+	shiki := &fakeShiki{enabled: false}
+	logs := &bytes.Buffer{}
+	s := shikiWatchSession(t, shiki, &fakeHistory{}, logs)
+
+	msgs := shikiPlayToLaunch(t, s)
+	found := false
+	for _, m := range msgs {
+		if sm, ok := m.(shikiSyncedMsg); ok {
+			found = true
+			if !strings.Contains(sm.note, "трекер отключён") {
+				t.Fatalf("note = %q, want the disabled skip", sm.note)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the disabled skip must be typed, got %v", msgs)
+	}
+	if len(shiki.epPushes) != 0 {
+		t.Fatalf("no push may run disabled, got %+v", shiki.epPushes)
+	}
+	if !strings.Contains(logs.String(), "tracker disabled") {
+		t.Fatalf("the skip must reach the file logger, got:\n%s", logs.String())
+	}
+}
+
+// TestSessionWatchSyncNeverRollsBack (PR61): the counter only moves
+// forward — an episode behind the local progress is a typed skip, no
+// push (idempotence + monotonicity).
+func TestSessionWatchSyncNeverRollsBack(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	hist := &fakeHistory{byShiki: map[int64]*storage.AnimeProgress{
+		21: {ID: 7, CurrentEpisode: "5"},
+	}}
+	s := shikiWatchSession(t, shiki, hist, &bytes.Buffer{})
+
+	msgs := shikiPlayToLaunch(t, s)
+	sawNote := false
+	for _, m := range msgs {
+		if sm, ok := m.(shikiSyncedMsg); ok {
+			if !strings.Contains(sm.note, "не откатывается") {
+				t.Fatalf("note = %q, want the rollback guard", sm.note)
+			}
+			sawNote = true
+		}
+	}
+	if !sawNote {
+		t.Fatalf("the rollback guard must be typed, got %v", msgs)
+	}
+	if len(shiki.epPushes) != 0 {
+		t.Fatalf("no push may run for an older episode, got %+v", shiki.epPushes)
+	}
+}
+
+// TestSessionWatchSyncReplaySameEpisode (PR61): re-playing the SAME
+// episode pushes the same SET again (episodes=N is idempotent — no
+// double increment is possible).
+func TestSessionWatchSyncReplaySameEpisode(t *testing.T) {
+	shiki := &fakeShiki{enabled: true}
+	hist := &fakeHistory{byShiki: map[int64]*storage.AnimeProgress{
+		21: {ID: 7, CurrentEpisode: "1"},
+	}}
+	s := shikiWatchSession(t, shiki, hist, &bytes.Buffer{})
+
+	shikiPlayToLaunch(t, s)
+	if len(shiki.epPushes) != 1 || shiki.epPushes[0].episodes != 1 {
+		t.Fatalf("replay pushes = %+v, want one episodes=1 SET", shiki.epPushes)
+	}
+}
+
+// TestSessionWatchSyncFailureLogged (PR61): a failed push surfaces on
+// the status line and in the file logger.
+func TestSessionWatchSyncFailureLogged(t *testing.T) {
+	shiki := &fakeShiki{enabled: true, epErr: errors.New("shiki down")}
+	logs := &bytes.Buffer{}
+	s := shikiWatchSession(t, shiki, &fakeHistory{}, logs)
+
+	msgs := shikiPlayToLaunch(t, s)
+	sawErr := false
+	for _, m := range msgs {
+		if sm, ok := m.(shikiSyncedMsg); ok && sm.err != nil {
+			sawErr = true
+			if !strings.Contains(sm.err.Error(), "ошибка синхронизации") {
+				t.Fatalf("err = %v, want the sync failure prefix", sm.err)
+			}
+		}
+	}
+	if !sawErr {
+		t.Fatalf("the failure must be carried, got %v", msgs)
+	}
+	if !strings.Contains(logs.String(), "shiki: progress push failed") {
+		t.Fatalf("the failure must reach the file logger, got:\n%s", logs.String())
 	}
 }

@@ -48,8 +48,9 @@ func (e *env) close() {
 // when fewer than this many providers answer both probe queries. It
 // tracks the roster minus one dead-provider tolerance (11 of 12 at
 // PR24's roster; 12 of 13 since nyaa joined in PR36; 13 of 14 since
-// anilibria-torrent joined in PR37).
-const gateProviders = 13
+// anilibria-torrent joined in PR37; 16 of 17 since animedia joined in
+// PR56; integration re-pin: 17 of 18 with anime365+animedia both in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59).
+const gateProviders = 20
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.
@@ -351,13 +352,13 @@ type allRow struct {
 }
 
 // parityAllCommand builds `parity all`: every registered provider is
-// probed with both gate queries under a per-operation timeout; the
-// summary table is printed and the command fails when fewer than
-// gateProviders providers answered both queries.
+// probed with both gate queries (or its own declared probe, PR51)
+// under a per-operation timeout; the summary table is printed and the
+// command fails when fewer than gateProviders providers answered.
 func parityAllCommand(setup func(*cobra.Command) (*env, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   "all",
-		Short: "Probe all providers (G1 gate): search 'test' + 'naruto' everywhere",
+		Short: "Probe all providers (G1 gate): search 'test' + 'naruto' everywhere (declared own probes win)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := setup(cmd)
@@ -373,7 +374,23 @@ func parityAllCommand(setup func(*cobra.Command) (*env, error)) *cobra.Command {
 				row := allRow{id: p.ID()}
 				start := time.Now()
 				row.ok = true
-				for _, query := range probeQueries {
+				// A provider declaring its own probe (PR51) is probed
+				// with it instead of the shared queries: a RU-only
+				// index (amd.online) answers 0 to «test»/«naruto» by
+				// design and would permanently burn the gate's
+				// one-dead tolerance. The wrapper layers peel the same
+				// way the smoke peels them.
+				queries := probeQueries
+				capability := p
+				if d, ok := capability.(providers.SearchDelegator); ok {
+					capability = d.Provider
+				}
+				if sq, ok := capability.(contracts.SmokeQueryProvider); ok {
+					if declared := sq.SmokeQuery(); declared != "" {
+						queries = []string{declared}
+					}
+				}
+				for _, query := range queries {
 					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 					results, err := p.Search(ctx, query)
 					cancel()

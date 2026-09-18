@@ -368,19 +368,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 14)
+	d := newToolDeps(t, 21)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("14/14 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("21/21 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "14/14") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "21/21") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 14 {
+	for i := range 21 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -388,34 +388,96 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 }
 
 // TestParityAllGateToleratesOneDead pins the tolerance semantics: the
-// floor is the roster minus one (13 of 14 since anilibria-torrent
-// joined in PR37).
+// floor is the roster minus one (16 of 17 since animedia joined in
+// PR56; 17 of 18 with anime365 merged alongside).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 14, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 21, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("13/14 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("20/21 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "13/14") {
-		t.Fatalf("summary must show 13/14:\n%s", out.String())
+	if !strings.Contains(out.String(), "20/21") {
+		t.Fatalf("summary must show 20/21:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 14, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 21, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("12/14 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("19/21 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "12/14") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 12/14 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "19/21") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 19/21 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())
+	}
+}
+
+// smokeQueryProvider is a parityProvider whose catalog only answers a
+// query of its own choosing (the PR51 own-catalog ruling; amd.online
+// is the live case: a RU-only prefix index deaf to the shared
+// latin/gate probes).
+type smokeQueryProvider struct {
+	*parityProvider
+	query string
+}
+
+func (p *smokeQueryProvider) SmokeQuery() string { return p.query }
+
+// TestParityAllHonorsDeclaredSmokeQuery pins the PR51 ruling inside
+// the G1 gate: a provider declaring its own probe is probed with it
+// INSTEAD of the shared queries — otherwise a RU-only index answers
+// 0/0 by design and permanently burns the gate's one-dead tolerance.
+func TestParityAllHonorsDeclaredSmokeQuery(t *testing.T) {
+	const declared = "врата штейна"
+	declared00 := &smokeQueryProvider{parityProvider: newParityProvider(t, "p00", false), query: declared}
+	saveDir := t.TempDir()
+	d := deps{
+		buildRegistry: func(config.Settings) (*providers.Registry, error) {
+			reg := providers.NewEmptyRegistry()
+			// p00 declares its own probe; the rest of the roster uses
+			// the shared queries (the real 20-provider shape).
+			if err := reg.Register(declared00); err != nil {
+				return nil, err
+			}
+			for i := 1; i < 20; i++ {
+				p := newParityProvider(t, fmt.Sprintf("p%02d", i), false)
+				if err := reg.Register(p); err != nil {
+					return nil, err
+				}
+			}
+			return reg, nil
+		},
+		now:     func() time.Time { return time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC) },
+		saveDir: saveDir,
+		seq:     new(atomic.Uint64),
+	}
+	var out, errOut strings.Builder
+
+	code := run([]string{"all"}, &out, &errOut, d)
+	if code != 0 {
+		t.Fatalf("declaring provider must pass the gate, exit %d, stderr: %s", code, errOut.String())
+	}
+	table := out.String()
+	if !strings.Contains(table, declared) {
+		t.Fatalf("gate must probe the declared query %q, row:\n%s", declared, table)
+	}
+	// The declared row keeps its own probe only.
+	if idx := strings.Index(table, "p00\t"); idx >= 0 {
+		row := table[idx : strings.IndexByte(table[idx:], '\n')+idx]
+		if strings.Contains(row, "test:") || strings.Contains(row, "naruto:") {
+			t.Fatalf("declaring provider must not receive the shared probes, row: %s", row)
+		}
+	}
+	// A non-declaring roster member still gets the shared probes.
+	if !strings.Contains(table, "test:") || !strings.Contains(table, "naruto:") {
+		t.Fatalf("non-declaring providers must keep the shared probes:\n%s", table)
 	}
 }
 

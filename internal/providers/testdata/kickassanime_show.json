@@ -1,0 +1,36 @@
+{
+ "episode_duration": 1437,
+ "genres": [
+  "Action",
+  "Comedy",
+  "Shounen",
+  "Supernatural"
+ ],
+ "locales": [
+  "ja-JP",
+  "en-US",
+  "es-ES"
+ ],
+ "slug": "dandadan-da3b",
+ "start_date": "2024-10-04T00:00:00.000Z",
+ "status": "finished_airing",
+ "synopsis": "Reeling from her recent breakup, Momo Ayase, a popular high schooler, shows kind…",
+ "title": "Dandadan",
+ "title_en": "Dan Da Dan",
+ "title_original": "ダンダダン",
+ "type": "tv",
+ "year": 2024,
+ "poster": {
+  "formats": [
+   "jpeg",
+   "webp"
+  ],
+  "sm": "dandadan-b585-sm",
+  "aspectRatio": 0.71,
+  "hq": "dandadan-b585-hq"
+ },
+ "season": "fall",
+ "end_date": "2024-12-20T00:00:00.000Z",
+ "rating": "R",
+ "watch_uri": "/dandadan-da3b/ep-1-aab983"
+}

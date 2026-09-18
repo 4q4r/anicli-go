@@ -189,6 +189,23 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, to
 	if pref == contracts.NamePrefLatin {
 		query = smokeQueryLatin
 	}
+	// Own-catalog providers (strict prefix search over the team's own
+	// dubs) can miss both shared probes: a declared smoke query wins
+	// and gets no RU/latin fallback (PR51). The stat delegator hides
+	// optional capabilities, so peel it for the check; the dub stream
+	// filter (only present when [providers].exclude_streams is set)
+	// hides them too — those configs keep the shared probes.
+	capability := p
+	if d, ok := capability.(providers.SearchDelegator); ok {
+		capability = d.Provider
+	}
+	declared := ""
+	if sq, ok := capability.(contracts.SmokeQueryProvider); ok {
+		declared = sq.SmokeQuery()
+	}
+	if declared != "" {
+		query = declared
+	}
 	results, err := p.Search(ctx, query)
 	if err != nil {
 		return fail("search: %s", shorten(err.Error(), 80))
@@ -197,8 +214,9 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, to
 	res.search = len(results)
 	// A default-preference provider deaf to the RU query gets ONE
 	// latin retry: a language mismatch is not a dead provider. The row
-	// names both queries so the fallback stays visible.
-	if res.search == 0 && pref != contracts.NamePrefLatin {
+	// names both queries so the fallback stays visible. Declaring
+	// providers speak for themselves — no fallback.
+	if res.search == 0 && declared == "" && pref != contracts.NamePrefLatin {
 		results, err = p.Search(ctx, smokeQueryLatin)
 		if err != nil {
 			return fail("search: %s", shorten(err.Error(), 80))

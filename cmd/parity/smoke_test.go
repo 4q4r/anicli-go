@@ -180,6 +180,32 @@ func (p *ruDeafSearch) Search(ctx context.Context, query string) ([]contracts.Se
 	return p.parityProvider.Search(ctx, query)
 }
 
+// TestSmokeProviderSmokeQueryOverride: a provider declaring a smoke
+// query (own-catalog dub teams whose strict-prefix search misses both
+// shared probes — PR51) is probed with ITS query; no RU/latin fallback
+// runs and the row names the override.
+func TestSmokeProviderSmokeQueryOverride(t *testing.T) {
+	own := &ownCatalogSearch{parityProvider: newParityProvider(t, "owncat", false)}
+	d := smokeDeps(t, 0, own)
+	out, errOut, code := runSmoke(t, d, "smoke", "all")
+	if code != 0 {
+		t.Fatalf("smoke-query override must pass the chain, exit %d, stderr: %s", code, errOut)
+	}
+	if !strings.Contains(out, ownCatalogQuery) {
+		t.Fatalf("row must name the provider-declared query:\n%s", out)
+	}
+	if strings.Contains(out, smokeQueryRU) || strings.Contains(out, smokeQueryLatin) {
+		t.Fatalf("shared probes must not run for a declaring provider:\n%s", out)
+	}
+}
+
+// ownCatalogSearch declares a provider-specific smoke query.
+type ownCatalogSearch struct{ *parityProvider }
+
+const ownCatalogQuery = "свой запрос"
+
+func (p *ownCatalogSearch) SmokeQuery() string { return ownCatalogQuery }
+
 // TestSmokeSkipsCredentialProviders: the credential-gated roster
 // members render as SKIP rows with their reason and never affect the
 // exit code — including gated ids absent from the registry.

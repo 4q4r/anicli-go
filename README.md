@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 18 провайдеров"]
+    subgraph sources["Источники — 19 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -125,6 +125,7 @@ graph TD
         P17[tokyotosho torrents]
         P18[anime365]
         P19[animedia]
+        P20[shiza]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -132,7 +133,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18 & P19
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18 & P19 & P20
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -285,6 +286,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
 | anime365 | smotret-anime.app | видео (русс. озвучки и субтитры) | ✅ живой (PR55), документированный JSON API (зеркала: smotret-anime.online, anime365.ru); без токена доступа (`providers.anime365.token`, нужна активная подписка) провайдер отключается при старте; ссылки на видео выдаёт embed-API по токену |
 | animedia | amd.online | видео (рус. озвучки) | ✅ живой (PR56); не порт — старый JSON API animedia.online мёртв, написан по живому DLE-сайту: поиск формой сайта, серии/озвучки из kodik-блоков страницы; стримы через общий kodik-экстрактор; ru-индекс (латиница не ищется), часть тайтлов отдана через rutube — типизированная ошибка |
+| shiza | shizaproject.com | видео (рус. озвучки, субтитры) | ✅ живой (PR57); не порт — Nuxt-SPA, написан по живому GraphQL API (публичный, анонимный): поиск по RU-названию и ромадзи, серии из kodik/sibnet-эмбедов через общие экстракторы; torrent-раздел мёртв (0 сидов) и не регистрируется |
 
 Не портированы / удалены (мёртвые):
 
@@ -306,7 +308,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 17/18 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 18/19 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ

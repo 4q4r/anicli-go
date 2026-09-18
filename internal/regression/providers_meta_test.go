@@ -23,7 +23,8 @@ import (
 // tokyotosho (PR38, the search RSS) joined after animetosho;
 // anime365 (PR55, the tokened smotret-anime JSON API) joined after
 // tokyotosho; animedia (PR56, the amd.online DLE site) joined after
-// anime365.
+// anime365; shiza (PR57, the shizaproject.com GraphQL catalog)
+// joined after animedia.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -43,6 +44,7 @@ var expectedProviderOrder = []string{
 	"tokyotosho",
 	"anime365",
 	"animedia",
+	"shiza",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

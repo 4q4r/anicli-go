@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -522,7 +523,9 @@ func TestSessionDubSelectLanguageTags(t *testing.T) {
 	s.loadEpisodesSync()
 
 	s.beginStreamResolve("")
-	s.Update(streamResolvedMsg{entries: []streamEntry{
+	// The settle must carry its round's generation — a stale round is
+	// dropped by the leak guard (PR61 review R1c).
+	s.Update(streamResolvedMsg{gen: s.resolveGen, entries: []streamEntry{
 		{Quality: "1080", DubKey: "[animego] Дубль 1", Source: contracts.VideoSource{URL: "v1080"}},
 		{Quality: "1080", DubKey: "[anilib] AniLib", Source: contracts.VideoSource{URL: "a1080"}},
 	}})
@@ -1521,5 +1524,170 @@ func TestSessionWatchSyncFailureLogged(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "shiki: progress push failed") {
 		t.Fatalf("the failure must reach the file logger, got:\n%s", logs.String())
+	}
+}
+
+// leakProbePlayback extends fakePlayback with REAL temp chapters
+// files: every ResolveSkips call creates one in dir and its cleanup
+// removes it — the leak probe counts survivors.
+type leakProbePlayback struct {
+	fakePlayback
+	dir string
+}
+
+func (f *leakProbePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), string, error) {
+	f.skipIDs = append(f.skipIDs, shikimoriID)
+	fh, err := os.CreateTemp(f.dir, "anicli-leak-probe-*")
+	if err != nil {
+		return "", func() {}, "", err
+	}
+	path := fh.Name()
+	_ = fh.Close()
+	return path, func() { _ = os.Remove(path) }, "скипы: op 0:00–1:00", nil
+}
+
+func leakProbeSession(t *testing.T) (*sessionScreen, *leakProbePlayback, string) {
+	t.Helper()
+	pb := &leakProbePlayback{dir: t.TempDir()}
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+				}},
+			},
+		},
+		Playback: pb,
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	return s, pb, pb.dir
+}
+
+func leakProbeLeftovers(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read probe dir: %v", err)
+	}
+	return len(entries)
+}
+
+// TestSessionRedubRewatchCleansChaptersFile (PR61 review R1b): a
+// same-episode re-resolve («Сменить озвучку» → re-watch) must retire
+// the previous chapters file — no unique temp file may survive.
+func TestSessionRedubRewatchCleansChaptersFile(t *testing.T) {
+	s, _, dir := leakProbeSession(t)
+
+	// First watch settles: file A is pending.
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", cmd())
+	}
+	ss.Update(sr)
+	if leakProbeLeftovers(t, dir) != 1 {
+		t.Fatalf("one pending chapters file expected, got %d", leakProbeLeftovers(t, dir))
+	}
+
+	// Back to the menu, «Сменить озвучку», re-watch same episode: the
+	// second resolve supersedes the first — file A must go, file B
+	// pending.
+	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if ss.state != sessionStateMenu {
+		t.Fatalf("Esc must return to the menu, got %v", ss.state)
+	}
+	ss.list.Jump(sessionActionIndex(ss, "redub"))
+	ss.Update(enter())
+	ss.list.Jump(sessionActionIndex(ss, "watch"))
+	ss.Update(enter())
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd = ss.Update(enter())
+	sr2 := cmd().(streamResolvedMsg)
+	ss.Update(sr2)
+	if n := leakProbeLeftovers(t, dir); n != 1 {
+		t.Fatalf("supersede must keep exactly the newest chapters file, got %d", n)
+	}
+
+	// Backing out of the session retires the last pending file.
+	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if n := leakProbeLeftovers(t, dir); n != 0 {
+		t.Fatalf("cancel must remove the pending chapters file, got %d survivors", n)
+	}
+}
+
+// TestSessionResolveErrorCleansChaptersFile (PR61 review R1a): the
+// error branch of the resolve settle must drop that round's chapters
+// file — the skip fetch runs even when the streams fail.
+func TestSessionResolveErrorCleansChaptersFile(t *testing.T) {
+	pb := &leakProbePlayback{dir: t.TempDir()}
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			// Episodes list fine, but ResolveStream has no fixture —
+			// every provider resolve fails ("no stream") while the
+			// skip fetch still runs.
+			episodes: testEpisodeSet(),
+		},
+		Playback: pb,
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	msg := cmd()
+	sr, ok := msg.(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", msg)
+	}
+	if sr.err == nil {
+		t.Fatalf("the resolve must fail with the provider down")
+	}
+	ss.Update(sr)
+	if n := leakProbeLeftovers(t, pb.dir); n != 0 {
+		t.Fatalf("the error settle must remove its chapters file, got %d survivors", n)
+	}
+}
+
+// TestSessionCancelMidResolveCleansChaptersFile (PR61 review R1c):
+// cancelling while a resolve is in flight invalidates that round —
+// its late settle must drop its own chapters file instead of leaking
+// it into the pending slot.
+func TestSessionCancelMidResolveCleansChaptersFile(t *testing.T) {
+	s, _, dir := leakProbeSession(t)
+
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	if cmd == nil {
+		t.Fatalf("the resolve must be scheduled")
+	}
+	// Cancel while the resolve goroutine is in flight.
+	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if ss.state != sessionStateMenu {
+		t.Fatalf("cancel must return to the menu, got %v", ss.state)
+	}
+	// The late settle lands: a stale round cleans up after itself.
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", cmd())
+	}
+	ss.Update(sr)
+	if n := leakProbeLeftovers(t, dir); n != 0 {
+		t.Fatalf("the stale settle must remove its chapters file, got %d survivors", n)
 	}
 }

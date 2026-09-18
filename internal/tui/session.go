@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +15,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
@@ -92,8 +94,11 @@ type streamEntry struct {
 // the interactive merged list; a dub key = the remembered-dub fast
 // path that auto-plays its best/remembered quality). The skip verdict
 // rides along (PR61): it is stream-independent, so it fetches once
-// during the resolve and the note composes into the launch line.
+// during the resolve and the note composes into the launch line. gen
+// tags the resolve round — a cancelled or superseded round's late
+// settle cleans up after itself.
 type streamResolvedMsg struct {
+	gen          int
 	scope        string
 	entries      []streamEntry
 	skipEpisode  string
@@ -261,7 +266,11 @@ type sessionScreen struct {
 	skipNote     string
 	skipChapters string
 	skipCleanup  func()
-	localCounts  map[string]int
+	// resolveGen tags the in-flight stream-resolve round: a cancel
+	// bumps it so the late settle drops its own chapters file instead
+	// of leaking it into the pending slot (PR61 review R1c).
+	resolveGen  int
+	localCounts map[string]int
 
 	status string // transient status line (play verdicts, sync notes)
 }
@@ -532,14 +541,26 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case bufferedProgressEnd:
 		return s, nil
 	case streamResolvedMsg:
+		if msg.gen != s.resolveGen {
+			// A superseded round (cancel or a newer watch landed
+			// first): nobody else will clean its chapters file.
+			if msg.skipCleanup != nil {
+				msg.skipCleanup()
+			}
+			return s, nil
+		}
 		if msg.err != nil {
+			if msg.skipCleanup != nil {
+				msg.skipCleanup()
+			}
 			s.status = "Ошибка: " + msg.err.Error()
 			s.state = sessionStateMenu
 			return s, nil
 		}
-		// A superseded pending chapters file (a re-resolve for a new
-		// watch) is removed before the new verdict takes its place.
-		if s.skipCleanup != nil && s.skipEpisode != msg.skipEpisode {
+		// A new verdict always retires the previous pending chapters
+		// file — each round writes a unique temp file, so leaving the
+		// old cleanup pending would orphan it (PR61 review R1b).
+		if s.skipCleanup != nil {
 			s.skipCleanup()
 			s.skipCleanup = nil
 		}
@@ -659,6 +680,9 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.skipCleanup = nil
 		s.skipChapters = ""
 	}
+	// Any in-flight resolve round is invalidated: its late settle
+	// cleans up after itself (PR61 review R1c).
+	s.resolveGen++
 	switch s.state {
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
@@ -814,10 +838,10 @@ func (s *sessionScreen) proceedWatch() (Screen, tea.Cmd) {
 		s.status = "Нет серий"
 		return s, nil
 	}
-	if s.videoDub == "" || ep.RawEmbeds[s.videoDub] == nil {
+	if s.videoDub == "" || len(ep.RawEmbeds[s.videoDub]) == 0 {
 		return s.beginStreamResolve("")
 	}
-	if (s.audioDub == "" || ep.RawEmbeds[s.audioDub] == nil) && s.audioDub != s.videoDub {
+	if (s.audioDub == "" || len(ep.RawEmbeds[s.audioDub]) == 0) && s.audioDub != s.videoDub {
 		return s.openAudioSelect()
 	}
 	return s.beginStreamResolve(s.videoDub)
@@ -912,6 +936,8 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	s.state = sessionStateQuality
 	s.streamEntries = nil
 	s.buildStreamList()
+	s.resolveGen++
+	gen := s.resolveGen
 	ep := *s.currentEpisodeData()
 	shikiID := s.shikimoriID()
 	deps := s.deps
@@ -931,6 +957,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 			}
 		}
 		return streamResolvedMsg{
+			gen:          gen,
 			scope:        scope,
 			entries:      entries,
 			skipEpisode:  ep.Num,
@@ -942,6 +969,11 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	})
 }
 
+// streamResolveFanout bounds the concurrent per-dub resolves of one
+// merged resolve (PR61 review): the same order as the provider
+// fan-out consts (anilibProbeConcurrency, ttPreflightConcurrency).
+const streamResolveFanout = 8
+
 // resolveAllStreams resolves every dub of the episode that carries
 // embed links (one dub when scope is set) concurrently and merges the
 // results into one quality-sorted entry list (python merge parity —
@@ -949,34 +981,42 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 // fails degrades: its entries drop, the rest still surface; only a
 // fully empty merge is an error.
 func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string) ([]streamEntry, error) {
-	keys := sortedEmbedKeys(ep.RawEmbeds)
-	type resolveResult struct {
-		key    string
-		stream contracts.MediaStream
-		err    error
-	}
-	ch := make(chan resolveResult, len(keys))
-	pending := 0
-	for _, k := range keys {
+	targets := make([]string, 0, len(ep.RawEmbeds))
+	for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
 		if scope != "" && k != scope {
 			continue
 		}
 		if len(ep.RawEmbeds[k]) == 0 {
 			continue // tier-1 key without hydrated links (PR43)
 		}
-		pending++
-		go func(key string) {
-			stream, err := eps.ResolveStream(ctx, providerOfTrackKey(key), ep, key)
-			ch <- resolveResult{key: key, stream: stream, err: err}
-		}(k)
+		targets = append(targets, k)
 	}
-	if pending == 0 {
+	if len(targets) == 0 {
 		return nil, fmt.Errorf("нет источников с потоками")
 	}
-	entries := make([]streamEntry, 0, pending)
+
+	type resolveResult struct {
+		key    string
+		stream contracts.MediaStream
+		err    error
+	}
+	var (
+		mu      sync.Mutex
+		results = make([]resolveResult, 0, len(targets))
+	)
+	// The fan-out degrades per provider: fn never fails, so one
+	// provider's error cannot cancel its siblings' lookups.
+	_ = netclient.Parallel(ctx, targets, streamResolveFanout, func(ctx context.Context, key string) error {
+		stream, err := eps.ResolveStream(ctx, providerOfTrackKey(key), ep, key)
+		mu.Lock()
+		results = append(results, resolveResult{key: key, stream: stream, err: err})
+		mu.Unlock()
+		return nil
+	})
+
+	entries := make([]streamEntry, 0, len(results))
 	var firstErr error
-	for range pending {
-		r := <-ch
+	for _, r := range results {
 		if r.err != nil {
 			if firstErr == nil {
 				firstErr = r.err

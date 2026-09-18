@@ -246,3 +246,10 @@ func (p *SameBand) ResolveStream(_ context.Context, episode contracts.Episode, d
 	}
 	return stream, nil
 }
+
+// SmokeQuery reports the provider-specific live smoke probe (PR52
+// integration): the catalog is the studio's OWN dub filmography under
+// server-side DLE matching, so the shared smoke probes (черная лагуна
+// / black lagoon) never surface. «дьявол» is the live-verified hit
+// (Devil May Cry S02 — 2 cards, PR47).
+func (p *SameBand) SmokeQuery() string { return "дьявол" }

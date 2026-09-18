@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 14 провайдеров"]
+    subgraph sources["Источники — 17 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -123,6 +123,7 @@ graph TD
         P15[anilibria-torrent]
         P16[animetosho torrents]
         P17[tokyotosho torrents]
+        P18[anizone]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -130,7 +131,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -281,6 +282,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
+| anizone | anizone.to | видео (субтитры, JP-аудио) | ✅ живой (PR59); не порт — написан по рецепту AniZone из Anivexa-API (проверено вживую 2026-09-18); Livewire-пагинация эпизодов, HLS 360/720/1080 с ja/en аудиогруппами и дорожками субтитров; из заблокированных сетей нужен `network.proxy_url` |
 
 Не портированы / удалены (мёртвые):
 

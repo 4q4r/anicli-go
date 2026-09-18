@@ -44,10 +44,10 @@ func newSkipTestPlayback(t *testing.T, status int, payload string) (*realPlaybac
 
 // TestRealPlaybackSkipNoteSuccess (PR61): a found answer produces the
 // chapter file plus the range note, and both outcomes hit the file
-// logger.
+// logger. The payload is the live v2 camelCase shape.
 func TestRealPlaybackSkipNoteSuccess(t *testing.T) {
 	pb, logs := newSkipTestPlayback(t, http.StatusOK,
-		`{"found":true,"results":[{"interval":{"start_time":0,"end_time":90},"skip_type":"op","episode_length":1440}]}`)
+		`{"found":true,"results":[{"interval":{"startTime":0,"endTime":90},"skipType":"op","episodeLength":1440}]}`)
 
 	path, cleanup, note, err := pb.ResolveSkips(context.Background(), 21, 2)
 	if err != nil {

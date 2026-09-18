@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 14 провайдеров"]
+    subgraph sources["Источники — 17 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -123,6 +123,7 @@ graph TD
         P15[anilibria-torrent]
         P16[animetosho torrents]
         P17[tokyotosho torrents]
+        P18[shiza]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -130,7 +131,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -281,6 +282,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
+| shiza | shizaproject.com | видео (рус. озвучка + субтитры) | ✅ живой (PR57); не порт — написан по живому GraphQL API (`/graphql`, операции вытащены из бандла Nuxt); анонимный поиск и кодик-плеер + зеркало sibnet; торренты в API есть, но раздача мертва (0 сидов на всех 1881) — торрент-провайдер не регистрировался |
 
 Не портированы / удалены (мёртвые):
 

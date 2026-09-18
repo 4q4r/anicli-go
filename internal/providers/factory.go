@@ -88,6 +88,14 @@ var allFactories = []struct {
 	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
 	}},
+	// shiza (PR57): the shizaproject.com GraphQL on the anidub stream
+	// plumbing — anonymous catalog search, kodik/sibnet embeds through
+	// the shared extractor factory. No credentials; its torrent
+	// entries are dead (0 seeders, see shiza.go) so no torrent
+	// sibling is registered.
+	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newShiza(ShizaBase, http)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

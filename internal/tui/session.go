@@ -89,11 +89,17 @@ type streamEntry struct {
 // (PR61): entries from every consulted provider dub of the episode,
 // quality-sorted. scope mirrors the resolve request ("" = all dubs —
 // the interactive merged list; a dub key = the remembered-dub fast
-// path that auto-plays its best/remembered quality).
+// path that auto-plays its best/remembered quality). The skip verdict
+// rides along (PR61): it is stream-independent, so it fetches once
+// during the resolve and the note composes into the launch line.
 type streamResolvedMsg struct {
-	scope   string
-	entries []streamEntry
-	err     error
+	scope        string
+	entries      []streamEntry
+	skipEpisode  string
+	skipNote     string
+	skipChapters string
+	skipCleanup  func()
+	err          error
 }
 
 // playedMsg settles one playback; quality is the label actually used
@@ -234,7 +240,15 @@ type sessionScreen struct {
 	// pickedVideo is the entry chosen from the merged list; doPlay
 	// and the buffered pipeline consume it directly.
 	pickedVideo contracts.VideoSource
-	localCounts map[string]int
+	// skip cache (PR61): the verdict of the episode's skip lookup,
+	// fetched during the stream resolve (stream-independent) and
+	// consumed at launch/doPlay. The cleanup removes the chapters
+	// file; playedMsg clears the whole cache (the file is gone).
+	skipEpisode  string
+	skipNote     string
+	skipChapters string
+	skipCleanup  func()
+	localCounts  map[string]int
 
 	status string // transient status line (play verdicts, sync notes)
 }
@@ -510,6 +524,16 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.state = sessionStateMenu
 			return s, nil
 		}
+		// A superseded pending chapters file (a re-resolve for a new
+		// watch) is removed before the new verdict takes its place.
+		if s.skipCleanup != nil && s.skipEpisode != msg.skipEpisode {
+			s.skipCleanup()
+			s.skipCleanup = nil
+		}
+		s.skipEpisode = msg.skipEpisode
+		s.skipNote = msg.skipNote
+		s.skipChapters = msg.skipChapters
+		s.skipCleanup = msg.skipCleanup
 		if msg.scope != "" {
 			// Remembered-dub fast path (python resolve_dubs_smart):
 			// auto-pick the remembered quality (or the best) and play
@@ -523,6 +547,10 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, nil
 	case playedMsg:
 		s.state = sessionStateMenu
+		// The chapters file was removed by the play pipeline's
+		// cleanup (PR61); the cache clears so the next watch of the
+		// episode re-resolves instead of replaying a dead path.
+		s.skipChapters, s.skipNote, s.skipCleanup = "", "", nil
 		if msg.err != nil {
 			s.status = "Ошибка воспроизведения: " + msg.err.Error()
 			return s, nil
@@ -601,7 +629,14 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // handleCancel applies I2 per state: substates return to the session
 // menu; the menu itself pops (root via «Выход»). Cancelling the
 // buffering state stops the download and cleans its temp file (PR43 C).
+// A pending skip chapters file (resolved but never played, PR61) is
+// removed on the way out.
 func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
+	if s.skipCleanup != nil && s.state != sessionStatePlaying {
+		s.skipCleanup()
+		s.skipCleanup = nil
+		s.skipChapters = ""
+	}
 	switch s.state {
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
@@ -856,12 +891,32 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	s.streamEntries = nil
 	s.buildStreamList()
 	ep := *s.currentEpisodeData()
+	shikiID := s.shikimoriID()
 	deps := s.deps
 	return s, safeCmd(sessionScreenID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
 		entries, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
-		return streamResolvedMsg{scope: scope, entries: entries, err: err}
+		// The skip verdict is stream-independent — it fetches here so
+		// the note is ready at launch (PR61). Best-effort: a failure
+		// degrades the note, never the resolve.
+		note, chapters, cleanup := "", "", func() {}
+		if deps.Playback != nil {
+			path, cl, n, serr := deps.Playback.ResolveSkips(ctx, shikiID, EpisodeSortKey(ep.Num))
+			note, cleanup = n, cl
+			if serr == nil {
+				chapters = path
+			}
+		}
+		return streamResolvedMsg{
+			scope:        scope,
+			entries:      entries,
+			skipEpisode:  ep.Num,
+			skipNote:     note,
+			skipChapters: chapters,
+			skipCleanup:  cleanup,
+			err:          err,
+		}
 	})
 }
 
@@ -1052,16 +1107,14 @@ func (s *sessionScreen) doPlayBuffered(handle buffered.Handle, quality string) t
 		audioURL = audio.URL
 	}
 
-	chapters := ""
-	if s.deps != nil && s.deps.Playback != nil {
-		var cleanup func()
-		chapters, cleanup, err = s.deps.Playback.ResolveSkips(ctx, s.shikimoriID(), EpisodeSortKey(ep.Num))
-		if err == nil && cleanup != nil {
-			defer cleanup()
-		}
-		if err != nil {
-			chapters = "" // skips are best-effort
-		}
+	// Chapters come from the resolve-phase skip verdict (PR61); the
+	// cleanup runs when the player exits.
+	chapters := s.skipChapters
+	if s.skipEpisode != ep.Num {
+		chapters = ""
+	}
+	if chapters != "" && s.skipCleanup != nil {
+		defer s.skipCleanup()
 	}
 
 	title := fmt.Sprintf("[%s - %s] %s - %s",
@@ -1201,7 +1254,8 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 
 // launchPlayback continues after the video (and, when fresh, audio)
 // picks: buffered mode buffers the picked stream, streaming launches
-// mpv.
+// mpv. The skip verdict fetched during the resolve (PR61) composes
+// into the launch line and auto-clears on the playback settle.
 func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
@@ -1212,6 +1266,9 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	}
 	s.state = sessionStatePlaying
 	s.status = "▶ Запуск mpv…"
+	if s.skipNote != "" && s.skipEpisode == s.currentEpisode() {
+		s.status += " · ⏭ " + s.skipNote
+	}
 	return s, s.playCmd()
 }
 
@@ -1247,17 +1304,14 @@ func (s *sessionScreen) doPlay() tea.Msg {
 		audioURL = audio.URL
 	}
 
-	chapters := ""
-	if s.deps != nil && s.deps.Playback != nil {
-		var cleanup func()
-		chapters, cleanup, err = s.deps.Playback.ResolveSkips(ctx, s.shikimoriID(), EpisodeSortKey(ep.Num))
-		if err == nil && cleanup != nil {
-			defer cleanup()
-		}
-		if err != nil {
-			// Skips are best-effort: play without chapters.
-			chapters = ""
-		}
+	// Chapters come from the resolve-phase skip verdict (PR61); the
+	// cleanup runs when the player exits.
+	chapters := s.skipChapters
+	if s.skipEpisode != ep.Num {
+		chapters = ""
+	}
+	if chapters != "" && s.skipCleanup != nil {
+		defer s.skipCleanup()
 	}
 
 	title := fmt.Sprintf("[%s - %s] %s - %s",

@@ -41,6 +41,9 @@ type Bundle struct {
 	// Details carries diagnostics: "ok", per-provider degradation
 	// notes or "no_provider_result".
 	Details string
+	// Intervals are the merged skip ranges (PR61): the raw material
+	// of FFMetadata, surfaced for the playback status note.
+	Intervals []Interval
 }
 
 // Empty reports whether any chapter content was resolved.
@@ -215,6 +218,7 @@ func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, erro
 			ChapterTypes: chapterTypes(merged),
 			ProviderID:   ProviderIDMerged,
 			Details:      "ok",
+			Intervals:    merged,
 		}
 		// Single contributor: its "pN" label maps back through
 		// providerIDs, which also index the clean-empty sets collected
@@ -242,6 +246,7 @@ func (m *Manager) Resolve(ctx context.Context, req ResolveRequest) (Bundle, erro
 				ChapterTypes: chapterTypes(intervals),
 				ProviderID:   ProviderIntroSkipper,
 				Details:      details,
+				Intervals:    intervals,
 			}, nil
 		default:
 			// Clean-empty local pass: a completion, not a failure.

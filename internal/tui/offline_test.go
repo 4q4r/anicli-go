@@ -136,8 +136,9 @@ func TestOfflineSession(t *testing.T) {
 // skips (spec: NO skip lookup — chapters are embedded).
 type skipPanicPlayback struct{ fakePlayback }
 
-func (p *skipPanicPlayback) ResolveSkips(context.Context, int64, float64) (string, func(), error) {
+func (p *skipPanicPlayback) ResolveSkips(context.Context, int64, float64) (string, func(), string, error) {
 	panic("offline playback must never resolve skips")
+	return "", func() {}, "", nil
 }
 
 func offlineActionIndex(s *offlineSession, id string) int {

@@ -75,8 +75,11 @@ type EpisodeService interface {
 // chapters (skip.Resolve) attached.
 type PlaybackService interface {
 	// ResolveSkips resolves the skip chapter file for the episode, or
-	// "" when none. The returned cleanup removes the temp file.
-	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), err error)
+	// "" when none. The returned cleanup removes the temp file. The
+	// note (PR61) is the human verdict for the launch status line —
+	// the found ranges, «не найдены» or «недоступны»; "" when nothing
+	// was fetched (no binding).
+	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), note string, err error)
 	// Play launches mpv and blocks until it exits.
 	Play(ctx context.Context, req PlayRequest) error
 }

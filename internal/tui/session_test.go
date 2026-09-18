@@ -50,19 +50,20 @@ type fakePlayback struct {
 	played   []PlayRequest
 	skipIDs  []int64 // shikimori ids seen by ResolveSkips
 	skipPath string
+	skipNote string // PR61: the note surfaced next to «Запуск mpv…»
 	err      error
 	// playHook runs before the request is recorded; returning an error
 	// fails the play (tests capture at-play-time file state here).
 	playHook func(PlayRequest) error
 }
 
-func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), error) {
+func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), string, error) {
 	f.skipIDs = append(f.skipIDs, shikimoriID)
 	cleanup := func() {}
 	if f.skipPath != "" {
-		return f.skipPath, cleanup, nil
+		return f.skipPath, cleanup, f.skipNote, nil
 	}
-	return "", cleanup, nil
+	return "", cleanup, f.skipNote, nil
 }
 
 func (f *fakePlayback) Play(ctx context.Context, req PlayRequest) error {
@@ -1178,4 +1179,91 @@ func TestSessionShikiResolveFreshSearch(t *testing.T) {
 			t.Fatalf("no binding expected, got %d", got)
 		}
 	})
+}
+
+// TestSessionSkipNoteComposedAtLaunch (PR61): the skip verdict fetched
+// during the stream resolve rides the launch line — «▶ Запуск mpv… ·
+// ⏭ …» — and auto-clears when playback settles.
+func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+				}},
+			},
+		},
+		Playback: &fakePlayback{skipNote: "скипы: op 0:00–1:30"},
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	// Watch → merged list settle carries the skip note.
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", cmd())
+	}
+	if sr.skipNote != "скипы: op 0:00–1:30" {
+		t.Fatalf("the resolve settle must carry the skip note, got %q", sr.skipNote)
+	}
+	next, _ = ss.Update(sr)
+	ss = next.(*sessionScreen)
+
+	// Pick the entry; ⭐ audio; the launch line composes the note.
+	ss.qualityList.Jump(0)
+	ss.Update(enter())
+	ss.dubList.Jump(0)
+	ss.Update(enter())
+	if !strings.Contains(ss.status, "▶ Запуск mpv…") ||
+		!strings.Contains(ss.status, "⏭ скипы: op 0:00–1:30") {
+		t.Fatalf("launch line must compose the skip note, got %q", ss.status)
+	}
+	// Playback settling auto-clears the note (the completion verdict
+	// replaces it).
+	ss.Update(playedMsg{})
+	if strings.Contains(ss.status, "⏭") {
+		t.Fatalf("the skip note must auto-clear on settle, got %q", ss.status)
+	}
+}
+
+// TestSessionSkipNoteAbsentKeepsPlainLaunch (PR61): without a note the
+// launch line stays the plain «▶ Запуск mpv…».
+func TestSessionSkipNoteAbsentKeepsPlainLaunch(t *testing.T) {
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+				}},
+			},
+		},
+		Playback: &fakePlayback{},
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	s.list.Jump(sessionActionIndex(s, "watch"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
+	_, cmd := ss.Update(enter())
+	ss.Update(cmd())
+	ss.qualityList.Jump(0)
+	ss.Update(enter())
+	ss.dubList.Jump(0)
+	ss.Update(enter())
+	if ss.status != "▶ Запуск mpv…" {
+		t.Fatalf("launch line = %q, want the plain form", ss.status)
+	}
 }

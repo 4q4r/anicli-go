@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -13,7 +14,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik without token is reported with the token reason", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = ""
-		cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable
+		cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable
+		cfg.Providers.Yanima.DDoSP1 = "p1"      // isolate the kodik variable
 		cfg.Providers.Yanima.DDoSP2 = "p2"
 		got := UnconfiguredProviders(cfg)
 		if len(got) != 1 {
@@ -30,7 +32,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik with a token is not reported", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = "secret"
-		cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable
+		cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable
+		cfg.Providers.Yanima.DDoSP1 = "p1"      // isolate the kodik variable
 		cfg.Providers.Yanima.DDoSP2 = "p2"
 		if got := UnconfiguredProviders(cfg); len(got) != 0 {
 			t.Fatalf("configured kodik must not be disabled, got %+v", got)
@@ -39,7 +42,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 
 	t.Run("yanima without both DDoS cookies is reported", func(t *testing.T) {
 		cfg := config.Default()
-		cfg.Providers.Kodik.Token = "secret" // isolate the yanima variable
+		cfg.Providers.Kodik.Token = "secret"    // isolate the yanima variable
+		cfg.Providers.Anime365.Token = "secret" // isolate the yanima variable
 		got := UnconfiguredProviders(cfg)
 		if len(got) != 1 || got[0].ID != "yanima" {
 			t.Fatalf("want exactly yanima, got %+v", got)
@@ -52,7 +56,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("yanima with one cookie missing is still reported", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = "secret"
-		cfg.Providers.Yanima.DDoSP1 = "p1" // ddoS_p2 left empty
+		cfg.Providers.Anime365.Token = "secret" // isolate the yanima variable
+		cfg.Providers.Yanima.DDoSP1 = "p1"      // ddoS_p2 left empty
 		got := UnconfiguredProviders(cfg)
 		if len(got) != 1 || got[0].ID != "yanima" {
 			t.Fatalf("the wall answers 403 without BOTH cookies, got %+v", got)
@@ -62,10 +67,45 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("yanima with both cookies is not reported", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = "secret"
+		cfg.Providers.Anime365.Token = "secret" // isolate the yanima variable
 		cfg.Providers.Yanima.DDoSP1 = "p1"
 		cfg.Providers.Yanima.DDoSP2 = "p2"
 		if got := UnconfiguredProviders(cfg); len(got) != 0 {
 			t.Fatalf("configured yanima must not be disabled, got %+v", got)
+		}
+	})
+
+	// anime365 (PR55) joins the table with kodik's exact shape: the
+	// embed data (playable links) is the ONE credential-gated resource
+	// of the API, so a tokenless anime365 is useless and disabled.
+	t.Run("anime365 without a token is reported with the token reason", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "secret" // isolate the anime365 variable
+		cfg.Providers.Yanima.DDoSP1 = "p1"
+		cfg.Providers.Yanima.DDoSP2 = "p2"
+		got := UnconfiguredProviders(cfg)
+		if len(got) != 1 {
+			t.Fatalf("want exactly anime365, got %+v", got)
+		}
+		if got[0].ID != "anime365" {
+			t.Fatalf("want anime365, got %q", got[0].ID)
+		}
+		if got[0].Reason == "" {
+			t.Fatalf("reason must not be empty")
+		}
+		if !strings.Contains(got[0].Reason, "providers.anime365.token") {
+			t.Errorf("reason must name the settings key, got %q", got[0].Reason)
+		}
+	})
+
+	t.Run("anime365 with a token is not reported", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Providers.Kodik.Token = "secret"
+		cfg.Providers.Anime365.Token = "secret"
+		cfg.Providers.Yanima.DDoSP1 = "p1"
+		cfg.Providers.Yanima.DDoSP2 = "p2"
+		if got := UnconfiguredProviders(cfg); len(got) != 0 {
+			t.Fatalf("configured anime365 must not be disabled, got %+v", got)
 		}
 	})
 }
@@ -101,7 +141,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
-	cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable (PR33)
+	cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable (PR33/PR55)
+	cfg.Providers.Yanima.DDoSP1 = "p1"      // isolate the kodik variable (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "p2"
 
 	bare, err := All(cfg)
@@ -113,8 +154,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 15 {
-		t.Fatalf("want the remaining 15 providers, got %d", len(bare))
+	if len(bare) != 16 {
+		t.Fatalf("want the remaining 16 providers, got %d", len(bare))
 	}
 }
 
@@ -124,7 +165,8 @@ func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
-	cfg.Providers.Yanima.DDoSP1 = "p1" // isolate the kodik variable (PR33)
+	cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable (PR33/PR55)
+	cfg.Providers.Yanima.DDoSP1 = "p1"      // isolate the kodik variable (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "p2"
 
 	reg, err := NewRegistry(cfg, nil)
@@ -151,7 +193,8 @@ func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 func TestRegistryDisabledListsYanima(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "set" // isolate the yanima variable
+	cfg.Providers.Kodik.Token = "set"       // isolate the yanima variable
+	cfg.Providers.Anime365.Token = "secret" // isolate the yanima variable
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {

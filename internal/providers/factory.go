@@ -88,6 +88,14 @@ var allFactories = []struct {
 	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
 	}},
+	// anime365 (PR55): the smotret-anime (anime365.ru) documented JSON
+	// API — open catalog/episodes/translations, tokened embed
+	// resolution (account with an active subscription). No frozen
+	// Python original (anidub precedent); written against the live
+	// API + the official OpenAPI spec (probed 2026-09-18).
+	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

@@ -40,6 +40,9 @@ const (
 	// EnvKodikToken carries the NAME of the kodik token environment
 	// variable, not a credential value.
 	EnvKodikToken = "ANICLI_KODIK_TOKEN" //nolint:gosec // variable name, not a secret
+	// EnvAnime365Token carries the NAME of the anime365 access-token
+	// environment variable, not a credential value.
+	EnvAnime365Token = "ANICLI_ANIME365_TOKEN" //nolint:gosec // variable name, not a secret
 )
 
 // Filesystem names and default values.
@@ -159,6 +162,8 @@ type Providers struct {
 	ExcludeStreams []string `toml:"exclude_streams"`
 	// Kodik configures the Kodik API source.
 	Kodik ProvidersKodik `toml:"kodik"`
+	// Anime365 configures the smotret-anime (anime365) source (PR55).
+	Anime365 ProvidersAnime365 `toml:"anime365"`
 	// Yanima configures the yanima.space source (PR33).
 	Yanima ProvidersYanima `toml:"yanima"`
 }
@@ -241,6 +246,18 @@ type CF struct {
 type ProvidersKodik struct {
 	// Token is the Kodik API token; also settable via ANICLI_KODIK_TOKEN
 	// (env wins over the file).
+	Token string `toml:"token"`
+}
+
+// ProvidersAnime365 carries the anime365 (smotret-anime) access token
+// (PR55): the catalog/episodes/translations endpoints are open, but the
+// embed data (playable links) requires a token from an account with an
+// active subscription, passed as the access_token query parameter. An
+// anime365 without a token is disabled at startup (PR24
+// unconfigured-provider table, kodik parity).
+type ProvidersAnime365 struct {
+	// Token is the anime365 access token; also settable via
+	// ANICLI_ANIME365_TOKEN (env wins over the file).
 	Token string `toml:"token"`
 }
 
@@ -403,6 +420,9 @@ func applyEnv(s *Settings) {
 	}
 	if v, ok := lookupEnv(EnvKodikToken); ok {
 		s.Providers.Kodik.Token = v
+	}
+	if v, ok := lookupEnv(EnvAnime365Token); ok {
+		s.Providers.Anime365.Token = v
 	}
 	if v, ok := lookupEnv(EnvAPISecret); ok {
 		s.API.AuthSecret = v

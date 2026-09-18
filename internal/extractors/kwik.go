@@ -51,7 +51,12 @@ func (e *kwikExtractor) Extract(ctx context.Context, url string) (map[string]con
 	}
 
 	// 1. Embed page with the animepahe Referer (extractors.py:600).
-	resp, err := e.http.Get(ctx, url, map[string]string{"Referer": "https://animepahe.ru"})
+	// PR49: the site's serving origin is animepahe.pw today (animepahe.com
+	// 301s to it; see providers.AnimePaheBase) — a browser session sends
+	// .pw as the Referer, so the embed fetch does the same. Live kwik
+	// verification is currently impossible: kwik.cx WAF-blocks this
+	// network even for real browsers (2026-09-18).
+	resp, err := e.http.Get(ctx, url, map[string]string{"Referer": "https://animepahe.pw"})
 	if err != nil {
 		return nil, fmt.Errorf("extractor:kwik: %w", err)
 	}

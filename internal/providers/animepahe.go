@@ -1,36 +1,44 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
+	"sort"
 	"strconv"
+
+	"github.com/PuerkitoBio/goquery"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// AnimePaheBase is the site root (anicli-py anicli/providers/
-// animepahe.py:18). The domain is flaky and bounces .ru → .su at
-// runtime; following redirects is the netclient's job (verified
-// 2026-09-12).
-const AnimePaheBase = "https://animepahe.ru"
+// AnimePaheBase is the site root — the serving ORIGIN, deliberately not
+// the canonical alias. Domain history (dated, verified 2026-09-18): the
+// Python port targeted animepahe.ru (dead: 301s to a host the site
+// disowns); animepahe.si — the Sep 2025 move (MALSync issue #3173) — is
+// NXDOMAIN again since ~Apr 2026 (authoritative DNS). The site banner
+// lists pw/com/org as its only domains; animepahe.com (MALSync's
+// declared canonical) 301s to the serving origin animepahe.pw.
+//
+// Why the origin, not the .com alias: the Cloudflare clearance the [cf]
+// ladder replays is host-scoped — live run 2026-09-18: with the alias
+// base the solver solved (and captured cookies for) .pw, the jar scoped
+// them to the .com request, and the redirected retry was re-challenged.
+// Pointing at the origin keeps solve-and-replay same-host.
+const AnimePaheBase = "https://animepahe.pw"
 
 // animePaheDub is the fixed single dub resolve_stream would have used
 // (animepahe.py:150 hardcodes dub_name="Original (Pahe)").
 const animePaheDub = "Original (Pahe)"
 
-// animePaheDropRe captures the quality dropdown anchors of a play page:
-// href first, then the class attribute, then a "NNNp" label inside the
-// anchor (animepahe.py:113).
-var animePaheDropRe = regexp.MustCompile(`<a href="([^"]+)"[^>]+class="dropdown-item"[^>]*>.*?(\d+)p.*?</a>`)
-
 // AnimePahe is the port of anicli-py anicli/providers/animepahe.py: a
 // JSON /api face for search and the episode listing, and a scraped
-// /play/<anime>/<episode> page whose kwik.cx dropdown links feed the
-// extractor factory.
+// /play/<anime>/<episode> page whose #resolutionMenu buttons carry the
+// kwik embed URLs (PR49: the site replaced the old quality anchors with
+// server-rendered data-src buttons) that feed the extractor factory.
 type AnimePahe struct {
 	Base
 }
@@ -54,6 +62,8 @@ func newAnimePahe(baseURL string, http *netclient.Client) *AnimePahe {
 }
 
 // animePaheSearch mirrors the fields consumed by animepahe.py:36-43.
+// Shape re-verified live 2026-09-18 (animepahe.pw /api?m=search): the
+// field names survived the domain moves; sessions became UUIDs.
 type animePaheSearch struct {
 	Data []struct {
 		Title   string `json:"title"`
@@ -63,6 +73,7 @@ type animePaheSearch struct {
 }
 
 // animePaheRelease mirrors the fields consumed by animepahe.py:62-87.
+// Shape re-verified live 2026-09-18 (animepahe.pw /api?m=release).
 type animePaheRelease struct {
 	LastPage int `json:"last_page"`
 	Data     []struct {
@@ -71,10 +82,14 @@ type animePaheRelease struct {
 	} `json:"data"`
 }
 
-// Search queries the internal /api endpoint (anicli-py
-// animepahe.py:26-46). Python wraps http.get and json.loads in one
-// except-block returning []: transport and decode failures both surface
-// as an empty result set here, verbatim (documented quirk).
+// Search queries the internal /api endpoint (anicli-py animepahe.py:26-46).
+//
+// PR49 divergence from Python: the original wraps http.get and json.loads
+// in one except-block returning [] — transport and decode failures both
+// surfaced as an empty result set. That quirk is retired: a silent empty
+// set is what hid the domain death that killed this provider. Failures
+// return typed provider errors (the gogoanime house pattern); only a
+// genuinely empty result set returns no results.
 func (p *AnimePahe) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	params := url.Values{}
 	params.Set("m", "search")
@@ -87,12 +102,13 @@ func (p *AnimePahe) Search(ctx context.Context, query string) ([]contracts.Searc
 		Op:      contracts.OpSearch,
 	})
 	if err != nil {
-		return []contracts.SearchResult{}, nil
+		return nil, err
 	}
 
 	var data animePaheSearch
 	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		return []contracts.SearchResult{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
+			fmt.Errorf("decode search response: %w", jsonErr))
 	}
 
 	results := make([]contracts.SearchResult, 0, len(data.Data))
@@ -110,23 +126,19 @@ func (p *AnimePahe) Search(ctx context.Context, query string) ([]contracts.Searc
 // GetEpisodes pages through the m=release listing (anicli-py
 // animepahe.py:48-91). animeURL is the search session id; the first
 // response carries last_page and page one, remaining pages are fetched
-// sequentially. Failures anywhere in the flow return an empty list (the
-// Python whole-call except-block), verbatim.
-//
-// Divergence from Python (task ruling): Python stored raw_embeds={} and
-// derived the play URL inside resolve_stream; the Go contract enumerates
-// dubs from RawEmbeds keys, so each episode stashes its deterministic
-// play URL under the fixed dub name resolve_stream would have used.
+// sequentially. PR49 divergence from Python: page failures are typed
+// errors, not a silent empty list (see Search).
 func (p *AnimePahe) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
-	episodes, lastPage, ok := p.fetchReleasePage(ctx, animeURL, 1)
-	if !ok {
-		return []contracts.Episode{}, nil
+	episodes, lastPage, err := p.fetchReleasePage(ctx, animeURL, 1)
+	if err != nil {
+		return nil, err
 	}
 
 	for page := 2; page <= lastPage; page++ {
-		more, _, ok := p.fetchReleasePage(ctx, animeURL, page)
-		if !ok {
-			return []contracts.Episode{}, nil
+		more, _, err := p.fetchReleasePage(ctx, animeURL, page)
+		if err != nil {
+			return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
+				fmt.Errorf("release page %d: %w", page, err))
 		}
 		episodes = append(episodes, more...)
 	}
@@ -134,8 +146,8 @@ func (p *AnimePahe) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 }
 
 // fetchReleasePage loads one m=release page, reporting its episodes and
-// the listing's last_page (0 when the decode fails).
-func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page int) ([]contracts.Episode, int, bool) {
+// the listing's last_page.
+func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page int) ([]contracts.Episode, int, error) {
 	params := url.Values{}
 	params.Set("m", "release")
 	params.Set("id", animeURL)
@@ -149,12 +161,13 @@ func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page 
 		Op:      contracts.OpGetEpisodes,
 	})
 	if err != nil {
-		return nil, 0, false
+		return nil, 0, err
 	}
 
 	var data animePaheRelease
 	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		return nil, 0, false
+		return nil, 0, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("decode release page %d: %w", page, jsonErr))
 	}
 
 	episodes := make([]contracts.Episode, 0, len(data.Data))
@@ -175,14 +188,53 @@ func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page 
 		})
 	}
 
-	return episodes, data.LastPage, true
+	return episodes, data.LastPage, nil
 }
 
-// ResolveStream scrapes the play page's quality dropdown and feeds each
-// href to the extractor factory (port of animepahe.py:93-150). Kwik
-// embed URLs resolve through the ported kwik extractor (the Python
-// factory disabled it; PR7 completes the flow the Python stub described);
+// animePahePlayLinks parses a play page into quality → embed URL. The
+// live page (2026-09-18 capture, testdata/animepahe_play.html)
+// server-renders the quality menu:
+//
+//	<div class="dropdown-menu" id="resolutionMenu">
+//	  <button type="button" data-src="https://kwik.cx/e/<id>" data-url="…"
+//	    data-fansub="OZC" data-resolution="720" data-audio="jpn"
+//	    data-av1="0" class="dropdown-item">OZC · 720p <span>BD</span></button>
+//
+// Buttons without a resolvable data-src or data-resolution are skipped;
+// the page's OTHER .dropdown-item elements (episode links, provider
+// tabs) must not leak in, hence the #resolutionMenu scoping. goquery,
+// not a regex: the old attribute-order-sensitive anchor regex died with
+// the old markup (PR49).
+func animePahePlayLinks(body []byte) map[string]string {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+
+	links := map[string]string{}
+	doc.Find("#resolutionMenu button[data-src]").Each(func(_ int, sel *goquery.Selection) {
+		src, ok := sel.Attr("data-src")
+		if !ok || src == "" {
+			return
+		}
+		quality, ok := sel.Attr("data-resolution")
+		if !ok || quality == "" {
+			return
+		}
+		links[quality] = src // later buttons overwrite, like dict.update
+	})
+	return links
+}
+
+// ResolveStream scrapes the play page's #resolutionMenu buttons and feeds
+// each embed to the extractor factory (port of animepahe.py:93-150, PR49
+// markup). Kwik embed URLs resolve through the ported kwik extractor;
 // direct media hrefs resolve via the fallback.
+//
+// PR49 divergence from Python: a play page without any resolvable button
+// is a typed provider error — the dropdown is server-rendered, so an
+// empty parse means the shape drifted or a challenge page got through,
+// and neither must masquerade as "no streams".
 func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		// Python hardcodes the dub name, ignoring dub_id (animepahe.py:150).
@@ -205,10 +257,22 @@ func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode
 		return stream, err
 	}
 
-	// The play page is parsed with the Python regex, not goquery: the
-	// matched anchor layout is attribute-order-sensitive (href, class).
-	for _, match := range animePaheDropRe.FindAllSubmatch(resp.Body, -1) {
-		sources, err := resolveEmbeds(ctx, p.http, []string{string(match[1])})
+	playLinks := animePahePlayLinks(resp.Body)
+	if len(playLinks) == 0 {
+		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, resp.StatusCode,
+			fmt.Errorf("play page carries no resolution buttons (%s)", embeds[0]))
+	}
+
+	// Sorted qualities keep the extraction order deterministic (map
+	// iteration is not; Python iterated the regex matches in page order).
+	qualities := make([]string, 0, len(playLinks))
+	for quality := range playLinks {
+		qualities = append(qualities, quality)
+	}
+	sort.Strings(qualities)
+
+	for _, quality := range qualities {
+		sources, err := resolveEmbeds(ctx, p.http, []string{playLinks[quality]})
 		if err != nil {
 			// Python ignores per-link extraction failures (an empty
 			// extractor result updates nothing); a failing extractor
@@ -218,8 +282,8 @@ func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode
 			}
 			continue
 		}
-		for quality, src := range sources {
-			stream.Links[quality] = src
+		for srcQuality, src := range sources {
+			stream.Links[srcQuality] = src
 		}
 	}
 	return stream, nil

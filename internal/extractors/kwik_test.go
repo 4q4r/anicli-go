@@ -171,8 +171,10 @@ func TestKwikExtractRoundTrip(t *testing.T) {
 	}
 
 	getReferer, postForm, postReferer := w.rec.snapshot()
-	if getReferer != "https://animepahe.ru" {
-		t.Errorf("embed page Referer = %q, want https://animepahe.ru (extractors.py:600)", getReferer)
+	// PR49: the site's serving origin is animepahe.pw today (providers.
+	// AnimePaheBase); the embed Referer follows the serving origin.
+	if getReferer != "https://animepahe.pw" {
+		t.Errorf("embed page Referer = %q, want https://animepahe.pw (extractors.py:600)", getReferer)
 	}
 	if got := postForm["_token"]; len(got) != 1 || got[0] != "tok123" {
 		t.Errorf("POST form _token = %v, want [tok123] (value=\"...\" scrape, extractors.py:616-620)", got)

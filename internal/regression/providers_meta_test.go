@@ -20,13 +20,14 @@ import (
 // provider) joined after yanima; anilibria-torrent (PR37, the new
 // aniliberty.top API's per-release torrents) joined after nyaa;
 // animetosho (PR38, the newznab feed) joined after anilibria-torrent;
-// tokyotosho (PR38, the search RSS) joined after animetosho;
-// anime365 (PR55, the tokened smotret-anime JSON API) joined after
-// tokyotosho; animedia (PR56, the amd.online DLE site) joined after
-// anime365; shiza (PR57, the shizaproject.com GraphQL catalog)
-// joined after animedia; kickassanime (PR58, the kaa.lt JSON API)
-// joined after shiza; anizone (PR59, the sub-only anizone.to
-// source) joined after kickassanime — the roster is frozen at 21.
+// tokyotosho (PR38, the search RSS) joined after animetosho.
+// Wave-2 integration (fix/60) seated the five parallel providers
+// next to their peers instead of the tail: kickassanime (PR58)
+// and anizone (PR59, sub-only) joined after animepahe in the
+// latin block; animedia (PR56, the amd.online DLE site), shiza
+// (PR57, the shizaproject.com GraphQL catalog) and anime365
+// (PR55, the tokened smotret-anime JSON API) joined after yanima
+// in the RU-dub block. The roster is frozen at 21.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -34,21 +35,21 @@ var expectedProviderOrder = []string{
 	"animego",
 	"gogoanime",
 	"animepahe",
+	"kickassanime",
+	"anizone",
 	"dreamcast",
 	"sameband",
 	"kodik",
 	"allanime",
 	"anidub",
 	"yanima",
+	"animedia",
+	"shiza",
+	"anime365",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",
-	"anime365",
-	"animedia",
-	"shiza",
-	"kickassanime",
-	"anizone",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

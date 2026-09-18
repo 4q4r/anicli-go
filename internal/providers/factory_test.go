@@ -32,9 +32,10 @@ func TestAllRosterComplete(t *testing.T) {
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
-		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho", "anime365", "animedia", "shiza", "kickassanime", "anizone",
+		"gogoanime", "animepahe", "kickassanime", "anizone",
+		"dreamcast", "sameband", "kodik",
+		"allanime", "anidub", "yanima", "animedia", "shiza", "anime365",
+		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -96,23 +97,18 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	if len(list) != 21 {
 		t.Fatalf("List() = %d providers, want 21", len(list))
 	}
-	// Registration order follows All() (stable render/fan-out order);
-	// anidub (no frozen Python original) is appended after the ported
-	// roster, yanima (PR33) after anidub, nyaa (PR36, first torrent
-	// search provider) after yanima, anilibria-torrent (PR37, the new
-	// aniliberty.top API's torrents) after nyaa, animetosho (PR38, the
-	// newznab feed) after anilibria-torrent, tokyotosho (PR38, the
-	// search RSS) after animetosho, anime365 (PR55, the tokened
-	// smotret-anime JSON API, no frozen Python original) after
-	// tokyotosho, animedia (PR56, the amd.online DLE site) after
-	// anime365, shiza (PR57, the GraphQL catalog) after animedia,
-	// kickassanime (PR58, the kaa.lt JSON API) after shiza,
-	// anizone (PR59, the sub-only anizone.to source) after kickassanime.
+	// Registration order follows All() (stable render/fan-out order).
+	// Wave-2 integration (fix/60) seated the five parallel providers
+	// next to their peers: kickassanime (PR58) and anizone (PR59)
+	// after animepahe in the latin block; animedia (PR56), shiza
+	// (PR57) and anime365 (PR55) after yanima in the RU-dub block;
+	// the torrent providers close the roster.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
-		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
-		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho", "anime365", "animedia", "shiza", "kickassanime", "anizone",
+		"gogoanime", "animepahe", "kickassanime", "anizone",
+		"dreamcast", "sameband", "kodik",
+		"allanime", "anidub", "yanima", "animedia", "shiza", "anime365",
+		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -219,21 +215,21 @@ func TestContentLanguageRoster(t *testing.T) {
 		"animego":           "ru",
 		"gogoanime":         "ja",
 		"animepahe":         "ja",
+		"kickassanime":      "ja",
+		"anizone":           "ja", // sub-only: the HLS default audio group is Japanese
 		"dreamcast":         "ru",
 		"sameband":          "ru",
 		"kodik":             "ru",
 		"allanime":          "ja", // primary sub track is Japanese; dub→"en"
 		"anidub":            "ru",
 		"yanima":            "ru",
+		"animedia":          "ru",
+		"shiza":             "ru",
+		"anime365":          "ru",
 		"nyaa":              "ja",
 		"anilibria-torrent": "ru",
 		"animetosho":        "ja",
 		"tokyotosho":        "ja",
-		"anime365":          "ru",
-		"animedia":          "ru",
-		"shiza":             "ru",
-		"kickassanime":      "ja",
-		"anizone":           "ja", // sub-only: the HLS default audio group is Japanese
 	}
 
 	cfg := config.Default()

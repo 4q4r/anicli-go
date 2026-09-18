@@ -40,6 +40,23 @@ var allFactories = []struct {
 	{"animepahe", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimePahe(AnimePaheBase, http)
 	}},
+	// kickassanime (PR58): the kaa.lt JSON API (fsearch → show →
+	// paginated episodes → per-episode servers on the krussdomi HLS
+	// edge). No credentials and no per-provider settings;
+	// network.proxy_url routes it from blocked networks like every
+	// foreign site.
+	{"kickassanime", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
+	}},
+	// anizone (PR59): the anizone.to sub-only stream source — the first
+	// provider with no frozen Python original, written from the
+	// Anivexa-API AniZone recipe (providers/anizone.js) re-verified live
+	// 2026-09-18. Livewire HTML payloads, /livewire/update episode
+	// pagination and vidstackPlayer HLS on the watch page; no
+	// credentials.
+	{"anizone", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniZone(AniZoneBase, http)
+	}},
 	{"dreamcast", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newDreamCast(DreamCastBase, http)
 	}},
@@ -58,6 +75,29 @@ var allFactories = []struct {
 	{"yanima", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newYanima(YanimaBase, cfg.Providers.Yanima.DDoSP1,
 			cfg.Providers.Yanima.DDoSP2, cfg.Providers.Yanima.Session, http)
+	}},
+	// animedia (PR56): the amd.online DLE site (the animedia.online
+	// JSON v3 API is dead). Written against the live site, not ported;
+	// no credentials — DLE search form POST in, kodik embeds out
+	// (resolved through the shared extractor factory).
+	{"animedia", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniMedia(AniMediaBase, http)
+	}},
+	// shiza (PR57): the shizaproject.com GraphQL on the anidub stream
+	// plumbing — anonymous catalog search, kodik/sibnet embeds through
+	// the shared extractor factory. No credentials; its torrent
+	// entries are dead (0 seeders, see shiza.go) so no torrent
+	// sibling is registered.
+	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newShiza(ShizaBase, http)
+	}},
+	// anime365 (PR55): the smotret-anime (anime365.ru) documented JSON
+	// API — open catalog/episodes/translations, tokened embed
+	// resolution (account with an active subscription). No frozen
+	// Python original (anidub precedent); written against the live
+	// API + the official OpenAPI spec (probed 2026-09-18).
+	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
 	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
@@ -87,46 +127,6 @@ var allFactories = []struct {
 	// enabled.
 	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
-	}},
-	// anime365 (PR55): the smotret-anime (anime365.ru) documented JSON
-	// API — open catalog/episodes/translations, tokened embed
-	// resolution (account with an active subscription). No frozen
-	// Python original (anidub precedent); written against the live
-	// API + the official OpenAPI spec (probed 2026-09-18).
-	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
-	}},
-	// animedia (PR56): the amd.online DLE site (the animedia.online
-	// JSON v3 API is dead). Written against the live site, not ported;
-	// no credentials — DLE search form POST in, kodik embeds out
-	// (resolved through the shared extractor factory).
-	{"animedia", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniMedia(AniMediaBase, http)
-	}},
-	// shiza (PR57): the shizaproject.com GraphQL on the anidub stream
-	// plumbing — anonymous catalog search, kodik/sibnet embeds through
-	// the shared extractor factory. No credentials; its torrent
-	// entries are dead (0 seeders, see shiza.go) so no torrent
-	// sibling is registered.
-	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newShiza(ShizaBase, http)
-	}},
-	// kickassanime (PR58): the kaa.lt JSON API (fsearch → show →
-	// paginated episodes → per-episode servers on the krussdomi HLS
-	// edge). No credentials and no per-provider settings;
-	// network.proxy_url routes it from blocked networks like every
-	// foreign site.
-	{"kickassanime", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
-	}},
-	// anizone (PR59): the anizone.to sub-only stream source — the first
-	// provider with no frozen Python original, written from the
-	// Anivexa-API AniZone recipe (providers/anizone.js) re-verified live
-	// 2026-09-18. Livewire HTML payloads, /livewire/update episode
-	// pagination and vidstackPlayer HLS on the watch page; no
-	// credentials.
-	{"anizone", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniZone(AniZoneBase, http)
 	}},
 }
 

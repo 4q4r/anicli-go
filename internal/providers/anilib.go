@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -155,7 +156,124 @@ func (p *Anilib) Search(ctx context.Context, query string) ([]contracts.SearchRe
 			Poster:   item.Cover.Default,
 		})
 	}
-	return results, nil
+	return p.filterContentless(ctx, results), nil
+}
+
+// anilibProbeConcurrency bounds the contentless-release preflight
+// fan-out (the same bounded-pool shape the smoke suite uses).
+const anilibProbeConcurrency = 8
+
+// filterContentless drops contentless catalog entries from the search
+// surface (PR53 owner ruling): releases whose episode/dub data is
+// empty per the API shape — the same data the PR44 release-dub model
+// hydrates. The API exposes no distinguishing field on the search
+// payload itself (the CM/«Реклама» entries ride ordinary catalog
+// rows; type.id=0 also covers real entries), so the preflight rides
+// the exact endpoints GetEpisodes uses: the release's episode list,
+// then the sorted-first episode's detail. A release is contentless
+// when it has no episodes at all or its first episode's players list
+// is empty.
+//
+// Fail-open: a failed probe (transport, non-200, decode) keeps the
+// result — absence of evidence is not evidence of contentlessness, and
+// a flaky API must not empty the search. Only a positively-empty
+// players list drops a release; drops are logged with the reason.
+//
+// Latency budget: two small JSON requests per result, ≤8 concurrent —
+// a 20-result search pays ~5 rounds ≈ 2-3s live, documented trade-off
+// for surfacing only playable results.
+func (p *Anilib) filterContentless(ctx context.Context, results []contracts.SearchResult) []contracts.SearchResult {
+	if len(results) == 0 {
+		return results
+	}
+
+	keep := make([]bool, len(results))
+	for i := range keep {
+		keep[i] = true // fail-open default
+	}
+	type indexed struct {
+		i int
+		r contracts.SearchResult
+	}
+	items := make([]indexed, len(results))
+	for i, r := range results {
+		items[i] = indexed{i: i, r: r}
+	}
+	_ = netclient.Parallel(ctx, items, anilibProbeConcurrency, func(ctx context.Context, it indexed) error {
+		contentless, err := p.probeContentless(ctx, it.r.URL)
+		switch {
+		case err != nil:
+			slog.Info("anilib: preflight failed, keeping release", "release", it.r.URL, "reason", err)
+		case contentless:
+			keep[it.i] = false
+			slog.Info("anilib: dropped contentless release", "release", it.r.URL, "title", it.r.Title)
+		}
+		return nil // never aborts the group; per-result outcomes recorded above
+	})
+
+	kept := make([]contracts.SearchResult, 0, len(results))
+	for i, r := range results {
+		if keep[i] {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// probeContentless reports whether the release behind a search-result
+// slug ("25322--black-lagoon-cm-anime") carries no dub content: the
+// episode list is empty, or the sorted-first episode's players list is
+// empty. The sort mirrors GetEpisodes so the probed episode is exactly
+// the one the release-dub model hydrates. Any transport/decode failure
+// surfaces as an error (fail-open upstream).
+func (p *Anilib) probeContentless(ctx context.Context, slugURL string) (bool, error) {
+	animeID := slugURL
+	if before, _, found := strings.Cut(slugURL, "--"); found {
+		animeID = before
+	}
+
+	params := url.Values{}
+	params.Set("anime_id", animeID)
+	listResp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/episodes?" + params.Encode(),
+		Headers: p.headers,
+		Op:      contracts.OpSearch,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	var list anilibEpisodes
+	if err := json.Unmarshal(listResp.Body, &list); err != nil {
+		return false, fmt.Errorf("decode episodes of %s: %w", animeID, err)
+	}
+	if len(list.Data) == 0 {
+		return true, nil
+	}
+
+	// Sorted-first episode, pythonFloatKey parity with GetEpisodes.
+	first := list.Data[0]
+	for _, item := range list.Data[1:] {
+		if pythonFloatKey(pythonStr(derefNum(item.Number))) < pythonFloatKey(pythonStr(derefNum(first.Number))) {
+			first = item
+		}
+	}
+
+	detailResp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     p.baseURL + "/episodes/" + first.ID.String(),
+		Headers: p.headers,
+		Op:      contracts.OpSearch,
+	})
+	if err != nil {
+		return false, err
+	}
+	var detail anilibEpisode
+	if err := json.Unmarshal(detailResp.Body, &detail); err != nil {
+		return false, fmt.Errorf("decode episode %s: %w", first.ID.String(), err)
+	}
+	return len(detail.Data.Players) == 0, nil
 }
 
 // GetEpisodes lists episodes of the anime identified by a "ID--slug"

@@ -1,12 +1,15 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -377,5 +380,248 @@ func TestTokyoToshoDisabledWhenTorrentOff(t *testing.T) {
 	}
 	if !strings.Contains(found.Reason, "[torrent]") {
 		t.Errorf("reason = %q, want the torrent-subsystem wording", found.Reason)
+	}
+}
+
+// --- PR53: search-time dead-host preflight (owner standing rule:
+// «мёртвь отфасовывается ещё до выдачи» — dead hosts are sorted out
+// BEFORE they surface). The feed below is CONSTRUCTED on the real
+// element order (category/title/link/description): item URLs point at
+// local httptest fixtures so the preflight runs network-free.
+
+// torrentFixtureServer serves real metainfo bytes as a .torrent host
+// and counts how often its .torrent path was fetched (atomic: the
+// preflight fans out concurrently).
+func torrentFixtureServer(t *testing.T, torrentBytes []byte, fetches *atomic.Int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fetches != nil {
+			fetches.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/x-bittorrent")
+		_, _ = w.Write(torrentBytes)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// ttFeedWith builds a search RSS with the given Anime item links.
+func ttFeedWith(links ...string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Tokyo Toshokan</title>`)
+	for _, link := range links {
+		b.WriteString(`
+    <item>
+      <category>Anime</category>
+      <title>[Good] Show - 01 (1080p).mkv</title>
+      <link><![CDATA[` + link + `]]></link>
+      <description><![CDATA[Size: 700.00MB<br />]]></description>
+    </item>`)
+	}
+	b.WriteString(`
+</channel></rss>`)
+	return b.String()
+}
+
+// TestTokyoToshoSearchPreflightDropsDeadHosts pins the PR53 owner
+// ruling: every surfaced result's .torrent bytes are pre-fetched
+// (bounded, short per-URL timeout) BEFORE the result surfaces; a dead
+// host (HTTP error, refused dial) drops the result. Survivors keep
+// feed order and metadata.
+func TestTokyoToshoSearchPreflightDropsDeadHosts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, mi, _ := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+	var torrentBytes bytes.Buffer
+	if err := mi.Write(&torrentBytes); err != nil {
+		t.Fatalf("serialize metainfo: %v", err)
+	}
+
+	var fetches atomic.Int64
+	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
+	dead := newDeadListener(t)
+
+	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
+		live.URL+"/good1.torrent",
+		"http://"+dead.Addr().String()+"/dead.torrent",
+		live.URL+"/good2.torrent",
+	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+
+	results, err := p.Search(context.Background(), "show")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 (the dead host dropped)", len(results))
+	}
+	if results[0].URL != live.URL+"/good1.torrent" || results[1].URL != live.URL+"/good2.torrent" {
+		t.Errorf("results = [%s, %s], want the two live links in feed order", results[0].URL, results[1].URL)
+	}
+	// The preflight fetched each .torrent exactly once.
+	if fetches.Load() != 2 {
+		t.Errorf("preflight fetches = %d, want 2", fetches.Load())
+	}
+}
+
+// TestTokyoToshoSearchPreflightFeedsIngestionNoRefetch: bytes that
+// PASSED the preflight are handed to the engine right away, so the
+// later GetEpisodes (the resolve leg) must NOT re-fetch the .torrent —
+// the cache-reuse assertion of the ruling.
+func TestTokyoToshoSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("engine-based ingest in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, mi, _ := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+	var torrentBytes bytes.Buffer
+	if err := mi.Write(&torrentBytes); err != nil {
+		t.Fatalf("serialize metainfo: %v", err)
+	}
+
+	var fetches atomic.Int64
+	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
+	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(live.URL+"/good.torrent"), nil),
+		testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+
+	if _, err := p.Search(context.Background(), "show"); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if fetches.Load() != 1 {
+		t.Fatalf("preflight fetches = %d, want 1", fetches.Load())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	eps, err := p.GetEpisodes(ctx, live.URL+"/good.torrent")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(eps) == 0 {
+		t.Fatal("episodes = 0, want the release file (metadata was already ingested)")
+	}
+	if fetches.Load() != 1 {
+		t.Errorf("fetches after GetEpisodes = %d, want 1 (ingestion must not double-fetch)", fetches.Load())
+	}
+}
+
+// TestTokyoToshoSearchPreflightNotMetainfoDropped: a host that answers
+// HTTP 200 with NON-metainfo content (login wall, parked page) is dead
+// too — the content check drops it.
+func TestTokyoToshoSearchPreflightNotMetainfoDropped(t *testing.T) {
+	t.Parallel()
+
+	html := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html><body>login wall, no torrent here</body></html>"))
+	}))
+	t.Cleanup(html.Close)
+	live := torrentFixtureServer(t, func() []byte {
+		dir := t.TempDir()
+		_, mi, _ := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+		var buf bytes.Buffer
+		if err := mi.Write(&buf); err != nil {
+			t.Fatalf("serialize metainfo: %v", err)
+		}
+		return buf.Bytes()
+	}(), nil)
+
+	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
+		html.URL+"/wall.torrent",
+		live.URL+"/good.torrent",
+	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+
+	results, err := p.Search(context.Background(), "show")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 || results[0].URL != live.URL+"/good.torrent" {
+		t.Fatalf("results = %v, want only the live link", results)
+	}
+}
+
+// TestTokyoToshoSearchPreflightSlowHostDropped: the per-URL budget is
+// short (~10s in production); a host stalling past it is dropped while
+// the rest of the surface still surfaces.
+func TestTokyoToshoSearchPreflightSlowHostDropped(t *testing.T) {
+	t.Parallel()
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(slow.Close)
+	live := torrentFixtureServer(t, func() []byte {
+		dir := t.TempDir()
+		_, mi, _ := seedReleaseFile(t, dir, "Test Show - 01.mkv", 256*1024)
+		var buf bytes.Buffer
+		if err := mi.Write(&buf); err != nil {
+			t.Fatalf("serialize metainfo: %v", err)
+		}
+		return buf.Bytes()
+	}(), nil)
+
+	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
+		slow.URL+"/slow.torrent",
+		live.URL+"/good.torrent",
+	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	p.preflightTimeout = 50 * time.Millisecond
+
+	results, err := p.Search(context.Background(), "show")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 || results[0].URL != live.URL+"/good.torrent" {
+		t.Fatalf("results = %v, want only the fast live link", results)
+	}
+}
+
+// TestTokyoToshoSearchPreflightLogsTypedReason: drops are logged with
+// the URL and the typed failure reason, never silent.
+func TestTokyoToshoSearchPreflightLogsTypedReason(t *testing.T) {
+	t.Parallel()
+
+	dead := newDeadListener(t)
+	deadURL := "http://" + dead.Addr().String() + "/dead.torrent"
+	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(deadURL), nil),
+		testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+
+	var logBuf bytes.Buffer
+	p.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	if _, err := p.Search(context.Background(), "show"); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, deadURL) {
+		t.Errorf("log = %q, want the dropped URL", logged)
+	}
+	if !strings.Contains(logged, "preflight") {
+		t.Errorf("log = %q, want the typed preflight reason", logged)
+	}
+}
+
+// TestTokyoToshoSearchNoEngineSkipsPreflight pins the nil-engine rule:
+// without the [torrent] engine there is nothing to preflight or feed,
+// so Search keeps the legacy behavior (no prefetch requests — this is
+// also what keeps hand-built unit tests network-free).
+func TestTokyoToshoSearchNoEngineSkipsPreflight(t *testing.T) {
+	t.Parallel()
+
+	hits := 0
+	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_search.xml")), &hits))
+	results, err := p.Search(context.Background(), "dandadan")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 (nil engine: no preflight, nothing dropped)", len(results))
+	}
+	// Exactly ONE request happened: the RSS search itself. No
+	// preflight attempted the fixture's real anirena/nyaa URLs.
+	if hits != 1 {
+		t.Errorf("server hits = %d, want 1 (search only)", hits)
 	}
 }

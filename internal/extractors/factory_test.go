@@ -69,7 +69,9 @@ func newTestFactory(t *testing.T) *Factory {
 
 // TestFactoryOrder pins the Python ExtractorFactory registration order
 // (anicli-py anicli/core/extractors.py:658-671) with the task-mandated
-// kwik extractor appended where the Python original disabled it.
+// kwik extractor appended where the Python original disabled it, and
+// the PR53 blogger extractor appended after it (the only live anitaku
+// mirror family; no Python extractor covered that host).
 func TestFactoryOrder(t *testing.T) {
 	t.Parallel()
 
@@ -77,7 +79,7 @@ func TestFactoryOrder(t *testing.T) {
 	want := []string{
 		"kodik", "aniboom", "cdnvideohub", "alloha", "sibnet",
 		"askor", "csst", "sovetromantica_embed",
-		"gogoplay", "streamtape", "dood", "kwik",
+		"gogoplay", "streamtape", "dood", "kwik", "blogger",
 	}
 	if len(f.extractors) != len(want) {
 		t.Fatalf("factory has %d extractors, want %d", len(f.extractors), len(want))

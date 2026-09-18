@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -15,10 +16,41 @@ import (
 func TestAnilibSearch(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture(t, "anilib_search.json"))
-	})
+	// The PR53 preflight rides /episodes after the search; only the
+	// /anime request is the search itself, so the recording happens
+	// inside the /anime leg and the mux serves the preflight chain
+	// (episode lists of the four fixture releases + their sorted-first
+	// episode id 13's players detail — all with dubs, all kept).
+	var rec *recordedRequest
+	var recMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path == "/anime" {
+			recMu.Lock()
+			rec = &recordedRequest{
+				Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery,
+				Header: r.Header.Clone(), Form: r.PostForm,
+			}
+			recMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture(t, "anilib_search.json"))
+			return
+		}
+		switch r.URL.Path {
+		case "/episodes":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture(t, "anilib_episodes.json"))
+		case "/episodes/13":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture(t, "anilib_episode_players.json"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
 	p := newAnilib(srv.URL, testClient(t, "anilib"))
 
 	results, err := p.Search(context.Background(), "naruto")
@@ -26,8 +58,8 @@ func TestAnilibSearch(t *testing.T) {
 		t.Fatalf("Search: %v", err)
 	}
 
-	if rec.Path != "/anime" {
-		t.Errorf("request path = %q, want /anime", rec.Path)
+	if rec == nil || rec.Path != "/anime" {
+		t.Fatalf("search request not recorded as /anime: %+v", rec)
 	}
 	// [LIVE-VERIFIED 2026-09-13] the browser-shaped parameter list the API
 	// accepts: q, limit=20 and site_id=5. The legacy fields[] entries and
@@ -79,6 +111,123 @@ func TestAnilibSearch(t *testing.T) {
 	}
 	if results[3].Poster != "" {
 		t.Errorf("Poster = %q, want empty when cover.default missing", results[3].Poster)
+	}
+}
+
+// anilibMuxFixtureServer routes the three live API shapes the search
+// preflight touches: /anime (search answers), /episodes?anime_id=N
+// (episode lists), /episodes/{id} (episode detail with players).
+// Every hit is appended to *paths so tests can pin the preflight's
+// exact request sequence; the append is mutex-guarded because the
+// preflight fans out concurrently.
+func anilibMuxFixtureServer(t *testing.T, mux map[string][]byte, paths *[]string) string {
+	t.Helper()
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if paths != nil {
+			mu.Lock()
+			*paths = append(*paths, r.URL.Path+"?"+r.URL.RawQuery)
+			mu.Unlock()
+		}
+		body, ok := mux[r.URL.Path+"?"+r.URL.RawQuery]
+		if !ok {
+			body = mux[r.URL.Path]
+		}
+		if body == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestAnilibSearchFiltersContentlessReleases pins the PR53 owner
+// ruling: contentless catalog entries (the CM/«Реклама» placeholders
+// whose episode detail carries an EMPTY players list) are dropped from
+// Search, never surfaced as dead results. The filter keys on the API's
+// own data property — first episode's players[] — exactly like the
+// PR44 release-dub model hydrates them, never on a title string.
+//
+// Fixture chain (all [LIVE-VERIFIED 2026-09-18]): the real 5-entry
+// black lagoon search; release 25322 «…Реклама» resolves to episode
+// 141970 whose players list is empty (dropped); the four real
+// releases resolve to the shared episodes fixture whose sorted-first
+// episode (id 13, the null-numbered one — pythonFloatKey parity with
+// GetEpisodes) carries players (kept).
+func TestAnilibSearchFiltersContentlessReleases(t *testing.T) {
+	t.Parallel()
+
+	var paths []string
+	base := anilibMuxFixtureServer(t, map[string][]byte{
+		"/anime":                   fixture(t, "anilib_search_black_lagoon.json"),
+		"/episodes?anime_id=25322": fixture(t, "anilib_episodes_cm.json"),
+		"/episodes/141970":         fixture(t, "anilib_episode_players_cm.json"),
+		"/episodes?anime_id=805":   fixture(t, "anilib_episodes.json"),
+		"/episodes?anime_id=1343":  fixture(t, "anilib_episodes.json"),
+		"/episodes?anime_id=3864":  fixture(t, "anilib_episodes.json"),
+		"/episodes?anime_id=5317":  fixture(t, "anilib_episodes.json"),
+		"/episodes/13":             fixture(t, "anilib_episode_players.json"),
+	}, &paths)
+	p := newAnilib(base, testClient(t, "anilib"))
+
+	results, err := p.Search(context.Background(), "black lagoon")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	// 5 live entries → 4 kept: the CM placeholder (empty players) is
+	// gone, feed order preserved.
+	if len(results) != 4 {
+		t.Fatalf("results = %d, want 4 (the CM entry dropped)", len(results))
+	}
+	for _, r := range results {
+		if strings.Contains(r.Title, "Реклама") {
+			t.Errorf("result %q surfaced: the contentless CM entry must be dropped", r.Title)
+		}
+	}
+	if results[0].Title != "Пираты «Чёрной лагуны»" {
+		t.Errorf("first title = %q, want feed order preserved", results[0].Title)
+	}
+
+	// The preflight rode the same endpoints the PR44 dub model uses:
+	// episode list of the release, then the sorted-first episode's
+	// detail. Spot-check the CM release's request pair.
+	joined := strings.Join(paths, " ")
+	if !strings.Contains(joined, "/episodes?anime_id=25322") {
+		t.Errorf("preflight never listed release 25322: %v", paths)
+	}
+	if !strings.Contains(joined, "/episodes/141970") {
+		t.Errorf("preflight never fetched the first episode's players: %v", paths)
+	}
+}
+
+// TestAnilibSearchPreflightFailureFailsOpen: a preflight probe that
+// FAILS (transport, non-200) is absence of evidence, not evidence of a
+// contentless release — the result is kept. The filter drops only on a
+// positively-empty players list; a flaky API must not empty the search.
+func TestAnilibSearchPreflightFailureFailsOpen(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/anime" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture(t, "anilib_search_black_lagoon.json"))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	p := newAnilib(srv.URL, testClient(t, "anilib"))
+
+	results, err := p.Search(context.Background(), "black lagoon")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 5 {
+		t.Fatalf("results = %d, want all 5 kept (probe errors fail open)", len(results))
 	}
 }
 

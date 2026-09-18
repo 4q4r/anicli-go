@@ -25,15 +25,15 @@ func TestAllRosterComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 16 {
-		t.Fatalf("All() = %d providers, want 16", len(bare))
+	if len(bare) != 17 {
+		t.Fatalf("All() = %d providers, want 17", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho",
+		"animetosho", "tokyotosho", "kickassanime",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -91,8 +91,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 16 {
-		t.Fatalf("List() = %d providers, want 16", len(list))
+	if len(list) != 17 {
+		t.Fatalf("List() = %d providers, want 17", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order);
 	// anidub (no frozen Python original) is appended after the ported
@@ -100,12 +100,13 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// search provider) after yanima, anilibria-torrent (PR37, the new
 	// aniliberty.top API's torrents) after nyaa, animetosho (PR38, the
 	// newznab feed) after anilibria-torrent, tokyotosho (PR38, the
-	// search RSS) after animetosho.
+	// search RSS) after animetosho, kickassanime (PR58, the kaa.lt
+	// JSON API) after tokyotosho.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho",
+		"animetosho", "tokyotosho", "kickassanime",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -186,8 +187,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 16 {
-		t.Fatalf("All() = %d providers, want 16", len(bare))
+	if len(bare) != 17 {
+		t.Fatalf("All() = %d providers, want 17", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -221,6 +222,7 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anilibria-torrent": "ru",
 		"animetosho":        "ja",
 		"tokyotosho":        "ja",
+		"kickassanime":      "ja",
 	}
 
 	cfg := config.Default()
@@ -262,8 +264,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 14 {
-		t.Fatalf("All() = %d providers, want 14", len(bare))
+	if len(bare) != 15 {
+		t.Fatalf("All() = %d providers, want 15", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

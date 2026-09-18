@@ -113,8 +113,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 15 {
-		t.Fatalf("want the remaining 15 providers, got %d", len(bare))
+	if len(bare) != 16 {
+		t.Fatalf("want the remaining 16 providers, got %d", len(bare))
 	}
 }
 

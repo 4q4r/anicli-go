@@ -1,0 +1,205 @@
+{
+ "current_page": 1,
+ "pages": [
+  {
+   "number": 1,
+   "from": "01",
+   "to": "12",
+   "eps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+   ]
+  }
+ ],
+ "result": [
+  {
+   "slug": "b324b5",
+   "title": "That's How Love Starts, Ya Know!",
+   "episode_number": 1,
+   "episode_string": "1",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-1-de71-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-1-de71-hq"
+   }
+  },
+  {
+   "slug": "d4ae7b",
+   "title": "That's a Space Alien, Ain't It?!",
+   "episode_number": 2,
+   "episode_string": "2",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-2-eef3-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-2-eef3-hq"
+   }
+  },
+  {
+   "slug": "e7330b",
+   "title": "It's a Granny vs. Granny Clash!",
+   "episode_number": 3,
+   "episode_string": "3",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-3-94c1-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-3-94c1-hq"
+   }
+  },
+  {
+   "slug": "bc85ec",
+   "title": "Kicking Turbo Granny's Ass",
+   "episode_number": 4,
+   "episode_string": "4",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-4-0cb8-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-4-0cb8-hq"
+   }
+  },
+  {
+   "slug": "18d1f2",
+   "title": "Like, Where Are Your Balls?",
+   "episode_number": 5,
+   "episode_string": "5",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-5-5a7f-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-5-5a7f-hq"
+   }
+  },
+  {
+   "slug": "7fbb52",
+   "title": "A Dangerous Woman Arrives",
+   "episode_number": 6,
+   "episode_string": "6",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-6-12a9-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-6-12a9-hq"
+   }
+  },
+  {
+   "slug": "c06f90",
+   "title": "To a Kinder World",
+   "episode_number": 7,
+   "episode_string": "7",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-7-bdd0-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-7-bdd0-hq"
+   }
+  },
+  {
+   "slug": "0fb85b",
+   "title": "I've Got This Funny Feeling",
+   "episode_number": 8,
+   "episode_string": "8",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-8-d675-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-8-d675-hq"
+   }
+  },
+  {
+   "slug": "961772",
+   "title": "Merge! Serpo Dover Demon Nessie!",
+   "episode_number": 9,
+   "episode_string": "9",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-9-022f-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-9-022f-hq"
+   }
+  },
+  {
+   "slug": "9dad7b",
+   "title": "Have You Ever Seen a Cattle Mutilation?",
+   "episode_number": 10,
+   "episode_string": "10",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-10-6688-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-10-6688-hq"
+   }
+  },
+  {
+   "slug": "488b8a",
+   "title": "First Love",
+   "episode_number": 11,
+   "episode_string": "11",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-11-794d-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-11-794d-hq"
+   }
+  },
+  {
+   "slug": "43e47f",
+   "episode_number": 12,
+   "episode_string": "12",
+   "thumbnail": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "65656a192b313de589b91ca1/ep-12-2f9f-sm",
+    "aspectRatio": 1.77,
+    "hq": "65656a192b313de589b91ca1/ep-12-2f9f-hq"
+   }
+  }
+ ]
+}

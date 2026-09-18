@@ -1,0 +1,45 @@
+{
+ "title": "Dandadan",
+ "title_en": "Dan Da Dan",
+ "synopsis": "Reeling from her recent breakup, Momo Ayase, a popular high schooler, shows kind…",
+ "episode_title": "That's How Love Starts, Ya Know!",
+ "episode_number": 1,
+ "episode_string": "1",
+ "language": "ja-JP",
+ "thumbnail": {
+  "formats": [
+   "jpeg",
+   "webp"
+  ],
+  "sm": "65656a192b313de589b91ca1/ep-1-de71-sm",
+  "aspectRatio": 1.77,
+  "hq": "65656a192b313de589b91ca1/ep-1-de71-hq"
+ },
+ "poster": {
+  "formats": [
+   "jpeg",
+   "webp"
+  ],
+  "sm": "dandadan-b585-sm",
+  "aspectRatio": 0.71,
+  "hq": "dandadan-b585-hq"
+ },
+ "broadcast_day": "thursday",
+ "broadcast_time": "15:26",
+ "slug": "b324b5",
+ "show_slug": "dandadan-da3b",
+ "type": "tv",
+ "servers": [
+  {
+   "name": "VidStreaming",
+   "shortName": "Vid",
+   "src": "https://krussdomi.com/cat-player/player?id=6713f500b97399e0e1ae2020&source=vidstream&ln=ja-JP"
+  },
+  {
+   "name": "BirdStream",
+   "shortName": "Bird",
+   "src": "https://krussdomi.com/cat-player/player?id=OGM1NjVmZGM1NjkzMzczYzIwNDYwMWU4MjFmYjJjNzM6Yjg0NmI3MTM3MjlhNjc2YTg0NTEwZGVmOWEyODJkY2M&type=dash"
+  }
+ ],
+ "next_ep_slug": "ep-2-d4ae7b"
+}

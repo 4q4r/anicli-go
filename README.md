@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 14 провайдеров"]
+    subgraph sources["Источники — 17 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -123,6 +123,7 @@ graph TD
         P15[anilibria-torrent]
         P16[animetosho torrents]
         P17[tokyotosho torrents]
+        P18[kickassanime]
     end
 
     EXT["Извлекатели плееров (9)<br/>internal/extractors"]
@@ -281,6 +282,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
+| kickassanime | kaa.lt | видео (HLS, JA + EN-дорожка в манифесте) | ✅ живой (PR58, написан по живому API — рецепты Anivexa-API); JSON-поиск, пагинированные эпизоды, мастер-манифест со переключаемыми аудиодорожками; из заблокированных сетей нужен `network.proxy_url` |
 
 Не портированы / удалены (мёртвые):
 

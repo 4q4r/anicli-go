@@ -40,8 +40,9 @@ type parityProvider struct {
 	// behaviour): searchEmpty returns an honest empty result set,
 	// epEmpty lists episodes with NO RawEmbeds, streamEmpty resolves
 	// zero links. searchResults widens the result set (URLs
-	// …/a0, /a1, …); deadEpIdx makes THAT result's GetEpisodes fail
-	// (-1 disables) — the every-surfaced-result-must-resolve rule.
+	// …/a0, /a1, …); deadEps makes THOSE results' GetEpisodes fail
+	// (torrent fakes fail them with the metadata error — the PR54
+	// kind-aware pass-rule scenarios).
 	searchEmpty bool
 	epEmpty     bool
 	streamEmpty bool
@@ -49,7 +50,7 @@ type parityProvider struct {
 	torrentDead bool
 
 	searchResults int
-	deadEpIdx     int
+	deadEps       map[int]bool
 
 	mu      sync.Mutex
 	epCalls int
@@ -58,7 +59,7 @@ type parityProvider struct {
 func newParityProvider(t *testing.T, id string, fail bool) *parityProvider {
 	t.Helper()
 
-	p := &parityProvider{id: id, fail: fail, deadEpIdx: -1}
+	p := &parityProvider{id: id, fail: fail}
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/search" {
 			http.NotFound(w, r)
@@ -141,13 +142,16 @@ func (p *parityProvider) GetEpisodes(ctx context.Context, animeURL string) ([]co
 	p.mu.Lock()
 	p.epCalls++
 	p.mu.Unlock()
-	// deadEpIdx: the surfaced result at that index fails its episode
-	// leg (every-surfaced-result-must-resolve scenarios).
-	if p.deadEpIdx >= 0 {
-		if idx := resultIndexOfURL(animeURL); idx == p.deadEpIdx {
+	// deadEps: the surfaced results at those indexes fail their
+	// episode leg — torrent fakes fail with the metadata error, stream
+	// fakes with a plain dead-result error (PR54 pass-rule scenarios).
+	if idx := resultIndexOfURL(animeURL); p.deadEps[idx] {
+		if p.isTorrent {
 			return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0,
-				fmt.Errorf("dead result %d", idx))
+				fmt.Errorf("торренты: метаданные не готовы: dead result %d", idx))
 		}
+		return nil, contracts.WrapProvider(p.id, contracts.OpGetEpisodes, 0,
+			fmt.Errorf("dead result %d", idx))
 	}
 	if !sleepCtx(ctx, p.epSleep) {
 		return nil, ctx.Err()

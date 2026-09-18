@@ -1,15 +1,18 @@
-// Live smoke suite (PR44, review-corrected): for every registered
-// provider EXCEPT the credential-gated ones, run the full consumption
-// chain against the live site — search a known-broad title (per the
-// provider's NamePreference), then resolve EVERY surfaced result
-// bounded-concurrent under the per-provider budget: stream providers
-// need dubs ≥ 1 AND ≥ 1 stream link per result; torrent providers
-// need metadata-ready with files ≥ 1 (their Search filters seedless
-// entries, so what surfaces is really seeding). A provider PASSES
-// only when search > 0 AND every surfaced result resolved; anything
-// else is a FAIL row with the reason and the resolved/surfaced
-// progress (dead providers are the desired visibility — never
-// excluded, never special-cased).
+// Live smoke suite (PR44, review-corrected; PR54 kind-aware pass
+// rule): for every registered provider EXCEPT the credential-gated
+// ones, run the full consumption chain against the live site — search
+// a known-broad title (per the provider's NamePreference), then
+// resolve EVERY surfaced result bounded-concurrent under the
+// per-provider budget: stream providers need dubs ≥ 1 AND ≥ 1 stream
+// link per result; torrent providers need metadata-ready with files
+// ≥ 1 (their Search filters seedless entries, so what surfaces is
+// really seeding). PASS is kind-aware (PR54 owner ruling): STREAM
+// providers pass when search>0 AND at least ONE surfaced result
+// resolved fully — the surfaced/resolved column keeps the honest N/M
+// and the failure column a sample reason; TORRENT providers still
+// need EVERY surfaced result resolved (their Search filters dead
+// hosts pre-surface). Anything else is a FAIL row; dead providers are
+// the desired visibility — never excluded, never special-cased.
 //
 // The same core backs `parity smoke [provider|all]` and the
 // //go:build live test file (smoke_live_test.go); the default
@@ -85,11 +88,14 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 			"known-broad title (NamePreference-routed), then resolve EVERY surfaced result\n" +
 			"bounded-concurrent under the per-provider budget — stream providers need\n" +
 			"dubs>=1 AND >=1 stream link per result; torrent providers need\n" +
-			"metadata-ready with files>=1 (their Search filters seedless entries). PASS\n" +
-			"needs search>0 AND all surfaced results resolved; a budget exhaustion is an\n" +
-			"honest FAIL naming the resolved/surfaced progress. Credential-gated\n" +
-			"providers (kodik, yanima) and the unimplemented rutracker are skipped with\n" +
-			"a visible reason. Exits non-zero when any provider FAILs.",
+			"metadata-ready with files>=1 (their Search filters seedless entries). PASS is\n" +
+			"kind-aware: STREAM providers pass when search>0 AND at least ONE surfaced\n" +
+			"result resolved fully (the surfaced/resolved column keeps the honest N/M and\n" +
+			"the failure column a sample reason); TORRENT providers still need EVERY\n" +
+			"surfaced result resolved. PASS needs search>0 either way; a budget\n" +
+			"exhaustion is an honest FAIL naming the resolved/surfaced progress.\n" +
+			"Credential-gated providers (kodik, yanima) and the unimplemented rutracker\n" +
+			"are skipped with a visible reason. Exits non-zero when any provider FAILs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := setup(cmd)
@@ -266,7 +272,21 @@ func smokeOne(parent context.Context, d deps, env *env, p contracts.Provider, to
 			minStreams = leg.streams
 		}
 	}
-	if res.resolved < res.surfaced {
+	// Pass rule (PR54 owner ruling), kind-aware:
+	//   stream  — search>0 ∧ ≥1 surfaced result fully resolved (the
+	//             catalog decides how much of the surface is alive);
+	//   torrent — ALL surfaced results resolved (their Search filters
+	//             dead pre-surface, so a surviving result is a promise
+	//             the whole surface must keep; metadata budget
+	//             semantics unchanged).
+	// Per-result failures stay visible either way: the
+	// surfaced/resolved column carries N/M and the failure column a
+	// sample reason.
+	pass := res.resolved > 0
+	if torrentIDs[p.ID()] {
+		pass = res.resolved == res.surfaced
+	}
+	if !pass {
 		if minDubs < 0 {
 			minDubs, minStreams = 0, 0
 		}

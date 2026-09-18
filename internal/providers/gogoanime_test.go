@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/crypto"
 )
 
 // requestLog is a recording test server serving exact-path bodies and
@@ -66,18 +69,84 @@ func (l *requestLog) record(body string) http.HandlerFunc {
 	}
 }
 
-// routeExtra registers an additional exact-path page after construction
-// (Go's ServeMux guards its routing tree, late registration stays safe).
-func (l *requestLog) routeExtra(t *testing.T, path, body string) {
+// gogoMirrorOption builds one Anitaku mirror <option>: the site stores
+// each server as base64-encoded iframe HTML in the value attribute
+// (loadMi does atob(value) into #pembed).
+func gogoMirrorOption(t *testing.T, index int, src string) string {
 	t.Helper()
-	l.srv.Config.Handler.(*http.ServeMux).Handle(path, http.HandlerFunc(l.record(body)))
+
+	iframe := `<iframe src="` + src + `" frameborder="0" allowfullscreen></iframe>`
+	enc := base64.StdEncoding.EncodeToString([]byte(iframe))
+	return `<option value="` + enc + `" data-index="` + fmt.Sprint(index) + `"></option>`
+}
+
+// gogoSinkWorld serves the classic gogo embed family offline: the
+// embedplus page (three AES key markers + encrypted data-value) and the
+// encrypt-ajax.php endpoint, crypto-modeled exactly like
+// extractors/gogoplay_test.go — the chain the mirrors walk when a
+// matching host is live.
+type gogoSinkWorld struct {
+	srv *httptest.Server
+}
+
+func newGogoSinkWorld(t *testing.T, m3u8 string) *gogoSinkWorld {
+	t.Helper()
+
+	const (
+		keyEnc = "3947103857291746"
+		keyIV  = "1029384756102938"
+		keyDec = "5647382910473829"
+	)
+	w := &gogoSinkWorld{}
+	w.srv = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/embedplus":
+			enc, err := crypto.AESEncrypt("id=content123&alias=naruto", []byte(keyEnc), []byte(keyIV))
+			if err != nil {
+				t.Errorf("encrypt data-value: %v", err)
+				rw.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(rw, `<div class="container-%s" id="videocontent-%s" data-value=%q></div><script>var videocontent-%s;</script>`,
+				keyEnc, keyIV, enc, keyDec)
+		case "/encrypt-ajax.php":
+			sources, _ := json.Marshal(map[string]any{
+				"source": []map[string]string{
+					{"file": m3u8, "label": "720 P"},
+				},
+			})
+			enc, err := crypto.AESEncrypt(string(sources), []byte(keyDec), []byte(keyIV))
+			if err != nil {
+				t.Errorf("encrypt ajax payload: %v", err)
+				rw.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(rw, `{"data":%q}`, enc)
+		default:
+			http.NotFound(rw, r)
+		}
+	}))
+	t.Cleanup(w.srv.Close)
+	return w
+}
+
+// formValue reads one POST form field off a recorded request.
+func formValue(form map[string][]string, key string) string {
+	if vals, ok := form[key]; ok && len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
 }
 
 func TestGogoAnimeSearch(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "gogoanime_search.html"))
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/wp-admin/admin-ajax.php" {
+			_, _ = w.Write(fixture(t, "gogoanime_search.json"))
+			return
+		}
+		http.NotFound(w, r)
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
@@ -86,36 +155,41 @@ func TestGogoAnimeSearch(t *testing.T) {
 		t.Fatalf("Search: %v", err)
 	}
 
-	// [LIVE-VERIFIED 2026-09-13] gogoanime.by is a WordPress/dramastream
-	// site: search is GET /?s=<query>, not the legacy /search.html form.
-	if rec.Path != "/" {
-		t.Errorf("request path = %q, want /", rec.Path)
+	// [LIVE-VERIFIED 2026-09-18] anitaku.io (the gogoanime rebrand,
+	// Kohi-den extensions-source issue #410) dropped the WordPress /?s=
+	// search: it 301s to /browse/. The live search is the dramastream
+	// ajax endpoint — POST form action/ts_ac_query; the GET form ignores
+	// the query and returns recent posts.
+	if rec.Method != http.MethodPost {
+		t.Errorf("request method = %q, want POST", rec.Method)
 	}
-	if want := "s=one+piece"; rec.Query != want {
-		t.Errorf("request query = %q, want %q", rec.Query, want)
+	if rec.Path != "/wp-admin/admin-ajax.php" {
+		t.Errorf("request path = %q, want /wp-admin/admin-ajax.php", rec.Path)
+	}
+	if got := formValue(rec.Form, "action"); got != "ts_ac_do_search" {
+		t.Errorf("form action = %q, want ts_ac_do_search", got)
+	}
+	if got := formValue(rec.Form, "ts_ac_query"); got != "one piece" {
+		t.Errorf("form ts_ac_query = %q, want %q", got, "one piece")
+	}
+	if got := rec.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want the form urlencoded media type", got)
 	}
 
 	if len(results) != 3 {
-		t.Fatalf("results = %d, want 3 (first .listupd a.tip cards)", len(results))
+		t.Fatalf("results = %d, want 3 (series[0].all entries)", len(results))
 	}
 	if results[0].Title != "One Piece: Heroines" {
-		t.Errorf("Title = %q, want anchor title attribute", results[0].Title)
+		t.Errorf("Title = %q, want post_title", results[0].Title)
 	}
-	// Result URLs stay the absolute /series/ hrefs the site emits.
-	if results[0].URL != "https://gogoanime.by/series/one-piece-heroines/" {
-		t.Errorf("URL = %q, want the absolute series href", results[0].URL)
+	if results[0].URL != "https://anitaku.io/series/one-piece-heroines/" {
+		t.Errorf("URL = %q, want the absolute post_link", results[0].URL)
 	}
 	if results[0].SourceID != "gogoanime" {
 		t.Errorf("SourceID = %q", results[0].SourceID)
 	}
-	if results[0].Poster != "https://i0.wp.com/gogoanime.by/wp-content/uploads/2026/07/one-piece-heroines.webp?resize=246,350" {
-		t.Errorf("Poster = %q, want img src", results[0].Poster)
-	}
-	// The sidebar .leftseries card must not leak into search results.
-	for _, r := range results {
-		if strings.Contains(r.URL, "bleach-sennen") {
-			t.Errorf("URL = %q leaked from the sidebar popular section", r.URL)
-		}
+	if !strings.Contains(results[0].Poster, "wp-content/uploads/") {
+		t.Errorf("Poster = %q, want post_image", results[0].Poster)
 	}
 }
 
@@ -123,7 +197,7 @@ func TestGogoAnimeSearchSendsReferer(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "<html></html>")
+		_, _ = w.Write([]byte(`{"series":[{"all":[]}]}`))
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
@@ -136,41 +210,77 @@ func TestGogoAnimeSearchSendsReferer(t *testing.T) {
 	}
 }
 
+func TestGogoAnimeSearchEmpty(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		// [LIVE-VERIFIED 2026-09-18] the zero-hit shape: all:[] plus the
+		// render template, verbatim apart from the template whitespace.
+		_, _ = w.Write([]byte(`{"series":[{"all":[],"template":"<a href=\"{post_link}\">{post_image_html}</a>","title":"Search","class_name":"live-search_item"}]}`))
+	})
+	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
+
+	results, err := p.Search(context.Background(), "black lagoon")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %d, want 0 for an empty all[]", len(results))
+	}
+}
+
+func TestGogoAnimeSearchMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html>cloudflare challenge</html>"))
+	})
+	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
+
+	_, err := p.Search(context.Background(), "q")
+	if err == nil {
+		t.Fatal("error = nil, want a typed decode failure")
+	}
+	if !strings.Contains(err.Error(), "gogoanime") {
+		t.Errorf("error = %v, want provider-tagged failure", err)
+	}
+}
+
 func TestGogoAnimeGetEpisodes(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/series/naruto-shippuuden/" {
-			_, _ = w.Write(fixture(t, "gogoanime_anime.html"))
+		if r.URL.Path == "/series/one-piece/" {
+			_, _ = w.Write(fixture(t, "gogoanime_series.html"))
 			return
 		}
 		http.NotFound(w, r)
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
-	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/series/naruto-shippuuden/")
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/series/one-piece/")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	if len(episodes) != 5 {
-		t.Fatalf("episodes = %d, want 5", len(episodes))
+	if len(episodes) != 3 {
+		t.Fatalf("episodes = %d, want 3 (.eplister li)", len(episodes))
 	}
 
-	// [LIVE-VERIFIED 2026-09-13] the dramastream series page renders ALL
-	// episode-items server-side, newest-first (Episode 500 … 496); the
-	// provider reverses to ascending like the legacy ajax list did.
-	wantNums := []string{"496", "497", "498", "499", "500"}
+	// [LIVE-VERIFIED 2026-09-18] the eplister renders newest-first
+	// (1178, 1177, 1176 for One Piece); the provider reverses to
+	// ascending like the legacy ajax list did.
+	wantNums := []string{"1176", "1177", "1178"}
 	for i, want := range wantNums {
 		if episodes[i].Num != want {
 			t.Errorf("episodes[%d].Num = %q, want %q", i, episodes[i].Num, want)
 		}
 	}
-	if episodes[4].Title != "Episode 500" {
-		t.Errorf("Title = %q, want the anchor text", episodes[4].Title)
+	if episodes[2].Title != "One Piece Episode 1178 English Subbed" {
+		t.Errorf("Title = %q, want the .epl-title text", episodes[2].Title)
 	}
-	if episodes[4].RawID != "https://gogoanime.by/naruto-shippuuden-episode-500-english-subbed/" {
-		t.Errorf("RawID = %q, want the absolute episode href", episodes[4].RawID)
+	if episodes[2].RawID != "https://anitaku.io/one-piece-episode-1178-english-subbed/" {
+		t.Errorf("RawID = %q, want the absolute episode href", episodes[2].RawID)
 	}
 	if len(episodes[0].RawEmbeds) != 0 {
 		t.Errorf("RawEmbeds = %v, want empty (servers are fetched lazily)", episodes[0].RawEmbeds)
@@ -181,14 +291,14 @@ func TestGogoAnimeGetEpisodesRelativeURL(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "gogoanime_anime.html"))
+		_, _ = w.Write(fixture(t, "gogoanime_series.html"))
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
-	if _, err := p.GetEpisodes(context.Background(), "/series/naruto-shippuuden/"); err != nil {
+	if _, err := p.GetEpisodes(context.Background(), "/series/one-piece/"); err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
-	if rec.Path != "/series/naruto-shippuuden/" {
+	if rec.Path != "/series/one-piece/" {
 		t.Errorf("request path = %q, want the base-prefixed series path", rec.Path)
 	}
 }
@@ -197,7 +307,7 @@ func TestGogoAnimeGetEpisodesNoEpisodes(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "<html><body>no episode list</body></html>")
+		_, _ = w.Write([]byte("<html><body>no episode list</body></html>"))
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
@@ -206,7 +316,7 @@ func TestGogoAnimeGetEpisodesNoEpisodes(t *testing.T) {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 	if len(episodes) != 0 {
-		t.Errorf("episodes = %d, want 0 without .episodes-container", len(episodes))
+		t.Errorf("episodes = %d, want 0 without .eplister", len(episodes))
 	}
 }
 
@@ -228,169 +338,76 @@ func TestGogoAnimeFetchDubs(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		// Host-swap the live-captured absolute URLs onto this server.
-		_, _ = w.Write([]byte(strings.ReplaceAll( //nolint:gosec // test server: host-swapped fixture body
-			string(fixture(t, "gogoanime_episode.html")), "https://gogoanime.by", "http://"+r.Host)))
+		if r.URL.Path == "/one-piece-episode-1178-english-subbed/" {
+			_, _ = w.Write(fixture(t, "gogoanime_episode.html"))
+			return
+		}
+		http.NotFound(w, r)
 	})
 	p := newGogoAnime(srv.URL, testClient(t, "gogoanime"))
 
 	episode := contracts.Episode{
-		Num:   "500",
-		RawID: srv.URL + "/naruto-shippuuden-episode-500-english-subbed/",
+		Num:   "1178",
+		RawID: srv.URL + "/one-piece-episode-1178-english-subbed/",
 	}
 	got, err := p.FetchDubs(context.Background(), &episode)
 	if err != nil {
 		t.Fatalf("FetchDubs: %v", err)
 	}
-	if rec.Path != "/naruto-shippuuden-episode-500-english-subbed/" {
+	if rec.Path != "/one-piece-episode-1178-english-subbed/" {
 		t.Errorf("request path = %q, want the episode page", rec.Path)
 	}
 
 	embeds := got.RawEmbeds
-	if len(embeds) != 2 {
-		t.Fatalf("RawEmbeds = %v, want 2 servers (no-data-src skipped)", embeds)
+	if len(embeds) != 1 {
+		t.Fatalf("RawEmbeds = %v, want 1 server (both options carry blank labels)", embeds)
 	}
-	mega, ok := embeds["Mega"]
-	if !ok || len(mega) != 1 {
-		t.Fatalf("Mega = %v, want the server's player URL", embeds["Mega"])
+	urls, ok := embeds["Unknown"]
+	if !ok || len(urls) != 2 {
+		t.Fatalf("Unknown = %v, want both mirror iframes (placeholder skipped)", urls)
 	}
-	if !strings.HasPrefix(mega[0], srv.URL+"/player/?source=embed&url=") {
-		t.Errorf("Mega data-src = %q, want the host-rewritten player URL", mega[0])
+	// [LIVE-VERIFIED 2026-09-18] option 1 is the real One Piece 1178
+	// capture, option 2 the real Dandadan S2 ep12 capture.
+	if !strings.Contains(urls[0], "blogger.com/video.g?token=") {
+		t.Errorf("mirror[0] = %q, want the blogger embed", urls[0])
 	}
-	if _, ok := embeds["Broken"]; ok {
-		t.Error("Broken (no data-src) must be skipped")
+	if !strings.Contains(urls[1], "megacloud.bloggy.click/stream/") {
+		t.Errorf("mirror[1] = %q, want the megacloud embed", urls[1])
 	}
 }
 
-// gogoMegaVidServers builds the live-verified megavid chain [LIVE-VERIFIED
-// 2026-09-13]: the referer-gated /player/ page on the gogo host serves an
-// iframe to a megavid embed whose #player-payload points at a JSON source
-// endpoint. Hosts are swapped to the recording servers so the chain runs
-// offline.
-func gogoMegaVidServers(t *testing.T) (gogo, embed *requestLog) {
-	t.Helper()
-
-	embed = newRequestLog(t, map[string]string{
-		"/mal/1735/500/sub":        string(fixture(t, "gogoanime_megavid.html")),
-		"/mal/1735/500/sub/source": string(fixture(t, "gogoanime_megavid_source.json")),
-	})
-	playerBody := strings.Replace(
-		string(fixture(t, "gogoanime_player.html")),
-		"https://megavid.buzz/mal/1735/500/sub",
-		embed.srv.URL+"/mal/1735/500/sub", 1)
-	gogo = newRequestLog(t, map[string]string{"/player/": playerBody})
-	return gogo, embed
-}
-
-// TestGogoAnimeResolveStreamMegaVidRoundTrip walks that chain end to end
-// and pins the referer/accept contracts on every hop.
-func TestGogoAnimeResolveStreamMegaVidRoundTrip(t *testing.T) {
+// TestGogoAnimeResolveStreamRoundTrip walks one mirror through the
+// extractor chain: the classic gogo embed host (streaming.php) resolves
+// via the modeled encrypt-ajax handshake to a 720 m3u8 source.
+func TestGogoAnimeResolveStreamRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	gogo, embed := gogoMegaVidServers(t)
-
-	episodeURL := gogo.srv.URL + "/naruto-shippuuden-episode-500-english-subbed/"
-	p := newGogoAnime(gogo.srv.URL, testClient(t, "gogoanime"))
+	sink := newGogoSinkWorld(t, "https://h.example/hls/master.m3u8")
+	p := newGogoAnime("https://anitaku.io", testClient(t, "gogoanime"))
 	episode := contracts.Episode{
-		Num:   "500",
-		RawID: episodeURL,
+		Num:   "1",
+		RawID: "https://anitaku.io/naruto-episode-1-english-subbed/",
 		RawEmbeds: map[string][]string{
-			"Mega": {gogo.srv.URL + "/player/?source=embed&url=V3oraS9OdVNOdFNoTUZuWm9qa1FrRWtnd3FZTmJlM3hXRWVzdmZqRVorZG9CYW15bFVMQWdCRHNxbzhRcTdNKw%3D%3D"},
+			"Unknown": {sink.srv.URL + "/embedplus?id=content123"},
 		},
 	}
 
-	stream, err := p.ResolveStream(context.Background(), episode, "Mega")
+	stream, err := p.ResolveStream(context.Background(), episode, "Unknown")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
-	if stream.DubName != "Mega" {
+	if stream.DubName != "Unknown" {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
 	src, ok := stream.Links["720"]
 	if !ok {
 		t.Fatalf("Links = %v, want a 720 entry", stream.Links)
 	}
-	if !strings.HasPrefix(src.URL, "https://megavid.buzz/vid/") {
-		t.Errorf("URL = %q, want the megavid hls source", src.URL)
-	}
-	if src.Type != "m3u8" {
-		t.Errorf("Type = %q, want m3u8 (hls)", src.Type)
-	}
-	if src.Headers["Referer"] != embed.srv.URL+"/mal/1735/500/sub" {
-		t.Errorf("Referer = %q, want the megavid embed page", src.Headers["Referer"])
-	}
-
-	// The /player/ proxy is referer-gated live (it redirects to the site
-	// root without one) — pin the episode-page Referer on that hop.
-	playerReq, ok := gogo.get("/player/")
-	if !ok {
-		t.Fatal("the player page was never fetched")
-	}
-	if got := playerReq.Header.Get("Referer"); got != episodeURL {
-		t.Errorf("player fetch Referer = %q, want the episode URL", got)
-	}
-
-	// The source hop mirrors the embed bootstrap: Accept json + embed
-	// Referer.
-	srcReq, ok := embed.get("/mal/1735/500/sub/source")
-	if !ok {
-		t.Fatal("the megavid source endpoint was never fetched")
-	}
-	if got := srcReq.Header.Get("Accept"); got != "application/json" {
-		t.Errorf("source fetch Accept = %q, want application/json", got)
-	}
-	if got := srcReq.Header.Get("Referer"); got != embed.srv.URL+"/mal/1735/500/sub" {
-		t.Errorf("source fetch Referer = %q, want the embed page URL", got)
-	}
-}
-
-// TestGogoAnimeResolveStreamMegaPlayRoundTrip covers the second live embed
-// family [LIVE-VERIFIED 2026-09-13]: /player/ → megaplay embed with an
-// inline jwplayer file URL.
-func TestGogoAnimeResolveStreamMegaPlayRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	embed := newRequestLog(t, map[string]string{
-		"/embed.php": string(fixture(t, "gogoanime_megaplay.html")),
-	})
-	playerBody := strings.Replace(
-		string(fixture(t, "gogoanime_player.html")),
-		"https://megavid.buzz/mal/1735/500/sub",
-		embed.srv.URL+"/embed.php?sid=x", 1)
-	gogo := newRequestLog(t, map[string]string{"/player/": playerBody})
-
-	p := newGogoAnime(gogo.srv.URL, testClient(t, "gogoanime"))
-	episode := contracts.Episode{
-		Num:   "1178",
-		RawID: gogo.srv.URL + "/one-piece-episode-1178-english-subbed/",
-		RawEmbeds: map[string][]string{
-			"HD": {gogo.srv.URL + "/player/?source=embed&url=x"},
-		},
-	}
-
-	stream, err := p.ResolveStream(context.Background(), episode, "HD")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	src, ok := stream.Links["720"]
-	if !ok {
-		t.Fatalf("Links = %v, want a 720 entry", stream.Links)
-	}
-	if src.URL != "https://megaplay.su/uploads/hls/a1p6UHRKOGFtNnpPQjlTMVBVeDFoSTBxNEpsVUhlY1kzMCtyanMreGUwcz0/index.m3u8?v=1789317979" {
-		t.Errorf("URL = %q, want the inline megaplay hls file", src.URL)
+	if src.URL != "https://h.example/hls/master.m3u8" {
+		t.Errorf("URL = %q, want the modeled hls source", src.URL)
 	}
 	if src.Type != "m3u8" {
 		t.Errorf("Type = %q, want m3u8", src.Type)
-	}
-
-	embedReq, ok := embed.get("/embed.php")
-	if !ok {
-		t.Fatal("the megaplay embed page was never fetched")
-	}
-	// The browser sends the full /player/ page URL (query included) as
-	// the embed-fetch Referer.
-	if got := embedReq.Header.Get("Referer"); got != gogo.srv.URL+"/player/?source=embed&url=x" {
-		t.Errorf("embed fetch Referer = %q, want the player page URL", got)
 	}
 }
 
@@ -400,19 +417,23 @@ func TestGogoAnimeResolveStreamMegaPlayRoundTrip(t *testing.T) {
 func TestGogoAnimeResolveStreamLazyFetchesDubs(t *testing.T) {
 	t.Parallel()
 
-	gogo, _ := gogoMegaVidServers(t)
-	episodePage := strings.ReplaceAll(
-		string(fixture(t, "gogoanime_episode.html")), "https://gogoanime.by", gogo.srv.URL)
-	gogo.routeExtra(t, "/naruto-shippuuden-episode-500-english-subbed/", episodePage)
+	sink := newGogoSinkWorld(t, "https://h.example/hls/lazy.m3u8")
 
-	p := newGogoAnime(gogo.srv.URL, testClient(t, "gogoanime"))
+	mirror := gogoMirrorOption(t, 1, sink.srv.URL+"/embedplus?id=content123")
+	episodePage := `<html><body><select class="mirror" name="mirror" onchange="loadMi(this);">` +
+		`<option value="">Select Video Server</option>` + mirror + `</select></body></html>`
+
+	site := newRequestLog(t, map[string]string{
+		"/naruto-episode-1-english-subbed/": episodePage,
+	})
+	p := newGogoAnime(site.srv.URL, testClient(t, "gogoanime"))
 	episode := contracts.Episode{
-		Num:       "500",
-		RawID:     gogo.srv.URL + "/naruto-shippuuden-episode-500-english-subbed/",
+		Num:       "1",
+		RawID:     site.srv.URL + "/naruto-episode-1-english-subbed/",
 		RawEmbeds: map[string][]string{},
 	}
 
-	stream, err := p.ResolveStream(context.Background(), episode, "Mega")
+	stream, err := p.ResolveStream(context.Background(), episode, "Unknown")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -422,23 +443,26 @@ func TestGogoAnimeResolveStreamLazyFetchesDubs(t *testing.T) {
 }
 
 // TestGogoAnimeResolveStreamFailsLoudWithoutSources pins the no-silent-
-// failure rule: when no embed resolves anything, the chain error surfaces.
+// failure rule: when no embed resolves anything, the chain error
+// surfaces provider-tagged.
 func TestGogoAnimeResolveStreamFailsLoudWithoutSources(t *testing.T) {
 	t.Parallel()
 
-	gogo := newRequestLog(t, map[string]string{"/player/": "<html><body>player maintenance</body></html>"})
+	srv := newRequestLog(t, map[string]string{
+		"/embedplus": "<html><body>player maintenance</body></html>",
+	})
 
-	p := newGogoAnime(gogo.srv.URL, testClient(t, "gogoanime"))
+	p := newGogoAnime(srv.srv.URL, testClient(t, "gogoanime"))
 	episode := contracts.Episode{
-		RawID: gogo.srv.URL + "/episode-1/",
+		RawID: srv.srv.URL + "/episode-1/",
 		RawEmbeds: map[string][]string{
-			"Mega": {gogo.srv.URL + "/player/?source=embed&url=x"},
+			"Unknown": {srv.srv.URL + "/embedplus?id=content123"},
 		},
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "Mega")
+	_, err := p.ResolveStream(context.Background(), episode, "Unknown")
 	if err == nil {
-		t.Fatal("error = nil, want the extraction failure of the empty player page")
+		t.Fatal("error = nil, want the extraction failure of the dead embed")
 	}
 	if !strings.Contains(err.Error(), "gogoanime") {
 		t.Errorf("error = %v, want provider-tagged failure", err)
@@ -451,6 +475,9 @@ func TestGogoAnimeProviderMeta(t *testing.T) {
 	p := newGogoAnime(GogoAnimeBase, testClient(t, "gogoanime"))
 	if p.ID() != "gogoanime" || p.Name() != "GogoAnime" || p.BaseURL() != GogoAnimeBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
+	}
+	if GogoAnimeBase != "https://anitaku.io" {
+		t.Errorf("GogoAnimeBase = %q, want the Anitaku rebrand domain (issue #410)", GogoAnimeBase)
 	}
 	// JA audio + EN subs + video (PR23: wanted-language audio → BOTH).
 	if p.SourceType() != contracts.SourceTypeBoth {

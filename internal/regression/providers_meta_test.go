@@ -22,7 +22,8 @@ import (
 // animetosho (PR38, the newznab feed) joined after anilibria-torrent;
 // tokyotosho (PR38, the search RSS) joined after animetosho;
 // anime365 (PR55, the tokened smotret-anime JSON API) joined after
-// tokyotosho.
+// tokyotosho; animedia (PR56, the amd.online DLE site) joined after
+// anime365.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -41,6 +42,7 @@ var expectedProviderOrder = []string{
 	"animetosho",
 	"tokyotosho",
 	"anime365",
+	"animedia",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

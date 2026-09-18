@@ -40,7 +40,7 @@ docker-build:
 load:
 	go test -tags=load -run '^TestLoad' -count=1 -v ./internal/api/ ./internal/storage/ ./internal/download/ ./internal/loadtest/
 
-# Live G1 gate: probes all 11 providers against real sites.
+# Live G1 gate: probes all 17 providers against real sites.
 parity:
 	go run ./cmd/parity all
 

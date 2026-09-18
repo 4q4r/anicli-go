@@ -96,6 +96,13 @@ var allFactories = []struct {
 	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
 	}},
+	// animedia (PR56): the amd.online DLE site (the animedia.online
+	// JSON v3 API is dead). Written against the live site, not ported;
+	// no credentials — DLE search form POST in, kodik embeds out
+	// (resolved through the shared extractor factory).
+	{"animedia", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniMedia(AniMediaBase, http)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

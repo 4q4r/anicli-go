@@ -20,7 +20,9 @@ import (
 // provider) joined after yanima; anilibria-torrent (PR37, the new
 // aniliberty.top API's per-release torrents) joined after nyaa;
 // animetosho (PR38, the newznab feed) joined after anilibria-torrent;
-// tokyotosho (PR38, the search RSS) joined after animetosho.
+// tokyotosho (PR38, the search RSS) joined after animetosho;
+// anime365 (PR55, the tokened smotret-anime JSON API) joined after
+// tokyotosho.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -38,6 +40,7 @@ var expectedProviderOrder = []string{
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",
+	"anime365",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly
@@ -50,6 +53,7 @@ func TestProviderRosterComplete(t *testing.T) {
 	// at startup and dropped from the registry).
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
+	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
 	cfg.Providers.Yanima.DDoSP1 = "test-p1"
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 	built, err := providers.All(cfg)

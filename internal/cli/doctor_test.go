@@ -18,18 +18,18 @@ import (
 	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
-// TestStartupNotices: the PR24/PR33 startup warning lines — one per
-// unconfigured provider, exact RU wording.
+// TestStartupNotices: the PR24/PR33/PR55 startup warning lines — one
+// per unconfigured provider, exact RU wording.
 func TestStartupNotices(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = ""
 
 	notices := startupNotices(cfg)
 	// Shikimori defaults to enabled=true (core feature) with empty
-	// credentials, so the default config yields the kodik, yanima and
-	// Shikimori notices.
-	if len(notices) != 3 {
-		t.Fatalf("want three notices (kodik + yanima + shikimori), got %v", notices)
+	// credentials, so the default config yields the kodik, yanima,
+	// anime365 and Shikimori notices.
+	if len(notices) != 4 {
+		t.Fatalf("want four notices (kodik + yanima + anime365 + shikimori), got %v", notices)
 	}
 	wantKodik := "⚠ Провайдер 'kodik' отключён: не задан токен (providers.kodik.token)"
 	if notices[0] != wantKodik {
@@ -39,8 +39,13 @@ func TestStartupNotices(t *testing.T) {
 	if notices[1] != wantYanima {
 		t.Fatalf("notice[1] = %q, want %q", notices[1], wantYanima)
 	}
+	wantAnime365 := "⚠ Провайдер 'anime365' отключён: не задан токен доступа (providers.anime365.token)"
+	if notices[2] != wantAnime365 {
+		t.Fatalf("notice[2] = %q, want %q", notices[2], wantAnime365)
+	}
 
 	cfg.Providers.Kodik.Token = "set"
+	cfg.Providers.Anime365.Token = "set"
 	cfg.Providers.Yanima.DDoSP1 = "p1"
 	cfg.Providers.Yanima.DDoSP2 = "p2"
 	cfg.Shikimori.Session = "configured"

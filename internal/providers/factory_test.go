@@ -17,23 +17,24 @@ func TestAllRosterComplete(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
-	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
+	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"     // keep yanima in the roster (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 16 {
-		t.Fatalf("All() = %d providers, want 16", len(bare))
+	if len(bare) != 17 {
+		t.Fatalf("All() = %d providers, want 17", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho",
+		"animetosho", "tokyotosho", "anime365",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -81,8 +82,9 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
-	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
+	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"     // keep yanima in the roster (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	reg, err := NewRegistry(cfg, nil)
@@ -91,8 +93,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 16 {
-		t.Fatalf("List() = %d providers, want 16", len(list))
+	if len(list) != 17 {
+		t.Fatalf("List() = %d providers, want 17", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order);
 	// anidub (no frozen Python original) is appended after the ported
@@ -100,12 +102,14 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// search provider) after yanima, anilibria-torrent (PR37, the new
 	// aniliberty.top API's torrents) after nyaa, animetosho (PR38, the
 	// newznab feed) after anilibria-torrent, tokyotosho (PR38, the
-	// search RSS) after animetosho.
+	// search RSS) after animetosho, anime365 (PR55, the tokened
+	// smotret-anime JSON API, no frozen Python original) after
+	// tokyotosho.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho",
+		"animetosho", "tokyotosho", "anime365",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -178,16 +182,17 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
-	cfg.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima in the roster (PR33)
+	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
+	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Yanima.DDoSP1 = "test-p1"     // keep yanima in the roster (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 16 {
-		t.Fatalf("All() = %d providers, want 16", len(bare))
+	if len(bare) != 17 {
+		t.Fatalf("All() = %d providers, want 17", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -221,14 +226,18 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anilibria-torrent": "ru",
 		"animetosho":        "ja",
 		"tokyotosho":        "ja",
+		"anime365":          "ru",
 	}
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	// yanima joins the roster only with its DDoS cookies configured
 	// (PR33); kodik stays tokenless here per this test's history.
+	// anime365 (PR55) joins with its token so the ru declaration is
+	// pinned like the rest of the RU-translations roster.
 	cfg.Providers.Yanima.DDoSP1 = "test-p1"
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
+	cfg.Providers.Anime365.Token = "test-token"
 
 	bare, err := All(cfg)
 	if err != nil {
@@ -257,13 +266,14 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	cfg.Providers.Exclude = []string{"animepahe", "kodik"}
 	cfg.Providers.Yanima.DDoSP1 = "test-p1" // keep yanima in the roster (PR33)
 	cfg.Providers.Yanima.DDoSP2 = "test-p2"
+	cfg.Providers.Anime365.Token = "test-token" // isolate the exclusion variable (PR55)
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 14 {
-		t.Fatalf("All() = %d providers, want 14", len(bare))
+	if len(bare) != 15 {
+		t.Fatalf("All() = %d providers, want 15", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

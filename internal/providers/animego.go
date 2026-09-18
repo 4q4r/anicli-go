@@ -14,22 +14,27 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// AnimeGoBase is the site root (anicli-py anicli/providers/animego.py:14).
-const AnimeGoBase = "https://animego.one"
+// AnimeGoBase is the site root. animego.org (and the animego.one
+// mirror this port originally targeted) is dead; animego.me is the
+// live AnimeGO continuation (same branding ©2017-2026, same
+// /anime/{slug}-{id} URL scheme, kodik+aniboom player ecosystem —
+// verified live 2026-09-18). PR48.
+const AnimeGoBase = "https://animego.me"
 
-// AnimeGo is the port of anicli-py anicli/providers/animego.py: HTML
-// scraping via goquery (Python used selectolax; selectors are ported
-// verbatim), a /player and /anime/series JSON-API pair returning HTML
-// fragments inside JSON, and lazy dub hydration via FetchDubs.
+// AnimeGo is the animego.me port of the animego provider. The site was
+// rewritten since the animego.org era: a Turbo/Stimulus frontend whose
+// data paths are HTML scraping of /search/anime, a JSON-wrapped HTML
+// fragment at /player/{animeID} (episodes carousel + the first
+// episode's provider buttons) and a JSON-wrapped HTML fragment at
+// /player/videos/{episodeID} (one episode's provider buttons). The
+// PR44 owner model survives unchanged: episode one keeps its real
+// embed links, the rest carry the release's dub KEYS with EMPTY lists,
+// hydrated lazily by FetchDubs.
 type AnimeGo struct {
 	Base
 }
 
 // newAnimego builds the provider against baseURL.
-//
-// The Python header set (animego.py:20-25) re-asserts the configured
-// user agent; the netclient already sends cfg.UserAgent on every
-// request, so it is not duplicated here.
 func newAnimego(baseURL string, http *netclient.Client) *AnimeGo {
 	headers := map[string]string{
 		"Referer":          baseURL,
@@ -47,9 +52,22 @@ func newAnimego(baseURL string, http *netclient.Client) *AnimeGo {
 	}}
 }
 
-// Search scrapes /search/anime (anicli-py animego.py:27-50). Selector
-// logic is a verbatim port: `.row > .col-ul-2` items, `.text-truncate
-// a[title]` for the title/href, `.lazy[data-original]` for the poster.
+// playerEnvelope is the site-wide JSON wrapper of every /player
+// endpoint: the payload HTML rides data.content.
+type playerEnvelope struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Data    struct {
+		Content string `json:"content"`
+	} `json:"data"`
+}
+
+// Search scrapes /search/anime (the original path still serves the
+// full results page on animego.me). Items are `.ani-grid__item`
+// blocks; the title link is `.ani-grid__item-title a[title]` and the
+// poster the `.ani-grid__item-picture img[src]`. The site emits
+// RELATIVE hrefs — they are absolutized against the provider base so
+// GetEpisodes receives a fetchable URL.
 func (p *AnimeGo) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	params := url.Values{}
 	params.Set("q", query)
@@ -71,23 +89,23 @@ func (p *AnimeGo) Search(ctx context.Context, query string) ([]contracts.SearchR
 	}
 
 	var results []contracts.SearchResult
-	doc.Find(".row > .col-ul-2").Each(func(_ int, item *goquery.Selection) {
-		titleNode := item.Find(".text-truncate a[title]").First()
+	doc.Find(".ani-grid__item").Each(func(_ int, item *goquery.Selection) {
+		titleNode := item.Find(".ani-grid__item-title a[title]").First()
 		if titleNode.Length() == 0 {
 			return
 		}
 
-		link, _ := titleNode.Attr("href")
+		href, _ := titleNode.Attr("href")
 		title, _ := titleNode.Attr("title")
 
 		var poster string
-		if thumb := item.Find(".lazy[data-original]").First(); thumb.Length() > 0 {
-			poster, _ = thumb.Attr("data-original")
+		if thumb := item.Find(".ani-grid__item-picture img[src]").First(); thumb.Length() > 0 {
+			poster, _ = thumb.Attr("src")
 		}
 
 		results = append(results, contracts.SearchResult{
 			Title:    title,
-			URL:      link,
+			URL:      p.absoluteURL(href),
 			SourceID: p.ID(),
 			Poster:   poster,
 		})
@@ -95,10 +113,30 @@ func (p *AnimeGo) Search(ctx context.Context, query string) ([]contracts.SearchR
 	return results, nil
 }
 
-// GetEpisodes scrapes the anime page for the numeric id, then the player
-// API fragment (anicli-py animego.py:52-91). Series pages yield one
-// episode per `#video-carousel .mb-0` entry; anything else is treated as
-// a film with a single episode whose embeds are parsed inline.
+// absoluteURL resolves a site-relative href against the provider base.
+func (p *AnimeGo) absoluteURL(href string) string {
+	if href == "" {
+		return ""
+	}
+	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
+		return href
+	}
+	if strings.HasPrefix(href, "//") {
+		return "https:" + href
+	}
+	if !strings.HasPrefix(href, "/") {
+		return href
+	}
+	return p.baseURL + href
+}
+
+// GetEpisodes loads the anime page, follows its player-loader URL
+// (/player/{animeID}) and parses the returned fragment. Series pages
+// yield one episode per carousel item (`[data-episode-number]`
+// carrying `data-episode`); the same fragment's provider buttons
+// describe episode one's streams, whose dub keys are distributed
+// release-wide. Pages without a carousel are films: one episode whose
+// embeds are parsed inline from the same fragment.
 func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method:  "GET",
@@ -116,73 +154,51 @@ func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 			fmt.Errorf("parse anime page: %w", err))
 	}
 
-	idNode := doc.Find(".br-2 .my-list-anime").First()
-	if idNode.Length() == 0 {
+	loader := doc.Find("[data-anime-player-loader-url-value]").First()
+	if loader.Length() == 0 {
 		return []contracts.Episode{}, nil
 	}
-	rawID, _ := idNode.Attr("id")
-	animeID := strings.TrimPrefix(rawID, "my-list-")
+	loaderPath, _ := loader.Attr("data-anime-player-loader-url-value")
+	animeID := pathID(loaderPath)
 	if animeID == "" {
 		return []contracts.Episode{}, nil
 	}
 
-	playerURL := fmt.Sprintf("%s/anime/%s/player?_allow=true", p.baseURL, animeID)
-	playerResp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     playerURL,
-		Headers: p.headers,
-		Op:      contracts.OpGetEpisodes,
-	})
+	content, err := p.fetchPlayerFragment(ctx, p.baseURL+loaderPath)
 	if err != nil {
 		return nil, err
 	}
-
-	var player struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(playerResp.Body, &player); err != nil {
-		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, playerResp.StatusCode,
-			fmt.Errorf("decode player response: %w", err))
-	}
-
-	epDoc, err := goquery.NewDocumentFromReader(strings.NewReader(player.Content))
+	epDoc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 	if err != nil {
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
 			fmt.Errorf("parse player content: %w", err))
 	}
 
 	var episodes []contracts.Episode
-	if carousel := epDoc.Find("#video-carousel"); carousel.Length() > 0 {
-		carousel.Find(".mb-0").Each(func(_ int, item *goquery.Selection) {
-			num, _ := item.Attr("data-episode")
-			epID, _ := item.Attr("data-id")
-			title, _ := item.Attr("data-episode-title")
-
-			if num == "" || epID == "" {
-				return
-			}
-			episodes = append(episodes, contracts.Episode{
-				Num:       num,
-				Title:     title,
-				RawID:     epID,
-				RawEmbeds: map[string][]string{},
-			})
-		})
-		// PR44 owner model: one request per RELEASE covers the dub-
-		// provider list (the first episode's series fragment names
-		// every dubbing studio). Episode one keeps its real links, the
-		// rest carry the keys with EMPTY lists; fail-soft — a failed
-		// tier-1 fetch only means the dub lists stay unknown until an
-		// episode is opened.
-		if len(episodes) > 0 {
-			if _, err := p.FetchDubs(ctx, &episodes[0]); err == nil {
-				applyReleaseDubKeys(episodes)
-			}
+	epDoc.Find("[data-episode-number][data-episode]").Each(func(_ int, item *goquery.Selection) {
+		num, _ := item.Attr("data-episode-number")
+		epID, _ := item.Attr("data-episode")
+		if num == "" || epID == "" {
+			return
 		}
+		episodes = append(episodes, contracts.Episode{
+			Num:       num,
+			RawID:     epID,
+			RawEmbeds: map[string][]string{},
+		})
+	})
+
+	if len(episodes) > 0 {
+		// Episode one's provider buttons ride the SAME fragment (zero
+		// extra requests — the PR44 tier-1 fetch is free here); the
+		// remaining episodes carry the dub keys with EMPTY lists.
+		p.parseEmbeds(epDoc, &episodes[0])
+		applyReleaseDubKeys(episodes)
 		return episodes, nil
 	}
 
-	// Film path (animego.py:82-90).
+	// Film path: no carousel — the fragment's provider buttons ARE the
+	// film's embeds.
 	film := contracts.Episode{
 		Num:       "1",
 		Title:     "Фильм",
@@ -193,85 +209,88 @@ func (p *AnimeGo) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 	return []contracts.Episode{film}, nil
 }
 
-// FetchDubs hydrates episode.RawEmbeds from /anime/series (port of
-// animego.py:93-105 fetch_dubs_for_episode). Episodes that already
-// carry actual embed LINKS are returned untouched (the python guard
-// at animego.py:94, PR44 refinement: release-scope dub KEYS with
-// empty lists are exactly the state hydration must fill in).
+// fetchPlayerFragment GETs a /player endpoint and returns its
+// data.content HTML.
+func (p *AnimeGo) fetchPlayerFragment(ctx context.Context, playerURL string) (string, error) {
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     playerURL,
+		Headers: p.headers,
+		Op:      contracts.OpGetEpisodes,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var envelope playerEnvelope
+	if err := json.Unmarshal(resp.Body, &envelope); err != nil {
+		return "", contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("decode player response: %w", err))
+	}
+	return envelope.Data.Content, nil
+}
+
+// FetchDubs hydrates episode.RawEmbeds from /player/videos/{episodeID}.
+// Episodes that already carry actual embed LINKS are returned untouched
+// (release-scope dub KEYS with empty lists are exactly the state
+// hydration exists to fill).
 func (p *AnimeGo) FetchDubs(ctx context.Context, episode *contracts.Episode) (*contracts.Episode, error) {
 	if hasAnyEmbedLinks(episode.RawEmbeds) {
 		return episode, nil
 	}
 
-	params := url.Values{}
-	params.Set("id", episode.RawID)
-
-	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     p.baseURL + "/anime/series?" + params.Encode(),
-		Headers: p.headers,
-		Op:      contracts.OpGetEpisodes,
-	})
+	content, err := p.fetchPlayerFragment(ctx, p.baseURL+"/player/videos/"+episode.RawID)
 	if err != nil {
 		return nil, err
 	}
-
-	var series struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(resp.Body, &series); err != nil {
-		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
-			fmt.Errorf("decode series response: %w", err))
-	}
-
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(series.Content))
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 	if err != nil {
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
-			fmt.Errorf("parse series content: %w", err))
+			fmt.Errorf("parse videos content: %w", err))
 	}
 
 	p.parseEmbeds(doc, episode)
 	return episode, nil
 }
 
-// parseEmbeds fills episode.RawEmbeds from a dubbing/players fragment
-// (port of animego.py:107-129 _parse_embeds): `#video-dubbing .mb-1`
-// maps data-dubbing ids to names; `#video-players > .mb-1` (falling back
-// to `#video-players > span`) entries carry data-player URLs tagged with
-// data-provide-dubbing.
+// parseEmbeds fills episode.RawEmbeds from a player fragment: provider
+// buttons (`button[data-anime-player-target="provider"]`) carry the
+// embed URL in data-player and the dubbing studio in
+// data-translation-title (missing titles fall back to "Unknown").
 func (p *AnimeGo) parseEmbeds(doc *goquery.Document, episode *contracts.Episode) {
-	dubbers := map[string]string{}
-	doc.Find("#video-dubbing .mb-1").Each(func(_ int, item *goquery.Selection) {
-		id, _ := item.Attr("data-dubbing")
-		if id == "" {
-			return
-		}
-		dubbers[id] = strings.TrimSpace(item.Text())
-	})
-
 	embeds := map[string][]string{}
-	nodes := doc.Find("#video-players > .mb-1")
-	if nodes.Length() == 0 {
-		nodes = doc.Find("#video-players > span")
-	}
-	nodes.Each(func(_ int, item *goquery.Selection) {
+	doc.Find(`button[data-anime-player-target="provider"]`).Each(func(_ int, item *goquery.Selection) {
 		playerURL, _ := item.Attr("data-player")
-		dubID, _ := item.Attr("data-provide-dubbing")
-
-		if playerURL == "" || dubID == "" {
+		if playerURL == "" {
 			return
 		}
 		if strings.HasPrefix(playerURL, "//") {
 			playerURL = "https:" + playerURL
 		}
-		dubName := dubbers[dubID]
+		dubName, _ := item.Attr("data-translation-title")
 		if dubName == "" {
-			dubName = "Unknown" // Python dubbers.get(dub_id, "Unknown")
+			dubName = "Unknown"
 		}
 		embeds[dubName] = append(embeds[dubName], playerURL)
 	})
 
 	episode.RawEmbeds = embeds
+}
+
+// pathID extracts the trailing numeric id of a site-relative path
+// ("/player/2115" → "2115").
+func pathID(path string) string {
+	idx := strings.LastIndex(path, "/")
+	if idx == -1 {
+		return ""
+	}
+	id := path[idx+1:]
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return id
 }
 
 // hasAnyEmbedLinks reports whether any dub key carries at least one
@@ -286,12 +305,12 @@ func hasAnyEmbedLinks(embeds map[string][]string) bool {
 	return false
 }
 
-// ResolveStream resolves the embed URLs of the chosen dub (port of
-// animego.py:131-138) through the extractor factory; direct media URLs
-// resolve via the factory fallback.
+// ResolveStream resolves the embed URLs of the chosen dub through the
+// extractor factory; direct media URLs resolve via the factory
+// fallback.
 //
 // PR44 owner model: a known-but-empty dub self-hydrates that ONE
-// episode here (a single /anime/series request) — resolving never
+// episode here (a single /player/videos request) — resolving never
 // runs bulk. An unknown dub key hydrates nothing.
 func (p *AnimeGo) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{

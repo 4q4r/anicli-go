@@ -92,14 +92,14 @@ func TestAnilibResolveStreamSelfHydrates(t *testing.T) {
 }
 
 // TestAnimegoGetEpisodesAppliesReleaseDubList: the same tier over the
-// /anime/series fragment — one request covers the release's dub list.
+// /player/{id} fragment — the provider buttons ride the SAME response
+// as the episode carousel, so the release's dub list costs zero extra
+// requests.
 func TestAnimegoGetEpisodesAppliesReleaseDubList(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/anime/series"):
-			_, _ = w.Write(fixture(t, "animego_series.json"))
-		case strings.HasSuffix(r.URL.Path, "/player"):
+		case strings.HasPrefix(r.URL.Path, "/player/"):
 			_, _ = w.Write(fixture(t, "animego_player_series.json"))
 		default:
 			_, _ = w.Write(fixture(t, "animego_anime.html"))
@@ -107,7 +107,7 @@ func TestAnimegoGetEpisodesAppliesReleaseDubList(t *testing.T) {
 	})
 	p := newAnimego(srv.URL, testClient(t, "animego"))
 
-	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/re-zero-1469")
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/piraty-chernoy-laguny-2115")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -117,47 +117,44 @@ func TestAnimegoGetEpisodesAppliesReleaseDubList(t *testing.T) {
 	// Episode 1 keeps its real player links; episode 2 carries the
 	// same dub keys with empty lists.
 	first := episodes[0]
-	if len(first.RawEmbeds["AniLib"]) == 0 {
+	if len(first.RawEmbeds["MC Entertainment"]) == 0 {
 		t.Fatalf("first episode embeds = %v, want real links", first.RawEmbeds)
 	}
 	second := episodes[1]
-	for _, key := range []string{"AniLib", "Unknown"} {
-		if links := second.RawEmbeds[key]; links == nil || len(links) != 0 {
-			t.Fatalf("episode 2 dub %q = %v, want an EMPTY list", key, links)
-		}
+	if links := second.RawEmbeds["MC Entertainment"]; links == nil || len(links) != 0 {
+		t.Fatalf("episode 2 dub %q = %v, want an EMPTY list", "MC Entertainment", links)
 	}
-	if len(second.RawEmbeds) != 2 {
+	if len(second.RawEmbeds) != 1 {
 		t.Fatalf("episode 2 embeds = %v, want exactly the release dub keys", second.RawEmbeds)
 	}
 }
 
 // TestAnimegoResolveStreamSelfHydrates: resolving episode 2's style
-// empty-key dub hydrates it via /anime/series on demand, then the
+// empty-key dub hydrates it via /player/videos/{id} on demand, then the
 // direct-URL embed resolves through the factory fallback (no extractor
 // network hop).
 func TestAnimegoResolveStreamSelfHydrates(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// A minimal series fragment: the dub list plus one direct
-		// .m3u8 player URL for episode 901.
-		_, _ = w.Write([]byte(`{"content":"<div id=video-dubbing><div class=mb-1 data-dubbing=5>AniLib</div></div>` +
-			`<div id=video-players><div class=mb-1 data-player=//cdn.example.com/static/ep.m3u8 data-provide-dubbing=5></div></div>"}`))
+		// A minimal /player/videos fragment: one provider button with a
+		// direct .m3u8 player URL tagged with the release dub key.
+		_, _ = w.Write([]byte(`{"status":"success","message":null,"data":{"content":"<button data-anime-player-target=\"provider\" data-player=//cdn.example.com/static/ep.m3u8 data-translation-title=\"MC Entertainment\"></button>"}}`))
 	})
 	p := newAnimego(srv.URL, testClient(t, "animego"))
 
 	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "901",
+		Num:   "2",
+		RawID: "27784",
 		RawEmbeds: map[string][]string{
-			"AniLib": {},
+			"MC Entertainment": {},
 		},
 	}
-	stream, err := p.ResolveStream(context.Background(), episode, "AniLib")
+	stream, err := p.ResolveStream(context.Background(), episode, "MC Entertainment")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
-	if rec.Path != "/anime/series" {
-		t.Errorf("request = %q, want the on-demand /anime/series hydration", rec.Path)
+	if rec.Path != "/player/videos/27784" {
+		t.Errorf("request = %q, want the on-demand /player/videos/27784 hydration", rec.Path)
 	}
 	if len(stream.Links) == 0 {
 		t.Fatal("self-hydration must produce playable links")

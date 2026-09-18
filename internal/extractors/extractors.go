@@ -71,6 +71,11 @@ func NewFactory(http *netclient.Client) *Factory {
 		&streamTapeExtractor{http: http},
 		&doodExtractor{http: http},
 		&kwikExtractor{http: http},
+		// blogger (PR53): the second task-mandated addition, appended
+		// after the Python order exactly like kwik above. anitaku.io
+		// (gogoanime) mirrors are blogger.com/video.g embeds; no
+		// registered Python extractor covers that host.
+		&bloggerExtractor{http: http},
 	}}
 }
 

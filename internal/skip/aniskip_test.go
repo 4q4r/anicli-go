@@ -96,14 +96,14 @@ func boolJSON(v bool) string {
 
 // TestAniSkipGetSkipTimes pins the v2 GET shape: path
 // /v2/skip-times/{mal}/{episode}, query types=op&types=ed, and the
-// interval/skip_type/episode_length response mapping.
+// interval/skipType/episodeLength response mapping (aniskip v2 camelCase).
 func TestAniSkipGetSkipTimes(t *testing.T) {
 	t.Parallel()
 
 	f := newAniskipFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		serveSkipTimes(w, true, `[
-			{"interval":{"start_time":0.0,"end_time":90.5},"skip_type":"op","skip_id":"a1","episode_length":1440.0},
-			{"interval":{"start_time":1300.25,"end_time":1400.0},"skip_type":"ed","skip_id":"b2","episode_length":1440.0}
+			{"interval":{"startTime":0.0,"endTime":90.5},"skipType":"op","skipId":"a1","episodeLength":1440.0},
+			{"interval":{"startTime":1300.25,"endTime":1400.0},"skipType":"ed","skipId":"b2","episodeLength":1440.0}
 		]`)
 	})
 	c := f.client(t, AniSkipOptions{})
@@ -123,8 +123,13 @@ func TestAniSkipGetSkipTimes(t *testing.T) {
 	if reqs[0].Path != "/v2/skip-times/21/2" {
 		t.Errorf("path = %q, want /v2/skip-times/21/2", reqs[0].Path)
 	}
-	if reqs[0].Query != "types=op&types=ed" {
-		t.Errorf("query = %q, want types=op&types=ed", reqs[0].Query)
+	// PR61 live finding: the aniskip v2 API now REQUIRES the
+	// episodeLength query parameter — without it every fetch answers
+	// HTTP 400. The fetch length is unknown pre-play, so the neutral
+	// 0 (accepted, "unknown") is sent and the authoritative length
+	// comes back inside each result.
+	if reqs[0].Query != "types=op&types=ed&episodeLength=0" {
+		t.Errorf("query = %q, want types=op&types=ed&episodeLength=0", reqs[0].Query)
 	}
 
 	want := []Interval{
@@ -205,8 +210,9 @@ func TestAniSkipGetSkipTimesHTTPError(t *testing.T) {
 }
 
 // TestAniSkipSubmitPostsSixFieldPayload pins the submit call shape: POST
-// /v2/skip-times/{mal}/{episode} with the six payload fields (skip_type,
-// provider_name, start_time, end_time, episode_length, submitter_id).
+// /v2/skip-times/{mal}/{episode} with the six payload fields (skipType,
+// providerName, startTime, endTime, episodeLength, submitterId — v2
+// camelCase, verified against the live API 2026-09-18).
 func TestAniSkipSubmitPostsSixFieldPayload(t *testing.T) {
 	t.Parallel()
 
@@ -240,12 +246,12 @@ func TestAniSkipSubmitPostsSixFieldPayload(t *testing.T) {
 		t.Errorf("path = %q, want /v2/skip-times/21/2", req.Path)
 	}
 	wantFields := map[string]any{
-		"skip_type":      "op",
-		"provider_name":  "anicli-go",
-		"start_time":     float64(0),
-		"end_time":       float64(90),
-		"episode_length": float64(1440),
-		"submitter_id":   "sub-1",
+		"skipType":      "op",
+		"providerName":  "anicli-go",
+		"startTime":     float64(0),
+		"endTime":       float64(90),
+		"episodeLength": float64(1440),
+		"submitterId":   "sub-1",
 	}
 	var got map[string]any
 	if err := jsonUnmarshalString(req.Body, &got); err != nil {

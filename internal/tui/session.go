@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,7 +15,9 @@ import (
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -25,7 +28,6 @@ const (
 	sessionStateLoading       sessionState = "loading"
 	sessionStateMenu          sessionState = "menu"
 	sessionStateEpisodeList   sessionState = "episodes"
-	sessionStateDubVideo      sessionState = "dub_video"
 	sessionStateDubAudio      sessionState = "dub_audio"
 	sessionStateQuality       sessionState = "quality"
 	sessionStateFormat        sessionState = "format"
@@ -73,11 +75,37 @@ type episodePartMsg struct {
 // episodesDoneMsg finalizes the merge after every source settled.
 type episodesDoneMsg struct{}
 
-// streamResolvedMsg carries the resolved video links for the quality
-// picker.
+// streamEntry is one concrete playable stream of the merged picker
+// list (PR61): a quality variant of one provider dub — the python
+// merged model where the choice happens per stream, never per
+// provider.
+type streamEntry struct {
+	// Quality is the resolution label ("1080").
+	Quality string
+	// DubKey is the provider-prefixed dub ("[anilib] AniLib").
+	DubKey string
+	// Source is the playable link.
+	Source contracts.VideoSource
+}
+
+// streamResolvedMsg carries the merged stream entries for the picker
+// (PR61): entries from every consulted provider dub of the episode,
+// quality-sorted. scope mirrors the resolve request ("" = all dubs —
+// the interactive merged list; a dub key = the remembered-dub fast
+// path that auto-plays its best/remembered quality). The skip verdict
+// rides along (PR61): it is stream-independent, so it fetches once
+// during the resolve and the note composes into the launch line. gen
+// tags the resolve round — a cancelled or superseded round's late
+// settle cleans up after itself.
 type streamResolvedMsg struct {
-	links map[string]contracts.VideoSource
-	err   error
+	gen          int
+	scope        string
+	entries      []streamEntry
+	skipEpisode  string
+	skipNote     string
+	skipChapters string
+	skipCleanup  func()
+	err          error
 }
 
 // playedMsg settles one playback; quality is the label actually used
@@ -93,6 +121,18 @@ type shikiUpdatedMsg struct {
 	err    error
 	rateID int64
 }
+
+// shikiSyncedMsg settles the on-start watch-progress push (PR61):
+// note carries the status-line verdict (synced / typed skip), err a
+// hard failure.
+type shikiSyncedMsg struct {
+	err  error
+	note string
+}
+
+// shikiSyncTimeout bounds the on-start progress push (3c: non-blocking,
+// bounded context alongside playback).
+const shikiSyncTimeout = 15 * time.Second
 
 // shikiBoundMsg settles the background shikimori id resolution (I5);
 // id 0 means "no confident match, binding skipped".
@@ -211,8 +251,26 @@ type sessionScreen struct {
 	infoPrompt *TextPrompt // score / rewatches entry
 
 	downloadEpisodes []string
-	resolvedLinks    map[string]contracts.VideoSource
-	localCounts      map[string]int
+	// streamEntries cache the merged picker entries between the
+	// resolve settle and the pick (Back from the audio prompt returns
+	// to the list without re-resolving).
+	streamEntries []streamEntry
+	// pickedVideo is the entry chosen from the merged list; doPlay
+	// and the buffered pipeline consume it directly.
+	pickedVideo contracts.VideoSource
+	// skip cache (PR61): the verdict of the episode's skip lookup,
+	// fetched during the stream resolve (stream-independent) and
+	// consumed at launch/doPlay. The cleanup removes the chapters
+	// file; playedMsg clears the whole cache (the file is gone).
+	skipEpisode  string
+	skipNote     string
+	skipChapters string
+	skipCleanup  func()
+	// resolveGen tags the in-flight stream-resolve round: a cancel
+	// bumps it so the late settle drops its own chapters file instead
+	// of leaking it into the pending slot (PR61 review R1c).
+	resolveGen  int
+	localCounts map[string]int
 
 	status string // transient status line (play verdicts, sync notes)
 }
@@ -483,16 +541,50 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case bufferedProgressEnd:
 		return s, nil
 	case streamResolvedMsg:
+		if msg.gen != s.resolveGen {
+			// A superseded round (cancel or a newer watch landed
+			// first): nobody else will clean its chapters file.
+			if msg.skipCleanup != nil {
+				msg.skipCleanup()
+			}
+			return s, nil
+		}
 		if msg.err != nil {
+			if msg.skipCleanup != nil {
+				msg.skipCleanup()
+			}
 			s.status = "Ошибка: " + msg.err.Error()
 			s.state = sessionStateMenu
 			return s, nil
 		}
-		s.resolvedLinks = msg.links
-		s.buildQualityList()
+		// A new verdict always retires the previous pending chapters
+		// file — each round writes a unique temp file, so leaving the
+		// old cleanup pending would orphan it (PR61 review R1b).
+		if s.skipCleanup != nil {
+			s.skipCleanup()
+			s.skipCleanup = nil
+		}
+		s.skipEpisode = msg.skipEpisode
+		s.skipNote = msg.skipNote
+		s.skipChapters = msg.skipChapters
+		s.skipCleanup = msg.skipCleanup
+		if msg.scope != "" {
+			// Remembered-dub fast path (python resolve_dubs_smart):
+			// auto-pick the remembered quality (or the best) and play
+			// straight away — no extra prompts.
+			e := autoStreamEntry(msg.entries, s.lastQuality)
+			s.videoDub, s.lastQuality, s.pickedVideo = e.DubKey, e.Quality, e.Source
+			return s.launchPlayback()
+		}
+		s.streamEntries = msg.entries
+		s.buildStreamList()
 		return s, nil
 	case playedMsg:
 		s.state = sessionStateMenu
+		// The chapters file was removed by the play pipeline's
+		// cleanup (PR61); the cache clears so the next watch of the
+		// episode re-resolves instead of replaying a dead path.
+		s.skipChapters, s.skipNote, s.skipCleanup = "", "", nil
 		if msg.err != nil {
 			s.status = "Ошибка воспроизведения: " + msg.err.Error()
 			return s, nil
@@ -512,6 +604,15 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.shikiRateID = msg.rateID
 		}
 		s.status = "Информация обновлена"
+		return s, nil
+	case shikiSyncedMsg:
+		if msg.err != nil {
+			s.status = msg.err.Error()
+			return s, nil
+		}
+		if msg.note != "" {
+			s.status = msg.note
+		}
 		return s, nil
 	case shikiBoundMsg:
 		if msg.id != 0 {
@@ -545,7 +646,7 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleMenuKey(key)
 	case sessionStateEpisodeList:
 		return s.handleEpisodeListKey(key)
-	case sessionStateDubVideo, sessionStateDubAudio:
+	case sessionStateDubAudio:
 		return s.handleDubKey(key)
 	case sessionStateQuality:
 		return s.handleQualityKey(key)
@@ -571,7 +672,17 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // handleCancel applies I2 per state: substates return to the session
 // menu; the menu itself pops (root via «Выход»). Cancelling the
 // buffering state stops the download and cleans its temp file (PR43 C).
+// A pending skip chapters file (resolved but never played, PR61) is
+// removed on the way out.
 func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
+	if s.skipCleanup != nil && s.state != sessionStatePlaying {
+		s.skipCleanup()
+		s.skipCleanup = nil
+		s.skipChapters = ""
+	}
+	// Any in-flight resolve round is invalidated: its late settle
+	// cleans up after itself (PR61 review R1c).
+	s.resolveGen++
 	switch s.state {
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
@@ -716,29 +827,34 @@ func (s *sessionScreen) handleFormatKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 // proceedWatch continues the watch pipeline after the format pick:
-// interactive dub selection when preferences are missing or
-// unavailable, else straight to stream resolution.
+// dubs remembered and available → straight to the scoped resolve
+// (auto quality, python resolve_dubs_smart parity); otherwise the
+// merged stream list over every provider dub (PR61 — the choice is
+// per stream, never per provider), with the audio prompt following
+// the video pick.
 func (s *sessionScreen) proceedWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
 		s.status = "Нет серий"
 		return s, nil
 	}
-	if s.videoDub == "" || ep.RawEmbeds[s.videoDub] == nil {
-		return s.openDubSelect(sessionStateDubVideo)
+	if s.videoDub == "" || len(ep.RawEmbeds[s.videoDub]) == 0 {
+		return s.beginStreamResolve("")
 	}
-	if (s.audioDub == "" || ep.RawEmbeds[s.audioDub] == nil) && s.audioDub != s.videoDub {
-		return s.openDubSelect(sessionStateDubAudio)
+	if (s.audioDub == "" || len(ep.RawEmbeds[s.audioDub]) == 0) && s.audioDub != s.videoDub {
+		return s.openAudioSelect()
 	}
-	return s.beginStreamResolve()
+	return s.beginStreamResolve(s.videoDub)
 }
 
-// openDubSelect builds the picker for the current state.
-func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
+// openAudioSelect builds the audio prompt (python's second prompt):
+// «⭐ Как видео» first — one muxed stream for both tracks — then the
+// other dub keys of the episode.
+func (s *sessionScreen) openAudioSelect() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	keys := sortedEmbedKeys(ep.RawEmbeds)
 	choices := make([]Choice, 0, len(keys)+1)
-	if state == sessionStateDubAudio && s.videoDub != "" {
+	if s.videoDub != "" {
 		name := stripProviderTag(s.videoDub)
 		if tag := s.dubLangTag(s.videoDub); tag != "" {
 			name = tag + " " + name
@@ -750,7 +866,10 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 		})
 	}
 	for _, k := range keys {
-		if state == sessionStateDubAudio && k == s.videoDub {
+		if k == s.videoDub {
+			continue
+		}
+		if len(ep.RawEmbeds[k]) == 0 {
 			continue
 		}
 		label := k
@@ -763,12 +882,8 @@ func (s *sessionScreen) openDubSelect(state sessionState) (Screen, tea.Cmd) {
 			Value: k,
 		})
 	}
-	title := "Выберите источник видео:"
-	if state == sessionStateDubAudio {
-		title = "Выберите источник аудио:"
-	}
-	s.state = state
-	s.dubList = NewPinList(NewMenu(title, "Нет доступных потоков", choices...), defaultListHeight)
+	s.state = sessionStateDubAudio
+	s.dubList = NewPinList(NewMenu("Выберите аудиопоток:", "Нет доступных аудиопотоков", choices...), defaultListHeight)
 	return s, nil
 }
 
@@ -783,7 +898,8 @@ func (s *sessionScreen) dubLangTag(key string) string {
 	return "[" + strings.ToUpper(lang) + "]"
 }
 
-// handleDubKey resolves the dub pickers.
+// handleDubKey resolves the audio picker (the video pick happens in
+// the merged stream list, PR61).
 func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.dubList.HandleKey(key) {
 		return s, nil
@@ -793,48 +909,169 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	}
 	if resolved == Back {
-		// Back from video select returns to the menu; from audio
-		// select back to the video select (python loop).
-		if s.state == sessionStateDubAudio && s.videoDub != "" {
-			return s.openDubSelect(sessionStateDubVideo)
+		// Back from the audio prompt returns to the merged stream
+		// list when its entries are cached (python's loop back to the
+		// video prompt), else to the menu.
+		if len(s.streamEntries) > 0 {
+			s.state = sessionStateQuality
+			s.buildStreamList()
+			return s, nil
 		}
 		s.state = sessionStateMenu
 		return s, nil
 	}
 	pick, _ := resolved.(string)
-	if s.state == sessionStateDubVideo {
-		s.videoDub = pick
-		return s.openDubSelect(sessionStateDubAudio)
-	}
 	s.audioDub = pick
 	if s.videoDub != "" && s.audioDub == "" {
 		s.audioDub = s.videoDub
 	}
-	return s.beginStreamResolve()
+	return s.launchPlayback()
 }
 
-// beginStreamResolve resolves the video stream for the quality picker.
-func (s *sessionScreen) beginStreamResolve() (Screen, tea.Cmd) {
+// beginStreamResolve resolves the episode's streams for the picker.
+// An empty scope resolves EVERY dub carrying embed links — the merged
+// list (PR61); a dub key scopes the resolve to the remembered dub
+// (the fast path auto-plays its result).
+func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	s.state = sessionStateQuality
-	s.buildQualityList()
-	dub := s.videoDub
+	s.streamEntries = nil
+	s.buildStreamList()
+	s.resolveGen++
+	gen := s.resolveGen
 	ep := *s.currentEpisodeData()
-	provider := providerOfTrackKey(dub)
+	shikiID := s.shikimoriID()
 	deps := s.deps
 	return s, safeCmd(sessionScreenID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
-		stream, err := deps.Episode.ResolveStream(ctx, provider, ep, dub)
-		if err != nil {
-			return streamResolvedMsg{err: err}
+		entries, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
+		// The skip verdict is stream-independent — it fetches here so
+		// the note is ready at launch (PR61). Best-effort: a failure
+		// degrades the note, never the resolve.
+		note, chapters, cleanup := "", "", func() {}
+		if deps.Playback != nil {
+			path, cl, n, serr := deps.Playback.ResolveSkips(ctx, shikiID, EpisodeSortKey(ep.Num))
+			note, cleanup = n, cl
+			if serr == nil {
+				chapters = path
+			}
 		}
-		return streamResolvedMsg{links: stream.Links}
+		return streamResolvedMsg{
+			gen:          gen,
+			scope:        scope,
+			entries:      entries,
+			skipEpisode:  ep.Num,
+			skipNote:     note,
+			skipChapters: chapters,
+			skipCleanup:  cleanup,
+			err:          err,
+		}
 	})
+}
+
+// streamResolveFanout bounds the concurrent per-dub resolves of one
+// merged resolve (PR61 review): the same order as the provider
+// fan-out consts (anilibProbeConcurrency, ttPreflightConcurrency).
+const streamResolveFanout = 8
+
+// resolveAllStreams resolves every dub of the episode that carries
+// embed links (one dub when scope is set) concurrently and merges the
+// results into one quality-sorted entry list (python merge parity —
+// the streams of all providers live in ONE list). A provider that
+// fails degrades: its entries drop, the rest still surface; only a
+// fully empty merge is an error.
+func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string) ([]streamEntry, error) {
+	targets := make([]string, 0, len(ep.RawEmbeds))
+	for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
+		if scope != "" && k != scope {
+			continue
+		}
+		if len(ep.RawEmbeds[k]) == 0 {
+			continue // tier-1 key without hydrated links (PR43)
+		}
+		targets = append(targets, k)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("нет источников с потоками")
+	}
+
+	type resolveResult struct {
+		key    string
+		stream contracts.MediaStream
+		err    error
+	}
+	var (
+		mu      sync.Mutex
+		results = make([]resolveResult, 0, len(targets))
+	)
+	// The fan-out degrades per provider: fn never fails, so one
+	// provider's error cannot cancel its siblings' lookups.
+	_ = netclient.Parallel(ctx, targets, streamResolveFanout, func(ctx context.Context, key string) error {
+		stream, err := eps.ResolveStream(ctx, providerOfTrackKey(key), ep, key)
+		mu.Lock()
+		results = append(results, resolveResult{key: key, stream: stream, err: err})
+		mu.Unlock()
+		return nil
+	})
+
+	entries := make([]streamEntry, 0, len(results))
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		for q, src := range r.stream.Links {
+			entries = append(entries, streamEntry{Quality: q, DubKey: r.key, Source: src})
+		}
+	}
+	sortStreamEntries(entries)
+	if len(entries) == 0 {
+		if firstErr != nil {
+			return nil, fmt.Errorf("потоки не получены: %w", firstErr)
+		}
+		return nil, fmt.Errorf("потоки не найдены")
+	}
+	return entries, nil
+}
+
+// sortStreamEntries orders the merged list: quality numerically
+// descending, ties broken by dub key for a deterministic order.
+func sortStreamEntries(entries []streamEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		qi, erri := strconv.Atoi(entries[i].Quality)
+		qj, errj := strconv.Atoi(entries[j].Quality)
+		if erri == nil && errj == nil && qi != qj {
+			return qi > qj
+		}
+		if erri == nil && errj == nil {
+			return entries[i].DubKey < entries[j].DubKey
+		}
+		return entries[i].Quality > entries[j].Quality
+	})
+}
+
+// autoStreamEntry picks the fast-path entry: the remembered quality
+// when the dub still offers it, else the best (first sorted) entry.
+func autoStreamEntry(entries []streamEntry, lastQuality string) streamEntry {
+	if len(entries) == 0 {
+		return streamEntry{}
+	}
+	if lastQuality != "" {
+		for _, e := range entries {
+			if e.Quality == lastQuality {
+				return e
+			}
+		}
+	}
+	return entries[0]
 }
 
 // handleQualityKey buffered branch (PR43 C): buffer the chosen stream
 // to a local file, play the file, delete it on exit.
-func (s *sessionScreen) startBuffered(qualityChoice string) (Screen, tea.Cmd) {
+func (s *sessionScreen) startBuffered() (Screen, tea.Cmd) {
 	snapshot := *s
 	ctx, cancel := context.WithCancel(context.Background())
 	s.bufferCancel = cancel
@@ -846,26 +1083,21 @@ func (s *sessionScreen) startBuffered(qualityChoice string) (Screen, tea.Cmd) {
 	s.bufferProgCh = progCh
 	download := safeCmd(sessionScreenID, func() tea.Msg {
 		defer close(progCh)
-		return snapshot.runBuffered(ctx, qualityChoice, gen, progCh)
+		return snapshot.runBuffered(ctx, gen, progCh)
 	})
 	return s, tea.Batch(download, waitBufferedProgress(progCh, gen))
 }
 
-// runBuffered resolves the stream choice and buffers it to completion,
-// pumping progress onto the channel (non-blocking: a full channel just
-// drops samples — the throttle keeps them coming).
-func (s *sessionScreen) runBuffered(ctx context.Context, qualityChoice string, gen int, progCh chan<- buffered.Progress) tea.Msg {
-	ep := s.currentEpisodeData()
-	if ep == nil {
-		return bufferReadyMsg{gen: gen, err: fmt.Errorf("нет серий")}
-	}
-	video, quality, err := s.pickVideo(ctx, ep, qualityChoice)
-	if err != nil {
-		return bufferReadyMsg{gen: gen, err: err}
+// runBuffered buffers the picked stream to completion, pumping
+// progress onto the channel (non-blocking: a full channel just drops
+// samples — the throttle keeps them coming).
+func (s *sessionScreen) runBuffered(ctx context.Context, gen int, progCh chan<- buffered.Progress) tea.Msg {
+	if s.pickedVideo.URL == "" {
+		return bufferReadyMsg{gen: gen, err: fmt.Errorf("поток не выбран")}
 	}
 	handle, err := s.deps.Buffered.Buffer(ctx, buffered.Source{
-		URL:     video.URL,
-		Headers: video.Headers,
+		URL:     s.pickedVideo.URL,
+		Headers: s.pickedVideo.Headers,
 	}, func(p buffered.Progress) {
 		select {
 		case progCh <- p:
@@ -875,7 +1107,7 @@ func (s *sessionScreen) runBuffered(ctx context.Context, qualityChoice string, g
 	if err != nil {
 		return bufferReadyMsg{gen: gen, err: err}
 	}
-	return bufferReadyMsg{gen: gen, handle: handle, quality: quality}
+	return bufferReadyMsg{gen: gen, handle: handle, quality: s.lastQuality}
 }
 
 // waitBufferedProgress is the re-arming pump of the buffering phase.
@@ -937,16 +1169,14 @@ func (s *sessionScreen) doPlayBuffered(handle buffered.Handle, quality string) t
 		audioURL = audio.URL
 	}
 
-	chapters := ""
-	if s.deps != nil && s.deps.Playback != nil {
-		var cleanup func()
-		chapters, cleanup, err = s.deps.Playback.ResolveSkips(ctx, s.shikimoriID(), EpisodeSortKey(ep.Num))
-		if err == nil && cleanup != nil {
-			defer cleanup()
-		}
-		if err != nil {
-			chapters = "" // skips are best-effort
-		}
+	// Chapters come from the resolve-phase skip verdict (PR61); the
+	// cleanup runs when the player exits.
+	chapters := s.skipChapters
+	if s.skipEpisode != ep.Num {
+		chapters = ""
+	}
+	if chapters != "" && s.skipCleanup != nil {
+		defer s.skipCleanup()
 	}
 
 	title := fmt.Sprintf("[%s - %s] %s - %s",
@@ -1019,18 +1249,46 @@ func humanBytes(n int64) string {
 	}
 }
 
-// buildQualityList renders the picker from resolved links (or the
-// auto option while unresolved).
-func (s *sessionScreen) buildQualityList() {
-	choices := []Choice{{ID: "auto", Label: "Авто (лучшее качество)", Value: "auto"}}
-	qualities := sortedQualityDesc(s.resolvedLinks)
-	for _, q := range qualities {
-		choices = append(choices, Choice{ID: q, Label: q + "p", Value: q})
+// buildStreamList renders the merged stream picker (PR61): one
+// quality-sorted list over every consulted provider dub, entries
+// labeled quality · dub [provider] · episode coverage.
+func (s *sessionScreen) buildStreamList() {
+	choices := make([]Choice, 0, len(s.streamEntries)+1)
+	if len(s.streamEntries) == 0 {
+		choices = append(choices, Choice{ID: "resolving", Label: "Ищу потоки…", Disabled: true})
 	}
-	s.qualityList = NewPinList(NewMenu("Выберите источник (качество):", "", choices...), defaultListHeight)
+	for i, e := range s.streamEntries {
+		choices = append(choices, Choice{
+			ID:    fmt.Sprintf("s%d", i),
+			Label: s.streamEntryLabel(e),
+			Value: e,
+		})
+	}
+	s.qualityList = NewPinList(NewMenu("Выберите поток (качество · озвучка · провайдер):", "Потоки не найдены", choices...), defaultListHeight)
 }
 
-// handleQualityKey resolves the quality pick and launches playback.
+// streamEntryLabel renders one merged-list row: quality first, then
+// the dub (with the language tag when known) and the provider tag,
+// then the dub's episode coverage.
+func (s *sessionScreen) streamEntryLabel(e streamEntry) string {
+	label := e.Quality + "p"
+	dub := stripProviderTag(e.DubKey)
+	if tag := s.dubLangTag(e.DubKey); tag != "" {
+		dub = tag + " " + dub
+	}
+	label += " · " + dub
+	if prov := providerOfTrackKey(e.DubKey); prov != "" {
+		label += " [" + prov + "]"
+	}
+	if n := s.dubStats[e.DubKey]; n > 0 {
+		label += fmt.Sprintf(" · %d сер.", n)
+	}
+	return label
+}
+
+// handleQualityKey resolves the stream pick (PR61): the entry records
+// video dub + quality; a fresh session continues to the audio prompt
+// (python's second prompt), a remembered audio dub plays directly.
 func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.qualityList.HandleKey(key) {
 		return s, nil
@@ -1043,25 +1301,141 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 		s.state = sessionStateMenu
 		return s, nil
 	}
-	choice, _ := resolved.(string)
+	entry, ok := resolved.(streamEntry)
+	if !ok {
+		return s, nil
+	}
+	s.videoDub = entry.DubKey
+	s.lastQuality = entry.Quality
+	s.pickedVideo = entry.Source
+	if s.audioDub == "" {
+		return s.openAudioSelect()
+	}
+	return s.launchPlayback()
+}
+
+// launchPlayback continues after the video (and, when fresh, audio)
+// picks: buffered mode buffers the picked stream, streaming launches
+// mpv. The skip verdict fetched during the resolve (PR61) composes
+// into the launch line and auto-clears on the playback settle. The
+// shikimori watch-progress push (PR61) runs ALONGSIDE playback —
+// python extract_and_play's update_rate at the launch moment.
+func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
 			s.status = "Буферный режим недоступен"
 			return s, nil
 		}
-		return s.startBuffered(choice)
+		return s.startBuffered()
 	}
 	s.state = sessionStatePlaying
 	s.status = "▶ Запуск mpv…"
-	return s, s.playCmd(choice)
+	if s.skipNote != "" && s.skipEpisode == s.currentEpisode() {
+		s.status += " · ⏭ " + s.skipNote
+	}
+	play := s.playCmd()
+	if s.deps == nil || s.deps.Shiki == nil {
+		return s, play
+	}
+	if id := s.shikimoriID(); id != 0 {
+		if episode := parseWatchEpisode(s.currentEpisode()); episode > 0 {
+			return s, tea.Batch(play, syncWatchProgressCmd(s.deps, id, episode))
+		}
+	}
+	return s, play
 }
 
-// playCmd resolves dubs/skips and runs the player; it settles into
-// playedMsg.
-func (s *sessionScreen) playCmd(qualityChoice string) tea.Cmd {
+// parseWatchEpisode reads the episode counter for the progress push;
+// 0 marks a non-numeric episode (OVA/special) that must not zero the
+// remote counter.
+func parseWatchEpisode(num string) int {
+	f := EpisodeSortKey(num)
+	if f <= 0 {
+		return 0
+	}
+	return int(f)
+}
+
+// syncWatchProgressCmd schedules the bounded, non-blocking push.
+func syncWatchProgressCmd(deps *Deps, shikimoriID int64, episode int) tea.Cmd {
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
+		defer cancel()
+		return syncWatchProgress(ctx, deps, shikimoriID, episode)
+	})
+}
+
+// syncWatchProgress pushes {episodes: N, status} to shikimori with
+// python parity: the stored status is kept (planned → watching), the
+// counter only ever moves forward, and every verdict — synced, typed
+// skip or failure — is logged.
+func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episode int) shikiSyncedMsg {
+	log := deps.logger()
+	if deps.Shiki == nil || !deps.Shiki.Enabled() {
+		log.Info("tui: shiki: tracker disabled; progress push skipped", "episode", episode)
+		return shikiSyncedMsg{note: "шики: трекер отключён — прогресс не отправлен"}
+	}
+	if mode := deps.Shiki.Mode(); mode == "none" || mode == "disabled" {
+		log.Info("tui: shiki: no auth; progress push skipped",
+			"episode", episode, "mode", mode)
+		return shikiSyncedMsg{note: "шики: нет авторизации — прогресс не отправлен"}
+	}
+
+	var (
+		rateID  int64
+		animeID int64
+		prior   int
+		status  = "watching"
+	)
+	if deps.History != nil {
+		rec, err := deps.History.GetByShikimoriID(ctx, shikimoriID)
+		if err != nil {
+			log.Warn("tui: shiki: local row lookup failed", "error", err)
+		}
+		if rec != nil {
+			animeID = rec.ID
+			prior = parseWatchEpisode(rec.CurrentEpisode)
+			if rec.ShikimoriRateID != nil {
+				rateID = *rec.ShikimoriRateID
+			}
+			if st := shikimori.CanonicalStatus(rec.ShikimoriStatus); st != "" {
+				if st == "plan_to_watch" || st == "planned" {
+					st = "watching" // python: planned → watching on play
+				}
+				status = st
+			}
+		}
+	}
+	if prior > episode {
+		log.Info("tui: shiki: episode behind local progress; push skipped",
+			"episode", episode, "prior", prior)
+		return shikiSyncedMsg{note: fmt.Sprintf(
+			"шики: серия %d — прогресс уже %d, счётчик не откатывается", episode, prior)}
+	}
+
+	newRate, err := deps.Shiki.UpdateEpisodes(ctx, shikimoriID, rateID, episode, status)
+	if err != nil {
+		log.Warn("tui: shiki: progress push failed", "episode", episode, "error", err)
+		return shikiSyncedMsg{err: fmt.Errorf("шики: ошибка синхронизации: %w", err)}
+	}
+	// A created rate id is persisted so the next push PATCHes instead
+	// of duplicating (SyncEpisodeProgress pattern: the id write
+	// survives caller cancellation).
+	if rateID == 0 && newRate != 0 && animeID != 0 && deps.History != nil {
+		if err := deps.History.SetRateID(context.WithoutCancel(ctx), animeID, newRate); err != nil {
+			log.Warn("tui: shiki: persist rate id failed", "anime", animeID, "error", err)
+		}
+	}
+	log.Info("tui: shiki: progress synced",
+		"episode", episode, "rate", newRate, "status", status)
+	return shikiSyncedMsg{note: fmt.Sprintf("шики: прогресс синхронизирован (эп %d)", episode)}
+}
+
+// playCmd runs the player; it settles into playedMsg.
+func (s *sessionScreen) playCmd() tea.Cmd {
 	snapshot := *s
 	return func() tea.Msg {
-		msg := snapshot.doPlay(qualityChoice)
+		msg := snapshot.doPlay()
 		return msg
 	}
 }
@@ -1069,14 +1443,16 @@ func (s *sessionScreen) playCmd(qualityChoice string) tea.Cmd {
 // doPlay performs the synchronous play pipeline. It runs on a struct
 // snapshot, so the quality used travels back via playedMsg and the
 // live model applies it in Update (I9).
-func (s *sessionScreen) doPlay(qualityChoice string) tea.Msg {
+func (s *sessionScreen) doPlay() tea.Msg {
 	ctx := context.Background()
 	ep := s.currentEpisodeData()
-
-	video, usedQuality, err := s.pickVideo(ctx, ep, qualityChoice)
-	if err != nil {
-		return playedMsg{err: err}
+	if ep == nil {
+		return playedMsg{err: fmt.Errorf("нет серий")}
 	}
+	if s.pickedVideo.URL == "" {
+		return playedMsg{err: fmt.Errorf("поток не выбран")}
+	}
+	video := s.pickedVideo
 
 	audioURL := ""
 	audio, err := s.pickAudio(ctx, ep)
@@ -1087,17 +1463,14 @@ func (s *sessionScreen) doPlay(qualityChoice string) tea.Msg {
 		audioURL = audio.URL
 	}
 
-	chapters := ""
-	if s.deps != nil && s.deps.Playback != nil {
-		var cleanup func()
-		chapters, cleanup, err = s.deps.Playback.ResolveSkips(ctx, s.shikimoriID(), EpisodeSortKey(ep.Num))
-		if err == nil && cleanup != nil {
-			defer cleanup()
-		}
-		if err != nil {
-			// Skips are best-effort: play without chapters.
-			chapters = ""
-		}
+	// Chapters come from the resolve-phase skip verdict (PR61); the
+	// cleanup runs when the player exits.
+	chapters := s.skipChapters
+	if s.skipEpisode != ep.Num {
+		chapters = ""
+	}
+	if chapters != "" && s.skipCleanup != nil {
+		defer s.skipCleanup()
 	}
 
 	title := fmt.Sprintf("[%s - %s] %s - %s",
@@ -1118,46 +1491,15 @@ func (s *sessionScreen) doPlay(qualityChoice string) tea.Msg {
 	if err != nil {
 		return playedMsg{err: err}
 	}
-	return playedMsg{quality: usedQuality}
+	return playedMsg{quality: s.lastQuality}
 }
 
 // errNoPlayback reports an unwired playback service.
 var errNoPlayback = fmt.Errorf("tui: playback service unavailable")
 
-// pickVideo resolves the video variant for the chosen quality,
-// returning the source and the quality label actually used.
-func (s *sessionScreen) pickVideo(ctx context.Context, ep *contracts.Episode, qualityChoice string) (*contracts.VideoSource, string, error) {
-	links := s.resolvedLinks
-	if links == nil {
-		stream, err := s.deps.Episode.ResolveStream(ctx, providerOfTrackKey(s.videoDub), *ep, s.videoDub)
-		if err != nil {
-			return nil, "", fmt.Errorf("видео %s: %w", s.videoDub, err)
-		}
-		links = stream.Links
-	}
-	quality := qualityChoice
-	if quality == "auto" || quality == "" {
-		if s.lastQuality != "" {
-			if _, ok := links[s.lastQuality]; ok {
-				quality = s.lastQuality
-			}
-		}
-		if quality == "auto" || quality == "" {
-			qualities := sortedQualityDesc(links)
-			if len(qualities) == 0 {
-				return nil, "", fmt.Errorf("нет потоков у %s", s.videoDub)
-			}
-			quality = qualities[0]
-		}
-	}
-	src, ok := links[quality]
-	if !ok {
-		return nil, "", fmt.Errorf("качество %s недоступно", quality)
-	}
-	return &src, quality, nil
-}
-
-// pickAudio resolves the separate audio track when the dubs differ.
+// pickAudio resolves the separate audio track when the dubs differ
+// (the SEPARATE case of PR61: the player gets both URLs, mpv joins
+// them via --audio-file).
 func (s *sessionScreen) pickAudio(ctx context.Context, ep *contracts.Episode) (*contracts.VideoSource, error) {
 	if s.audioDub == "" || s.audioDub == s.videoDub {
 		return nil, nil
@@ -1778,7 +2120,7 @@ func (s *sessionScreen) View() tea.View {
 		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.list.Render()
 	case sessionStateEpisodeList:
 		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.episodeList.Render()
-	case sessionStateDubVideo, sessionStateDubAudio:
+	case sessionStateDubAudio:
 		body = themedList(s.dubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)

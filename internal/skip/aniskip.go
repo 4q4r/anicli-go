@@ -55,36 +55,46 @@ type aniskipResponse struct {
 	Results []aniskipResultItem `json:"results"`
 }
 
-// aniskipResultItem is one skip-time result.
+// aniskipResultItem is one skip-time result. The live v2 API answers
+// camelCase (startTime/endTime/skipType/skipId/episodeLength —
+// verified against api.aniskip.com 2026-09-18; the snake_case shape
+// was v1 and silently decoded to zero intervals).
 type aniskipResultItem struct {
 	Interval      aniskipInterval `json:"interval"`
-	SkipType      string          `json:"skip_type"`
-	SkipID        string          `json:"skip_id"`
-	EpisodeLength float64         `json:"episode_length"`
+	SkipType      string          `json:"skipType"`
+	SkipID        string          `json:"skipId"`
+	EpisodeLength float64         `json:"episodeLength"`
 }
 
 // aniskipInterval carries the start/end seconds.
 type aniskipInterval struct {
-	StartTime float64 `json:"start_time"`
-	EndTime   float64 `json:"end_time"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
 }
 
-// aniskipSubmitPayload is the six-field submit body (skip_type,
-// provider_name, start_time, end_time, episode_length, submitter_id).
+// aniskipSubmitPayload is the six-field submit body (skipType,
+// providerName, startTime, endTime, episodeLength, submitterId — v2
+// camelCase, live-verified).
 type aniskipSubmitPayload struct {
-	SkipType      string  `json:"skip_type"`
-	ProviderName  string  `json:"provider_name"`
-	StartTime     float64 `json:"start_time"`
-	EndTime       float64 `json:"end_time"`
-	EpisodeLength float64 `json:"episode_length"`
-	SubmitterID   string  `json:"submitter_id"`
+	SkipType      string  `json:"skipType"`
+	ProviderName  string  `json:"providerName"`
+	StartTime     float64 `json:"startTime"`
+	EndTime       float64 `json:"endTime"`
+	EpisodeLength float64 `json:"episodeLength"`
+	SubmitterID   string  `json:"submitterId"`
 }
 
 // GetSkipTimes fetches the op/ed skip times of one episode. A clean
 // found=false answers as an empty slice with a nil error; transport and
 // HTTP failures propagate as errors.
+//
+// PR61 live finding: the v2 API requires the episodeLength query
+// parameter — requests without it answer HTTP 400 for every anime.
+// The fetch happens before playback, so the length is unknown: the
+// neutral 0 is sent (accepted by the API) and each result carries the
+// authoritative episode_length.
 func (c *AniSkipClient) GetSkipTimes(ctx context.Context, shikimoriID int64, episodeNum float64) ([]Interval, error) {
-	url := fmt.Sprintf("%s/v2/skip-times/%d/%s?types=op&types=ed",
+	url := fmt.Sprintf("%s/v2/skip-times/%d/%s?types=op&types=ed&episodeLength=0",
 		c.opts.BaseURL, shikimoriID, normalizeEpisodeNum(episodeNum))
 
 	resp, err := c.http.Get(ctx, url, nil)

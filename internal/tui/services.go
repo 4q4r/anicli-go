@@ -75,8 +75,11 @@ type EpisodeService interface {
 // chapters (skip.Resolve) attached.
 type PlaybackService interface {
 	// ResolveSkips resolves the skip chapter file for the episode, or
-	// "" when none. The returned cleanup removes the temp file.
-	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), err error)
+	// "" when none. The returned cleanup removes the temp file. The
+	// note (PR61) is the human verdict for the launch status line —
+	// the found ranges, «не найдены» or «недоступны»; "" when nothing
+	// was fetched (no binding).
+	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), note string, err error)
 	// Play launches mpv and blocks until it exits.
 	Play(ctx context.Context, req PlayRequest) error
 }
@@ -155,6 +158,11 @@ type ShikimoriService interface {
 	// leave them untouched. rateID > 0 PATCHes the existing rate,
 	// otherwise a new rate is created and its id returned.
 	UpdateStatus(ctx context.Context, shikimoriID, rateID int64, status string, score, rewatches *int) (int64, error)
+	// UpdateEpisodes pushes the watch-progress counter (PR61, python
+	// extract_and_play's update_rate): episodes=N with the ensured
+	// status. rateID > 0 PATCHes the rate, otherwise a new rate is
+	// created and its id returned.
+	UpdateEpisodes(ctx context.Context, shikimoriID, rateID int64, episodes int, status string) (int64, error)
 	// SearchIDs maps candidate titles to shikimori anime ids (python
 	// search_ids autocomplete port).
 	SearchIDs(ctx context.Context, query string) (map[string]int64, error)

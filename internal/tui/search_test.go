@@ -257,17 +257,17 @@ func TestSearchGroupingFlow(t *testing.T) {
 		t.Fatalf("want the two Naruto results checked, got %+v", checked)
 	}
 
-	// Enter resolves to the source pick screen.
+	// Enter resolves to the session directly (PR61: no provider gate).
 	_, cmd := group.Update(enter())
 	msg := cmd()
 	switch m := msg.(type) {
 	case pushMsg:
-		if m.screen.ID() != searchSourceID {
-			t.Fatalf("grouping must push source pick, got %q", m.screen.ID())
+		if m.screen.ID() != sessionScreenID {
+			t.Fatalf("grouping must push the session, got %q", m.screen.ID())
 		}
 	case replaceMsg:
-		if m.screen.ID() != searchSourceID {
-			t.Fatalf("grouping must replace with source pick, got %q", m.screen.ID())
+		if m.screen.ID() != sessionScreenID {
+			t.Fatalf("grouping must replace with the session, got %q", m.screen.ID())
 		}
 	default:
 		t.Fatalf("unexpected message %#v", msg)

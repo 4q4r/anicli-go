@@ -71,6 +71,10 @@ type fakeShiki struct {
 	// next is the rate id returned for the next create (PATCH echoes
 	// the incoming id).
 	next int64
+	// epPushes records the UpdateEpisodes watch-progress pushes
+	// (PR61); epErr fails every push.
+	epPushes []shikiEpisodePush
+	epErr    error
 }
 
 type shikiUpdate struct {
@@ -79,6 +83,14 @@ type shikiUpdate struct {
 	status      string
 	score       *int
 	rewatches   *int
+}
+
+// shikiEpisodePush is one recorded watch-progress push (PR61).
+type shikiEpisodePush struct {
+	shikimoriID int64
+	rateID      int64
+	episodes    int
+	status      string
 }
 
 func (f *fakeShiki) Enabled() bool { return f.enabled }
@@ -101,6 +113,22 @@ func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, rateID int64, s
 func (f *fakeShiki) SearchIDs(_ context.Context, query string) (map[string]int64, error) {
 	f.queries = append(f.queries, query)
 	return f.ids, nil
+}
+
+// UpdateEpisodes records the watch-progress push (PR61): PATCH echoes
+// the incoming rate id, creates return the next fixture id.
+func (f *fakeShiki) UpdateEpisodes(_ context.Context, shikimoriID, rateID int64, episodes int, status string) (int64, error) {
+	f.epPushes = append(f.epPushes, shikiEpisodePush{
+		shikimoriID: shikimoriID, rateID: rateID, episodes: episodes, status: status,
+	})
+	if f.epErr != nil {
+		return 0, f.epErr
+	}
+	if rateID > 0 {
+		return rateID, nil
+	}
+	f.next++
+	return f.next, nil
 }
 
 // Autocomplete resolves the rich autocomplete records (PR42): the

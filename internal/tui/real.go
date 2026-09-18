@@ -145,7 +145,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	deps := &Deps{
 		Search:   &realSearch{registry: registry},
 		Episode:  &realEpisode{registry: registry},
-		Playback: &realPlayback{player: real.player, skips: real.skips},
+		Playback: &realPlayback{player: real.player, skips: real.skips, log: logf(o.logger)},
 		History:  &realHistory{store: store},
 		Offline:  &realOffline{settings: settings},
 		Database: &realDatabase{store: store},
@@ -306,28 +306,73 @@ func (s *realEpisode) HydrateDubs(ctx context.Context, providerID string, episod
 type realPlayback struct {
 	player *player.Player
 	skips  *skip.Manager
+	// log is the file diagnostics sink (PR61: every aniskip fetch —
+	// found, missed or failed — is logged); nil degrades to discard.
+	log *slog.Logger
 }
 
-func (s *realPlayback) ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (string, func(), error) {
+// skipLogger normalizes the optional sink: nil degrades to a discard
+// logger (never stderr inside the TUI).
+func (s *realPlayback) skipLogger() *slog.Logger {
+	if s.log == nil {
+		return discardSlog
+	}
+	return s.log
+}
+
+// discardSlog is the shared discard sink.
+var discardSlog = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+// formatSkipClock renders seconds as m:ss (the status-line clock).
+func formatSkipClock(sec float64) string {
+	total := int(sec)
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
+// formatSkipNote renders the found ranges ("скипы: op 0:00–1:30 · …").
+func formatSkipNote(b skip.Bundle) string {
+	parts := make([]string, 0, len(b.Intervals))
+	for _, iv := range b.Intervals {
+		parts = append(parts, fmt.Sprintf("%s %s–%s",
+			iv.SkipType, formatSkipClock(iv.StartTime), formatSkipClock(iv.EndTime)))
+	}
+	return "скипы: " + strings.Join(parts, " · ")
+}
+
+// ResolveSkips resolves the episode's skip chapters and reports the
+// verdict (PR61): every fetch outcome — found, clean miss, transport
+// failure, missing binding — lands in the file logger, and the note
+// feeds the TUI launch line.
+func (s *realPlayback) ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (string, func(), string, error) {
+	log := s.skipLogger()
 	if shikimoriID == 0 {
-		return "", func() {}, nil
+		log.Info("tui: skips: no binding; lookup skipped", "episode", episode)
+		return "", func() {}, "", nil
 	}
 	bundle, err := s.skips.Resolve(ctx, skip.ResolveRequest{
 		ShikimoriID: shikimoriID,
 		EpisodeNum:  episode,
 	})
 	if err != nil {
-		return "", func() {}, err
+		log.Warn("tui: skips: lookup failed", "episode", episode, "error", err)
+		return "", func() {}, "скипы: недоступны", err
 	}
 	if bundle.Empty() {
-		return "", func() {}, nil
+		log.Info("tui: skips: no entry found",
+			"episode", episode, "details", bundle.Details)
+		return "", func() {}, "скипы: не найдены", nil
 	}
-	path, err := bundle.WriteChaptersFile(os.TempDir())
-	if err != nil {
-		return "", func() {}, err
+	path, werr := bundle.WriteChaptersFile(os.TempDir())
+	if werr != nil {
+		log.Warn("tui: skips: chapters file write failed", "episode", episode, "error", werr)
+		return "", func() {}, "скипы: недоступны", werr
 	}
+	note := formatSkipNote(bundle)
+	log.Info("tui: skips: resolved",
+		"episode", episode, "provider", bundle.ProviderID,
+		"types", bundle.ChapterTypes, "chapters", len(bundle.Intervals))
 	cleanup := func() { _ = os.Remove(path) }
-	return path, cleanup, nil
+	return path, cleanup, note, nil
 }
 
 func (s *realPlayback) Play(ctx context.Context, req PlayRequest) error {
@@ -510,6 +555,20 @@ func (s *realShiki) UpdateStatus(ctx context.Context, shikimoriID, rateID int64,
 		Status:    shikimori.CanonicalStatus(status),
 		Score:     score,
 		Rewatches: rewatches,
+	}
+	if rateID > 0 {
+		return s.client.UpdateRate(ctx, rateID, input)
+	}
+	return s.client.CreateRate(ctx, shikimoriID, input)
+}
+
+// UpdateEpisodes pushes the watch-progress counter (PR61, python
+// extract_and_play's update_rate parity): PATCH the stored rate or
+// create one, sending {episodes: N, status}.
+func (s *realShiki) UpdateEpisodes(ctx context.Context, shikimoriID, rateID int64, episodes int, status string) (int64, error) {
+	input := shikimori.RateInput{
+		Episodes: &episodes,
+		Status:   shikimori.CanonicalStatus(status),
 	}
 	if rateID > 0 {
 		return s.client.UpdateRate(ctx, rateID, input)

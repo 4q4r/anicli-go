@@ -24,7 +24,6 @@ import (
 const (
 	searchProgressID = "search-progress"
 	searchGroupID    = "search-group"
-	searchSourceID   = "search-source"
 )
 
 // searchTimeout bounds one provider search inside the fan-out.
@@ -427,18 +426,13 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				}
 			}
 			if m.resume != nil {
-				// Catalog flow (I6): the selection resumes the record;
-				// with several providers checked the picker decides
-				// the primary first.
-				if len(group) > 1 {
-					return m, replace(newSearchSource(m.deps, group, m.resume))
-				}
-				return m, replace(newResumedSession(m.deps, group[0], group, *m.resume))
+				// Catalog flow (I6): the selection resumes the record.
+				// PR61: every checked provider joins the session (the
+				// python merge) — the «Выберите провайдера» gate is
+				// gone; the choice happens at the stream level.
+				return m, replace(newResumedSession(m.deps, stablePrimary(group), stableGroup(group), *m.resume))
 			}
-			if len(group) > 1 {
-				return m, replace(newSearchSource(m.deps, group, nil))
-			}
-			return m, replace(NewSessionScreen(m.deps, group[0], group))
+			return m, replace(NewSessionScreen(m.deps, stablePrimary(group), stableGroup(group)))
 		}
 		if len(m.pending) > 0 {
 			// Fan-out still running: nothing to pick yet — the
@@ -666,7 +660,7 @@ func (g *searchGroup) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			group = append(group, r)
 		}
 	}
-	return g, push(NewSearchSource(g.deps, group))
+	return g, push(NewSessionScreen(g.deps, stablePrimary(group), stableGroup(group)))
 }
 
 // View implements Screen.
@@ -677,86 +671,24 @@ func (g *searchGroup) View() tea.View {
 	return tea.NewView(g.check.Render())
 }
 
-// searchSource picks the provider to use for this session (python
-// selected_group[0] made explicit): one row per checked result.
-type searchSource struct {
-	deps  *Deps
-	group []contracts.SearchResult
-	list  *PinList
-	// resume, when set, continues the history record on the pick
-	// instead of a fresh session (the catalog flow's picker, PR31).
-	resume *storage.AnimeProgress
-}
-
-// NewSearchSource builds the provider picker for a fresh session:
-// each checked result in registry-stable order.
-//
-//nolint:revive // internal screen type
-func NewSearchSource(deps *Deps, group []contracts.SearchResult) *searchSource {
-	return newSearchSource(deps, group, nil)
-}
-
-// newSearchSource builds the picker, optionally resuming the history
-// record on its pick (the catalog flow).
-func newSearchSource(deps *Deps, group []contracts.SearchResult, resume *storage.AnimeProgress) *searchSource {
+// stableGroup returns a SourceID-sorted copy of the checked group
+// (the removed provider picker's registry-stable order, PR61): the
+// session's primary and history binding stay deterministic without a
+// gate.
+func stableGroup(group []contracts.SearchResult) []contracts.SearchResult {
 	stable := append([]contracts.SearchResult(nil), group...)
 	sort.SliceStable(stable, func(i, j int) bool { return stable[i].SourceID < stable[j].SourceID })
-	choices := make([]Choice, 0, len(stable))
-	for i, r := range stable {
-		choices = append(choices, Choice{
-			ID:    fmt.Sprintf("s%d", i),
-			Label: fmt.Sprintf("%s — %s", r.Title, r.SourceID),
-			Value: r,
-		})
-	}
-	title := "Выберите провайдера: " + BestDisplayTitle(group)
-	return &searchSource{
-		deps:   deps,
-		group:  stable,
-		list:   NewPinList(NewMenu(title, "", choices...), defaultListHeight),
-		resume: resume,
-	}
+	return stable
 }
 
-// ID implements Screen.
-func (s *searchSource) ID() string { return searchSourceID }
-
-// Init implements Screen.
-func (s *searchSource) Init() tea.Cmd { return nil }
-
-// Update implements Screen.
-func (s *searchSource) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	key, ok := msg.(tea.KeyPressMsg)
-	if !ok {
-		return s, nil
+// stablePrimary is the deterministic primary of a checked group: the
+// sorted-first result.
+func stablePrimary(group []contracts.SearchResult) contracts.SearchResult {
+	stable := stableGroup(group)
+	if len(stable) == 0 {
+		return contracts.SearchResult{}
 	}
-	if IsCancelKey(key) {
-		return s, pop()
-	}
-	if s.list.HandleKey(key) {
-		return s, nil
-	}
-	resolved := ResolveKey(s.list.Menu(), s.list.Cursor(), key)
-	if resolved == nil {
-		return s, nil
-	}
-	primary, ok := resolved.(contracts.SearchResult)
-	if !ok {
-		return s, pop()
-	}
-	if s.resume != nil {
-		// Catalog flow (PR31): the explicit pick overrides the
-		// record's saved binding — the user chose which provider to
-		// use for this session, the record restores episode/dubs.
-		return s, replace(newResumedSession(s.deps, primary, s.group, *s.resume))
-	}
-	return s, replace(NewSessionScreen(s.deps, primary, s.group))
-}
-
-// View implements Screen: the padded source-picker title above the
-// list (PR24).
-func (s *searchSource) View() tea.View {
-	return tea.NewView(theme.Title.Render(s.list.Menu().Title) + "\n\n" + s.list.Render())
+	return stable[0]
 }
 
 // padDisplay right-pads s with spaces to the given display width,

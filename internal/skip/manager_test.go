@@ -181,8 +181,8 @@ func introChaptersJSON(intervals ...Interval) string {
 
 func foundPayload() string {
 	return `{"found":true,"results":[
-		{"interval":{"start_time":0,"end_time":90},"skip_type":"op","episode_length":1440},
-		{"interval":{"start_time":1300,"end_time":1400},"skip_type":"ed","episode_length":1440}
+		{"interval":{"startTime":0,"endTime":90},"skipType":"op","episodeLength":1440},
+		{"interval":{"startTime":1300,"endTime":1400},"skipType":"ed","episodeLength":1440}
 	]}`
 }
 
@@ -205,7 +205,7 @@ func TestManagerResolveMergesAPIProviders(t *testing.T) {
 	// The anime_skip collector only emits op/ed (neutral inference), so
 	// a complementary ED exercises the real cross-provider merge.
 	f := newManagerFixture(t, cfg,
-		`{"found":true,"results":[{"interval":{"start_time":0,"end_time":90},"skip_type":"op","episode_length":1440}]}`,
+		`{"found":true,"results":[{"interval":{"startTime":0,"endTime":90},"skipType":"op","episodeLength":1440}]}`,
 		`{"data":{"episodeByMalId":{"timestamps":[{"skipType":"ED","startTime":1300,"endTime":1400}]}}}`)
 
 	bundle, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
@@ -413,6 +413,39 @@ func TestManagerResolveAllCleanEmpty(t *testing.T) {
 	}
 	if bundle.Details != "no_provider_result" {
 		t.Errorf("Details = %q, want no_provider_result", bundle.Details)
+	}
+}
+
+// TestManagerResolveBundleCarriesIntervals (PR61): the bundle exposes
+// the merged intervals so the playback surface can render the
+// «⏭ скипы: …» status note with real ranges.
+func TestManagerResolveBundleCarriesIntervals(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Skip{ProvidersOrder: []string{"aniskip", "anime_skip", "intro_skipper"},
+		AnimeSkipEnabled: true, IntroSkipperEnabled: true}
+	f := newManagerFixture(t, cfg,
+		`{"found":true,"results":[{"interval":{"startTime":0,"endTime":90},"skipType":"op","episodeLength":1440}]}`,
+		`{"data":{"episodeByMalId":{"timestamps":[{"skipType":"ED","startTime":1300,"endTime":1400}]}}}`)
+
+	bundle, err := f.m.Resolve(context.Background(), ResolveRequest{ShikimoriID: 21, EpisodeNum: 2})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(bundle.Intervals) != 2 {
+		t.Fatalf("Intervals = %+v, want 2 merged entries", bundle.Intervals)
+	}
+	byType := map[string]Interval{}
+	for _, iv := range bundle.Intervals {
+		byType[iv.SkipType] = iv
+	}
+	op, ok := byType["op"]
+	if !ok || op.StartTime != 0 || op.EndTime != 90 {
+		t.Errorf("op interval = %+v, want 0–90", op)
+	}
+	ed, ok := byType["ed"]
+	if !ok || ed.StartTime != 1300 || ed.EndTime != 1400 {
+		t.Errorf("ed interval = %+v, want 1300–1400", ed)
 	}
 }
 

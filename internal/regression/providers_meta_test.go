@@ -25,7 +25,8 @@ import (
 // tokyotosho; animedia (PR56, the amd.online DLE site) joined after
 // anime365; shiza (PR57, the shizaproject.com GraphQL catalog)
 // joined after animedia; kickassanime (PR58, the kaa.lt JSON API)
-// joined after shiza.
+// joined after shiza; anizone (PR59, the sub-only anizone.to
+// source) joined after kickassanime — the roster is frozen at 21.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -47,6 +48,7 @@ var expectedProviderOrder = []string{
 	"animedia",
 	"shiza",
 	"kickassanime",
+	"anizone",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

@@ -12,7 +12,9 @@ Fixtures marked **[LIVE-VERIFIED …]** diverge from that rule on
 purpose: they are derived from real network captures of the marked day
 (2026-09-13 for the allanime crypto wave, 2026-09-17 for the torrent
 providers, 2026-09-18 for the third revival wave — animevost,
-sameband, animego.me, animepahe.pw, gogoanime → Anitaku, dreamcast;
+sameband, animego.me, animepahe.pw, gogoanime → Anitaku, dreamcast —
+and the anizone wave, PR59, which has no Python original at all and is
+pinned against the Anivexa-API recipe instead;
 page chrome trimmed, values verbatim) because the live site drifted
 away from the frozen Python shapes — see the per-fixture notes.
 
@@ -83,3 +85,9 @@ the same change.
 | `anime365_translations.json` | **[LIVE-VERIFIED 2026-09-18]** derived from `GET /api/translations?seriesId=35439&episodeId=342089&limit=50`, per-entry fields trimmed to the consumed set (PR55). Eight real rows (raw + voiceRu teams incl. the AniLibria BD/TV collision + subRu pairs) plus two modeled: an inactive voice (dead dub → hidden) and a voice with empty `authorsList` (the "Озвучка" name fallback). |
 | `anime365_embed.json` | **[MODELED — token-gated, disclosed]** constructed on the documented `/api/translations/embed/{id}` payload: the wrapper's `EmbedTranslation` type (types.ts:122-140) + the official OpenAPI spec (PR55). No real capture was possible without an access token with an active subscription. `stream[]` rows (height → urls[]) feed the quality keys, `download[]` fills missing qualities; `subtitlesUrl` may be relative (documented API quirk) and is not consumed. |
 | `anime365_error.json` | **[LIVE-VERIFIED 2026-09-18]** verbatim body of the tokenless embed request (`GET /api/translation/5964785/embed` → HTTP 404, `{"error":{"code":404}}`), pinning the API error convention: the `error` object can ride ANY status (documented HTTP-200 errors included) and the body's `code` maps onto the sentinel taxonomy. |
+| `anizone_search.html` | **[LIVE-VERIFIED 2026-09-18]** verbatim `items: JSON.parse('…')` payload + csrf meta of `GET https://anizone.to/anime?search=black lagoon` (3 hits, hash slugs like `a8vfumal`; page chrome trimmed). Not a Python-port fixture — the provider is written from the Anivexa-API AniZone recipe (PR59); the payload drives the JS-string-literal decoder (double-escaped `\\u041F` cyrillic titles verbatim). |
+| `anizone_series.html` | **[LIVE-VERIFIED 2026-09-18]** payload, `pages.anime-detail` wire:snapshot and `hasMore: false` of `GET /anime/a8vfumal` (Black Lagoon): twelve numeric episodes plus four specials (`s1…s4` — the drop rule), `videos_count` has-sub gate, `title_list` pick order. |
+| `anizone_series_paged.html` | **[LIVE-VERIFIED 2026-09-18]** page one of `GET /anime/uyyyn4kf` (One Piece, 1184 episodes): `hasMore: true`, verbatim `nextCursor`, wire:snapshot and csrf — the continuation request state. |
+| `anizone_livewire_page2.json` | **[LIVE-VERIFIED 2026-09-18]** verbatim `POST /livewire/update` response (snapshot + `loadPage(cursor)` call in, `items-loaded` dispatch with items 25–48 + next `nextCursor`/`hasMore` out; `effects.html`/`returns` trimmed — not consumed). Captured live across three chained pages of the One Piece walk. |
+| `anizone_watch.html` | **[LIVE-VERIFIED 2026-09-18]** the `vidstackPlayer(JSON.parse('…'))` payload of `GET /anime/a8vfumal/1`: HLS master src (raw double-escaped `\\\/…` — the normalizeUrl pass), five subtitle sidecars and storyboard/chapter tracks (sidecars not consumed — no MediaStream slot). |
+| `anizone_master.m3u8` | **[LIVE-VERIFIED 2026-09-18]** the verbatim master playlist from the watch payload: 360/720/1080 h264 variants over ja/en audio groups (ja default) — the aaParseMasterPlaylist split input. |

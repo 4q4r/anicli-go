@@ -29,7 +29,10 @@ var dreamcastPlayerjsRe = regexp.MustCompile(`new Playerjs\("(.*?)"\)`)
 
 // dreamcastCryptKeyRe extracts the crypto key from the unpacked playerjs
 // (dreamcast.py:133): the raw file bytes carry a backslash before the
-// opening quote and backslashes after the final '='.
+// opening quote and backslashes after the final '='. Re-verified against
+// the LIVE library 2026-09-18: Playerjs 20.7.1 ships the byte-identical
+// escaped-quote shape (u:\'#1…=\\\'), so the frozen pattern still pins
+// the baked-in key of dreamerscast.com's /js/playerjs.min.js.
 var dreamcastCryptKeyRe = regexp.MustCompile(`u:\s*\\\s*['"]([^=]+=[\\]+)\s*['"]`)
 
 // unpack helpers mirror the Python packer regexp set (dreamcast.py:151,
@@ -56,6 +59,20 @@ const dreamcastOY = "xx???x=xx?x??="
 // form-POST JSON search, and episodes decoded out of an obfuscated
 // Playerjs playlist (packer + salt/pepper crypto chain, ported verbatim
 // below).
+//
+// Revived live 2026-09-18 (PR51) against the rebranded site's own
+// domain (dreamerscast.com — the base the Python original already
+// carried). The 20.7.1 library ships the SAME key shape and crypto
+// constants; what changed is behavioral and typed here:
+//   - the player blob marker is "#2" (the library's junk-strip path;
+//     the decode math is marker-agnostic after the 2-char strip);
+//   - film releases carry a single-string playlist file (one episode);
+//   - license-blocked releases carry a …/dash/block,… string file — a
+//     typed ErrGeoBlocked, not a silent [];
+//   - decode/markup failures are typed ErrExtractFailed: the frozen
+//     Python-parity silence masked the whole site drift until the
+//     provider looked dead (task ruling, PR51);
+//   - stream links keep the site Referer (task ruling, PR5).
 type DreamCast struct {
 	Base
 }
@@ -83,17 +100,26 @@ type dreamcastSearch struct {
 	} `json:"releases"`
 }
 
-// dreamcastPlaylist mirrors the fields consumed by dreamcast.py:79-85.
+// dreamcastPlaylist mirrors the playlist envelope: `file` is an episode
+// array for series and a single URL string for films and the
+// license-blocked placeholder (both shapes are live — see the fixtures),
+// so it stays raw until GetEpisodes interprets it.
 type dreamcastPlaylist struct {
-	File []struct {
-		Title *string `json:"title"`
-		File  string  `json:"file"`
-	} `json:"file"`
+	Label string          `json:"label"`
+	File  json.RawMessage `json:"file"`
+}
+
+// dreamcastPlaylistEntry is one series episode of the playlist
+// (dreamcast.py:79-85).
+type dreamcastPlaylistEntry struct {
+	Title *string `json:"title"`
+	File  string  `json:"file"`
 }
 
 // Search POSTs the filter form to the site root (anicli-py
-// dreamcast.py:25-48). Python wraps only json.loads in a bare except:
-// transport errors stay loud, decode failures return [].
+// dreamcast.py:25-48). Divergence from Python (task ruling, PR51): a
+// non-JSON answer is protocol drift and fails typed — the Python bare
+// except returned [], which masked site drift as an empty catalog.
 func (p *DreamCast) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	form := url.Values{}
 	form.Set("search", query)
@@ -114,7 +140,8 @@ func (p *DreamCast) Search(ctx context.Context, query string) ([]contracts.Searc
 
 	var data dreamcastSearch
 	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		return []contracts.SearchResult{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
+			fmt.Errorf("decode search response (%w): %w", contracts.ErrExtractFailed, jsonErr))
 	}
 
 	results := make([]contracts.SearchResult, 0, len(data.Releases))
@@ -135,11 +162,12 @@ func (p *DreamCast) Search(ctx context.Context, query string) ([]contracts.Searc
 }
 
 // GetEpisodes decodes the obfuscated Playerjs playlist of the anime page
-// (port of dreamcast.py:50-88). The anime page carries the encoded blob
-// plus the /js/playerjs script URL; the script holds the salt key the
-// decoder needs. Any decode failure yields no episodes (the Python
-// whole-flow except-block), while page and script fetches stay loud
-// (both requests sit outside the Python try).
+// (port of dreamcast.py:50-88). The page carries the "#2"-marked blob
+// plus the /js/playerjs script URL; the library holds the baked-in key
+// the decoder needs. Divergence from Python (task ruling, PR51): every
+// silent-empty path is typed — missing markers and decode failures are
+// ErrExtractFailed, the license-blocked placeholder playlist is
+// ErrGeoBlocked, film releases surface as ONE episode.
 func (p *DreamCast) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method: "GET",
@@ -170,7 +198,8 @@ func (p *DreamCast) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 	})
 
 	if jsEncoded == "" || playerJSURL == "" {
-		return []contracts.Episode{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("no Playerjs blob or player script on the page: %w", contracts.ErrExtractFailed))
 	}
 	if !strings.HasPrefix(playerJSURL, "http") {
 		playerJSURL = p.baseURL + playerJSURL
@@ -187,19 +216,54 @@ func (p *DreamCast) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 
 	playlist, err := decodePlaylist(string(jsResp.Body), jsEncoded)
 	if err != nil {
-		// Python _decode_playlist swallows every exception and the
-		// caller swallows the empty result (dreamcast.py:75-88, 124-125).
-		return []contracts.Episode{}, nil
+		// Python _decode_playlist swallowed every exception into an
+		// empty playlist (dreamcast.py:75-88, 124-125) — the silence
+		// that hid the 2026 drift. Typed now.
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, jsResp.StatusCode,
+			fmt.Errorf("decode playlist (%w): %w", contracts.ErrExtractFailed, err))
 	}
 
-	episodes := make([]contracts.Episode, 0, len(playlist.File))
-	for i, item := range playlist.File {
+	// Interpret the playlist `file` shape (live behavior):
+	//   array  → the series episode list;
+	//   string → ONE film episode, unless it is the license-blocked
+	//            placeholder (…/dash/block,… or label "<id>-block").
+	var entries []dreamcastPlaylistEntry
+	if err := json.Unmarshal(playlist.File, &entries); err == nil {
+		return p.episodesFromEntries(entries), nil
+	}
+	var single string
+	if serr := json.Unmarshal(playlist.File, &single); serr != nil {
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, jsResp.StatusCode,
+			fmt.Errorf("playlist file: neither episode array nor string url: %w", contracts.ErrExtractFailed))
+	}
+	if dreamcastIsBlocked(playlist.Label, single) {
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, jsResp.StatusCode, contracts.ErrGeoBlocked)
+	}
+	return p.episodesFromEntries([]dreamcastPlaylistEntry{{File: single}}), nil
+}
+
+// dreamcastIsBlocked reports the license-blocked placeholder playlist:
+// the site serves a single string file pointing at a /dash/block,/
+// rendition labelled "<id>-block" (live: release 111 Bleach TYBW).
+func dreamcastIsBlocked(label, file string) bool {
+	return strings.Contains(file, "/block,") || strings.HasSuffix(label, "-block")
+}
+
+// episodesFromEntries maps playlist entries to contracts episodes
+// (dreamcast.py:92-99): 1-based num and index default titles, the raw
+// file string carried verbatim for ResolveStream. A missing title on a
+// single-entry playlist renders the kodik-movie convention "Фильм".
+func (p *DreamCast) episodesFromEntries(entries []dreamcastPlaylistEntry) []contracts.Episode {
+	episodes := make([]contracts.Episode, 0, len(entries))
+	for i, item := range entries {
 		// Python enumerate(..., 1): 1-based num, default title uses the
 		// 1-based index too.
 		num := strconv.Itoa(i + 1)
 		title := fmt.Sprintf("Episode %d", i+1)
 		if item.Title != nil {
 			title = *item.Title
+		} else if len(entries) == 1 {
+			title = "Фильм"
 		}
 		episodes = append(episodes, contracts.Episode{
 			Num:   num,
@@ -210,16 +274,20 @@ func (p *DreamCast) GetEpisodes(ctx context.Context, animeURL string) ([]contrac
 			},
 		})
 	}
-	return episodes, nil
+	return episodes
 }
 
-// ResolveStream splits the episode file field on commas/spaces and keeps
-// http(s) media URLs ending in .m3u8 or .mpd (port of dreamcast.py:90-99):
-// one 1080 slot, the last match winning.
+// ResolveStream splits the episode file field and keeps http(s) media
+// URLs ending in .m3u8 or .mpd (port of dreamcast.py:90-99): one 1080
+// slot, the last match winning.
 //
-// Divergence from Python (task ruling, PR5): the resolved VideoSource
-// carries the site root as its Referer so mpv can play the CDN link; the
-// Python original left stream headers empty.
+// Divergences (task rulings): the resolved VideoSource carries the site
+// root as its Referer so mpv can play the CDN link (PR5; the Python
+// original left stream headers empty), and trailing separators are
+// trimmed per token — the live playlist joins the dash/hls manifests
+// with " or " and the vod URLs THEMSELVES carry commas (the
+// _,1080,720,low, quality path), so the Python blanket comma-split
+// destroyed every live link.
 func (p *DreamCast) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		DubName: dubID,
@@ -231,18 +299,32 @@ func (p *DreamCast) ResolveStream(_ context.Context, episode contracts.Episode, 
 		return stream, nil
 	}
 
-	for _, u := range strings.Fields(strings.ReplaceAll(embeds[0], ",", " ")) {
-		if strings.HasPrefix(u, "http") &&
-			(strings.HasSuffix(u, ".m3u8") || strings.HasSuffix(u, ".mpd")) {
-			stream.Links["1080"] = contracts.VideoSource{
-				URL:     u,
-				Quality: "1080",
-				Headers: map[string]string{"Referer": p.baseURL},
+	// The live playlist joins the dash/hls manifests with " or "; each
+	// part is whitespace-tokenized, trailing separators trimmed (the
+	// legacy ", "-joined lists), URLs kept verbatim — their quality
+	// path carries meaningful commas (…_,1080,720,low,aac,.mp4.urlset).
+	for _, part := range strings.Split(embeds[0], " or ") {
+		for _, u := range strings.Fields(part) {
+			u = strings.TrimRight(u, ",")
+			if strings.HasPrefix(u, "http") &&
+				(strings.HasSuffix(u, ".m3u8") || strings.HasSuffix(u, ".mpd")) {
+				stream.Links["1080"] = contracts.VideoSource{
+					URL:     u,
+					Quality: "1080",
+					Headers: map[string]string{"Referer": p.baseURL},
+				}
 			}
 		}
 	}
 	return stream, nil
 }
+
+// SmokeQuery reports the provider-specific live smoke probe (PR51):
+// the catalog is the team's OWN dubs under strict prefix search, so
+// the shared probes (черная лагуна / black lagoon) never surface.
+// "мао" is a stable single-hit release — and deliberately NOT the
+// catalog's top «блич» hit (Bleach TYBW), which is license-blocked.
+func (p *DreamCast) SmokeQuery() string { return "мао" }
 
 // decodePlaylist ports _decode_playlist (dreamcast.py:101-125): unpack
 // the playerjs, decode the salt key JSON, strip the bk0-bk4 junk parts

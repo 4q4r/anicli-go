@@ -1,4 +1,45 @@
 [
-  {"title": "Серия 1", "file": "[1080p]/hls/1/1080/index.m3u8,[720p]/hls/1/720/index.m3u8"},
-  {"file": "[1080p]/hls/2/1080/index.m3u8,[720p]/hls/2/720/index.m3u8"}
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 01_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>39:29</div>Серия 01",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 01_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 02_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>33:33</div>Серия 02",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 02_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 02_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 02_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 02_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 03_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>30:51</div>Серия 03",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 03_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 03_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 03_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 03_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 04_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>39:27</div>Серия 04",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 04_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 04_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 04_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 04_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 05_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>32:38</div>Серия 05",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 05_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 05_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 05_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 05_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 06_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>38:52</div>Серия 06",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 06_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 06_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 06_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 06_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 07_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>37:09</div>Серия 07",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 07_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 07_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 07_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 07_RUS.txt"
+  },
+  {
+    "title": "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 08_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>34:15</div>Серия 08",
+    "file": "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 08_RUS_2/index.m3u8,[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 08_RUS_1/index.m3u8,[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 08_RUS_0/index.m3u8",
+    "thumbnails": "/v/anime/Devil May Cry S02/thumbnails/Devil May Cry S02 - 08_RUS.txt"
+  },
+  {
+    "file": "[720p]/v/anime/modeled/no-title/index.m3u8"
+  }
 ]

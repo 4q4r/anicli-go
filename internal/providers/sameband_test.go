@@ -2,22 +2,27 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// [LIVE-VERIFIED 2026-09-13] The DLE POST search (do=search&subaction=search
-// &story=…) returns 200 with an EMPTY fastsearch_results shell — the site's
-// search is AJAX-only now. Search therefore GETs the /anime catalog (94
-// entries, no pagination, HTTP 200) and filters client-side.
+// [LIVE-VERIFIED 2026-09-18] The DLE POST search is ALIVE: POST
+// /index.php?do=search with the do/subaction/story form renders real
+// shortstory results server-side (live: 2 cards for the fixture query,
+// junk query → 0 cards, HTTP 200, Referer not required). Search posts
+// the same form the Python original sends (sameband.py:23-46) and
+// parses the identical .col-auto card template — no client-side
+// filtering (the server already matched the query).
 func TestSameBandSearch(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
+		_, _ = w.Write(fixture(t, "sameband_search.html"))
 	})
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
@@ -26,80 +31,94 @@ func TestSameBandSearch(t *testing.T) {
 		t.Fatalf("Search: %v", err)
 	}
 
-	if rec.Method != "GET" {
-		t.Errorf("request method = %q, want GET (catalog fetch)", rec.Method)
+	if rec.Method != "POST" {
+		t.Errorf("request method = %q, want POST (DLE search form, sameband.py:30)", rec.Method)
 	}
-	if rec.Path != "/anime" {
-		t.Errorf("request path = %q, want /anime", rec.Path)
+	if rec.Path != "/index.php" || rec.Query != "do=search" {
+		t.Errorf("request target = %q?%q, want /index.php?do=search", rec.Path, rec.Query)
+	}
+	if got := rec.Form["do"]; len(got) != 1 || got[0] != "search" {
+		t.Errorf("do form field = %q, want search", got)
+	}
+	if got := rec.Form["subaction"]; len(got) != 1 || got[0] != "search" {
+		t.Errorf("subaction form field = %q, want search", got)
+	}
+	if got := rec.Form["story"]; len(got) != 1 || got[0] != "дьявол" {
+		t.Errorf("story form field = %q, want the raw query", got)
+	}
+	if ct := rec.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want the form encoding", ct)
 	}
 
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1 catalog match", len(results))
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want the 2 captured cards", len(results))
 	}
-	if results[0].Title != "Дьявол Может Плакать 2" {
+	if results[0].Title != "Дьявол Может Плакать" {
 		t.Errorf("Title = %q, want the .poster[title] attribute", results[0].Title)
 	}
-	// The absolute catalog href is kept verbatim (sameband.py:42 quirk).
-	if results[0].URL != "https://sameband.studio/anime/122-djavol-mozhet-plakat-2.html" {
-		t.Errorf("URL = %q, want the absolute href", results[0].URL)
+	if results[1].URL != "https://sameband.studio/anime/122-djavol-mozhet-plakat-2.html" {
+		t.Errorf("URL = %q, want the absolute href", results[1].URL)
 	}
 	// The poster src is always prefixed with the site root, even when
 	// already absolute — sameband.py:44 quirk preserved.
-	if results[0].Poster != srv.URL+"/v/posters/IMG_26306.webp" {
+	if results[0].Poster != srv.URL+"/v/posters/IMG_26210.webp" {
 		t.Errorf("Poster = %q, want base-prefixed relative src", results[0].Poster)
 	}
 }
 
-func TestSameBandSearchFiltersCaseInsensitively(t *testing.T) {
+func TestSameBandSearchNoResultsIsEmpty(t *testing.T) {
 	t.Parallel()
 
+	// A junk query answers the same results shell with zero cards
+	// (verified live 2026-09-18: story=лагуна → 0 cards, HTTP 200).
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
+		_, _ = fmt.Fprint(w, `<html><body><div id="dle-content"></div></body></html>`)
 	})
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
-	results, err := p.Search(context.Background(), "ИСТОРИЯ")
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2 case-insensitive matches", len(results))
-	}
-	if results[0].Title != "История о перекуре за супермаркетом" {
-		t.Errorf("Title = %q", results[0].Title)
-	}
-	if results[1].Title != "История электричества в двадцатом веке" {
-		t.Errorf("Title = %q", results[1].Title)
-	}
-}
-
-func TestSameBandSearchNoCatalogMatchIsEmpty(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture(t, "sameband_catalog.html"))
-	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
-
-	results, err := p.Search(context.Background(), "naruto")
+	results, err := p.Search(context.Background(), "лагуна")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if len(results) != 0 {
-		t.Errorf("results = %d, want 0 for a query absent from the catalog", len(results))
+		t.Errorf("results = %d, want 0", len(results))
 	}
 }
 
+// The netclient maps a 403 (WAF wall) onto the typed sentinel before
+// the provider sees it.
+func TestSameBandSearchProvider403(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	})
+	p := newSameBand(srv.URL, testClient(t, "sameband"))
+
+	_, err := p.Search(context.Background(), "дьявол")
+	if !errors.Is(err, contracts.ErrProvider403) {
+		t.Fatalf("err = %v, want ErrProvider403", err)
+	}
+}
+
+// [LIVE-VERIFIED 2026-09-18] Full chain against the real capture paths:
+// anime page → /v/play/Devil_May_Cry_S02.html player (its Playerjs
+// bootstrap sits inside a Cloudflare Rocket Loader retyped script tag)
+// → /v/list/Devil May Cry S02_list.txt playlist — the playlist URL
+// carries RAW SPACES and must be fetched percent-encoded (the httptest
+// route only matches when the client escaped them). The real playlist
+// titles are HTML blobs (poster/duration markup); they are kept raw
+// like the Python original (sameband.py:77).
 func TestSameBandGetEpisodes(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/anime/van-pis":
+		case "/anime/122-djavol-mozhet-plakat-2.html":
 			_, _ = w.Write(fixture(t, "sameband_anime.html"))
-		case "/player/123":
-			_, _ = fmt.Fprint(w, `var p = new Playerjs({id:"container", file:"/playlist/123.json"});`)
-		case "/playlist/123.json":
+		case "/v/play/Devil_May_Cry_S02.html":
+			_, _ = w.Write(fixture(t, "sameband_player.html"))
+		case "/v/list/Devil May Cry S02_list.txt":
 			_, _ = w.Write(fixture(t, "sameband_playlist.json"))
 		default:
 			http.NotFound(w, r)
@@ -107,31 +126,40 @@ func TestSameBandGetEpisodes(t *testing.T) {
 	})
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
-	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/van-pis")
+	episodes, err := p.GetEpisodes(context.Background(),
+		srv.URL+"/anime/122-djavol-mozhet-plakat-2.html")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	if len(episodes) != 2 {
-		t.Fatalf("episodes = %d, want 2", len(episodes))
+	if len(episodes) != 9 {
+		t.Fatalf("episodes = %d, want 8 captured + 1 modeled", len(episodes))
 	}
-	if episodes[0].Num != "1" || episodes[1].Num != "2" {
-		t.Errorf("nums = %q/%q, want 1/2", episodes[0].Num, episodes[1].Num)
+	first := episodes[0]
+	if first.Num != "1" || first.RawID != "1" {
+		t.Errorf("Num/RawID = %q/%q, want 1/1", first.Num, first.RawID)
 	}
-	if episodes[0].Title != "Серия 1" {
-		t.Errorf("Title = %q, want the playlist entry title", episodes[0].Title)
+	wantTitle := "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 01_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>39:29</div>Серия 01"
+	if first.Title != wantTitle {
+		t.Errorf("Title = %q, want the raw playlist title (kept like Python)", first.Title)
 	}
-	// Python item.get("title", f"Episode {i}") — missing key falls back.
-	if episodes[1].Title != "Episode 2" {
-		t.Errorf("Title = %q, want the index fallback", episodes[1].Title)
-	}
-	raw := episodes[0].RawEmbeds["SameBand"]
-	if len(raw) != 1 || raw[0] != "[1080p]/hls/1/1080/index.m3u8,[720p]/hls/1/720/index.m3u8" {
+	wantFile := "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8," +
+		"[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_1/index.m3u8," +
+		"[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8"
+	raw := first.RawEmbeds["SameBand"]
+	if len(raw) != 1 || raw[0] != wantFile {
 		t.Errorf("RawEmbeds = %v, want the raw quality-prefixed file string", raw)
+	}
+	// Python item.get("title", f"Episode {i}") — the modeled trailing
+	// entry has no title and falls back to the 1-based index.
+	if episodes[8].Title != "Episode 9" || episodes[8].Num != "9" {
+		t.Errorf("modeled entry = %q/%q, want the index fallback", episodes[8].Title, episodes[8].Num)
 	}
 }
 
-func TestSameBandGetEpisodesNoIframe(t *testing.T) {
+// Divergence from Python (task ruling, PR47): a missing player iframe
+// is a typed NotFound, not a silent empty result.
+func TestSameBandGetEpisodesNoIframeTyped(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -140,18 +168,41 @@ func TestSameBandGetEpisodesNoIframe(t *testing.T) {
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/none")
-	if err != nil {
-		t.Fatalf("GetEpisodes: %v", err)
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
-	if len(episodes) != 0 {
-		t.Errorf("episodes = %d, want 0 without the iframe (sameband.py:53)", len(episodes))
+	if episodes != nil {
+		t.Errorf("episodes = %v, want nil alongside the error", episodes)
 	}
 }
 
-// Python wraps only json.loads of the playlist in a bare except
-// (sameband.py:68-71): a non-JSON playlist yields no episodes while the
-// page and player fetches stay loud.
-func TestSameBandGetEpisodesPlaylistDecodeSilent(t *testing.T) {
+// Divergence from Python (task ruling, PR47): a player page without a
+// Playerjs file field is a typed ExtractFailed, not a silent empty.
+func TestSameBandGetEpisodesPlayerWithoutFileTyped(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/anime/x":
+			_, _ = fmt.Fprint(w, `<div class="player"><div class="player-content"><iframe src="/player/9"></iframe></div></div>`)
+		case "/player/9":
+			_, _ = fmt.Fprint(w, `Playerjs({id:"player"})`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	p := newSameBand(srv.URL, testClient(t, "sameband"))
+
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want ErrExtractFailed", err)
+	}
+}
+
+// Divergence from Python (task ruling, PR47): a non-JSON playlist is a
+// typed ExtractFailed — the Python bare except (sameband.py:68-71) hid
+// exactly this breakage during the 2026-09 outage.
+func TestSameBandGetEpisodesPlaylistDecodeTyped(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -168,24 +219,28 @@ func TestSameBandGetEpisodesPlaylistDecodeSilent(t *testing.T) {
 	})
 	p := newSameBand(srv.URL, testClient(t, "sameband"))
 
-	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
-	if err != nil {
-		t.Fatalf("GetEpisodes: %v, want silent empty", err)
-	}
-	if len(episodes) != 0 {
-		t.Errorf("episodes = %d, want 0", len(episodes))
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want ErrExtractFailed", err)
 	}
 }
 
+// ResolveStream splits the raw file field on commas and maps each
+// "[NNNp]<url>" part (port of sameband.py:83-96) — asserted against the
+// real captured file string: three qualities, relative paths
+// base-prefixed verbatim (raw spaces preserved like Python).
 func TestSameBandResolveStream(t *testing.T) {
 	t.Parallel()
 
 	p := newSameBand("https://sameband.studio", testClient(t, "sameband"))
+	file := "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8," +
+		"[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_1/index.m3u8," +
+		"[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8"
 	episode := contracts.Episode{
 		Num:   "1",
 		RawID: "1",
 		RawEmbeds: map[string][]string{
-			"SameBand": {"[1080p]/hls/1/1080/index.m3u8,[720p]https://cdn.sameband.example/hls/1/720/index.m3u8,junk"},
+			"SameBand": {file},
 		},
 	}
 
@@ -193,27 +248,27 @@ func TestSameBandResolveStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
-	if len(stream.Links) != 2 {
-		t.Fatalf("Links = %v, want 1080 and 720", stream.Links)
+	if len(stream.Links) != 3 {
+		t.Fatalf("Links = %v, want 480/720/1080", stream.Links)
 	}
-	src1080, ok := stream.Links["1080"]
+	src480, ok := stream.Links["480"]
 	if !ok {
-		t.Fatalf("Links = %v, want a 1080 entry", stream.Links)
+		t.Fatalf("Links = %v, want a 480 entry", stream.Links)
 	}
-	if src1080.URL != "https://sameband.studio/hls/1/1080/index.m3u8" {
-		t.Errorf("URL = %q, want the base-prefixed relative path", src1080.URL)
+	if src480.URL != "https://sameband.studio/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8" {
+		t.Errorf("URL = %q, want the base-prefixed relative path", src480.URL)
 	}
-	if src1080.Type != "m3u8" {
-		t.Errorf("Type = %q, want m3u8 (sameband.py:95)", src1080.Type)
+	if src480.Type != "m3u8" {
+		t.Errorf("Type = %q, want m3u8 (sameband.py:95)", src480.Type)
 	}
 	// Task ruling (PR5): direct site media carries the Referer for mpv;
 	// the Python original left stream headers empty.
-	if src1080.Headers["Referer"] != "https://sameband.studio" {
-		t.Errorf("Referer = %q, want the site root", src1080.Headers["Referer"])
+	if src480.Headers["Referer"] != "https://sameband.studio" {
+		t.Errorf("Referer = %q, want the site root", src480.Headers["Referer"])
 	}
-	src720 := stream.Links["720"]
-	if src720.URL != "https://cdn.sameband.example/hls/1/720/index.m3u8" {
-		t.Errorf("URL = %q, want the absolute href untouched", src720.URL)
+	src1080 := stream.Links["1080"]
+	if src1080.URL != "https://sameband.studio/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8" {
+		t.Errorf("1080 URL = %q", src1080.URL)
 	}
 	if stream.DubName != "SameBand" {
 		t.Errorf("DubName = %q", stream.DubName)

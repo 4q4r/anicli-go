@@ -1,11 +1,25 @@
 package providers
 
+// Fixture provenance: animevost_search.json, animevost_playlist.json,
+// animevost_search_miss.json and animevost_playlist_error.json are
+// VERBATIM live captures from api.animevost.org taken on 2026-09-18:
+//
+//	POST /v1/search  name=black%20lagoon            -> 200 (3 entries)
+//	POST /v1/playlist id=326                        -> 200 (12 entries)
+//	POST /v1/search  name=<phrase with no match>    -> 404 {"error":"Ничего не найдено"}
+//	POST /v1/playlist id=999999                     -> 200 {"status":"fail","error":"Тайтл с таким id не найден"}
+//
+// The 2026-09-18 search envelope is {"state":{...},"data":[...]}; the
+// state.count field is stale metadata (it stays 0 while data carries
+// hits) and is deliberately not consulted.
+
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -18,81 +32,100 @@ func TestAnimevostSearch(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "animevost_search.json"))
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
-	results, err := p.Search(context.Background(), "bibop")
+	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 
 	// Search is a POST with form field name=<query> (anicli-py
-	// animevost.py:20-22: data={"name": query}; the PR brief's "q=" is a
-	// shorthand, the Python param is ported verbatim).
+	// animevost.py:20-22), answered by the live 2026-09-18 API.
 	if rec.Method != "POST" {
 		t.Errorf("request method = %q, want POST", rec.Method)
 	}
 	if rec.Path != "/search" {
 		t.Errorf("request path = %q", rec.Path)
 	}
-	if got := rec.Form["name"]; len(got) != 1 || got[0] != "bibop" {
-		t.Errorf("form name = %v, want [bibop]", got)
+	if got := rec.Form["name"]; len(got) != 1 || got[0] != "black lagoon" {
+		t.Errorf("form name = %v, want [black lagoon]", got)
+	}
+	// The API is transport-fingerprint sensitive (see animevost.go):
+	// requests must keep browser-grade headers.
+	if rec.Header.Get("User-Agent") == "" {
+		t.Error("User-Agent header is empty, want a browser-grade UA")
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2", len(results))
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want 3", len(results))
 	}
-	if results[0].Title != "Ковбой Бибоп" {
-		t.Errorf("Title = %q", results[0].Title)
+	first := results[0]
+	if first.Title != "Пираты «Черной лагуны» / Black Lagoon [1-12 из 12]" {
+		t.Errorf("Title = %q", first.Title)
 	}
-	if results[0].URL != "7" {
-		t.Errorf("URL = %q, want str(id) = 7", results[0].URL)
+	if first.URL != "326" {
+		t.Errorf("URL = %q, want str(id) = 326", first.URL)
 	}
-	if results[0].SourceID != "animevost" {
-		t.Errorf("SourceID = %q", results[0].SourceID)
+	if first.SourceID != "animevost" {
+		t.Errorf("SourceID = %q", first.SourceID)
 	}
-	if results[1].Poster != "https://cdn.animevost.org/preview/re_zero.jpg" {
-		t.Errorf("Poster = %q", results[1].Poster)
+	if !strings.HasPrefix(first.Poster, "https://static.openni.ru/") {
+		t.Errorf("Poster = %q, want a static.openni.ru preview", first.Poster)
 	}
 }
 
-func TestAnimevostSearchMissingIDRendersNone(t *testing.T) {
+func TestAnimevostSearchMissIsTypedError(t *testing.T) {
 	t.Parallel()
 
-	// Python builds url=str(item.get("id")) (animevost.py:33): a missing
-	// id renders as "None", not "".
+	// A phrase with no index match is HTTP 404 + {"error":"Ничего не
+	// найдено"} on the live API: an explicit miss, never a silent empty
+	// list.
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, `{"data": [{"title": "Ghost Anime", "urlImagePreview": ""}]}`)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(fixture(t, "animevost_search_miss.json"))
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
-	results, err := p.Search(context.Background(), "ghost")
-	if err != nil {
-		t.Fatalf("Search: %v", err)
+	results, err := p.Search(context.Background(), "черная лагуна")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
 	}
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1", len(results))
+	if !strings.Contains(err.Error(), "Ничего не найдено") {
+		t.Errorf("error = %v, want the server's miss text carried through", err)
 	}
-	if results[0].URL != "None" {
-		t.Errorf("URL = %q, want None (str(None))", results[0].URL)
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) {
+		t.Fatalf("error = %T, want *contracts.ProviderError", err)
+	}
+	if perr.Op != contracts.OpSearch || perr.StatusCode != http.StatusNotFound {
+		t.Errorf("ProviderError = op %q status %d, want search/404", perr.Op, perr.StatusCode)
+	}
+	if results != nil {
+		t.Errorf("results = %#v, want nil alongside the error", results)
 	}
 }
 
-func TestAnimevostSearchMalformedJSONReturnsEmpty(t *testing.T) {
+func TestAnimevostSearchMalformedJSONIsTypedError(t *testing.T) {
 	t.Parallel()
 
-	// Python swallows decode errors on the search path (animevost.py:23-26:
-	// except Exception: return []); the port must match.
+	// The Python original swallowed decode errors (except Exception:
+	// return []); the revival surfaces them instead of faking an empty
+	// surface.
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html>not json</html>")
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
 	results, err := p.Search(context.Background(), "q")
-	if err != nil {
-		t.Fatalf("Search on malformed JSON = %v, want nil (Python returns [])", err)
+	if err == nil {
+		t.Fatal("error = nil, want a typed decode failure")
 	}
-	if len(results) != 0 {
-		t.Errorf("results = %d, want 0", len(results))
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) || perr.Op != contracts.OpSearch {
+		t.Fatalf("error = %v, want a ProviderError tagged search", err)
+	}
+	if results != nil {
+		t.Errorf("results = %#v, want nil alongside the error", results)
 	}
 }
 
@@ -102,17 +135,15 @@ func TestAnimevostSearchProvider403(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
 	_, err := p.Search(context.Background(), "q")
 	if !errors.Is(err, contracts.ErrProvider403) {
 		t.Fatalf("error = %v, want ErrProvider403", err)
 	}
-	// The operation tag must reach the ProviderError (netclient Do Op),
-	// not the generic "request".
 	var perr *contracts.ProviderError
 	if !errors.As(err, &perr) || perr.Op != contracts.OpSearch {
-		t.Errorf("ProviderError.Op = %q, want %q", perr.Op, contracts.OpSearch)
+		t.Fatalf("ProviderError.Op = %v, want %q", perr, contracts.OpSearch)
 	}
 }
 
@@ -123,39 +154,33 @@ func TestAnimevostGetEpisodes(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "animevost_playlist.json"))
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
-	episodes, err := p.GetEpisodes(context.Background(), "7")
+	episodes, err := p.GetEpisodes(context.Background(), "326")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 	if rec.Method != "POST" || rec.Path != "/playlist" {
 		t.Errorf("request = %s %s, want POST /playlist", rec.Method, rec.Path)
 	}
-	if got := rec.Form["id"]; len(got) != 1 || got[0] != "7" {
-		t.Errorf("form id = %v, want [7]", got)
+	if got := rec.Form["id"]; len(got) != 1 || got[0] != "326" {
+		t.Errorf("form id = %v, want [326]", got)
 	}
 
-	if len(episodes) != 3 {
-		t.Fatalf("episodes = %d, want 3", len(episodes))
+	// The live Black Lagoon (id 326) playlist: 12 episodes, every one
+	// carrying hd + std on video.animetop.info.
+	if len(episodes) != 12 {
+		t.Fatalf("episodes = %d, want 12", len(episodes))
 	}
-	// 1-based enumerate supplies num and raw_id; missing name falls back
-	// to the index string (animevost.py:51-52).
-	if episodes[0].Num != "1" || episodes[0].RawID != "1" {
-		t.Errorf("episode 1 Num/RawID = %q/%q", episodes[0].Num, episodes[0].RawID)
+	first := episodes[0]
+	if first.Num != "1" || first.RawID != "1" {
+		t.Errorf("episode 1 Num/RawID = %q/%q", first.Num, first.RawID)
 	}
-	if episodes[0].Title != "Серия 1" {
-		t.Errorf("episode 1 Title = %q", episodes[0].Title)
-	}
-	if episodes[1].Title != "2" {
-		t.Errorf("episode 2 Title = %q, want index fallback 2", episodes[1].Title)
-	}
-	if episodes[2].Num != "3" || episodes[2].Title != "Серия 3 (без std)" {
-		t.Errorf("episode 3 = %q/%q", episodes[2].Num, episodes[2].Title)
+	if first.Title != "1 серия" {
+		t.Errorf("episode 1 Title = %q", first.Title)
 	}
 
-	// The raw embed is a JSON object of hd/std links.
-	raw := episodes[0].RawEmbeds["AnimeVost"]
+	raw := first.RawEmbeds["AnimeVost"]
 	if len(raw) != 1 {
 		t.Fatalf("RawEmbeds[AnimeVost] = %#v, want one JSON payload", raw)
 	}
@@ -163,49 +188,56 @@ func TestAnimevostGetEpisodes(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw[0]), &links); err != nil {
 		t.Fatalf("decode links payload: %v", err)
 	}
-	if links["hd"] != "https://video.animevost.org/cowboy_bebop/1_hd.mp4" ||
-		links["std"] != "https://video.animevost.org/cowboy_bebop/1_std.mp4" {
-		t.Errorf("links payload = %v", links)
+	if links["hd"] != "http://video.animetop.info/720/1927476833.mp4" {
+		t.Errorf("hd = %q", links["hd"])
 	}
-	// Truthy check: episode 3 has no std.
-	var links3 map[string]string
-	if err := json.Unmarshal([]byte(episodes[2].RawEmbeds["AnimeVost"][0]), &links3); err != nil {
-		t.Fatalf("decode links payload: %v", err)
+	if links["std"] != "http://video.animetop.info/1927476833.mp4" {
+		t.Errorf("std = %q", links["std"])
 	}
-	if _, has := links3["std"]; has {
-		t.Errorf("episode 3 links = %v, std must be dropped", links3)
+	last := episodes[11]
+	if last.Num != "12" || last.Title != "12 серия" {
+		t.Errorf("episode 12 = %q/%q", last.Num, last.Title)
 	}
 }
 
-func TestAnimevostGetEpisodesErrorObjectReturnsEmpty(t *testing.T) {
+func TestAnimevostGetEpisodesFailEnvelopeIsTypedError(t *testing.T) {
 	t.Parallel()
 
-	// The playlist endpoint answers {"error": ...} for unknown ids
-	// (animevost.py:47-48).
+	// An unknown id answers HTTP 200 with {"status":"fail","error":
+	// "Тайтл с таким id не найден"} on the live API: surfaced as a typed
+	// miss, never a silent empty list (the Python original returned []).
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, `{"error": "not found"}`)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture(t, "animevost_playlist_error.json"))
 	})
-	p := newAnimevost(srv.URL, testClient(t, "animevost"))
+	p := newAnimevost(srv.URL, nil)
 
-	episodes, err := p.GetEpisodes(context.Background(), "99999")
-	if err != nil {
-		t.Fatalf("GetEpisodes on error object = %v, want nil", err)
+	episodes, err := p.GetEpisodes(context.Background(), "999999")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
 	}
-	if len(episodes) != 0 {
-		t.Errorf("episodes = %d, want 0", len(episodes))
+	if !strings.Contains(err.Error(), "Тайтл с таким id не найден") {
+		t.Errorf("error = %v, want the server's fail text carried through", err)
+	}
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) || perr.Op != contracts.OpGetEpisodes {
+		t.Fatalf("error = %v, want a ProviderError tagged episodes", err)
+	}
+	if episodes != nil {
+		t.Errorf("episodes = %#v, want nil alongside the error", episodes)
 	}
 }
 
 func TestAnimevostResolveStream(t *testing.T) {
 	t.Parallel()
 
-	// ResolveStream is offline (animevost.py:66-76).
-	p := newAnimevost(AnimeVostBase, testClient(t, "animevost"))
+	// ResolveStream is offline (anicli-py animevost.py:66-76).
+	p := newAnimevost(AnimeVostBase, nil)
 	episode := contracts.Episode{
 		Num:   "1",
 		RawID: "1",
 		RawEmbeds: map[string][]string{
-			"AnimeVost": {`{"hd":"https://video.animevost.org/x/1_hd.mp4","std":"https://video.animevost.org/x/1_std.mp4"}`},
+			"AnimeVost": {`{"hd":"http://video.animetop.info/720/1927476833.mp4","std":"http://video.animetop.info/1927476833.mp4"}`},
 		},
 	}
 
@@ -223,14 +255,14 @@ func TestAnimevostResolveStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("Links missing 720 (hd maps to 720): %v", stream.Links)
 	}
-	if hd.URL != "https://video.animevost.org/x/1_hd.mp4" || hd.Quality != "720" || hd.Type != "mp4" {
+	if hd.URL != "http://video.animetop.info/720/1927476833.mp4" || hd.Quality != "720" || hd.Type != "mp4" {
 		t.Errorf("720 source = %+v", hd)
 	}
 	sd, ok := stream.Links["480"]
 	if !ok {
 		t.Fatalf("Links missing 480 (std maps to 480): %v", stream.Links)
 	}
-	if sd.URL != "https://video.animevost.org/x/1_std.mp4" || sd.Quality != "480" || sd.Type != "mp4" {
+	if sd.URL != "http://video.animetop.info/1927476833.mp4" || sd.Quality != "480" || sd.Type != "mp4" {
 		t.Errorf("480 source = %+v", sd)
 	}
 }
@@ -240,7 +272,7 @@ func TestAnimevostResolveStreamUnknownDubIsEmpty(t *testing.T) {
 
 	// Python defaults the payload to "{}" for a missing dub, yielding an
 	// empty MediaStream (animevost.py:67).
-	p := newAnimevost(AnimeVostBase, testClient(t, "animevost"))
+	p := newAnimevost(AnimeVostBase, nil)
 
 	stream, err := p.ResolveStream(context.Background(), contracts.Episode{RawEmbeds: map[string][]string{}}, "NoSuchDub")
 	if err != nil {
@@ -257,11 +289,18 @@ func TestAnimevostResolveStreamUnknownDubIsEmpty(t *testing.T) {
 func TestAnimevostProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimevost(AnimeVostBase, testClient(t, "animevost"))
+	p := newAnimevost(AnimeVostBase, nil)
 	if p.ID() != "animevost" || p.Name() != "AnimeVost" || p.BaseURL() != AnimeVostBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
+	}
+	// The 2026-09-18 index reliably matches canonical latin names
+	// (black lagoon, naruto) while Cyrillic phrases only hit in their
+	// exact inflected site-title form; declare the latin routing so the
+	// search fan-out sends romaji/english queries.
+	if pref := p.NamePreference(); pref != contracts.NamePrefLatin {
+		t.Errorf("NamePreference = %v, want NamePrefLatin", pref)
 	}
 }

@@ -1,15 +1,1 @@
-[
-  {
-    "name": "Серия 1",
-    "hd": "https://video.animevost.org/cowboy_bebop/1_hd.mp4",
-    "std": "https://video.animevost.org/cowboy_bebop/1_std.mp4"
-  },
-  {
-    "hd": "https://video.animevost.org/cowboy_bebop/2_hd.mp4",
-    "std": "https://video.animevost.org/cowboy_bebop/2_std.mp4"
-  },
-  {
-    "name": "Серия 3 (без std)",
-    "hd": "https://video.animevost.org/cowboy_bebop/3_hd.mp4"
-  }
-]
+[{"name":"1 серия","hd":"http://video.animetop.info/720/1927476833.mp4","std":"http://video.animetop.info/1927476833.mp4","preview":"http://media.animetop.info/img/1927476833.jpg"},{"name":"2 серия","hd":"http://video.animetop.info/720/1829620278.mp4","std":"http://video.animetop.info/1829620278.mp4","preview":"http://media.animetop.info/img/1829620278.jpg"},{"name":"3 серия","hd":"http://video.animetop.info/720/1076656324.mp4","std":"http://video.animetop.info/1076656324.mp4","preview":"http://media.animetop.info/img/1076656324.jpg"},{"name":"4 серия","hd":"http://video.animetop.info/720/1392483208.mp4","std":"http://video.animetop.info/1392483208.mp4","preview":"http://media.animetop.info/img/1392483208.jpg"},{"name":"5 серия","hd":"http://video.animetop.info/720/1687577576.mp4","std":"http://video.animetop.info/1687577576.mp4","preview":"http://media.animetop.info/img/1687577576.jpg"},{"name":"6 серия","hd":"http://video.animetop.info/720/656045901.mp4","std":"http://video.animetop.info/656045901.mp4","preview":"http://media.animetop.info/img/656045901.jpg"},{"name":"7 серия","hd":"http://video.animetop.info/720/1468905944.mp4","std":"http://video.animetop.info/1468905944.mp4","preview":"http://media.animetop.info/img/1468905944.jpg"},{"name":"8 серия","hd":"http://video.animetop.info/720/749769575.mp4","std":"http://video.animetop.info/749769575.mp4","preview":"http://media.animetop.info/img/749769575.jpg"},{"name":"9 серия","hd":"http://video.animetop.info/720/2078223317.mp4","std":"http://video.animetop.info/2078223317.mp4","preview":"http://media.animetop.info/img/2078223317.jpg"},{"name":"10 серия","hd":"http://video.animetop.info/720/1851888227.mp4","std":"http://video.animetop.info/1851888227.mp4","preview":"http://media.animetop.info/img/1851888227.jpg"},{"name":"11 серия","hd":"http://video.animetop.info/720/1249870861.mp4","std":"http://video.animetop.info/1249870861.mp4","preview":"http://media.animetop.info/img/1249870861.jpg"},{"name":"12 серия","hd":"http://video.animetop.info/720/1151866419.mp4","std":"http://video.animetop.info/1151866419.mp4","preview":"http://media.animetop.info/img/1151866419.jpg"}]

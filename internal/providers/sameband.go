@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,22 +55,31 @@ type samebandPlaylist []struct {
 	File  string  `json:"file"`
 }
 
-// Search GETs the /anime catalog and filters client-side [LIVE-VERIFIED
-// 2026-09-13: GET /anime → HTTP 200, 94 article.shortstory entries, no
-// pagination]. The DLE POST search form the Python original used
-// (sameband.py:23-46) is dead server-side: the endpoint answers 200 with
-// an empty fastsearch_results shell because the site's search became
-// AJAX-only. Card parsing keeps the same selectors the DLE results page
-// used (.col-auto / .image[href] / .poster[title] / img.swiper-lazy) —
-// the catalog renders the identical shortstory template. Matching is a
-// case-insensitive substring test on the card title. Posters stay the
-// site root glued onto the swiper img src — even when the src is already
-// absolute, verbatim like the Python original (sameband.py:44).
+// Search POSTs the DLE search form and parses the result cards [LIVE-
+// VERIFIED 2026-09-18: POST /index.php?do=search with body
+// do=search&subaction=search&story=<query> renders real shortstory
+// results server-side — 2 cards for the probe query, junk query → 0
+// cards, HTTP 200, no Referer needed]. This is the Python original's
+// exact endpoint (sameband.py:23-46); the interim catalog-scrape
+// search in this branch was built on a 2026-09-13 capture that caught
+// the endpoint mid-outage. Cards keep the same selectors the DLE
+// results page always used (.col-auto / .image[href] / .poster[title]
+// / img.swiper-lazy); the server already matched the query, so there
+// is no client-side filtering. Posters stay the site root glued onto
+// the swiper img src — even when the src is already absolute, verbatim
+// like the Python original (sameband.py:44).
 func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
+	form := url.Values{}
+	form.Set("do", "search")
+	form.Set("subaction", "search")
+	form.Set("story", query)
+
 	resp, err := p.http.Do(ctx, netclient.Request{
-		Method: "GET",
-		URL:    p.baseURL + "/anime",
-		Op:     contracts.OpSearch,
+		Method:  "POST",
+		URL:     p.baseURL + "/index.php?do=search",
+		Headers: formContentType,
+		Body:    strings.NewReader(form.Encode()),
+		Op:      contracts.OpSearch,
 	})
 	if err != nil {
 		return nil, err
@@ -78,10 +88,9 @@ func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.Search
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
 	if err != nil {
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
-			fmt.Errorf("parse catalog page: %w", err))
+			fmt.Errorf("parse search results: %w", err))
 	}
 
-	needle := strings.ToLower(query)
 	var results []contracts.SearchResult
 	doc.Find(".col-auto").Each(func(_ int, item *goquery.Selection) {
 		linkNode := item.Find(".image[href]").First()
@@ -92,10 +101,6 @@ func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.Search
 
 		link, _ := linkNode.Attr("href")
 		title, _ := titleNode.Attr("title")
-
-		if !strings.Contains(strings.ToLower(title), needle) {
-			return
-		}
 
 		poster := ""
 		if img := item.Find("img.swiper-lazy").First(); img.Length() > 0 {
@@ -115,9 +120,14 @@ func (p *SameBand) Search(ctx context.Context, query string) ([]contracts.Search
 }
 
 // GetEpisodes follows the anime page iframe to the player page and its
-// JSON playlist (port of sameband.py:48-81). Only the playlist decode is
-// silent on failure (the Python bare except); page, player and playlist
-// fetches stay loud.
+// JSON playlist (port of sameband.py:48-81).
+//
+// Divergence from Python (task ruling, PR47): the structural breaks the
+// Python original silenced (missing iframe → sameband.py:53, missing
+// Playerjs file → sameband.py:61, non-JSON playlist → bare except
+// sameband.py:68-71) surface as typed errors — the 2026-09 API move sat
+// behind exactly these silent-empty paths, invisible until the smoke
+// run. Fetch failures stay loud as before.
 func (p *SameBand) GetEpisodes(ctx context.Context, animeURL string) ([]contracts.Episode, error) {
 	resp, err := p.http.Do(ctx, netclient.Request{
 		Method: "GET",
@@ -136,7 +146,8 @@ func (p *SameBand) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 
 	iframe := doc.Find(".player > .player-content > iframe[src]").First()
 	if iframe.Length() == 0 {
-		return []contracts.Episode{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("player iframe not found on anime page: %w", contracts.ErrNotFound))
 	}
 
 	playerURL, _ := iframe.Attr("src")
@@ -155,7 +166,8 @@ func (p *SameBand) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 
 	match := samebandFileRe.FindSubmatch(playerResp.Body)
 	if match == nil {
-		return []contracts.Episode{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, playerResp.StatusCode,
+			fmt.Errorf("player page has no Playerjs file field: %w", contracts.ErrExtractFailed))
 	}
 
 	playlistURL := string(match[1])
@@ -174,7 +186,8 @@ func (p *SameBand) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 
 	var playlist samebandPlaylist
 	if jsonErr := json.Unmarshal(playlistResp.Body, &playlist); jsonErr != nil {
-		return []contracts.Episode{}, nil
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, playlistResp.StatusCode,
+			fmt.Errorf("decode playlist: %w", contracts.ErrExtractFailed))
 	}
 
 	episodes := make([]contracts.Episode, 0, len(playlist))

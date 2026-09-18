@@ -1,0 +1,47 @@
+{
+	"series": [
+		{
+			"all": [
+				{
+					"ID": 18034,
+					"post_image": "https://anitaku.io/wp-content/uploads/2026/07/1783267953-5498-151415-212x300.jpg",
+					"post_image_html": "<div class=\"post-thumbnail\"><img src=\"https://anitaku.io/wp-content/uploads/2026/07/1783267953-5498-151415-212x300.jpg\" alt=\"\" width=\"150\" height=\"150\"></div>",
+					"post_title": "One Piece: Heroines",
+					"post_genres": "Adventure, Fantasy, Shounen, Slice of Life",
+					"post_type": "Anime",
+					"post_status": "Ongoing",
+					"post_link": "https://anitaku.io/series/one-piece-heroines/",
+					"post_ep": "Ep",
+					"post_latest": "1",
+					"post_sub": "Sub"
+				},
+				{
+					"ID": 8180,
+					"post_image": "https://anitaku.io/wp-content/uploads/2025/04/1743609723-2181-148809-212x300.jpg",
+					"post_image_html": "<div class=\"post-thumbnail\"><img src=\"https://anitaku.io/wp-content/uploads/2025/04/1743609723-2181-148809-212x300.jpg\" alt=\"\" width=\"150\" height=\"150\"></div>",
+					"post_title": "Haite Kudasai, Takamine-san",
+					"post_genres": "Comedy, Ecchi, Romance, School, Shounen",
+					"post_type": "Anime",
+					"post_status": "Completed",
+					"post_link": "https://anitaku.io/series/haite-kudasai-takamine-san/",
+					"post_ep": "Ep",
+					"post_latest": "12",
+					"post_sub": "Sub"
+				},
+				{
+					"ID": 8175,
+					"post_image": "https://anitaku.io/wp-content/uploads/2025/04/1743609520-7971-148725-212x300.jpg",
+					"post_image_html": "<div class=\"post-thumbnail\"><img src=\"https://anitaku.io/wp-content/uploads/2025/04/1743609520-7971-148725-212x300.jpg\" alt=\"\" width=\"150\" height=\"150\"></div>",
+					"post_title": "Koisuru One Piece",
+					"post_genres": "Comedy, Parody, Romance, Shounen",
+					"post_type": "Anime",
+					"post_status": "Ongoing",
+					"post_link": "https://anitaku.io/series/koisuru-one-piece/",
+					"post_ep": "Ep",
+					"post_latest": "6",
+					"post_sub": "Sub"
+				}
+			]
+		}
+	]
+}

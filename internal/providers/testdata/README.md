@@ -8,10 +8,12 @@ irrelevant to the parsing logic are trimmed. If the live API drifts, the
 provenance reference below points at the Python parsing code that defines
 the expected input.
 
-Fixtures marked **[LIVE-VERIFIED 2026-09-13]** diverge from that rule on
-purpose: they are derived from real network captures of the same day (page
-chrome trimmed, values verbatim) because the live site drifted away from
-the frozen Python shapes — see the per-fixture notes.
+Fixtures marked **[LIVE-VERIFIED …]** diverge from that rule on
+purpose: they are derived from real network captures of the marked day
+(2026-09-13 for the wave-2 revivals, 2026-09-18 for the gogoanime →
+Anitaku rebrand; page chrome trimmed, values verbatim) because the live
+site drifted away from the frozen Python shapes — see the per-fixture
+notes.
 
 | Fixture | Consumed by (provenance) |
 | --- | --- |
@@ -27,15 +29,11 @@ the frozen Python shapes — see the per-fixture notes.
 | `animego_player_series.json` | `anicli/providers/animego.py:61-81` — player API JSON with `content` HTML; selector `#video-carousel .mb-0` with `data-episode`, `data-id`, `data-episode-title`. |
 | `animego_player_film.json` | `anicli/providers/animego.py:82-105` — player API JSON with `content` HTML lacking `#video-carousel`; film path parses `#video-dubbing .mb-1` (`data-dubbing`) and `#video-players > span` children WITHOUT `.mb-1` so the Python fallback selector branch (`#video-players > span`, animego.py:115) is exercised (`data-player`, `data-provide-dubbing`). |
 | `animego_series.json` | `anicli/providers/animego.py:93-105` — `/anime/series` API JSON with `content` HTML carrying the same dubbing/players markup. |
-| `gogoanime_search.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://gogoanime.by/?s=one+piece` — the site moved to WordPress/dramastream (gogoanime3.co is Cloudflare-blocked). Search results are the `a.tip` cards of the FIRST `.listupd` (title attr, absolute `/series/` href, `.limit img` poster); the second `.listupd` (external-results placeholder) and the sidebar `.leftseries` card must not leak in. Cards verbatim from the capture. |
+| `gogoanime_search.json` | **[LIVE-VERIFIED 2026-09-18]** derived from `POST https://anitaku.io/wp-admin/admin-ajax.php` (`action=ts_ac_do_search&ts_ac_query=one piece`) — the Anitaku rebrand (gogoanime platform, Kohi-den extensions-source issue #410) dropped the WordPress `/?s=` search (it 301s to `/browse/`); the GET form of this endpoint silently ignores the query and answers with recent posts. The response is `{"series":[{"all":[…]}]}`; per item reads `post_title`, `post_image`, `post_link`. First three of eight live entries verbatim, array trimmed. |
+| `gogoanime_series.html` | **[LIVE-VERIFIED 2026-09-18]** derived from `GET https://anitaku.io/series/one-piece/` — the `.bixbox.epcheck` block with the `.eplister` grid; li entries carry `a[href]` (absolute episode URL), `.epl-num`, `.epl-title`, newest-first (live: newest ~84 of One Piece; the site exposes no older-episode ajax). First three entries verbatim, list trimmed. |
 | `anidub_search.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://online.anidub.com/?do=search&subaction=search&story=naruto` (plain curl, desktop UA) — anidub's DLE POST search still renders results server-side (13 cards live; junk query → zero cards, HTTP 200). Cards reuse the catalog `.th-item` template (`.sect-content.sect-items` scope, `a.th-in[href]`, `.th-title`, `.th-img img[src]`); three cards verbatim, page chrome trimmed. |
 | `anidub_anime.html` | **[LIVE-VERIFIED 2026-09-13]** the `.fplayer` block verbatim from `GET https://online.anidub.com/12254-blich-…-zakljuchitelnaja-chast.html` — tab 1 "Основной плеер" is ONE full-title playlist span (`ПЛЕЕР #1` → external ladonyvesna host, skipped client-side); tab 2 "Запасной плеер" carries per-episode `Серия N` spans with `video.sibnet.ru/shell.php` embeds (live: 8 of 13 aired). |
-| `gogoanime_anime.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://gogoanime.by/series/naruto-shippuuden/` — the dramastream series page renders ALL `.episodes-container .episode-item` entries server-side (live: 499), newest-first; the five items are verbatim. |
-| `gogoanime_episode.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://gogoanime.by/naruto-shippuuden-episode-500-english-subbed/` — `#w-servers li.player-type-link[data-src]` server list (name = li text, value = same-origin `/player/` proxy URL). The "Mega" li is verbatim from that page; the "HD" li is the real entry captured from the One Piece 1178 page the same day; the data-src-less li models the skip. |
-| `gogoanime_player.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://gogoanime.by/player/?source=embed&url=…` with the episode-page Referer (without it the proxy redirects to the site root) — wraps the real embed in `iframe.player-iframe` (megavid.buzz). |
-| `gogoanime_megavid.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://megavid.buzz/mal/1735/500/sub` — megavid-family embed; the `#player-payload` JSON element (verbatim) points the player bootstrap at a `sourceUrl` JSON endpoint (`Accept: application/json`). |
-| `gogoanime_megavid_source.json` | **[LIVE-VERIFIED 2026-09-13]** real capture of `GET https://megavid.buzz/mal/1735/500/sub/source` — `{"status":"ok","source":"https://megavid.buzz/vid/…","type":"hls"}`. |
-| `gogoanime_megaplay.html` | **[LIVE-VERIFIED 2026-09-13]** derived from `GET https://megaplay.su/embed.php?sid=…` — megaplay-family embed with an inline jwplayer `file: "<hls url>"` setup (verbatim). |
+| `gogoanime_episode.html` | **[LIVE-VERIFIED 2026-09-18]** derived from `GET https://anitaku.io/one-piece-episode-1178-english-subbed/` — the `select.mirror` server list where each option stores one server as **base64-encoded iframe HTML** in its value (the theme's `loadMi` does `atob(value)` into `#pembed`); the leading `Select Video Server` placeholder has an empty value and is skipped. Option 1 is the real One Piece 1178 capture (blogger.com embed); option 2 carries the real mirror value captured the same day from the Dandadan S2 ep12 page (megacloud.bloggy.click), index renumbered. |
 | `animepahe_search.json` | `anicli/providers/animepahe.py:26-46` — `/api?m=search` response object with `data[]`; per item reads `title`, `session`, `poster`. |
 | `animepahe_episodes_p1.json` | `anicli/providers/animepahe.py:48-91` — `/api?m=release` first page carrying `total`/`per_page`/`last_page`=2 and `data[]` (`episode`, `session`). |
 | `animepahe_episodes_p2.json` | same endpoint, page 2; a fractional `episode: 2.5` pins the wire-form number rendering (`str(2.5)` → `"2.5"`). |

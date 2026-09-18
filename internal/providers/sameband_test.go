@@ -301,3 +301,17 @@ func TestSameBandProviderMeta(t *testing.T) {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
 }
+
+// The live smoke query: the catalog is the studio's own dubs under
+// server-side DLE matching, so the shared probes can never surface —
+// the provider declares its own live-verified hit («дьявол», 2 cards).
+func TestSameBandSmokeQuery(t *testing.T) {
+	t.Parallel()
+
+	p := newSameBand(SameBandBase, testClient(t, "sameband"))
+	if sq, ok := contracts.Provider(p).(contracts.SmokeQueryProvider); !ok {
+		t.Fatalf("SameBand does not declare SmokeQueryProvider")
+	} else if sq.SmokeQuery() == "" {
+		t.Fatalf("SmokeQuery = \"\", want a provider-specific probe")
+	}
+}

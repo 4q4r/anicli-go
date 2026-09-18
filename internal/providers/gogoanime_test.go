@@ -38,17 +38,6 @@ func newRequestLog(t *testing.T, pages map[string]string) *requestLog {
 	return l
 }
 
-func (l *requestLog) get(path string) (recordedRequest, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, req := range l.requests {
-		if req.Path == path {
-			return req, true
-		}
-	}
-	return recordedRequest{}, false
-}
-
 // record wraps a body-serving handler with request capture.
 func (l *requestLog) record(body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -485,5 +474,20 @@ func TestGogoAnimeProviderMeta(t *testing.T) {
 	}
 	if p.ContentLanguage() != "ja" {
 		t.Errorf("ContentLanguage = %q, want ja", p.ContentLanguage())
+	}
+}
+
+// The live smoke query: the Anitaku live-search index no longer surfaces
+// the shared probes (2026-09-18: {"all":[]} for черная лагуна / black
+// lagoon, eight results for "one piece") — the provider declares its own
+// stable broad hit.
+func TestGogoAnimeSmokeQuery(t *testing.T) {
+	t.Parallel()
+
+	p := newGogoAnime(GogoAnimeBase, testClient(t, "gogoanime"))
+	if sq, ok := contracts.Provider(p).(contracts.SmokeQueryProvider); !ok {
+		t.Fatalf("GogoAnime does not declare SmokeQueryProvider")
+	} else if sq.SmokeQuery() == "" {
+		t.Fatalf("SmokeQuery = \"\", want a provider-specific probe")
 	}
 }

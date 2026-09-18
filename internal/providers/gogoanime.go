@@ -297,3 +297,10 @@ func (p *GogoAnime) factorySources(ctx context.Context, links ...string) (map[st
 	}
 	return sources, nil
 }
+
+// SmokeQuery reports the provider-specific live smoke probe (PR52
+// integration): the Anitaku live-search index no longer surfaces the
+// shared probes — 2026-09-18 the endpoint answers {"all":[]} for both
+// черная лагуна and black lagoon while "one piece" still returns its
+// eight results — so the provider declares its own stable broad hit.
+func (p *GogoAnime) SmokeQuery() string { return "one piece" }

@@ -251,10 +251,13 @@ func (p *GogoAnime) FetchDubs(ctx context.Context, episode *contracts.Episode) (
 // ResolveStream resolves the chosen server's mirrors onto media URLs
 // through the extractor factory [LIVE-VERIFIED 2026-09-18: anitaku.io
 // mirrors are direct embed URLs — the gogoanime.by referer-gated
-// /player/ proxy no longer exists]. The ONLY live mirror family is
-// blogger.com/video.g embeds, resolved through the PR53 blogger
-// extractor (player batchexecute RPC → progressive mp4s); classic
-// gogo hosts (streaming.php et al.) resolve through the gogoplay
+// /player/ proxy no longer exists]. The site's mirror pool rotates per
+// episode across several families; blogger.com/video.g embeds are the
+// only family PROVEN live (resolved through the PR53 blogger
+// extractor: player batchexecute RPC → progressive mp4s), while other
+// pool members seen on the live catalog (megaplay.buzz and the dead
+// embtaku/org.es/s3taku hosts) stay unprobed or dead. Classic gogo
+// hosts (streaming.php et al.) resolve through the gogoplay
 // encrypt-ajax extractor whenever the site serves them again.
 //
 // Like the Python original (gogoanime.py:122-134) the dub list is

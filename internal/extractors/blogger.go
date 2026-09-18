@@ -54,6 +54,8 @@ func (e *bloggerExtractor) Matches(u string) bool { return strings.Contains(u, "
 // semantics; the live captures carry the progressive mp4 pair itag 22
 // = 720p, itag 18 = 360p).
 type bloggerFormat struct {
+	// Itag documents the wire shape (and anchors itag semantics in the
+	// comment above); quality keys ride QualityLabel, never this field.
 	Itag         int    `json:"itag"`
 	URL          string `json:"url"`
 	MimeType     string `json:"mimeType"`

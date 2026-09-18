@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -302,21 +303,84 @@ func TestSmokeDurationColumnHonest(t *testing.T) {
 	}
 }
 
-// TestSmokeEverySurfacedResultMustResolve pins the corrected PASS
-// rule: not just the first result — EVERY surfaced result must carry
-// its full chain; one dead result fails the provider with the result
-// named.
-func TestSmokeEverySurfacedResultMustResolve(t *testing.T) {
+// TestSmokeStreamPassesOnAnyFullyResolvedResult pins the PR54 owner
+// ruling: for STREAM providers the pass rule is search>0 ∧ ≥1 surfaced
+// result fully resolved — the catalog decides how much of the surface
+// is alive (gogoanime's "one piece" probe: 3 of 8 results carry live
+// blogger mirrors). The whole surface is STILL resolved
+// bounded-concurrent (epCalls == 3), the surfaced/resolved column
+// keeps the honest 1/3, and the run exits zero.
+func TestSmokeStreamPassesOnAnyFullyResolvedResult(t *testing.T) {
 	mixed := newParityProvider(t, "mixed", false)
 	mixed.searchResults = 3
-	mixed.deadEpIdx = 1 // the SECOND surfaced result is dead
+	mixed.deadEps = map[int]bool{0: true, 1: true} // only the 3rd resolves
 	d := smokeDeps(t, 0, mixed)
 	out, _, code := runSmoke(t, d, "smoke", "all")
-	if code == 0 {
-		t.Fatalf("a dead surfaced result must fail the provider, stdout:\n%s", out)
+	if code != 0 {
+		t.Fatalf("a stream provider with one fully-resolved result must PASS, stdout:\n%s", out)
 	}
-	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "2/3") {
-		t.Fatalf("FAIL row must name the dead result 2 of 3:\n%s", out)
+	if !strings.Contains(out, "PASS") {
+		t.Fatalf("PASS row missing:\n%s", out)
+	}
+	// The surfaced/resolved column keeps the honest 3 surfaced / 1
+	// resolved (standalone cell — the counts triple is 3/1/1).
+	var mixedRow string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "mixed") {
+			mixedRow = line
+		}
+	}
+	if mixedRow == "" {
+		t.Fatalf("mixed row missing:\n%s", out)
+	}
+	cells := strings.Fields(mixedRow)
+	if !slices.Contains(cells, "3/1") {
+		t.Fatalf("row must keep the surfaced/resolved 3/1 visibility, cells: %v", cells)
+	}
+	if mixed.epCalls != 3 {
+		t.Fatalf("episode legs = %d, want all 3 surfaced results attempted", mixed.epCalls)
+	}
+	if !strings.Contains(out, "smoke PASSED: 1/1") {
+		t.Fatalf("summary missing:\n%s", out)
+	}
+}
+
+// TestSmokeStreamAllSurfacedFailStillFails: the ≥1 rule is no amnesty —
+// a stream provider whose whole surface fails still FAILs, and the
+// failure column names how many resolved and a sample reason.
+func TestSmokeStreamAllSurfacedFailStillFails(t *testing.T) {
+	dead := newParityProvider(t, "alldead", false)
+	dead.searchResults = 3
+	dead.deadEps = map[int]bool{0: true, 1: true, 2: true}
+	d := smokeDeps(t, 0, dead)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code == 0 {
+		t.Fatalf("an all-dead stream surface must fail, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "resolved 0/3") {
+		t.Fatalf("FAIL row must name resolved 0/3:\n%s", out)
+	}
+	if !strings.Contains(out, "result 1/3") {
+		t.Fatalf("FAIL row must carry a sample result reason:\n%s", out)
+	}
+}
+
+// TestSmokeTorrentAllSurfacedStillRequired pins the OTHER half of the
+// PR54 ruling: torrent providers keep the all-surfaced rule (their
+// Search filters dead pre-surface, so a surviving result is a promise
+// the whole surface must keep). Two of three dead → FAIL naming 1/3.
+func TestSmokeTorrentAllSurfacedStillRequired(t *testing.T) {
+	tor := newParityProvider(t, "torpart", false)
+	tor.isTorrent = true
+	tor.searchResults = 3
+	tor.deadEps = map[int]bool{0: true, 1: true}
+	d := smokeDeps(t, 0, tor)
+	out, _, code := runSmoke(t, d, "smoke", "all")
+	if code == 0 {
+		t.Fatalf("a torrent provider with unresolved surfaced results must fail, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "resolved 1/3") {
+		t.Fatalf("FAIL row must name resolved 1/3 (all-surface rule unchanged):\n%s", out)
 	}
 }
 
@@ -345,8 +409,12 @@ func TestSmokeResolvesAllSurfacedResults(t *testing.T) {
 // TestSmokeBudgetExhaustionNamesProgress: when the per-provider budget
 // expires before every surfaced result resolved, the FAIL names the
 // progress (resolved N/M) instead of silently certifying a head.
+// TORRENT provider: the all-surfaced rule is where the budget
+// semantics live (PR54 — stream providers pass on any fully-resolved
+// result).
 func TestSmokeBudgetExhaustionNamesProgress(t *testing.T) {
 	slow := newParityProvider(t, "slowfeed", false)
+	slow.isTorrent = true
 	slow.searchResults = 12
 	slow.epSleep = 100 * time.Millisecond // two waves of 8 under a 150ms budget
 	d := smokeDeps(t, 150*time.Millisecond, slow)

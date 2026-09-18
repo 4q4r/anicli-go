@@ -368,19 +368,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 19)
+	d := newToolDeps(t, 20)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("19/19 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("20/20 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "19/19") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "20/20") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 19 {
+	for i := range 20 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -391,28 +391,28 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 // floor is the roster minus one (16 of 17 since animedia joined in
 // PR56; 17 of 18 with anime365 merged alongside).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 19, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 20, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("18/19 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("19/20 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "18/19") {
-		t.Fatalf("summary must show 18/19:\n%s", out.String())
+	if !strings.Contains(out.String(), "19/20") {
+		t.Fatalf("summary must show 19/20:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 19, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 20, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("17/19 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("18/20 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "17/19") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 17/19 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "18/20") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 18/20 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())
@@ -442,11 +442,11 @@ func TestParityAllHonorsDeclaredSmokeQuery(t *testing.T) {
 		buildRegistry: func(config.Settings) (*providers.Registry, error) {
 			reg := providers.NewEmptyRegistry()
 			// p00 declares its own probe; the rest of the roster uses
-			// the shared queries (the real 18-provider shape).
+			// the shared queries (the real 19-provider shape).
 			if err := reg.Register(declared00); err != nil {
 				return nil, err
 			}
-			for i := 1; i < 18; i++ {
+			for i := 1; i < 19; i++ {
 				p := newParityProvider(t, fmt.Sprintf("p%02d", i), false)
 				if err := reg.Register(p); err != nil {
 					return nil, err

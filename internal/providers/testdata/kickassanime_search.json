@@ -1,0 +1,101 @@
+{
+ "result": [
+  {
+   "episode_count": 0,
+   "genres": [
+    "Action",
+    "Adventure",
+    "Fantasy",
+    "Shounen"
+   ],
+   "locales": [
+    "ja-JP",
+    "en-US"
+   ],
+   "slug": "one-piece-0948",
+   "status": "currently_airing",
+   "synopsis": "Gol D. Roger was known as the \"Pirate King,\" the strongest and most infamous being to have sailed the Grand Line. The capture and execution of Roger by the World Government brought a change throughout the world. His last words before his death revealed the existence of the greatest treasure in the world, One Piece. It was this revelation that brought about the Grand Age of Pirates, men who dreamed of finding One Piece—which promises an unlimited amount of riches and fame—and quite possibly the pinnacle of glory and the title of the Pirate King.\n\nEnter Monkey D. Luffy, a 17-year-old boy who defies your standard definition of a pirate. Rather than the popular persona of a wicked, hardened, toothless pirate ransacking villages for fun, Luffy's reason for being a pirate is one of pure wonder: the thought of an exciting adventure that leads him to intriguing people and ultimately, the promised treasure. Following in the footsteps of his childhood hero, Luffy and his crew travel across the Grand Line, experiencing crazy adventures, unveiling dark mysteries and battling strong enemies, all in order to reach the most coveted of all fortunes—One Piece.",
+   "title": "One Piece",
+   "title_en": "One Piece",
+   "type": "tv",
+   "year": 1999,
+   "poster": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "one-piece-2056-sm",
+    "aspectRatio": 0.66,
+    "hq": "one-piece-2056-hq"
+   },
+   "episode_duration": 1440,
+   "watch_uri": "/one-piece-0948/ep-1-225ebd",
+   "episode_number": 1,
+   "episode_string": "1"
+  },
+  {
+   "episode_count": 1,
+   "genres": [
+    "Action",
+    "Adventure",
+    "Fantasy",
+    "Shounen"
+   ],
+   "locales": [
+    "ja-JP"
+   ],
+   "slug": "one-piece-movie-01-95eb",
+   "status": "finished_airing",
+   "synopsis": "Many years ago, Woonan, a legendary pirate, plundered one-third of the world's gold and stashed it away on his secret island shrouded in mystery. \n\nIn the present, Luffy and the rest of the Straw Hats continue on their journey to the Grand Line. They are robbed by a group of bandits. Led by their captain, El Drago, these same bandits are headed towards Woonan's famed island. Even though the Straw Hat Pirates must now recover their stolen treasure, they have gained another objective: to discover the lost island, its treasures, and learn about the legend of Woonan.",
+   "title": "One Piece Movie 01",
+   "type": "movie",
+   "year": 2000,
+   "poster": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "one-piece-movie-01-9b77-sm",
+    "aspectRatio": 0.7,
+    "hq": "one-piece-movie-01-9b77-hq"
+   },
+   "episode_duration": 3052,
+   "watch_uri": "/one-piece-movie-01-95eb/ep-1-69f1ba",
+   "episode_number": 1,
+   "episode_string": "1"
+  },
+  {
+   "episode_count": 1,
+   "genres": [
+    "Action",
+    "Adventure",
+    "Fantasy",
+    "Shounen"
+   ],
+   "locales": [
+    "ja-JP"
+   ],
+   "slug": "one-piece-clockwork-island-adventure-7033",
+   "status": "finished_airing",
+   "synopsis": "Informed by the Thief Brothers his ship has been stolen by the Trump Kyoudai (Trump Siblings) who have set up base on Clockwork Island. Monkey D. Luffy, Captain of the Going Merry and aspiring Pirate King works with his crew - Usopp, Zoro, Sanji and Nami to battle their way up Clockwork Island to reclaim their ship.",
+   "title": "One Piece Movie 02: Nejimaki-jima no Daibouken",
+   "title_en": "One Piece: Clockwork Island Adventure",
+   "type": "movie",
+   "year": 2001,
+   "poster": {
+    "formats": [
+     "jpeg",
+     "webp"
+    ],
+    "sm": "one-piece-clockwork-island-adventure-9bcb-sm",
+    "aspectRatio": 0.75,
+    "hq": "one-piece-clockwork-island-adventure-9bcb-hq"
+   },
+   "episode_duration": 3322,
+   "watch_uri": "/one-piece-clockwork-island-adventure-7033/ep-1-8df0c4",
+   "episode_number": 1,
+   "episode_string": "1"
+  }
+ ],
+ "maxPage": 3
+}

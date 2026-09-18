@@ -26,15 +26,15 @@ func TestAllRosterComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 19 {
-		t.Fatalf("All() = %d providers, want 19", len(bare))
+	if len(bare) != 20 {
+		t.Fatalf("All() = %d providers, want 20", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho", "anime365", "animedia", "shiza",
+		"animetosho", "tokyotosho", "anime365", "animedia", "shiza", "kickassanime",
 	}
 	seen := map[string]bool{}
 	for _, p := range bare {
@@ -93,8 +93,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 19 {
-		t.Fatalf("List() = %d providers, want 19", len(list))
+	if len(list) != 20 {
+		t.Fatalf("List() = %d providers, want 20", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order);
 	// anidub (no frozen Python original) is appended after the ported
@@ -105,12 +105,13 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// search RSS) after animetosho, anime365 (PR55, the tokened
 	// smotret-anime JSON API, no frozen Python original) after
 	// tokyotosho, animedia (PR56, the amd.online DLE site) after
-	// anime365, shiza (PR57, the GraphQL catalog) after animedia.
+	// anime365, shiza (PR57, the GraphQL catalog) after animedia,
+	// kickassanime (PR58, the kaa.lt JSON API) after shiza.
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
 		"allanime", "anidub", "yanima", "nyaa", "anilibria-torrent",
-		"animetosho", "tokyotosho", "anime365", "animedia", "shiza",
+		"animetosho", "tokyotosho", "anime365", "animedia", "shiza", "kickassanime",
 	}
 	for i, p := range list {
 		if p.ID() != wantOrder[i] {
@@ -192,8 +193,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 19 {
-		t.Fatalf("All() = %d providers, want 19", len(bare))
+	if len(bare) != 20 {
+		t.Fatalf("All() = %d providers, want 20", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -230,6 +231,7 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anime365":          "ru",
 		"animedia":          "ru",
 		"shiza":             "ru",
+		"kickassanime":      "ja",
 	}
 
 	cfg := config.Default()
@@ -275,8 +277,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 17 {
-		t.Fatalf("All() = %d providers, want 17", len(bare))
+	if len(bare) != 18 {
+		t.Fatalf("All() = %d providers, want 18", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

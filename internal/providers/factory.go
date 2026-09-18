@@ -111,6 +111,14 @@ var allFactories = []struct {
 	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newShiza(ShizaBase, http)
 	}},
+	// kickassanime (PR58): the kaa.lt JSON API (fsearch → show →
+	// paginated episodes → per-episode servers on the krussdomi HLS
+	// edge). No credentials and no per-provider settings;
+	// network.proxy_url routes it from blocked networks like every
+	// foreign site.
+	{"kickassanime", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge when [cf].enabled

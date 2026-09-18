@@ -134,40 +134,53 @@ func TestWatchOpensFormatSelector(t *testing.T) {
 }
 
 // TestFormatSelectorStreamPickProceeds: Enter on «Потоковый» starts
-// the watch pipeline in streaming mode (dub selection follows).
+// the watch pipeline in streaming mode — the merged stream resolve
+// (PR61) schedules immediately for a fresh session.
 func TestFormatSelectorStreamPickProceeds(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	s.formatList.Jump(0) // «Потоковый»
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("stream pick cmd: %T", cmd)
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("stream pick must schedule the stream resolve")
 	}
 	if s.buffered {
 		t.Fatal("stream pick must clear the buffered mode")
 	}
-	if s.state != sessionStateDubVideo {
-		t.Fatalf("state = %s, want the video dub picker", s.state)
+	if s.state != sessionStateQuality {
+		t.Fatalf("state = %s, want the merged stream list", s.state)
+	}
+	// The resolve settles into the merged entries (PR61).
+	msg := cmd()
+	sr, ok := msg.(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", msg)
+	}
+	s.Update(sr)
+	if len(s.streamEntries) != 1 {
+		t.Fatalf("merged entries = %d, want 1", len(s.streamEntries))
 	}
 }
 
-// TestFormatSelectorBufferedPickProceeds: Enter on «Буферный» starts
-// the watch pipeline in buffered mode.
+// TestFormatSelectorBufferedPickProceeds: Enter on «Буферный» arms the
+// buffered mode and starts the same merged resolve (PR61).
 func TestFormatSelectorBufferedPickProceeds(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	s.formatList.Jump(1) // «Буферный»
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("buffered pick cmd: %T", cmd)
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("buffered pick must schedule the stream resolve")
 	}
 	if !s.buffered {
 		t.Fatal("buffered pick must arm the buffered mode")
 	}
-	if s.state != sessionStateDubVideo {
-		t.Fatalf("state = %s, want the video dub picker", s.state)
+	if s.state != sessionStateQuality {
+		t.Fatalf("state = %s, want the merged stream list", s.state)
 	}
 }
 
@@ -251,16 +264,16 @@ func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 		return nil
 	}
 
-	// ▶ Смотреть → format selector («Буферный») → dub pickers →
-	// straight to quality.
-	pickVideoDubBuffered(t, s, "[anidub] AniDUB")
-	pickAudioDub(t, s)
-
-	// Enter on «Авто» starts the buffered pipeline.
-	s.qualityList.Jump(0)
-	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// ▶ Смотреть → format selector («Буферный») → merged stream pick →
+	// «⭐ Как видео».
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(indexOfDayFormatList(s, "buffer"))
+	_, formatCmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	pickMergedStream(t, s, formatCmd, 0)
+	cmd := confirmAudioStar(t, s)
 	if cmd == nil {
-		t.Fatal("quality pick must start the buffered download")
+		t.Fatal("audio pick must start the buffered download")
 	}
 	if s.state != sessionStateBuffering {
 		t.Fatalf("state = %s, want buffering", s.state)
@@ -371,12 +384,14 @@ func TestFormatBufferedProgress(t *testing.T) {
 // download, returns to the menu with the verdict and leaves no file.
 func TestSessionBufferedCancelCleans(t *testing.T) {
 	s, _, playback, _ := newBufferedSession(t)
-	pickVideoDubBuffered(t, s, "[anidub] AniDUB")
-	pickAudioDub(t, s)
-	s.qualityList.Jump(0)
-	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.list.Jump(indexOfDayActionMenu(s, "watch"))
+	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	s.formatList.Jump(indexOfDayFormatList(s, "buffer"))
+	_, formatCmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	pickMergedStream(t, s, formatCmd, 0)
+	cmd := confirmAudioStar(t, s)
 	if cmd == nil {
-		t.Fatal("quality pick must start the buffered download")
+		t.Fatal("audio pick must start the buffered download")
 	}
 	// Esc cancels while the download runs.
 	if _, cancelCmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEsc}); cancelCmd != nil {
@@ -460,47 +475,36 @@ func pickFormat(t *testing.T, s *sessionScreen, buffered bool) {
 	}
 }
 
-// pickVideoDubBuffered drives the watch flow through the buffered
-// format pick to the video dub pick.
-func pickVideoDubBuffered(t *testing.T, s *sessionScreen, dub string) {
+// pickMergedStream settles the post-format merged resolve (PR61) and
+// picks the entry at idx, landing on the audio prompt.
+func pickMergedStream(t *testing.T, s *sessionScreen, cmd tea.Cmd, idx int) {
 	t.Helper()
-	pickFormat(t, s, true)
-	if !s.buffered {
-		t.Fatal("buffered format pick must arm the buffered mode")
+	if cmd == nil {
+		t.Fatal("format pick must schedule the stream resolve")
 	}
-	if s.state != sessionStateDubVideo {
-		t.Fatalf("state = %s, want dub video", s.state)
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("stream resolve expected, got %T", cmd())
 	}
-	idx := -1
-	for i, item := range s.dubList.Menu().Items {
-		if item.Value == dub {
-			idx = i
-			break
-		}
+	s.Update(sr)
+	if s.state != sessionStateQuality {
+		t.Fatalf("state = %s, want the merged stream list", s.state)
 	}
-	if idx < 0 {
-		t.Fatalf("dub %q not in picker", dub)
-	}
-	s.dubList.Jump(idx)
-	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("video dub cmd: %T", cmd)
+	s.qualityList.Jump(idx)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if s.state != sessionStateDubAudio {
+		t.Fatalf("state = %s, want the audio prompt", s.state)
 	}
 }
 
-// pickAudioDub confirms the audio dub pick («⭐ Как видео»); the pick
-// resolves the stream synchronously, entering the quality picker.
-func pickAudioDub(t *testing.T, s *sessionScreen) {
+// confirmAudioStar confirms the «⭐ Как видео» row and returns the
+// launched command (the buffered batch or the play cmd).
+func confirmAudioStar(t *testing.T, s *sessionScreen) tea.Cmd {
 	t.Helper()
 	if s.state != sessionStateDubAudio {
-		t.Fatalf("state = %s, want dub audio", s.state)
+		t.Fatalf("state = %s, want the audio prompt", s.state)
 	}
 	s.dubList.Jump(0)
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if s.state != sessionStateQuality {
-		t.Fatalf("state = %s, want quality", s.state)
-	}
-	if cmd != nil {
-		// The stream resolve settles into the quality picker.
-		s.Update(cmd())
-	}
+	return cmd
 }

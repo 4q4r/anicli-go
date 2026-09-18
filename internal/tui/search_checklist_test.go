@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -212,10 +211,11 @@ func TestSearchEnterOneSelectionGoesToSession(t *testing.T) {
 	}
 }
 
-// TestSearchEnterMultiSelectionOpensProviderPicker (PR31): three
-// checked providers open the picker over exactly the selected rows;
-// the picker pick then enters the session carrying all of them.
-func TestSearchEnterMultiSelectionOpensProviderPicker(t *testing.T) {
+// TestSearchEnterMultiSelectionOpensMergedSession (PR61): the
+// python-original model merges every checked provider into ONE
+// session — the «Выберите провайдера» gate is gone; the choice
+// happens at the stream level inside the session.
+func TestSearchEnterMultiSelectionOpensMergedSession(t *testing.T) {
 	fs, deps := checklistTestDeps()
 	fs.providers = append(fs.providers, ProviderMeta{ID: "third", Name: "Third"})
 	res := func(src string) []contracts.SearchResult {
@@ -236,31 +236,24 @@ func TestSearchEnterMultiSelectionOpensProviderPicker(t *testing.T) {
 	}
 	rm, ok := firstMsg(cmd).(replaceMsg)
 	if !ok {
-		t.Fatalf("multi selection must replace with the provider picker, got %T", firstMsg(cmd))
-	}
-	src, ok := rm.screen.(*searchSource)
-	if !ok {
-		t.Fatalf("multi selection must open the provider picker, got %T", rm.screen)
-	}
-	if len(src.group) != 3 {
-		t.Fatalf("picker must list the three selected providers, got %d", len(src.group))
-	}
-	if !strings.Contains(src.list.Menu().Title, "Выберите провайдера") {
-		t.Fatalf("picker title must use provider terminology, got %q", src.list.Menu().Title)
-	}
-
-	// Picker enter: the session carries ALL selected providers.
-	_, cmd = src.Update(enter())
-	rm, ok = firstMsg(cmd).(replaceMsg)
-	if !ok {
-		t.Fatalf("picker enter must enter the session, got %T", firstMsg(cmd))
+		t.Fatalf("multi selection must replace with the session, got %T", firstMsg(cmd))
 	}
 	sess, ok := rm.screen.(*sessionScreen)
 	if !ok {
-		t.Fatalf("picker pick must enter the session, got %T", rm.screen)
+		t.Fatalf("multi selection must open the session directly (no provider gate), got %T", rm.screen)
 	}
 	if len(sess.group) != 3 {
-		t.Fatalf("session must carry the selected providers, got %d", len(sess.group))
+		t.Fatalf("session must carry ALL selected providers, got %d", len(sess.group))
+	}
+	// The group is SourceID-sorted so the primary (and the history
+	// binding) is deterministic without the removed picker.
+	for i := 1; i < len(sess.group); i++ {
+		if sess.group[i-1].SourceID > sess.group[i].SourceID {
+			t.Fatalf("group must be SourceID-sorted, got %v", sess.group)
+		}
+	}
+	if sess.primary.SourceID != sess.group[0].SourceID {
+		t.Fatalf("primary must be the sorted-first result, got %s", sess.primary.SourceID)
 	}
 }
 
@@ -301,11 +294,11 @@ func TestSearchEscFromSettledPopsBack(t *testing.T) {
 	}
 }
 
-// TestCatalogResumeMultiSelectionPickerResumes (PR31): in the catalog
-// flow, several checked providers open the picker and the pick
-// RESUMES the history record (saved episode/dubs) instead of a fresh
+// TestCatalogResumeMultiSelectionResumes (PR61): in the catalog flow,
+// several checked providers open the resumed session directly (no
+// picker) — the record's saved episode/dubs restore into the merged
 // session.
-func TestCatalogResumeMultiSelectionPickerResumes(t *testing.T) {
+func TestCatalogResumeMultiSelectionResumes(t *testing.T) {
 	fs, deps := checklistTestDeps()
 	rec := rebindTestRecord()
 	saved := "5"
@@ -325,24 +318,17 @@ func TestCatalogResumeMultiSelectionPickerResumes(t *testing.T) {
 	_, cmd := rp.Update(enter())
 	rm, ok := firstMsg(cmd).(replaceMsg)
 	if !ok {
-		t.Fatalf("catalog multi selection must open the picker, got %T", firstMsg(cmd))
-	}
-	src, ok := rm.screen.(*searchSource)
-	if !ok {
-		t.Fatalf("catalog multi selection must open the provider picker, got %T", rm.screen)
-	}
-
-	_, cmd = src.Update(enter())
-	rm, ok = firstMsg(cmd).(replaceMsg)
-	if !ok {
-		t.Fatalf("picker enter must resume the session, got %T", firstMsg(cmd))
+		t.Fatalf("catalog multi selection must open the resumed session, got %T", firstMsg(cmd))
 	}
 	sess, ok := rm.screen.(*sessionScreen)
 	if !ok {
-		t.Fatalf("picker pick must resume the session, got %T", rm.screen)
+		t.Fatalf("catalog multi selection must resume the session directly (no provider gate), got %T", rm.screen)
 	}
 	if sess.resume == nil || sess.resume.CurrentEpisode != saved {
 		t.Fatalf("session must resume the record, got %+v", sess.resume)
+	}
+	if len(sess.group) != 2 {
+		t.Fatalf("resumed session must carry both providers, got %d", len(sess.group))
 	}
 }
 

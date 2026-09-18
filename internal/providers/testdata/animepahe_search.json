@@ -1,18 +1,1 @@
-{
-  "data": [
-    {
-      "id": 431,
-      "title": "Sen to Chihiro no Kamikakushi",
-      "session": "e3f9a1c2d4b5",
-      "poster": "https://i.animepahe.example/successors/cover.jpg",
-      "type": "Movie"
-    },
-    {
-      "id": 5081,
-      "title": "One Piece Film: Red",
-      "session": "d00dcafe99",
-      "poster": "https://i.animepahe.example/onepiece-red/cover.jpg",
-      "type": "Movie"
-    }
-  ]
-}
+{"total":182,"per_page":8,"current_page":1,"last_page":23,"next_page_url":"https:\/\/animepahe.pw\/api?query=black%20lagoon&page=2","prev_page_url":null,"from":1,"to":8,"data":[{"id":1007,"title":"Black Lagoon","type":"TV","episodes":12,"status":"Finished Airing","season":"Spring","year":2006,"score":8.04,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/dec\/dec28adff13eb5321b68f215758a236b93e1a448b94991f29ffdcb1a08a97d58.webp","session":"f903fca6-42ca-c7f2-d631-0dc0f1605ba5"},{"id":1008,"title":"Black Lagoon: The Second Barrage","type":"TV","episodes":12,"status":"Finished Airing","season":"Fall","year":2006,"score":8.18,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/475\/475c8a62a3a39bf12f1711add6a060c091725742d4453b134add9ca609cca101.webp","session":"878fd104-15a2-d537-6cde-26a40017fe2f"},{"id":1540,"title":"Black Lagoon: Roberta's Blood Trail","type":"OVA","episodes":5,"status":"Finished Airing","season":"Summer","year":2010,"score":8.03,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/e06\/e06dc9326fafde1661cdc48f0fedc3f96d2b8b839a078c857219c61621897099.webp","session":"a500f102-43c2-5c39-83dd-bbaa275a1b64"},{"id":1463,"title":"Black Lagoon Omake","type":"Special","episodes":7,"status":"Finished Airing","season":"Winter","year":2010,"score":6.75,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/f86\/f86f0c8e593b6ccec10611914b8af2733487e0e790d3ede8972af4c81f89346c.webp","session":"9c52b49c-ab33-72de-a153-b5f3f2e40544"},{"id":53,"title":"Black Bullet","type":"TV","episodes":13,"status":"Finished Airing","season":"Spring","year":2014,"score":7.07,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/749\/749a6450efe4afc63c1c2dbbfcc135fd49ca78cf4ece106106eacf25560cc5b3.webp","session":"9faa4db6-014a-225d-ffa3-e329772f147c"},{"id":122,"title":"Black\u2605Rock Shooter (TV)","type":"TV","episodes":8,"status":"Finished Airing","season":"Winter","year":2012,"score":6.8,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/e16\/e1698b8056d416d74902a4ebd158001890ff30cd80b2189feb644af8631e2493.webp","session":"130943b3-75af-6020-e3f7-40d4ff26435e"},{"id":991,"title":"Black Butler II","type":"TV","episodes":12,"status":"Finished Airing","season":"Summer","year":2010,"score":7.12,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/379\/379330299da41536c0e64dad0394c122f08fc367cfbc1af411d69c64553f2cb0.webp","session":"7883cda8-4957-7178-2cb3-8c623c15ee99"},{"id":1004,"title":"Black Butler","type":"TV","episodes":24,"status":"Finished Airing","season":"Fall","year":2008,"score":7.65,"poster":"https:\/\/i.animepahe.pw\/uploads\/posters\/80e\/80e715b794daa1aa5d8a8a51e2ec0bf044f3ed62f66f6b016c89fc0096d9be17.webp","session":"d635ac90-8c7f-2264-3f8a-6b676ae69881"}]}

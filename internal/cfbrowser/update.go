@@ -294,10 +294,21 @@ func (u *Updater) CheckAndMaybeInstall(ctx context.Context) error {
 }
 
 // check performs the gated cycle; the singleflight wrapper already
-// serialized concurrent callers. The channel follows the SAME
-// precedence as Install: a valid license updates within the pro
-// channel (failures defer, never downgrade to free); no license
-// keeps the classic free GitHub flow.
+// serialized concurrent callers. The channel (config [cf] channel)
+// selects the cycle:
+//
+//   - pro: the pre-PR73 cycle verbatim — a valid license updates
+//     within the pro channel (failures defer, never downgrade to
+//     free); no license keeps the classic free flow.
+//   - free: the bound-checked free flow only — the license API and
+//     the pro channel are never consulted.
+//   - auto (default): the free-base cycle — the filtered free line's
+//     bookkeeping (pro-marked dirs never satisfy it, the chromedp
+//     compat bound blocks incompatible pulls), plus the pro upgrade
+//     attempt while a valid license resolves to a compatible pro
+//     latest. While the pro line serves, the free base's check is
+//     done for the cycle; when the pro pull is skipped or fails, a
+//     loud note is logged and the free flow keeps the base current.
 func (u *Updater) check(ctx context.Context) error {
 	logger := u.cfg.logger()
 	cacheDir, err := ResolveCacheDir(u.cfg.CacheDir)
@@ -308,10 +319,9 @@ func (u *Updater) check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	installed, _ := scanCache(cacheDir, spec)
-	installedVersion := ""
-	if installed != nil {
-		installedVersion = installed.Version
+	channel, err := normalizeChannel(u.cfg.Channel)
+	if err != nil {
+		return err
 	}
 
 	// Network gate: 3s HEAD probe. Offline → defer.
@@ -320,36 +330,95 @@ func (u *Updater) check(ctx context.Context) error {
 	u.probeMu.RUnlock()
 	if !reachable(ctx, probeURL, u.cfg.HTTPClient) {
 		u.record(cacheDir, UpdateStatus{
-			InstalledVersion: installedVersion, Deferred: true,
+			InstalledVersion: u.baselineVersion(cacheDir, spec, channel), Deferred: true,
 			LastError: "probe: network unreachable",
 		})
 		logger.Info("cfbrowser: auto-update deferred (offline)")
 		return nil
 	}
 
-	licRep, licErr := CheckLicense(ctx, LicenseOptions{
-		CacheDir:   u.cfg.CacheDir,
-		APIBase:    u.cfg.LicenseAPIBase,
-		HTTPClient: u.cfg.HTTPClient,
-	})
-	if licErr != nil {
-		// License unprovable after the probe said "online": treat as
-		// a transient failure and defer (no free downgrade while a
-		// key is configured — the user's tier is unknown, not free).
-		if ResolveLicenseKey(cacheDir) != "" {
-			u.record(cacheDir, UpdateStatus{
-				InstalledVersion: installedVersion, Deferred: true,
-				LastError: licErr.Error(),
-			})
-			return nil
-		}
-		licRep = nil // key-less: the free channel proceeds
+	if channel == channelPro {
+		return u.checkProChannel(ctx, cacheDir, spec, logger)
 	}
-	if licRep != nil && licRep.Status.Valid {
-		return u.checkPro(ctx, cacheDir, spec, licRep, logger)
+	return u.checkFreeBase(ctx, cacheDir, spec, channel, logger)
+}
+
+// baselineVersion reports the working line's installed version for
+// the status bookkeeping: pro — the newest cache dir (pre-PR73
+// posture); free/auto — the newest free-line dir (pro-marked dirs
+// never satisfy the free line).
+func (u *Updater) baselineVersion(cacheDir string, spec PlatformSpec, channel string) string {
+	if channel == channelPro {
+		bin, _ := scanCache(cacheDir, spec)
+		if bin != nil {
+			return bin.Version
+		}
+		return ""
+	}
+	bin, _, _ := scanCacheFree(cacheDir, spec)
+	if bin != nil {
+		return bin.Version
+	}
+	return ""
+}
+
+// checkFreeBase is the free/auto update cycle. The free line's
+// comparison baseline is the filtered free scan (a pro-marked dir
+// must never gate a free update), the compat bound gates both the
+// cached-major verdict and the latest release, and — under auto — a
+// valid license offers the cycle to the pro upgrade first.
+func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec PlatformSpec, channel string, logger *slog.Logger) error {
+	freeBin, _, compatErr := scanCacheFree(cacheDir, spec)
+	installedVersion := ""
+	if freeBin != nil {
+		installedVersion = freeBin.Version
+	}
+	if compatErr != nil {
+		// The whole free line is unusable for the pinned chromedp:
+		// record and name the fix. A retry cannot move a bound.
+		u.record(cacheDir, UpdateStatus{
+			InstalledVersion: installedVersion, LastError: compatErr.Error(),
+		})
+		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", compatErr)
+		return compatErr
 	}
 
-	// Free channel: unchanged semantics.
+	if channel == channelAuto {
+		licRep, licErr := CheckLicense(ctx, LicenseOptions{
+			CacheDir:   u.cfg.CacheDir,
+			APIBase:    u.cfg.LicenseAPIBase,
+			HTTPClient: u.cfg.HTTPClient,
+		})
+		if licErr != nil {
+			// License unprovable after the probe said "online": a
+			// configured key defers (the tier is unknown, not free);
+			// a key-less setup keeps the free channel going.
+			if ResolveLicenseKey(cacheDir) != "" {
+				u.record(cacheDir, UpdateStatus{
+					InstalledVersion: installedVersion, Deferred: true,
+					LastError: licErr.Error(),
+				})
+				return nil
+			}
+			licRep = nil
+		}
+		if licRep != nil && licRep.Status.Valid {
+			if u.tryProUpgradeCycle(ctx, cacheDir, spec, licRep, logger) {
+				return nil // the pro line serves; the base is covered
+			}
+			// Pro pull skipped or failed: the notes are loud; keep
+			// the free base current below.
+		}
+	}
+
+	return u.freeFlow(ctx, cacheDir, spec, installedVersion, logger)
+}
+
+// freeFlow is the shared free-release tail of both update cycles:
+// latest release → chromedp compat bound → compare against the
+// caller's baseline → forced verified install. The bound applies on
+// every channel — it guards the driver, not a tier.
+func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSpec, installedVersion string, logger *slog.Logger) error {
 	rel, err := u.gh.LatestFreeRelease(ctx, spec)
 	if err != nil {
 		// Asset gaps (darwin on some tags) are terminal for this
@@ -358,6 +427,14 @@ func (u *Updater) check(ctx context.Context) error {
 			LatestVersion: installedVersion, InstalledVersion: installedVersion,
 			LastError: err.Error(),
 		})
+		return err
+	}
+	if err := checkChromiumCompat(rel.Version); err != nil {
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: rel.Version, InstalledVersion: installedVersion,
+			LastError: err.Error(),
+		})
+		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", err)
 		return err
 	}
 
@@ -388,17 +465,87 @@ func (u *Updater) check(ctx context.Context) error {
 	return nil
 }
 
+// tryProUpgradeCycle is auto mode's pro upgrade: with the license
+// already validated, resolve the newest pro version and update the
+// pro line — but only while that version stays within the chromedp
+// compatibility bound. Reports whether the pro line is confirmed
+// serving (updated now or already current); false hands the cycle
+// back to the free base, with the reason logged loud.
+func (u *Updater) tryProUpgradeCycle(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger) bool {
+	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
+		CacheDir:     u.cfg.CacheDir,
+		DownloadBase: u.cfg.DownloadBase,
+		HTTPClient:   u.cfg.HTTPClient,
+	})
+	if err != nil {
+		logger.Warn("cfbrowser: pro upgrade skipped — работаем на free", "error", err)
+		return false
+	}
+	if !chromiumMajorKnownGood(version) {
+		logger.Warn(proIncompatNote(version))
+		return false
+	}
+	if err := u.checkPro(ctx, cacheDir, spec, licRep, logger, channelAuto); err != nil {
+		logger.Warn("cfbrowser: pro update failed — работаем на free", "error", err)
+		return false
+	}
+	return true
+}
+
+// checkProChannel is the pre-PR73 updater cycle, regression-pinned
+// for channel=pro: license-gated pro updates with the classic free
+// flow as the no-valid-license fallback.
+func (u *Updater) checkProChannel(ctx context.Context, cacheDir string, spec PlatformSpec, logger *slog.Logger) error {
+	installed, _ := scanCache(cacheDir, spec)
+	installedVersion := ""
+	if installed != nil {
+		installedVersion = installed.Version
+	}
+
+	licRep, licErr := CheckLicense(ctx, LicenseOptions{
+		CacheDir:   u.cfg.CacheDir,
+		APIBase:    u.cfg.LicenseAPIBase,
+		HTTPClient: u.cfg.HTTPClient,
+	})
+	if licErr != nil {
+		// License unprovable after the probe said "online": treat as
+		// a transient failure and defer (no free downgrade while a
+		// key is configured — the user's tier is unknown, not free).
+		if ResolveLicenseKey(cacheDir) != "" {
+			u.record(cacheDir, UpdateStatus{
+				InstalledVersion: installedVersion, Deferred: true,
+				LastError: licErr.Error(),
+			})
+			return nil
+		}
+		licRep = nil // key-less: the free channel proceeds
+	}
+	if licRep != nil && licRep.Status.Valid {
+		return u.checkPro(ctx, cacheDir, spec, licRep, logger, channelPro)
+	}
+
+	// Free channel: the shared free flow (the compat bound rides it —
+	// it guards the driver, not a tier).
+	return u.freeFlow(ctx, cacheDir, spec, installedVersion, logger)
+}
+
 // checkPro runs the pro-channel update cycle: marker-gated latest
 // version, comparison against the PRO-installed line, verified pro
 // install. The comparison baseline is the newest pro-marked cache
 // directory only — a free-installed dir (same or newer version)
 // must never satisfy a pro update check; with no pro dir installed
-// the resolved version always downloads. Failures defer (the
-// network-gated retry semantics are identical to the free channel);
-// a free download is NEVER substituted.
-func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger) error {
+// the resolved version always downloads. Under auto the baseline is
+// compat-filtered (an incompatible pro dir never gates a compatible
+// update). Failures defer (the network-gated retry semantics are
+// identical to the free channel); a free download is NEVER
+// substituted.
+func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger, channel string) error {
 	// The pro line's baseline: pro-marked dirs only ("" when none).
-	proInstalled, _ := scanProCache(cacheDir, spec)
+	scanBaseline := scanProCache
+	if channel == channelAuto {
+		scanBaseline = scanProCacheCompat
+	}
+	proInstalled, _ := scanBaseline(cacheDir, spec)
 	installedVersion := ""
 	if proInstalled != nil {
 		installedVersion = proInstalled.Version

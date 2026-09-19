@@ -33,6 +33,7 @@ func TestUpdaterProChannelInstallsProVersion(t *testing.T) {
 		DownloadBase:   fx.srv.URL,
 		LicenseAPIBase: fx.srv.URL,
 		ProbeURL:       fx.srv.URL + "/api/license/validate",
+		Channel:        channelPro, // pro-channel pin: installs the pro latest whatever its major
 		Logger:         testLogger(t),
 	})
 	if err := up.CheckAndMaybeInstall(context.Background()); err != nil {
@@ -172,6 +173,7 @@ func TestUpdaterProVerificationFailureDefersNoFreeDowngrade(t *testing.T) {
 		DownloadBase:   fx.srv.URL,
 		LicenseAPIBase: fx.srv.URL,
 		ProbeURL:       fx.srv.URL + "/api/license/validate",
+		Channel:        channelPro, // pro-channel pin: verification failures defer, never downgrade
 		Logger:         testLogger(t),
 	})
 	err := up.CheckAndMaybeInstall(context.Background())
@@ -216,12 +218,14 @@ func TestUpdaterPinnedVersionDisablesSelfUpdate(t *testing.T) {
 func TestUpdaterFreeLicenseOfflineDefersThenFreeChannel(t *testing.T) {
 	// No license at all: the updater behaves exactly as before
 	// (network-gated free flow) — the license machinery adds no
-	// network dependency when no key exists.
-	archive := freeArchive(t, "150.0.0.0.1")
+	// network dependency when no key exists. (The newer fixture
+	// release stays within the chromedp compat bound: the free flow
+	// refuses incompatible latest builds, channel-agnostically.)
+	archive := freeArchive(t, "146.0.7680.177.9")
 	srv := newUpdateFixture(t,
-		[]string{"chromium-v150.0.0.0.1"},
+		[]string{"chromium-v146.0.7680.177.9"},
 		map[string][]ghAsset{
-			"chromium-v150.0.0.0.1": {{linuxX64Asset, int64(len(archive)), sha256Hex(archive), ""}},
+			"chromium-v146.0.7680.177.9": {{linuxX64Asset, int64(len(archive)), sha256Hex(archive), ""}},
 		},
 		map[string]string{linuxX64Asset: string(archive)},
 	)
@@ -240,7 +244,7 @@ func TestUpdaterFreeLicenseOfflineDefersThenFreeChannel(t *testing.T) {
 	if err := up.CheckAndMaybeInstall(context.Background()); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if st := up.Status(); st.UpdatedTo != "150.0.0.0.1" {
+	if st := up.Status(); st.UpdatedTo != "146.0.7680.177.9" {
 		t.Errorf("status = %+v, want the free update installed", st)
 	}
 }

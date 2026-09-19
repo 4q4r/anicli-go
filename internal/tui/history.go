@@ -282,10 +282,25 @@ func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *Men
 			if !ok {
 				return pop()
 			}
-			// PR30: every record already carries its Shikimori
-			// binding — the pick goes straight to the provider
-			// fan-out, no actions menu and no rebind prompt.
-			return push(newRebindProgress(deps, rec))
+			if rec.NeedsCorrection || rec.SourceID == "" || rec.SourceURL == "" {
+				// Placeholder (PR30): the record carries no usable
+				// source — the provider fan-out binds it (PR62 #2
+				// persists the pick).
+				return push(newRebindProgress(deps, rec))
+			}
+			// PR62 #3: bound records skip the search — the fan-out ran
+			// ONCE when the binding was made; re-entry resumes the
+			// stored source directly (python's saved-single-source
+			// resume), «🔄 Перепривязать» re-runs the fan-out.
+			primary := contracts.SearchResult{
+				Title:    derefStr(rec.BoundTitle, rec.Title),
+				URL:      rec.SourceURL,
+				SourceID: rec.SourceID,
+			}
+			if rec.Poster != nil {
+				primary.Poster = *rec.Poster
+			}
+			return push(newResumedSession(deps, primary, []contracts.SearchResult{primary}, *rec))
 		},
 	})
 }

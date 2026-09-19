@@ -733,6 +733,14 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return s, nil // a round is already running; its settle will report
 		}
 		return s, s.hydrateEpisode(s.currentEpisode())
+	case "rebind":
+		// PR62 #3: re-run the provider fan-out over the stored record;
+		// the next checklist pick re-persists the binding (BindSource
+		// moves the row, deleting the old source key).
+		if s.resume == nil {
+			return s, nil
+		}
+		return s, replace(newRebindProgress(s.deps, s.resume))
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
 		s.status = "Озвучка сброшена — выберите заново при просмотре"
@@ -1890,12 +1898,15 @@ func (s *sessionScreen) restoreResume() {
 // is disabled only for an episode whose hydration attempt already
 // found nothing — an unopened episode stays clickable, because
 // clicking it IS the on-demand trigger (PR44 owner model).
+// buildActionMenu assembles the action menu; a resumed record adds
+// «🔄 Перепривязать» (PR62 #3): the manual re-binding path that
+// re-runs the provider fan-out over the stored record.
 func (s *sessionScreen) buildActionMenu() {
 	watchDisabled := false
 	if ep := s.currentEpisodeData(); ep != nil && s.hydrated[ep.Num] && len(ep.RawEmbeds) == 0 {
 		watchDisabled = true
 	}
-	s.list = NewPinList(NewMenu(s.renderHeader(), "", []Choice{
+	choices := []Choice{
 		{ID: "watch", Label: "▶ Смотреть", Disabled: watchDisabled},
 		{ID: "next", Label: "⏭ След."},
 		{ID: "prev", Label: "⏮ Пред."},
@@ -1904,8 +1915,12 @@ func (s *sessionScreen) buildActionMenu() {
 		{ID: "info", Label: "📝 Изменить инфо"},
 		{ID: "download", Label: "⬇ Скачать серии"},
 		{ID: "refresh", Label: "🔄 Обновить источники"},
-		{ID: "exit", Label: "🚪 Выход"},
-	}...), defaultListHeight)
+	}
+	if s.resume != nil {
+		choices = append(choices, Choice{ID: "rebind", Label: "🔄 Перепривязать"})
+	}
+	choices = append(choices, Choice{ID: "exit", Label: "🚪 Выход"})
+	s.list = NewPinList(NewMenu(s.renderHeader(), "", choices...), defaultListHeight)
 }
 
 // buildEpisodeList builds the jump list with local markers.

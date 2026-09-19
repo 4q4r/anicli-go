@@ -150,3 +150,94 @@ func TestHistoryBadgeClearsAfterBind(t *testing.T) {
 		t.Fatalf("bound record must not render the [⚠] badge, got %q", got)
 	}
 }
+
+// sessionMenuItem finds a menu item by id.
+func sessionMenuItem(s *sessionScreen, id string) *Choice {
+	for i := range s.list.Menu().Items {
+		if s.list.Menu().Items[i].ID == id {
+			return &s.list.Menu().Items[i]
+		}
+	}
+	return nil
+}
+
+// rebindSession builds a resumed session (record ID 7) with episodes
+// loaded and the action menu open.
+func rebindSession(t *testing.T) *sessionScreen {
+	t.Helper()
+	deps := &Deps{
+		Episode: &fakeEpisode{episodes: testEpisodeSet()},
+		History: &fakeHistory{},
+	}
+	primary := contracts.SearchResult{Title: "Наруто", URL: "u2", SourceID: "anilib"}
+	group := []contracts.SearchResult{primary, {Title: "Наруто", URL: "u1", SourceID: "animego"}}
+	s := newResumedSession(deps, primary, group, storage.AnimeProgress{
+		ID: 7, Title: "Наруто", SourceID: "anilib", SourceURL: "u2", CurrentEpisode: "2",
+	})
+	s.loadEpisodesSync()
+	return s
+}
+
+// TestSessionRebindMenuItemPresentForResumedRecord (PR62 #3): a
+// session backed by a stored record offers «🔄 Перепривязать» — the
+// manual re-binding path (e.g. a new source appeared).
+func TestSessionRebindMenuItemPresentForResumedRecord(t *testing.T) {
+	s := rebindSession(t)
+	item := sessionMenuItem(s, "rebind")
+	if item == nil {
+		t.Fatalf("resumed session must offer «Перепривязать», got %v", s.list.Menu().Items)
+	}
+	if item.Label != "🔄 Перепривязать" {
+		t.Fatalf("label = %q, want «🔄 Перепривязать»", item.Label)
+	}
+}
+
+// TestSessionRebindMenuItemAbsentForFreshSession (PR62 #3): a fresh
+// session has no stored binding to re-run — no item.
+func TestSessionRebindMenuItemAbsentForFreshSession(t *testing.T) {
+	deps := &Deps{
+		Episode: &fakeEpisode{episodes: testEpisodeSet()},
+		History: &fakeHistory{},
+	}
+	s := NewSessionScreen(deps,
+		contracts.SearchResult{Title: "Наруто", URL: "u1", SourceID: "animego"},
+		[]contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}})
+	s.loadEpisodesSync()
+	if item := sessionMenuItem(s, "rebind"); item != nil {
+		t.Fatalf("fresh session must not offer «Перепривязать», got %+v", item)
+	}
+}
+
+// TestSessionRebindRerunsSearchForRecord (PR62 #3): picking
+// «Перепривязать» replaces the session with the catalog fan-out over
+// the SAME record; the subsequent pick re-persists the binding (the
+// old source row is deleted by the move), closing the loop.
+func TestSessionRebindRerunsSearchForRecord(t *testing.T) {
+	s := rebindSession(t)
+	item := sessionMenuItem(s, "rebind")
+	if item == nil {
+		t.Fatalf("resumed session must offer «Перепривязать»")
+	}
+	for i := range s.list.Menu().Items {
+		if s.list.Menu().Items[i].ID == "rebind" {
+			s.list.Jump(i)
+			break
+		}
+	}
+	_, cmd := s.Update(enter())
+	if cmd == nil {
+		t.Fatalf("the pick must navigate")
+	}
+	msg := cmd()
+	rm, ok := msg.(replaceMsg)
+	if !ok {
+		t.Fatalf("rebind must replace the session, got %#v", msg)
+	}
+	rp, ok := rm.screen.(*rebindProgress)
+	if !ok {
+		t.Fatalf("rebind must open the catalog fan-out, got %T", rm.screen)
+	}
+	if rp.rec == nil || rp.rec.ID != 7 {
+		t.Fatalf("the fan-out must carry the same record, got %+v", rp.rec)
+	}
+}

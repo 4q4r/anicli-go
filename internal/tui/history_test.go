@@ -225,14 +225,47 @@ func TestHistoryListRendering(t *testing.T) {
 	}
 }
 
+// TestHistoryPickBoundRecordSkipsSearch (PR62 #3): a BOUND record
+// (needs_correction clear) resumes the session straight from the
+// stored source — the provider fan-out runs ONCE per binding, not on
+// every entry.
+func TestHistoryPickBoundRecordSkipsSearch(t *testing.T) {
+	deps := &Deps{History: &fakeHistory{items: historyItems()}}
+	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
+	list.list.Jump(0) // Ванпанчмен — bound
+	_, cmd := list.Update(enter())
+	if cmd == nil {
+		t.Fatalf("pick must navigate")
+	}
+	msg := cmd()
+	pm, ok := msg.(pushMsg)
+	if !ok {
+		t.Fatalf("pick must push a screen, got %#v", msg)
+	}
+	sess, ok := pm.screen.(*sessionScreen)
+	if !ok {
+		t.Fatalf("bound record must resume the session directly (no re-search), got %T", pm.screen)
+	}
+	if sess.resume == nil || sess.resume.ID != 1 {
+		t.Fatalf("session must resume the picked record, got %+v", sess.resume)
+	}
+	if got := sess.shikimoriID(); got != 11 {
+		t.Fatalf("resumed session must carry the shikimori binding, got %d", got)
+	}
+	if sess.primary.SourceID != "animego" || sess.primary.URL != "u1" {
+		t.Fatalf("session must build on the stored source, got %s/%s", sess.primary.SourceID, sess.primary.URL)
+	}
+}
+
 // TestHistoryPickStartsFanOut (PR30): picking an anime from the
 // catalog goes DIRECTLY to the provider fan-out — no actions menu, no
-// rebind text prompt: every record already carries its Shikimori
-// binding.
+// rebind text prompt. PR62 #3 narrows this to the PLACEHOLDER records
+// (needs_correction set): bound records resume without a search —
+// see TestHistoryPickBoundRecordSkipsSearch.
 func TestHistoryPickStartsFanOut(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
-	list.list.Jump(0) // Ванпанчмен
+	list.list.Jump(1) // Bleach (needs_correction placeholder, watching filter)
 	_, cmd := list.Update(enter())
 	if cmd == nil {
 		t.Fatalf("pick must navigate")

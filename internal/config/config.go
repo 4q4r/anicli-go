@@ -251,6 +251,19 @@ type CF struct {
 	AutoUpdate bool `toml:"auto_update"`
 	// UpdateInterval is the auto-update retry ticker cadence.
 	UpdateInterval time.Duration `toml:"update_interval"`
+	// Channel selects the stealth-Chromium line (PR73):
+	//
+	//   - "auto" (default): free is the base — public GitHub free
+	//     releases, no pro traffic without a key; a valid license key
+	//     (anicli cf login) upgrades installs and updates to the pro
+	//     line, best-effort and only while the pro build stays
+	//     compatible with the bundled chromedp driver;
+	//   - "free": the pro channel is never touched, even with a key;
+	//   - "pro": always the license-keyed pro line (requires a valid
+	//     key; pre-PR73 behavior).
+	//
+	// Anything else fails validation at startup.
+	Channel string `toml:"channel"`
 }
 
 // ProvidersKodik carries the Kodik API token (https://kodik-api.com
@@ -350,6 +363,7 @@ func Default() Settings {
 			BrowserIdleTimeout: 15 * time.Second,
 			AutoUpdate:         true,
 			UpdateInterval:     30 * time.Minute,
+			Channel:            "auto",
 		},
 	}
 }
@@ -514,6 +528,15 @@ func (s *Settings) Validate() error {
 			return fmt.Errorf("torrent.tracker_lists %q: unsupported scheme %q (want http or https)",
 				listURL, u.Scheme)
 		}
+	}
+	// The stealth-Chromium channel: a typo ("frea") must fail at
+	// startup, not silently resolve as some other line mid-run.
+	switch s.CF.Channel {
+	case "", "auto", "free", "pro":
+		// "" only arises for programmatically built Settings — it
+		// selects auto downstream.
+	default:
+		return fmt.Errorf("cf.channel %q: unknown channel (want auto, free or pro)", s.CF.Channel)
 	}
 	return nil
 }

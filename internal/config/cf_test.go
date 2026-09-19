@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,9 @@ func TestCFDefaults(t *testing.T) {
 	if s.CF.UpdateInterval != 30*time.Minute {
 		t.Errorf("cf.update_interval default = %v, want 30m", s.CF.UpdateInterval)
 	}
+	if s.CF.Channel != "auto" {
+		t.Errorf("cf.channel default = %q, want auto (free base + license upgrade, PR73)", s.CF.Channel)
+	}
 }
 
 func TestCFFileOverrides(t *testing.T) {
@@ -36,6 +40,7 @@ solve_timeout = "2m"
 browser_idle_timeout = "5s"
 auto_update = false
 update_interval = "1h"
+channel = "free"
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -59,6 +64,9 @@ update_interval = "1h"
 	if s.CF.UpdateInterval != time.Hour {
 		t.Errorf("update_interval = %v", s.CF.UpdateInterval)
 	}
+	if s.CF.Channel != "free" {
+		t.Errorf("channel = %q, want file value free", s.CF.Channel)
+	}
 }
 
 // TestCFZeroIdleTimeoutIsImmediate pins the "0s = close right after
@@ -76,6 +84,37 @@ func TestCFZeroIdleTimeoutIsImmediate(t *testing.T) {
 	}
 	if s.CF.BrowserIdleTimeout != 0 {
 		t.Errorf("browser_idle_timeout = %v, want 0 (immediate close)", s.CF.BrowserIdleTimeout)
+	}
+}
+
+// TestCFChannelValidation pins the channel contract: the three
+// documented values load; anything else fails loud at startup
+// instead of surfacing as a mid-run resolution surprise.
+func TestCFChannelValidation(t *testing.T) {
+	for _, channel := range []string{"auto", "free", "pro"} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "settings.toml")
+		content := "[cf]\nchannel = \"" + channel + "\"\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(path)
+		if err != nil {
+			t.Fatalf("channel %q: load: %v", channel, err)
+		}
+		if s.CF.Channel != channel {
+			t.Errorf("channel = %q, want %q", s.CF.Channel, channel)
+		}
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.toml")
+	if err := os.WriteFile(path, []byte("[cf]\nchannel = \"banana\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "cf.channel") {
+		t.Fatalf("err = %v, want a loud cf.channel validation error", err)
 	}
 }
 

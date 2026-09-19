@@ -111,6 +111,9 @@ type SolverConfig struct {
 	Binary *BinaryInfo
 	// DriverFactory builds the Naviger (nil = chromedp driver).
 	DriverFactory DriverFactory
+	// Channel threads the config [cf] channel into the lazy
+	// resolution (ResolveOptions.Channel; "" = auto).
+	Channel string
 }
 
 func (c SolverConfig) solveTimeout() time.Duration {

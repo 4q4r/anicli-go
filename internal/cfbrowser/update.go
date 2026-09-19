@@ -57,6 +57,11 @@ type UpdaterConfig struct {
 	// BinaryPath mirrors $CLOAKBROWSER_BINARY_PATH (an explicit user
 	// binary disables self-updating: the user owns that channel).
 	BinaryPath string
+	// Channel selects the update line (config [cf] channel): "auto"
+	// (default, "" incl.) keeps the free base current and pulls pro
+	// only while a valid key sees a chromedp-compatible pro latest;
+	// "free" never touches pro; "pro" keeps the pre-PR73 cycle.
+	Channel string
 	// Logger receives outcome lines (nil = slog.Default()).
 	Logger *slog.Logger
 	// HTTPClient overrides transport (tests).

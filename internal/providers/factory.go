@@ -72,10 +72,6 @@ var allFactories = []struct {
 	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
 	}},
-	{"yanima", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newYanima(YanimaBase, cfg.Providers.Yanima.DDoSP1,
-			cfg.Providers.Yanima.DDoSP2, cfg.Providers.Yanima.Session, http)
-	}},
 	// animedia (PR56): the amd.online DLE site (the animedia.online
 	// JSON v3 API is dead). Written against the live site, not ported;
 	// no credentials — DLE search form POST in, kodik embeds out

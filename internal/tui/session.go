@@ -716,6 +716,11 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		if s.currentIdx < len(s.order)-1 {
 			s.currentIdx++
 			s.buildActionMenu()
+			// python parity (PR63 #2): the pick falls through into
+			// resolve_dubs_smart + extract_and_play — the next episode
+			// starts playing right away when the remembered dubs still
+			// fit.
+			return s.autoWatchNext()
 		}
 		return s, nil
 	case "prev":
@@ -798,6 +803,41 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 		{ID: "buffer", Label: "Буферный", Value: "buffer"},
 	}...), defaultListHeight)
 	return s, nil
+}
+
+// autoWatchNext launches the watch pipeline for the episode «⏭ След.»
+// just advanced to (PR63 #2, python session_loop parity: the pick
+// falls through into resolve_dubs_smart + extract_and_play). The
+// remembered dubs still available on the new episode → straight to
+// playback with no manual picks; the previously used source gone →
+// the typed «⚠ Прошлые настройки недоступны» note + the usual
+// selection (the merged stream list, with the audio prompt when the
+// audio pick is fresh). The format selector does not re-open: the
+// armed buffered mode carries over — the python loop has no
+// per-episode format step. A sourceless episode hydrates first (the
+// same on-demand trigger as «Смотреть»).
+func (s *sessionScreen) autoWatchNext() (Screen, tea.Cmd) {
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		s.status = "Нет серий"
+		return s, nil
+	}
+	if len(ep.RawEmbeds) == 0 {
+		if !s.hydrated[ep.Num] && !s.hydrating {
+			return s, s.hydrateEpisode(ep.Num)
+		}
+		if !s.hydrating {
+			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+		}
+		return s, nil
+	}
+	if s.videoDub != "" && len(ep.RawEmbeds[s.videoDub]) == 0 {
+		// python resolve_dubs_smart: the previously used source is not
+		// on the new episode — typed note, then the usual selection.
+		s.status = fmt.Sprintf("⚠ Прошлые настройки недоступны: %s / %s",
+			s.videoDub, s.audioDub)
+	}
+	return s.proceedWatch()
 }
 
 // handleFormatKey resolves the format selector: the pick arms the

@@ -382,7 +382,14 @@ func paheFormSubmitScript(action string) string {
 // jsString renders s as a JS single-quoted string literal (the bridge
 // only interpolates Go-built keys and URLs — never page content).
 func jsString(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`)
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `\'`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		"\x00", `\u0000`,
+	)
 	return "'" + r.Replace(s) + "'"
 }
 

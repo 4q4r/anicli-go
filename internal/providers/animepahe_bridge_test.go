@@ -337,3 +337,25 @@ func TestBuildPaheBridge(t *testing.T) {
 		t.Fatal("buildPaheBridge(manager without solver) != nil, want nil")
 	}
 }
+
+// TestJSStringEscapes pins the bridge's JS string-literal escaping:
+// backslash, quote, newlines, tab and NUL must survive the Go→JS
+// handoff byte-exactly (URLs/keys are interpolated through this).
+func TestJSStringEscapes(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		`plain`:         `'plain'`,
+		`back\slash`:    `'back\\slash'`,
+		`quo'te`:        `'quo\'te'`,
+		"new\nline":     `'new\nline'`,
+		"carriage\rret": `'carriage\rret'`,
+		"tab\there":     `'tab\there'`,
+		"nul\x00byte":   `'nul\u0000byte'`,
+	}
+	for in, want := range cases {
+		if got := jsString(in); got != want {
+			t.Errorf("jsString(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

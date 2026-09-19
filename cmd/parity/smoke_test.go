@@ -465,3 +465,30 @@ func TestSmokeSearchErrorFails(t *testing.T) {
 // Compile-time guard: the smoke suite exercises the hydration
 // contract production uses (kept honest against accidental drift).
 var _ contracts.DubsHydrator = (*smokeHydrator)(nil)
+
+// TestSmokeTimeoutFlagReachesDeps pins the --smoke-timeout wiring: the
+// CLI flag must override deps.smokeTimeout (the deps seam alone is
+// unreachable from the command line). A provider whose episode leg
+// sleeps past a tiny budget FAILS with the deadline under the flag,
+// and PASSES without it — same provider, same sleep.
+func TestSmokeTimeoutFlagReachesDeps(t *testing.T) {
+	slow := newParityProvider(t, "slowpoke", false)
+	slow.epSleep = 400 * time.Millisecond
+
+	withFlag := smokeDeps(t, 0, slow)
+	out, _, code := runSmoke(t, withFlag, "smoke", "slowpoke", "--smoke-timeout", "50ms")
+	if code == 0 {
+		t.Fatalf("a 50ms budget must starve the 400ms episode leg, stdout:\n%s", out)
+	}
+	if !strings.Contains(out, "context deadline exceeded") {
+		t.Fatalf("FAIL row must name the budget deadline:\n%s", out)
+	}
+
+	slowDefault := newParityProvider(t, "slowpoke", false)
+	slowDefault.epSleep = 400 * time.Millisecond
+	noFlag := smokeDeps(t, 0, slowDefault)
+	out, _, code = runSmoke(t, noFlag, "smoke", "slowpoke")
+	if code != 0 {
+		t.Fatalf("without the flag the default budget must cover the leg, stdout:\n%s", out)
+	}
+}

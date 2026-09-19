@@ -353,14 +353,19 @@ func TestErrNavDeadlineWrapsContextDeadlineExceeded(t *testing.T) {
 // recordingExecutor is a cdp.Executor fake that records command
 // methods instead of talking to a browser.
 type recordingExecutor struct {
-	mu      sync.Mutex
-	methods []string
+	mu        sync.Mutex
+	methods   []string
+	onCommand func() // optional hook fired in the ISSUING goroutine
 }
 
 func (e *recordingExecutor) Execute(_ context.Context, method string, _ any, _ any) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	hook := e.onCommand
 	e.methods = append(e.methods, method)
+	e.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
@@ -437,6 +442,28 @@ func TestEnableResourceDietIssuesFetchEnableOnSessionContext(t *testing.T) {
 	rec := exec.recorded()
 	if len(rec) != 1 || rec[0] != "Fetch.enable" {
 		t.Errorf("commands = %v, want exactly Fetch.enable", rec)
+	}
+}
+
+// TestArmCacheDisabledIssuesCommandsOnSessionContext pins the PR71
+// cache posture: an ephemeral automation browser must never serve a
+// navigation from the HTTP cache — live-verified 2026-09-19: a cached
+// render settled instantly while every network-bound in-page fetch
+// drew a fresh challenge (cf-mitigated: challenge), because the stale
+// clearance for the current egress IP was never re-negotiated by the
+// cached document request.
+func TestArmCacheDisabledIssuesCommandsOnSessionContext(t *testing.T) {
+	base, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+	exec := &recordingExecutor{}
+	tctx := cdp.WithExecutor(base, exec)
+
+	if err := armCacheDisabled(tctx); err != nil {
+		t.Fatalf("cache disable must arm on a session context: %v", err)
+	}
+	rec := exec.recorded()
+	if len(rec) != 2 || rec[0] != "Network.enable" || rec[1] != "Network.setCacheDisabled" {
+		t.Errorf("commands = %v, want [Network.enable Network.setCacheDisabled]", rec)
 	}
 }
 
@@ -532,5 +559,80 @@ func TestHandlePausedRequestRoutesOnSessionExecutor(t *testing.T) {
 	rec := exec.recorded()
 	if len(rec) != 2 || rec[0] != "Fetch.failRequest" || rec[1] != "Fetch.continueRequest" {
 		t.Errorf("commands = %v, want [Fetch.failRequest Fetch.continueRequest]", rec)
+	}
+}
+
+// TestPauseHandlerNeverIssuesCommandsOnListenerGoroutine pins the PR71
+// deadlock fix's invariant: chromedp runs event listeners SYNCHRONOUSLY
+// under the target's listenersMu (util.go runListeners), so a listener
+// that issues a CDP command deadlocks against its own lock — live
+// verified 2026-09-19: every solve hung forever once a challenge page's
+// logo image paused (fetch-domain interception). The diet handler must
+// therefore only ENQUEUE; the commands flow on the pump goroutine.
+func TestPauseHandlerNeverIssuesCommandsOnListenerGoroutine(t *testing.T) {
+	base, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+	exec := &recordingExecutor{}
+	ctx := cdp.WithExecutor(base, exec)
+
+	handler, stopped := newPausePump(ctx)
+	t.Cleanup(func() { <-stopped })
+
+	syncProbe := make(chan struct{})
+	exec.onCommand = func() { syncProbe <- struct{}{} } // fires IN the issuing goroutine
+
+	handler(&fetch.EventRequestPaused{
+		RequestID:    fetch.RequestID("img1"),
+		ResourceType: network.ResourceTypeImage,
+	})
+
+	// The handler must have returned WITHOUT issuing the command: the
+	// synchronous probe never fired before this line (a blocking receive
+	// here would mean the old in-listener behavior).
+	select {
+	case <-syncProbe:
+		t.Fatal("the listener goroutine issued a CDP command (deadlock posture)")
+	default:
+	}
+
+	// The command still lands, asynchronously, on the pump.
+	select {
+	case <-syncProbe:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pump never issued the pause answer")
+	}
+	rec := exec.recorded()
+	if len(rec) != 1 || rec[0] != "Fetch.failRequest" {
+		t.Errorf("commands = %v, want the async Fetch.failRequest", rec)
+	}
+}
+
+// Overflow never blocks the listener goroutine either: excess pauses
+// are dropped (a stalled diet-target image is benign; a deadlocked
+// receiver is not).
+func TestPauseHandlerOverflowDropsWithoutBlocking(t *testing.T) {
+	base, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+	exec := &recordingExecutor{}
+	ctx := cdp.WithExecutor(base, exec)
+
+	handler, stopped := newPausePump(ctx)
+	t.Cleanup(func() { <-stopped })
+
+	var seq atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range pauseQueueCap * 3 {
+			handler(&fetch.EventRequestPaused{
+				RequestID:    fetch.RequestID(fmt.Sprint(seq.Add(1))),
+				ResourceType: network.ResourceTypeImage,
+			})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler blocked on overflow")
 	}
 }

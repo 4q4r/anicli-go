@@ -37,8 +37,12 @@ var allFactories = []struct {
 	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},
-	{"animepahe", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimePahe(AnimePaheBase, http)
+	// animepahe (PR71): the site ops ride the [cf] browser bridge (the
+	// serving origin re-challenges non-browser fingerprints even with a
+	// replayed clearance — PR71 dossier A/B); nil bridge keeps the
+	// netclient + CF-ladder path for [cf]-disabled configs.
+	{"animepahe", func(http *netclient.Client, _ config.Settings, cf *cfbrowser.Manager) contracts.Provider {
+		return newAnimePahe(AnimePaheBase, http, buildPaheBridge(cf))
 	}},
 	// kickassanime (PR58): the kaa.lt JSON API (fsearch → show →
 	// paginated episodes → per-episode servers on the krussdomi HLS

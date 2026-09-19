@@ -40,7 +40,7 @@ func TestAnimePaheSearch(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "animepahe_search.json"))
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
@@ -82,7 +82,7 @@ func TestAnimePaheSearchSendsRefererAndUA(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"data": []}`)
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 
 	if _, err := p.Search(context.Background(), "q"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -104,7 +104,7 @@ func TestAnimePaheSearchTypedErrors(t *testing.T) {
 
 	t.Run("transport error", func(t *testing.T) {
 		t.Parallel()
-		p := newAnimePahe("http://"+newDeadListener(t).Addr().String(), testClient(t, "animepahe"))
+		p := newAnimePahe("http://"+newDeadListener(t).Addr().String(), testClient(t, "animepahe"), nil)
 		results, err := p.Search(context.Background(), "q")
 		if err == nil {
 			t.Fatal("Search err = nil, want the transport error")
@@ -119,7 +119,7 @@ func TestAnimePaheSearchTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, "not json at all")
 		})
-		p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+		p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 		results, err := p.Search(context.Background(), "q")
 		if err == nil {
 			t.Fatal("Search err = nil, want a decode error")
@@ -163,7 +163,7 @@ func TestAnimePaheGetEpisodesPagination(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "animepahe_episodes_p2.json"))
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 
 	const animeSession = "76d59a16-e57d-4ad1-7ec6-e88f0fe9469b"
 	episodes, err := p.GetEpisodes(context.Background(), animeSession)
@@ -217,7 +217,7 @@ func TestAnimePaheGetEpisodesSinglePage(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"total":1,"per_page":30,"current_page":1,"last_page":1,"data":[`+
 			`{"id":8370,"episode":1,"episode2":0,"session":"3b736dd0beb4caf0b1b28e9937755f10eb3626c5b6b107ccb45602f2463f697f"}]}`)
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 
 	episodes, err := p.GetEpisodes(context.Background(), "f903fca6-42ca-c7f2-d631-0dc0f1605ba5")
 	if err != nil {
@@ -236,7 +236,7 @@ func TestAnimePaheGetEpisodesTypedErrors(t *testing.T) {
 
 	t.Run("transport error", func(t *testing.T) {
 		t.Parallel()
-		p := newAnimePahe("http://"+newDeadListener(t).Addr().String(), testClient(t, "animepahe"))
+		p := newAnimePahe("http://"+newDeadListener(t).Addr().String(), testClient(t, "animepahe"), nil)
 		episodes, err := p.GetEpisodes(context.Background(), "s")
 		if err == nil {
 			t.Fatal("GetEpisodes err = nil, want the transport error")
@@ -251,7 +251,7 @@ func TestAnimePaheGetEpisodesTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, "not json at all")
 		})
-		p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+		p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 		_, err := p.GetEpisodes(context.Background(), "s")
 		var pe *contracts.ProviderError
 		if !errors.As(err, &pe) {
@@ -360,7 +360,7 @@ func TestAnimePaheResolveStreamKwikRoundTrip(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, pahePlayPage(kwik.URL+"/kwik/e/abc123XYZ", "1080")) //nolint:gosec // test-owned fixture writer
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 	episode := contracts.Episode{
 		Num:   "1",
 		RawID: "f903fca6-42ca-c7f2-d631-0dc0f1605ba5|3b736dd0beb4caf0",
@@ -399,7 +399,7 @@ func TestAnimePaheResolveStreamDirectMedia(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, pahePlayPage("https://cdn.animepahe.example/file.mp4", "720"))
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 	episode := contracts.Episode{
 		RawID:     "s|e",
 		RawEmbeds: map[string][]string{"Original (Pahe)": {srv.URL + "/play/s/e"}},
@@ -427,7 +427,7 @@ func TestAnimePaheResolveStreamNoButtons(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body>Just a moment...</body></html>")
 	})
-	p := newAnimePahe(srv.URL, testClient(t, "animepahe"))
+	p := newAnimePahe(srv.URL, testClient(t, "animepahe"), nil)
 	episode := contracts.Episode{
 		RawID:     "s|e",
 		RawEmbeds: map[string][]string{"Original (Pahe)": {srv.URL + "/play/s/e"}},
@@ -446,7 +446,7 @@ func TestAnimePaheResolveStreamNoButtons(t *testing.T) {
 func TestAnimePaheProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimePahe(AnimePaheBase, testClient(t, "animepahe"))
+	p := newAnimePahe(AnimePaheBase, testClient(t, "animepahe"), nil)
 	if p.ID() != "animepahe" || p.Name() != "AnimePahe" || p.BaseURL() != AnimePaheBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}

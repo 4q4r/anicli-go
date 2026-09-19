@@ -80,7 +80,7 @@ type smokeResult struct {
 
 // paritySmokeCommand builds `parity smoke [provider|all]`.
 func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "smoke [provider|all]",
 		Short: "Live smoke chain (search → dubs → stream) per provider; all = every non-credential provider",
 		Long: "smoke runs the full consumption chain against live sites per provider: search a\n" +
@@ -97,6 +97,14 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 			"are skipped with a visible reason. Exits non-zero when any provider FAILs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The per-provider budget override (--smoke-timeout): the
+			// 90s default predates browser-transport providers — a
+			// CF-bridge provider's chain is a dozen navigations, and a
+			// budget meant for plain HTTP starves it mid-leg (PR71).
+			if cmd.Flags().Changed("smoke-timeout") {
+				v, _ := cmd.Flags().GetDuration("smoke-timeout")
+				d.smokeTimeout = v
+			}
 			env, err := setup(cmd)
 			if err != nil {
 				return err
@@ -161,6 +169,9 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 			return nil
 		},
 	}
+	cmd.Flags().Duration("smoke-timeout", 0,
+		"per-provider smoke budget override (default: 90s; a CF-bridge provider's browser chain needs more)")
+	return cmd
 }
 
 // smokeOne runs one provider's smoke: search (NamePreference-routed),

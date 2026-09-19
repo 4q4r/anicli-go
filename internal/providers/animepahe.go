@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -39,8 +40,15 @@ const animePaheDub = "Original (Pahe)"
 // /play/<anime>/<episode> page whose #resolutionMenu buttons carry the
 // kwik embed URLs (PR49: the site replaced the old quality anchors with
 // server-rendered data-src buttons) that feed the extractor factory.
+//
+// PR71: the site operations ride the [cf] browser bridge when one is
+// wired (the serving origin re-challenges non-browser fingerprints even
+// with a replayed clearance — see animepahe_bridge.go); nil keeps the
+// netclient + CF-ladder path.
 type AnimePahe struct {
 	Base
+	// browser is the stealth-browser transport (nil = netclient).
+	browser paheBrowser
 }
 
 // newAnimePahe builds the provider against baseURL.
@@ -49,7 +57,7 @@ type AnimePahe struct {
 // User-Agent+Referer header set (animepahe.py:24) but forgets to pass it
 // to any request; the port actually sends the Referer (the UA is already
 // applied by the netclient on every request).
-func newAnimePahe(baseURL string, http *netclient.Client) *AnimePahe {
+func newAnimePahe(baseURL string, http *netclient.Client, browser paheBrowser) *AnimePahe {
 	return &AnimePahe{Base: Base{
 		id:          "animepahe",
 		name:        "AnimePahe",
@@ -58,7 +66,31 @@ func newAnimePahe(baseURL string, http *netclient.Client) *AnimePahe {
 		contentLang: "ja",
 		headers:     map[string]string{"Referer": baseURL},
 		http:        http,
-	}}
+	}, browser: browser}
+}
+
+// fetchPage GETs url through the provider's active transport: the
+// in-page browser fetch (site cookies, real fingerprint) when the
+// bridge is wired, the netclient + CF ladder otherwise. Failures are
+// typed provider errors tagged with op.
+func (p *AnimePahe) fetchPage(ctx context.Context, url string, op string) ([]byte, error) {
+	if p.browser != nil {
+		body, err := p.browser.PageFetch(ctx, url)
+		if err != nil {
+			return nil, contracts.WrapProvider(p.ID(), op, 0, err)
+		}
+		return body, nil
+	}
+	resp, err := p.http.Do(ctx, netclient.Request{
+		Method:  "GET",
+		URL:     url,
+		Headers: p.headers,
+		Op:      op,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
 }
 
 // animePaheSearch mirrors the fields consumed by animepahe.py:36-43.
@@ -95,19 +127,14 @@ func (p *AnimePahe) Search(ctx context.Context, query string) ([]contracts.Searc
 	params.Set("m", "search")
 	params.Set("q", query)
 
-	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     p.baseURL + "/api?" + params.Encode(),
-		Headers: p.headers,
-		Op:      contracts.OpSearch,
-	})
+	body, err := p.fetchPage(ctx, p.baseURL+"/api?"+params.Encode(), contracts.OpSearch)
 	if err != nil {
 		return nil, err
 	}
 
 	var data animePaheSearch
-	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
+	if jsonErr := json.Unmarshal(body, &data); jsonErr != nil {
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, 0,
 			fmt.Errorf("decode search response: %w", jsonErr))
 	}
 
@@ -154,19 +181,14 @@ func (p *AnimePahe) fetchReleasePage(ctx context.Context, animeURL string, page 
 	params.Set("sort", "episode_asc")
 	params.Set("page", strconv.Itoa(page))
 
-	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     p.baseURL + "/api?" + params.Encode(),
-		Headers: p.headers,
-		Op:      contracts.OpGetEpisodes,
-	})
+	body, err := p.fetchPage(ctx, p.baseURL+"/api?"+params.Encode(), contracts.OpGetEpisodes)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	var data animePaheRelease
-	if jsonErr := json.Unmarshal(resp.Body, &data); jsonErr != nil {
-		return nil, 0, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+	if jsonErr := json.Unmarshal(body, &data); jsonErr != nil {
+		return nil, 0, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
 			fmt.Errorf("decode release page %d: %w", page, jsonErr))
 	}
 
@@ -226,15 +248,21 @@ func animePahePlayLinks(body []byte) map[string]string {
 	return links
 }
 
-// ResolveStream scrapes the play page's #resolutionMenu buttons and feeds
-// each embed to the extractor factory (port of animepahe.py:93-150, PR49
-// markup). Kwik embed URLs resolve through the ported kwik extractor;
-// direct media hrefs resolve via the fallback.
+// ResolveStream resolves an episode through the two-attempt chain (PR71):
 //
-// PR49 divergence from Python: a play page without any resolvable button
-// is a typed provider error — the dropdown is server-rendered, so an
-// empty parse means the shape drifted or a challenge page got through,
-// and neither must masquerade as "no streams".
+//	(a) the #resolutionMenu kwik embeds through the extractor factory —
+//	    unchanged from PR49 and first in line so unblocked networks keep
+//	    the player flow;
+//	(b) when the bridge is wired and (a) left qualities unresolved (kwik
+//	    /e/ is hard WAF-blocked on many networks; the failure is a plain
+//	    403 deny, not a challenge), the #pickDownload interstitial
+//	    chain: pahe.win short link → kwik /f/ file page → captured
+//	    download URL. See animepahe_bridge.go for the full mechanism.
+//
+// A play page with neither menu is a typed provider error — both menus
+// are server-rendered, so an empty parse means the shape drifted or a
+// challenge page got through, and neither must masquerade as "no
+// streams".
 func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
 		// Python hardcodes the dub name, ignoring dub_id (animepahe.py:150).
@@ -247,38 +275,30 @@ func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode
 		return stream, nil
 	}
 
-	resp, err := p.http.Do(ctx, netclient.Request{
-		Method:  "GET",
-		URL:     embeds[0],
-		Headers: p.headers,
-		Op:      contracts.OpResolveStream,
-	})
+	body, err := p.fetchPage(ctx, embeds[0], contracts.OpResolveStream)
 	if err != nil {
 		return stream, err
 	}
 
-	playLinks := animePahePlayLinks(resp.Body)
-	if len(playLinks) == 0 {
-		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, resp.StatusCode,
-			fmt.Errorf("play page carries no resolution buttons (%s)", embeds[0]))
-	}
+	playLinks := animePahePlayLinks(body)
 
-	// Sorted qualities keep the extraction order deterministic (map
-	// iteration is not; Python iterated the regex matches in page order).
+	// Attempt (a): the embed extraction, per quality, in sorted order.
+	// Python ignores per-link extraction failures (an empty extractor
+	// result updates nothing); a failing extractor must not shadow
+	// links that do resolve. PR71: the first failure is remembered but
+	// no longer short-circuits — attempt (b) gets its chance first.
 	qualities := make([]string, 0, len(playLinks))
 	for quality := range playLinks {
 		qualities = append(qualities, quality)
 	}
 	sort.Strings(qualities)
 
+	var embedErr error
 	for _, quality := range qualities {
-		sources, err := resolveEmbeds(ctx, p.http, []string{playLinks[quality]})
-		if err != nil {
-			// Python ignores per-link extraction failures (an empty
-			// extractor result updates nothing); a failing extractor
-			// must not shadow links that do resolve.
-			if len(stream.Links) == 0 {
-				return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
+		sources, extractErr := resolveEmbeds(ctx, p.http, []string{playLinks[quality]})
+		if extractErr != nil {
+			if embedErr == nil {
+				embedErr = extractErr
 			}
 			continue
 		}
@@ -286,5 +306,103 @@ func (p *AnimePahe) ResolveStream(ctx context.Context, episode contracts.Episode
 			stream.Links[srcQuality] = src
 		}
 	}
+
+	// Attempt (b): the interstitial chain fills whatever (a) missed.
+	if p.browser != nil {
+		if interErr := p.resolveViaInterstitials(ctx, body, &stream); interErr != nil {
+			if embedErr == nil {
+				embedErr = interErr
+			} else {
+				// Both attempts left evidence: the caller needs both —
+				// the embed failure alone would mask an interstitial
+				// wall (and vice versa).
+				embedErr = fmt.Errorf("%w; interstitial chain: %w", embedErr, interErr)
+			}
+		}
+	}
+
+	if len(stream.Links) == 0 {
+		if embedErr == nil {
+			return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
+				fmt.Errorf("play page carries no resolution buttons or download links (%s)", embeds[0]))
+		}
+		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, embedErr)
+	}
 	return stream, nil
+}
+
+// resolveViaInterstitials runs attempt (b): for every play-page
+// quality the embed extraction missed, walk pahe.win → kwik /f/ →
+// captured download URL through the bridge. Qualities that already
+// resolved stay untouched; per-quality failures are remembered (the
+// first one surfaces only when nothing resolved at all — the caller's
+// convention) and never shadow qualities that do resolve.
+func (p *AnimePahe) resolveViaInterstitials(ctx context.Context, playBody []byte, stream *contracts.MediaStream) error {
+	downloads := animePaheDownloadLinks(playBody)
+	if len(downloads) == 0 {
+		return fmt.Errorf("play page carries no download menu for the interstitial chain")
+	}
+
+	qualities := make([]string, 0, len(downloads))
+	for quality := range downloads {
+		qualities = append(qualities, quality)
+	}
+	sort.Strings(qualities)
+
+	var failures []string
+	for _, quality := range qualities {
+		if _, resolved := stream.Links[quality]; resolved {
+			continue
+		}
+		media, err := p.resolveInterstitial(ctx, downloads[quality])
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s (%s): %s", quality, downloads[quality], err))
+			continue
+		}
+		mediaType := "mp4"
+		if strings.HasSuffix(media, ".m3u8") {
+			mediaType = "m3u8"
+		}
+		stream.Links[quality] = contracts.VideoSource{
+			URL:     media,
+			Quality: quality,
+			Type:    mediaType,
+			// The kwik extractor's Referer convention: the media edge
+			// sits behind the kwik estate.
+			Headers: map[string]string{"Referer": "https://kwik.cx/"},
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("interstitial chain: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// resolveInterstitial walks ONE pahe.win short link to its direct
+// media URL: interstitial page → kwik /f/ file page → token form →
+// in-page submit under the driver's download capture.
+func (p *AnimePahe) resolveInterstitial(ctx context.Context, interstitial string) (string, error) {
+	pageBody, err := p.browser.PageHTML(ctx, interstitial)
+	if err != nil {
+		return "", fmt.Errorf("interstitial %s: %w", interstitial, err)
+	}
+	target := animePaheInterstitialTarget(pageBody)
+	if target == "" {
+		return "", fmt.Errorf("interstitial %s exposes no kwik target", interstitial)
+	}
+
+	fileBody, err := p.browser.PageHTML(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("kwik file page %s: %w", target, err)
+	}
+	action, _, ok := animePaheKwikForm(fileBody)
+	if !ok {
+		return "", fmt.Errorf("kwik file page %s carries no download form", target)
+	}
+
+	media, err := p.browser.SubmitDownload(ctx, target, action)
+	if err != nil {
+		return "", fmt.Errorf("download submit %s: %w", action, err)
+	}
+	return media, nil
 }

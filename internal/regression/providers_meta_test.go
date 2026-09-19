@@ -46,6 +46,7 @@ var expectedProviderOrder = []string{
 	"animedia",
 	"shiza",
 	"anime365",
+	"hdrezka",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

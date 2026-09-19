@@ -23,23 +23,22 @@ const (
 // ([cf] channel = "auto") — exported for CLI comparisons.
 const ChannelAuto = channelAuto
 
-// chromedpDriverLabel names the pinned chromedp driver generation the
-// compatibility bound is verified against (log and error wording).
-const chromedpDriverLabel = "chromedp v0.16"
-
-// maxKnownGoodChromiumMajor is the newest chromium major the pinned
-// chromedp driver is verified to control: 146 works (live-verified,
-// PR73); 151 kills every session on the first Navigate (PR71). A
-// chromedp bump raises it. Test-overridable by assignment (the
-// cfbrowser test suite runs sequentially — no t.Parallel).
+// maxKnownGoodChromiumMajor is the newest chromium major verified to
+// work with the driver end-to-end on the reference machine: 146 is
+// live-verified (PR73/PR75); 151 dies on the first real navigation —
+// PR75 root-caused it to the 151 binary's seccomp sandbox on kernel
+// 7.2.6-zen2 (exit 76, reproducible without chromedp), NOT to a
+// chromedp API defect. The limit moves only on live verification of
+// the next major. Test-overridable by assignment (the cfbrowser test
+// suite runs sequentially — no t.Parallel).
 var maxKnownGoodChromiumMajor = 146
 
-// CompatError reports a resolution blocked by the chromedp
-// compatibility bound: the newest available chromium build exceeds
-// the major the pinned driver can control. It is loud and typed on
-// purpose — the fix (a chromedp bump shipping in a new anicli) must
-// be named, never papered over with a knowingly-broken binary or a
-// silent channel switch.
+// CompatError reports a resolution blocked by the compatibility
+// bound: the newest available chromium build is above the last
+// verified-good major. It is loud and typed on purpose — the real
+// state (unverified, known-broken in one tested case) must be named,
+// never papered over with a knowingly-broken binary or a silent
+// channel switch.
 type CompatError struct {
 	// Newest is the newest rejected version.
 	Newest string
@@ -50,10 +49,10 @@ type CompatError struct {
 // Error implements error, naming the rejected version and the fix.
 func (e *CompatError) Error() string {
 	return fmt.Sprintf(
-		"cfbrowser: chromium %s несовместим с драйвером %s (проверенный максимум: major ≤ %d) — "+
-			"обновите anicli: обновление chromedp поднимет лимит "+
+		"cfbrowser: chromium %s заблокирован границей совместимости (проверенный максимум: major ≤ %d) — "+
+			"лимит поднимет только новый anicli с проверенной живой версией "+
 			"(точечный обход: $%s или $%s)",
-		e.Newest, chromedpDriverLabel, e.Bound, EnvBinaryPath, EnvVersion)
+		e.Newest, e.Bound, EnvBinaryPath, EnvVersion)
 }
 
 // versionMajor extracts the leading major segment of a dotted

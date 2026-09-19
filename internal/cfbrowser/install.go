@@ -489,11 +489,13 @@ func upgradeToProBestEffort(ctx context.Context, opts InstallOptions, spec Platf
 }
 
 // proIncompatNote is the loud auto-mode note that the newest pro
-// build cannot be driven by the pinned chromedp generation, so the
-// free base stays in service.
+// build is blocked by the verified-major bound, so the free base
+// stays in service. PR75: deliberately does NOT promise a chromedp
+// fix — the standalone repro disproved that attribution.
 func proIncompatNote(version string) string {
-	return fmt.Sprintf("cfbrowser: pro %s несовместим с %s — работаем на free; обновите chromedp",
-		version, chromedpDriverLabel)
+	return fmt.Sprintf("cfbrowser: pro %s заблокирован границей совместимости (проверенный максимум ≤ %d) — "+
+		"работаем на free; лимит поднимет только живая проверка новой chromium",
+		version, maxKnownGoodChromiumMajor)
 }
 
 // installProVersion downloads one exact pro version. The archive

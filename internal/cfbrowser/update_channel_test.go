@@ -121,7 +121,7 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 		t.Errorf("status = %+v, want the free line recorded (the working binary), not pro 151", st)
 	}
 	note := buf.String()
-	for _, want := range []string{"151.0.7922.108.6", "несовместим", "работаем на free"} {
+	for _, want := range []string{"151.0.7922.108.6", "заблокирован", "работаем на free"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("log note %q must mention %q", note, want)
 		}

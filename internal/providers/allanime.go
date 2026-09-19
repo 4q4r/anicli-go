@@ -557,10 +557,13 @@ func (p *AllAnime) fetchEpisodeSources(ctx context.Context, episode contracts.Ep
 		}
 
 		// The live limiter throttles the episode query ("Too many
-		// requests, please try again in 5 seconds." and NEED_CAPTCHA —
-		// both observed live 2026-09-17 on back-to-back resolves).
-		// Back off once and retry the same query; a persisting limit
-		// falls through to the decode path and fails loud.
+		// requests, please try again in 5 seconds." — observed live
+		// 2026-09-17 on back-to-back resolves). Back off once and retry
+		// the same query; a persisting limit falls through to the
+		// decode path and fails loud. NEED_CAPTCHA is a different
+		// verdict entirely — a site-side wall (PR67, 2026-09-19) — and
+		// is never retried here; it flows to the decode path and
+		// surfaces as errAACaptcha on the first attempt.
 		if aaIsAARateLimited(body) {
 			if !rateLimitRetried {
 				rateLimitRetried = true
@@ -757,13 +760,18 @@ func aaRateLimitWait(base time.Duration) time.Duration {
 	return base + jitter
 }
 
-// aaIsAARateLimited reports the live episode-query throttle signals:
+// aaIsAARateLimited reports the live episode-query throttle signal:
 // the explicit "Too many requests, please try again in 5 seconds."
-// message and NEED_CAPTCHA (the site's anti-abuse verdict, transient
-// under burst resolve). [LIVE-VERIFIED 2026-09-17].
+// message. NEED_CAPTCHA is deliberately NOT classified here: the
+// PR67 root-cause probe (2026-09-19) proved it is a site-side wall on
+// the episode-sources query — it survives fresh crypto material,
+// buildId rotation, both egresses, polite pacing, and an in-page
+// browser fetch — so it must surface as the typed errAACaptcha
+// immediately instead of riding the backoff-retry path.
+// [LIVE-VERIFIED 2026-09-17] for "Too many requests".
 func aaIsAARateLimited(body []byte) bool {
 	for _, msg := range aaGraphQLErrorMessages(body) {
-		if strings.HasPrefix(msg, "Too many requests") || strings.HasPrefix(msg, "NEED_CAPTCHA") {
+		if strings.HasPrefix(msg, "Too many requests") {
 			return true
 		}
 	}

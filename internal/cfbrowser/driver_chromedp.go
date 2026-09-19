@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/input"
@@ -218,19 +219,79 @@ func cdpExecutorFrom(ctx context.Context) cdp.Executor {
 	return cdp.ExecutorFromContext(ctx)
 }
 
+// pauseQueueCap bounds the paused-request backlog between the listener
+// and the pump goroutine. A challenge page's resource count is tens;
+// 256 is orders of magnitude above that.
+const pauseQueueCap = 256
+
+// newPausePump arms the paused-request pump: it returns the event
+// handler to register with ListenTarget plus a channel closed when the
+// pump exits (ctx done).
+//
+// DEADLOCK RATIONALE (PR71, live-verified 2026-09-19): chromedp runs
+// event listeners SYNCHRONOUSLY on its receiver goroutine UNDER the
+// target's listenersMu (util.go runListeners). A listener that issues
+// a CDP command — the diet's FailRequest/ContinueRequest — re-enters
+// Target.Execute and locks against the very mutex the receiver holds,
+// deadlocking the session the first time a pausable resource actually
+// pauses (any challenge page carrying an image). The handler therefore
+// only ENQUEUES; a separate goroutine answers the pauses. Overflow
+// drops the event (the diet-target resource stalls — benign: images
+// and media never gate page scripts), because blocking the listener
+// would reintroduce the deadlock and an in-listener command is the
+// deadlock itself.
+func newPausePump(ctx context.Context) (handler func(any), stopped <-chan struct{}) {
+	pauses := make(chan *fetch.EventRequestPaused, pauseQueueCap)
+	stoppedC := make(chan struct{})
+	go func() {
+		defer close(stoppedC)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-pauses:
+				handlePausedRequest(ctx, ev)
+			}
+		}
+	}()
+	return func(ev any) {
+		paused, ok := ev.(*fetch.EventRequestPaused)
+		if !ok {
+			return
+		}
+		select {
+		case pauses <- paused:
+		default:
+			slog.Warn("cfbrowser: pause backlog full; dropping pause",
+				"request_id", paused.RequestID)
+		}
+	}, stoppedC
+}
+
 // enableResourceDiet arms fetch-domain interception on the solve
 // session: the listener attaches FIRST (no paused request may slip
-// through unanswered), then Fetch.enable scopes the pauses to the
-// blocked resource types. ctx must be a session-executor context —
-// on a bare chromedp context Fetch.enable fails with
-// "invalid context" and the factory degrades warn-only.
+// through unanswered — pauses queue onto the pump, see newPausePump),
+// then Fetch.enable scopes the pauses to the blocked resource types.
+// ctx must be a session-executor context — on a bare chromedp context
+// Fetch.enable fails with "invalid context" and the factory degrades
+// warn-only.
 func enableResourceDiet(ctx context.Context) error {
-	chromedp.ListenTarget(ctx, func(ev any) {
-		if paused, ok := ev.(*fetch.EventRequestPaused); ok {
-			handlePausedRequest(ctx, paused)
-		}
-	})
+	handler, _ := newPausePump(ctx)
+	chromedp.ListenTarget(ctx, handler)
 	return fetch.Enable().WithPatterns(fetchBlockPatterns()).Do(ctx)
+}
+
+// armCacheDisabled disables the HTTP cache for the whole session
+// (Network.enable + setCacheDisabled). An ephemeral automation browser
+// must see LIVE states: a cached render settles the solve loop's poll
+// without ever re-negotiating a clearance that went stale (PR71, live
+// evidence in the test file). ctx must be a session-executor context;
+// failures degrade warn-only at the factory like the diet.
+func armCacheDisabled(ctx context.Context) error {
+	if err := network.Enable().Do(ctx); err != nil {
+		return err
+	}
+	return network.SetCacheDisabled(true).Do(ctx)
 }
 
 // chromedpDriver is the production DriverFactory (headless-only).
@@ -277,11 +338,17 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 	// the listener is attached BEFORE Fetch.enable so no paused
 	// request can slip through unanswered. Both run on the
 	// session-executor context — the bare chromedp context fails
-	// Fetch.enable with "invalid context".
-	if err := enableResourceDiet(withSessionExecutor(ctx)); err != nil {
+	// Fetch.enable with "invalid context". The cache disable rides
+	// the same session-scoped arming: a cached render must never
+	// stand in for a live navigation state (see armCacheDisabled).
+	sessionCtx := withSessionExecutor(ctx)
+	if err := enableResourceDiet(sessionCtx); err != nil {
 		// Best-effort diet: a full-resource solve still works, just
 		// fatter. Warn, do not fail the session over it.
 		slog.Warn("cfbrowser: resource blocking unavailable", "error", err)
+	}
+	if err := armCacheDisabled(sessionCtx); err != nil {
+		slog.Warn("cfbrowser: cache disable unavailable", "error", err)
 	}
 
 	return &chromedpNav{
@@ -540,6 +607,73 @@ func (n *chromedpNav) Eval(ctx context.Context, expression string, out any) erro
 	defer cancel()
 	tctx := withSessionExecutor(nctx)
 	return n.run(tctx, chromedp.Evaluate(expression, out))
+}
+
+// DownloadObserver is the optional Naviger capability for capturing the
+// target URL of a browser-initiated download (the animepahe bridge's
+// kwik token-POST flow). The post-redirect media URL is invisible to
+// in-page JS (fetch redirect:'manual' is opaque, redirect:'follow' dies
+// on the cross-origin CORS check, a real form submit turns the
+// navigation into a download) — only the CDP download event carries it.
+// Implemented by the chromedp adapter; test fakes implement it as
+// needed.
+type DownloadObserver interface {
+	// CaptureDownload arms download-event capture and runs fn (typically
+	// an in-page form submit). It returns the URL of the first download
+	// begun while fn ran. Downloads are DENIED session-wide: the capture
+	// observes the event, the file never touches disk.
+	CaptureDownload(ctx context.Context, fn func(ctx context.Context) error) (string, error)
+}
+
+// CaptureDownload implements DownloadObserver under the same bounded
+// navigation budget as Navigate/Click/Eval (F55 parity).
+//
+// Deny + eventsEnabled is armed on every capture (idempotent): deny
+// guarantees the ephemeral browser never writes an untrusted media file
+// to disk, and eventsEnabled makes Browser.downloadWillBegin flow to
+// the session listener even for denied downloads.
+func (n *chromedpNav) CaptureDownload(ctx context.Context, fn func(ctx context.Context) error) (string, error) {
+	// Entry gate: an already-expired caller must not race the bridge
+	// into a fresh budget.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if fn == nil {
+		return "", errors.New("cfbrowser: capture download without an action")
+	}
+	nctx, cancel := n.navContext(ctx)
+	defer cancel()
+	tctx := withSessionExecutor(nctx)
+
+	if err := browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorDeny).
+		WithEventsEnabled(true).Do(tctx); err != nil {
+		return "", fmt.Errorf("cfbrowser: arm download capture: %w", err)
+	}
+
+	// The listener is attached BEFORE fn runs so the submit cannot race
+	// the capture; the buffered channel decouples the event goroutine.
+	urls := make(chan string, 1)
+	chromedp.ListenTarget(tctx, func(ev any) {
+		if e, ok := ev.(*browser.EventDownloadWillBegin); ok {
+			select {
+			case urls <- e.URL:
+			default: // first download wins; the channel never blocks
+			}
+		}
+	})
+
+	if err := fn(tctx); err != nil {
+		return "", err
+	}
+	select {
+	case url := <-urls:
+		return url, nil
+	case <-nctx.Done():
+		if errors.Is(nctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("cfbrowser: download capture budget expired: %w", nctx.Err())
+		}
+		return "", fmt.Errorf("cfbrowser: download capture: %w", nctx.Err())
+	}
 }
 
 // Close tears the browser session down: the whole process group dies

@@ -443,7 +443,7 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				}
 				sess := newResumedSession(m.deps, primary, stableGroup(group), *m.resume)
 				if bindErr != nil {
-					sess.status = "⚠ Не удалось сохранить привязку: " + bindErr.Error()
+					sess.setStatus("⚠ Не удалось сохранить привязку: " + bindErr.Error())
 				}
 				return m, replace(sess)
 			}

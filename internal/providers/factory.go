@@ -310,7 +310,7 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 		if filter != nil {
 			p = dubFilteredProvider{Provider: p, filter: filter}
 		}
-		if err := reg.Register(SearchDelegator{Provider: p, stats: stats}); err != nil {
+		if err := reg.Register(SearchDelegator{Provider: p, stats: stats, logger: providerLog}); err != nil {
 			return nil, err
 		}
 	}

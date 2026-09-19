@@ -76,6 +76,27 @@ func TestDefaults(t *testing.T) {
 	if got.Providers.Anime365.Token != "" {
 		t.Errorf("Providers.Anime365.Token = %q, want empty (must be user-supplied)", got.Providers.Anime365.Token)
 	}
+	if got.Providers.HDRezka.BaseURL != "" {
+		t.Errorf("Providers.HDRezka.BaseURL = %q, want empty (built-in default)", got.Providers.HDRezka.BaseURL)
+	}
+}
+
+// TestHDRezkaBaseURLFromFile: [providers.hdrezka] base_url overrides the
+// provider's mirror route (PR72): the rezka mirror family geo-fences
+// differently per domain, so the working route must be user-swappable
+// without a rebuild.
+func TestHDRezkaBaseURLFromFile(t *testing.T) {
+	path := writeTOML(t, `
+[providers.hdrezka]
+base_url = "https://rezka-mirror.example"
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Providers.HDRezka.BaseURL != "https://rezka-mirror.example" {
+		t.Errorf("Providers.HDRezka.BaseURL = %q, want file value", got.Providers.HDRezka.BaseURL)
+	}
 }
 
 func writeTOML(t *testing.T, content string) string {

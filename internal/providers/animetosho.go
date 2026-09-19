@@ -4,14 +4,23 @@ package providers
 // the third TorrentBase provider after nyaa and anilibria-torrent.
 // Anonymous feed, no credentials, nothing to configure. Each RSS item
 // carries the release title plus newznab/torznab attribute twins
-// (infohash, size, seeders); ingestion prefers a hex-infohash magnet —
-// built from the infohash attr or taken verbatim from magneturl when
-// that one is hex too (its tr= announces aid peer discovery) — and
-// falls back to the item's direct <enclosure> .torrent URL that the
-// engine downloads itself. The live feed's magneturl is frequently
-// base32 (nekoBT mirror hashes) and is deliberately NOT taken: the
-// engine contract is a 40-hex btih (nyaa rule), and such items always
-// carry the hex infohash attr alongside. Not a Python port: written
+// (infohash, size, seeders). PR66 .torrent-bytes ingestion (the
+// tokyotosho PR53 pattern): the result link is the item's <enclosure>
+// — a direct .torrent URL on AT's OWN storage (storage.animetosho.org,
+// type application/x-bittorrent; live-verified) — and Search
+// preflights every result's bytes (bounded ≤8, ~10s/URL), dropping the
+// dead ones BEFORE they surface and handing the survivors' bytes to
+// the engine (IngestMetaInfo). The reason: the live feed's magneturl
+// is base32 (nekoBT mirror hashes, engine contract is 40-hex — not
+// taken) and the synthesized magnet from the hex infohash attr is
+// tracker-less, so its metadata arrived via DHT only and timed out
+// under any real budget (the PR52 smoke FAIL `resolved 6/23` class);
+// bytes ingestion needs no swarm round-trip at all. The engine's
+// tracker pool attaches to the metainfo ingest as to every other
+// (one mechanism, PR45). Magnets serve only as the no-enclosure
+// fallback: a hex magneturl rides verbatim (its tr= announces aid peer
+// discovery), otherwise a magnet is built from the infohash attr —
+// kept unprobed, the engine owns magnets. Not a Python port: written
 // against the live API, endpoints and field set captured by curl on
 // 2026-09-17 (controller dossier, normative).
 
@@ -22,6 +31,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
@@ -53,6 +63,10 @@ const (
 type AnimeTosho struct {
 	Base
 	*TorrentBase
+
+	// preflightTimeout overrides the per-URL preflight budget (tests);
+	// 0 keeps torrentPreflightTimeout.
+	preflightTimeout time.Duration
 }
 
 // newAnimeTosho builds the provider. The engine may be nil (fails loud
@@ -122,11 +136,12 @@ func (i atItem) attr(name string) string {
 }
 
 // Search queries the newznab search API. The torrent link of a result
-// is a hex-infohash magnet (the engine ingests the infohash directly —
-// no .torrent download for ingestion); a direct .torrent enclosure URL
-// is the fallback when the item carries no usable hash. Items with
-// neither, or without a title, are dropped instead of handed
-// downstream as dead results (nyaa rule).
+// is the <enclosure> .torrent URL on AT's own storage (the PR66
+// ingestion: the preflight carries its bytes to the engine); a hex
+// magneturl verbatim or an infohash-built magnet is the fallback when
+// the item carries no usable enclosure. Items with neither, or without
+// a title, are dropped instead of handed downstream as dead results
+// (nyaa rule).
 func (p *AnimeTosho) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {
@@ -165,7 +180,7 @@ func (p *AnimeTosho) Search(ctx context.Context, query string) ([]contracts.Sear
 		}
 		link := animeToshoResultLink(title, item.attr("magneturl"), item.attr("infohash"), item.Enclosure.URL)
 		if link == "" {
-			// No usable hash and no .torrent URL: the item has
+			// No enclosure and no usable hash: the item has
 			// nothing the engine could ingest.
 			continue
 		}
@@ -187,15 +202,37 @@ func (p *AnimeTosho) Search(ctx context.Context, query string) ([]contracts.Sear
 		})
 	}
 	// Seedless entries are dead results: drop them before they surface
-	// (fail-soft — items without a seed attr survive).
-	return filterSeedless(results), nil
+	// (fail-soft — items without a seed attr survive), so the
+	// preflight never spends a fetch on them. The PR66 preflight then
+	// probes the survivors' .torrent bytes: dead hosts never surface,
+	// and the surviving bytes feed the engine (no double fetch).
+	return p.preflight(ctx, filterSeedless(results)), nil
 }
 
-// animeToshoResultLink picks the torrent link of one RSS item: a hex
-// magneturl verbatim (its tr= announces ride), a magnet built from a
-// well-formed 40-hex infohash attr, the .torrent enclosure URL
-// otherwise, "" when none is usable (the caller drops such items).
+// preflightBudget is the effective per-URL fetch budget.
+func (p *AnimeTosho) preflightBudget() time.Duration {
+	if p.preflightTimeout > 0 {
+		return p.preflightTimeout
+	}
+	return torrentPreflightTimeout
+}
+
+// preflight drops search results whose .torrent bytes are not
+// fetchable and parseable (the shared TorrentBase preflight; the
+// tokyotosho PR53 mechanism).
+func (p *AnimeTosho) preflight(ctx context.Context, results []contracts.SearchResult) []contracts.SearchResult {
+	return p.preflightResults(ctx, p.http, p.loggerOrDiscard(), p.ID(), p.preflightBudget(), results)
+}
+
+// animeToshoResultLink picks the torrent link of one RSS item: the
+// <enclosure> .torrent URL on AT's own storage verbatim (PR66 — the
+// bytes-ingestible, preflightable link), a hex magneturl verbatim (its
+// tr= announces ride), a magnet built from a well-formed 40-hex
+// infohash attr, "" when none is usable (the caller drops such items).
 func animeToshoResultLink(title, magnetURL, infoHash, enclosureURL string) string {
+	if u := strings.TrimSpace(enclosureURL); u != "" {
+		return u
+	}
 	if magnetURI(magnetURL) {
 		return magnetURL
 	}
@@ -203,7 +240,7 @@ func animeToshoResultLink(title, magnetURL, infoHash, enclosureURL string) strin
 	if len(hash) == nyaaInfoHashHexLen && isHex(hash) {
 		return "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(title)
 	}
-	return strings.TrimSpace(enclosureURL)
+	return ""
 }
 
 // humanBytesAttr renders a byte-count attribute ("23175675801") in the

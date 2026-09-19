@@ -15,19 +15,23 @@ import (
 // duplicated or re-ordered, and when a roster member loses its
 // dedicated fixture→DTO shape test. sovetromantica was removed in PR22
 // (domain hijacked off the anime project, frozen 2025); anidub (no
-// frozen Python original) joined the roster the same PR; yanima
-// (PR33) joined after anidub; nyaa (PR36, first torrent search
-// provider) joined after yanima; anilibria-torrent (PR37, the new
-// aniliberty.top API's per-release torrents) joined after nyaa;
-// animetosho (PR38, the newznab feed) joined after anilibria-torrent;
-// tokyotosho (PR38, the search RSS) joined after animetosho.
+// frozen Python original) joined the roster the same PR; nyaa (PR36,
+// first torrent search provider) joined after anidub; anilibria-torrent
+// (PR37, the new aniliberty.top API's per-release torrents) joined
+// after nyaa; animetosho (PR38, the newznab feed) joined after
+// anilibria-torrent; tokyotosho (PR38, the search RSS) joined after
+// animetosho.
 // Wave-2 integration (fix/60) seated the five parallel providers
 // next to their peers instead of the tail: kickassanime (PR58)
 // and anizone (PR59, sub-only) joined after animepahe in the
 // latin block; animedia (PR56, the amd.online DLE site), shiza
 // (PR57, the shizaproject.com GraphQL catalog) and anime365
-// (PR55, the tokened smotret-anime JSON API) joined after yanima
-// in the RU-dub block. The roster is frozen at 21.
+// (PR55, the tokened smotret-anime JSON API) joined the RU-dub
+// block; yanima left it in PR65 (dead Mitelis wall, roster pinned
+// 21→20); yummy (PR68, the YummyAnime api.yani.tv JSON API) joined
+// after anime365 and hdrezka (PR69, the hdrezka-home.tv rezka
+// catalog behind an Anubis PoW gate) joined after yummy, closing
+// the RU-dub block. The roster is frozen at 22.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -42,10 +46,11 @@ var expectedProviderOrder = []string{
 	"kodik",
 	"allanime",
 	"anidub",
-	"yanima",
 	"animedia",
 	"shiza",
 	"anime365",
+	"yummy",
+	"hdrezka",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",
@@ -58,13 +63,11 @@ var expectedProviderOrder = []string{
 // roster size).
 func TestProviderRosterComplete(t *testing.T) {
 	// The full roster needs every credentialled provider configured
-	// (PR24/PR33: a tokenless kodik or a cookieless yanima is disabled
-	// at startup and dropped from the registry).
+	// (PR24/PR55: a tokenless kodik or anime365 is disabled at
+	// startup and dropped from the registry).
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
 	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
-	cfg.Providers.Yanima.DDoSP1 = "test-p1"
-	cfg.Providers.Yanima.DDoSP2 = "test-p2"
 	built, err := providers.All(cfg)
 	if err != nil {
 		t.Fatalf("providers.All: %v", err)

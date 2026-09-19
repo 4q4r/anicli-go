@@ -7,6 +7,22 @@ package providers
 // pipeline. Not a Python port: written against the live site, the
 // endpoint and field set were verified via curl on 2026-09-17
 // (controller recon, normative).
+//
+// PR66 .torrent-bytes ingestion (the tokyotosho PR53 pattern): the
+// result link is the RSS <link> — the direct
+// https://nyaa.si/download/{id}.torrent — not the magnet synthesized
+// from nyaa:infoHash. The synthesized magnet is tracker-less, so its
+// metadata arrives via DHT only and times out under any real budget
+// (the PR52 smoke FAIL `resolved 2/35` class). Search therefore
+// preflights every result's .torrent bytes (bounded ≤8, ~10s/URL) and
+// drops the dead ones BEFORE they surface; survivors' bytes are handed
+// to the engine (IngestMetaInfo), so the resolve leg never re-fetches
+// and metadata needs no swarm round-trip at all. nyaa.si route
+// flakiness (RST direct / 504 flaps via proxy) is absorbed by the same
+// preflight: unreachable-host results are dropped that instant. The
+// magnet from nyaa:infoHash is only the no-<link> fallback (kept
+// unprobed — the engine owns magnets), and the PR44 seeders>0 filter
+// stands.
 
 import (
 	"context"
@@ -14,6 +30,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
@@ -55,6 +72,10 @@ const (
 type Nyaa struct {
 	Base
 	*TorrentBase
+
+	// preflightTimeout overrides the per-URL preflight budget (tests);
+	// 0 keeps torrentPreflightTimeout.
+	preflightTimeout time.Duration
 }
 
 // newNyaa builds the provider. The engine may be nil (fails loud on
@@ -90,8 +111,9 @@ type nyaaRSS struct {
 }
 
 // nyaaItem mirrors one RSS <item>: the release name in <title>, the
-// .torrent URL in <link> and the nyaa: extension fields (matched by
-// namespace URL, so a prefix rename upstream cannot break parsing).
+// direct .torrent download URL in <link> and the nyaa: extension
+// fields (matched by namespace URL, so a prefix rename upstream cannot
+// break parsing).
 type nyaaItem struct {
 	Title    string `xml:"title"`
 	Link     string `xml:"link"`
@@ -103,9 +125,9 @@ type nyaaItem struct {
 }
 
 // Search queries the public RSS feed. The torrent link of a result is
-// a magnet built from the RSS infoHash (the engine ingests the
-// infohash directly — no .torrent download for ingestion) with the
-// RSS <link> URL as the fallback when the feed omits the hash.
+// the RSS <link> .torrent download URL (the PR66 ingestion: the
+// preflight carries its bytes to the engine); the infoHash-built
+// magnet is the fallback when the feed omits the <link>.
 func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {
@@ -145,7 +167,7 @@ func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResu
 		}
 		link := nyaaResultLink(title, item.InfoHash, item.Link)
 		if link == "" {
-			// No usable infohash and no .torrent URL: the item has
+			// No <link> and no usable infohash: the item has
 			// nothing the engine could ingest — drop it like an
 			// empty title instead of handing downstream a dead
 			// result.
@@ -166,19 +188,42 @@ func (p *Nyaa) Search(ctx context.Context, query string) ([]contracts.SearchResu
 		})
 	}
 	// Seedless items are dead results: drop them before they surface
-	// (fail-soft — items without a seed field survive).
-	return filterSeedless(results), nil
+	// (fail-soft — items without a seed field survive), so the
+	// preflight never spends a fetch on them. The PR66 preflight then
+	// probes the survivors' .torrent bytes: dead hosts never surface,
+	// and the surviving bytes feed the engine (no double fetch).
+	return p.preflight(ctx, filterSeedless(results)), nil
 }
 
-// nyaaResultLink picks the torrent link of one RSS item: a magnet
-// from a well-formed 40-hex infoHash, the .torrent URL otherwise, ""
-// when neither is usable (the caller drops such items).
+// preflightBudget is the effective per-URL fetch budget.
+func (p *Nyaa) preflightBudget() time.Duration {
+	if p.preflightTimeout > 0 {
+		return p.preflightTimeout
+	}
+	return torrentPreflightTimeout
+}
+
+// preflight drops search results whose .torrent bytes are not
+// fetchable and parseable (the shared TorrentBase preflight; the
+// tokyotosho PR53 mechanism).
+func (p *Nyaa) preflight(ctx context.Context, results []contracts.SearchResult) []contracts.SearchResult {
+	return p.preflightResults(ctx, p.http, p.loggerOrDiscard(), p.ID(), p.preflightBudget(), results)
+}
+
+// nyaaResultLink picks the torrent link of one RSS item: the <link>
+// .torrent download URL verbatim (PR66 — the bytes-ingestible,
+// preflightable link), a magnet from a well-formed 40-hex infoHash as
+// the no-<link> fallback, "" when neither is usable (the caller drops
+// such items).
 func nyaaResultLink(title, infoHash, torrentURL string) string {
+	if u := strings.TrimSpace(torrentURL); u != "" {
+		return u
+	}
 	hash := strings.ToLower(strings.TrimSpace(infoHash))
 	if len(hash) == nyaaInfoHashHexLen && isHex(hash) {
 		return "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(title)
 	}
-	return strings.TrimSpace(torrentURL)
+	return ""
 }
 
 // isHex reports whether s is non-empty lowercase hexadecimal.

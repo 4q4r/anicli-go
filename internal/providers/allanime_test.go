@@ -518,11 +518,13 @@ func TestAllAnimeResolveStreamKeyRefreshOnRotation(t *testing.T) {
 
 // TestAllAnimeResolveStreamRateLimitRetry pins the live rate-limit
 // contract of the episode query: the site answers "Too many requests,
-// please try again in 5 seconds." (and NEED_CAPTCHA) when the client
-// resolves too fast — observed live 2026-09-17 on concurrent resolves.
-// The provider must back off once (aaRateLimitBackoff) and retry the
-// SAME query; a persisting limit still fails loud, with exactly one
-// retry (no hammering).
+// please try again in 5 seconds." when the client resolves too fast —
+// observed live 2026-09-17 on concurrent resolves. The provider must
+// back off once (aaRateLimitBackoff) and retry the SAME query; a
+// persisting limit still fails loud, with exactly one retry (no
+// hammering). NEED_CAPTCHA is deliberately NOT part of this contract:
+// since 2026-09-19 it is a site-side wall (see
+// TestAllAnimeNeedCaptchaLiveBodyTyped), not a limiter.
 func TestAllAnimeResolveStreamRateLimitRetry(t *testing.T) {
 	t.Parallel()
 
@@ -561,33 +563,37 @@ func TestAllAnimeResolveStreamRateLimitRetry(t *testing.T) {
 		}
 	})
 
-	t.Run("NEED_CAPTCHA as transient limiter", func(t *testing.T) {
+	t.Run("NEED_CAPTCHA walls immediately, no rate-limit retry", func(t *testing.T) {
 		t.Parallel()
+		// PR67 root cause (2026-09-19): NEED_CAPTCHA on the
+		// episode-sources query is a site-side WALL, not a transient
+		// limiter — it survived 24h+, fresh crypto material, both
+		// egresses, polite pacing, and an in-page browser fetch with
+		// module-native material. Retrying burned the rate-limit
+		// backoff budget on a verdict no retry can clear. The typed
+		// errAACaptcha must surface on the FIRST attempt.
 		env := newAAEnv(t)
-		var posts, limits atomic.Int32
+		var posts atomic.Int32
 		env.apiBehaviors = append(env.apiBehaviors, func(r *http.Request, w http.ResponseWriter) bool {
 			if !strings.Contains(r.URL.Path, "/api") || strings.Contains(r.URL.Path, "bootstrap") {
 				return false
 			}
 			posts.Add(1)
-			if limits.Add(1) == 1 {
-				_, _ = w.Write([]byte(`{"errors":[{"message":"NEED_CAPTCHA","extensions":{"code":"NEED_CAPTCHA"}}]}`))
-				return true
-			}
-			return false
+			_, _ = w.Write([]byte(`{"errors":[{"message":"NEED_CAPTCHA","extensions":{"code":"NEED_CAPTCHA"}}]}`))
+			return true
 		})
 		p := env.provider()
 		p.rateLimitBackoff = fastBackoff
 
-		stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
-		if err != nil {
-			t.Fatalf("ResolveStream after transient NEED_CAPTCHA: %v", err)
+		_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "id1"}, "sub")
+		if err == nil {
+			t.Fatal("NEED_CAPTCHA must fail typed")
 		}
-		if len(stream.Links) == 0 {
-			t.Fatal("no links after NEED_CAPTCHA retry")
+		if !errors.Is(err, errAACaptcha) {
+			t.Fatalf("err = %v, want errAACaptcha chain", err)
 		}
-		if got := posts.Load(); got != 2 {
-			t.Errorf("episode requests = %d, want 2", got)
+		if got := posts.Load(); got != 1 {
+			t.Errorf("episode requests = %d, want exactly 1 (a captcha wall is not retried as a rate limit)", got)
 		}
 	})
 
@@ -791,6 +797,40 @@ func TestAllAnimeResolveStreamNeedCaptchaTyped(t *testing.T) {
 	}
 	if bridge.calls != 0 {
 		t.Errorf("bridge calls = %d, want 0 (captcha must not burn a bridge session)", bridge.calls)
+	}
+}
+
+// TestAllAnimeNeedCaptchaLiveBodyTyped pins the EXACT raw answer the
+// live episode-sources endpoint gave on 2026-09-19 (PR67 root-cause
+// probe; fixture captured via proxy — identical on direct): fresh
+// buildId-173 material, valid show id, polite pacing, HTTP 200, and
+// still a NEED_CAPTCHA verdict. The decode layer must classify it as
+// errAACaptcha and never as data (locations/path/data fields exercise
+// the full errors[] shape).
+func TestAllAnimeNeedCaptchaLiveBodyTyped(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("testdata", "allanime", "episode_need_captcha_live_2026-09-19.json"))
+	if err != nil {
+		t.Fatalf("read live fixture: %v", err)
+	}
+
+	sources, derr := aaDecodePlainSources(raw)
+	if derr == nil {
+		t.Fatal("live NEED_CAPTCHA body decoded without error")
+	}
+	if !errors.Is(derr, errAACaptcha) {
+		t.Fatalf("err = %v, want errAACaptcha chain", derr)
+	}
+	if sources != nil {
+		t.Fatalf("sources = %#v, want nil", sources)
+	}
+
+	// The verdict is also reported by aaHasAACryptoError's sibling
+	// classifier as NOT a rate limit — the wall and the throttle are
+	// different verdicts with different handling.
+	if aaIsAARateLimited(raw) {
+		t.Error("live NEED_CAPTCHA body classified as rate limit; the wall must not ride the backoff path")
 	}
 }
 

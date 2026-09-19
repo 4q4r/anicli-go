@@ -24,8 +24,6 @@ func TestRealDepsConstruction(t *testing.T) {
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()           // isolate the offline scan
 	settings.Providers.Kodik.Token = "test-token" // keep kodik registered (PR24)
-	settings.Providers.Yanima.DDoSP1 = "test-p1"  // keep yanima registered (PR33)
-	settings.Providers.Yanima.DDoSP2 = "test-p2"
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)
@@ -76,11 +74,9 @@ func TestRealDepsDisabledProviders(t *testing.T) {
 
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()
-	// yanima and anime365 stay configured: this test pins the kodik
-	// specimen of the disabled-set mechanism (PR33 added a second
-	// credentialled provider, PR55 a third).
-	settings.Providers.Yanima.DDoSP1 = "test-p1"
-	settings.Providers.Yanima.DDoSP2 = "test-p2"
+	// anime365 stays configured: this test pins the kodik specimen of
+	// the disabled-set mechanism (PR55 added another credentialled
+	// provider).
 	settings.Providers.Anime365.Token = "test-token"
 	real, err := NewRealDeps(settings, store)
 	if err != nil {

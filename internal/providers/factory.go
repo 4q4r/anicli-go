@@ -72,10 +72,6 @@ var allFactories = []struct {
 	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
 	}},
-	{"yanima", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newYanima(YanimaBase, cfg.Providers.Yanima.DDoSP1,
-			cfg.Providers.Yanima.DDoSP2, cfg.Providers.Yanima.Session, http)
-	}},
 	// animedia (PR56): the amd.online DLE site (the animedia.online
 	// JSON v3 API is dead). Written against the live site, not ported;
 	// no credentials — DLE search form POST in, kodik embeds out
@@ -98,6 +94,28 @@ var allFactories = []struct {
 	// API + the official OpenAPI spec (probed 2026-09-18).
 	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
+	}},
+	// yummy (PR68): the YummyAnime REST API (api.yani.tv behind
+	// site.yummyani.me) — the first provider ported from the vypivshiy
+	// anicli-api reference library (source/yummy_anime.py), verified
+	// live 2026-09-19. No credentials and no per-provider settings;
+	// cfg.Network.UserAgent rides on the CVH video sources (okcdn ties
+	// playback to the extraction UA).
+	{"yummy", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newYummy(YummySiteBase, YummyAPIBase, yummyCDNVideoHubBase, cfg.Network.UserAgent, http)
+	}},
+	// hdrezka (PR69): hdrezka-home.tv (RU rezka catalog, anime section) —
+	// port of the frozen anicli-api hdrezka source re-verified live
+	// 2026-09-19, PLUS a pure-Go Anubis proof-of-work gate solver: the
+	// site fronts every path with Anubis 1.25.0 and the upstream
+	// reference crashes against it. No credentials; translators are the
+	// dubs (one-voice included), hdrezka's own CDN resolves to
+	// HLS/mp4. From ISP-blocked networks network.proxy_url routes it
+	// (foreign hosting, Roskomnadzor-class SNI block on the direct
+	// route); stream links additionally require a site-accepted exit
+	// (see hdrezka.go).
+	{"hdrezka", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newHDRezka(HDRezkaBase, http)
 	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is

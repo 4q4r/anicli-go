@@ -35,8 +35,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent/metainfo"
-
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/torrent"
@@ -94,7 +92,7 @@ type TokyoTosho struct {
 	*TorrentBase
 
 	// preflightTimeout overrides the per-URL preflight budget (tests);
-	// 0 keeps ttPreflightTimeout.
+	// 0 keeps torrentPreflightTimeout.
 	preflightTimeout time.Duration
 }
 
@@ -213,81 +211,23 @@ func (p *TokyoTosho) Search(ctx context.Context, query string) ([]contracts.Sear
 	return p.preflight(ctx, results), nil
 }
 
-// ttPreflightConcurrency bounds the dead-host preflight fan-out
-// (owner ruling: ≤8).
-const ttPreflightConcurrency = 8
-
-// ttPreflightTimeout is the per-URL budget of one .torrent preflight
-// fetch (owner ruling: short, ~10s).
-const ttPreflightTimeout = 10 * time.Second
-
-// preflightBudget is the effective per-URL fetch budget.
+// preflightBudget is the effective per-URL fetch budget (the shared
+// torrentPreflightTimeout default, owner ruling: short, ~10s).
 func (p *TokyoTosho) preflightBudget() time.Duration {
 	if p.preflightTimeout > 0 {
 		return p.preflightTimeout
 	}
-	return ttPreflightTimeout
+	return torrentPreflightTimeout
 }
 
 // preflight drops search results whose .torrent bytes are not fetchable
 // and parseable (dead hosts never surface), and hands the surviving
 // bytes to the engine under the original link so ingestion never
-// re-fetches. Fail-soft at the edges: a link that is not an http(s)
-// URL cannot be probed and is kept; an engine handoff failure keeps
-// the result (the resolve leg falls back to the URL ingest).
+// re-fetches. PR66: the mechanism lives on TorrentBase.preflightResults
+// (shared with nyaa and animetosho); the provider supplies its client,
+// logger, identity and the per-URL budget.
 func (p *TokyoTosho) preflight(ctx context.Context, results []contracts.SearchResult) []contracts.SearchResult {
-	if p.engineSnapshot() == nil {
-		// No engine wired: the registry never registers the provider
-		// this way ([torrent] disabled) — hand-built unit tests do.
-		// Nothing to preflight, nothing to feed; keep the surface.
-		return results
-	}
-
-	type indexed struct {
-		i int
-		r contracts.SearchResult
-	}
-	items := make([]indexed, len(results))
-	for i, r := range results {
-		items[i] = indexed{i: i, r: r}
-	}
-	alive := make([]bool, len(results))
-	_ = netclient.Parallel(ctx, items, ttPreflightConcurrency, func(ctx context.Context, it indexed) error {
-		// The engine handoff rides the CALLER's context (no point
-		// ingesting into a cancelled session); only the fetch carries
-		// the short per-URL budget.
-		if !strings.HasPrefix(it.r.URL, "http://") && !strings.HasPrefix(it.r.URL, "https://") {
-			alive[it.i] = true
-			return nil
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, p.preflightBudget())
-		defer cancel()
-		resp, err := p.http.Get(probeCtx, it.r.URL, nil)
-		if err != nil {
-			p.loggerOrDiscard().Info("tokyotosho: preflight dropped dead .torrent host", "url", it.r.URL, "reason", err)
-			return nil // never aborts the group
-		}
-		mi, err := metainfo.Load(bytes.NewReader(resp.Body))
-		if err != nil {
-			p.loggerOrDiscard().Info("tokyotosho: preflight dropped .torrent host",
-				"url", it.r.URL,
-				"reason", fmt.Errorf("%w: %w", torrent.ErrNotMetainfo, err))
-			return nil
-		}
-		alive[it.i] = true
-		if _, err := p.IngestMetaInfo(ctx, it.r.URL, mi); err != nil {
-			p.loggerOrDiscard().Info("tokyotosho: preflight ingest failed (resolve leg will retry by URL)", "url", it.r.URL, "reason", err)
-		}
-		return nil
-	})
-
-	kept := make([]contracts.SearchResult, 0, len(results))
-	for i, r := range results {
-		if alive[i] {
-			kept = append(kept, r)
-		}
-	}
-	return kept
+	return p.preflightResults(ctx, p.http, p.loggerOrDiscard(), p.ID(), p.preflightBudget(), results)
 }
 
 // ttSize extracts the size text ("1.66GB") from the description HTML

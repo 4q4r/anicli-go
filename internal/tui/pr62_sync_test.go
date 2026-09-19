@@ -283,6 +283,8 @@ func TestSavePlaybackMovesShikiBoundRowOntoNewSource(t *testing.T) {
 		ShikimoriRateID: &rate, ShikimoriStatus: "planned",
 		NeedsCorrection: true, UpdatedAt: nowUTC(),
 	}
+	poster := "https://shikimori.io/system/animes/original/21.jpg"
+	seed.Poster = &poster
 	if err := store.Progress.Upsert(ctx, &seed); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -308,6 +310,9 @@ func TestSavePlaybackMovesShikiBoundRowOntoNewSource(t *testing.T) {
 	}
 	if got.ShikimoriRateID == nil || *got.ShikimoriRateID != 55 {
 		t.Fatalf("rate id must survive the move, got %+v", got.ShikimoriRateID)
+	}
+	if got.Poster == nil || *got.Poster != poster {
+		t.Fatalf("the placeholder poster must survive the move, got %v", got.Poster)
 	}
 	if got.NeedsCorrection {
 		t.Fatalf("watching a title clears the placeholder flag, got %+v", got)

@@ -432,6 +432,9 @@ func (s *realHistory) SavePlayback(ctx context.Context, rec storage.AnimeProgres
 		if rec.ShikimoriID == nil {
 			rec.ShikimoriID = found.ShikimoriID
 		}
+		if rec.Poster == nil {
+			rec.Poster = found.Poster
+		}
 		if rec.Score == 0 {
 			rec.Score = found.Score
 		}

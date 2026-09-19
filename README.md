@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 20 провайдеров"]
+    subgraph sources["Источники — 21 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -123,18 +123,19 @@ graph TD
         P19[animedia]
         P20[shiza]
         P18[anime365]
+        P23[yummy]
         P14[nyaa]
         P15[anilibria-torrent]
         P16[animetosho]
         P17[tokyotosho]
     end
 
-    EXT["Извлекатели плееров (9)<br/>internal/extractors"]
+    EXT["Извлекатели плееров (11)<br/>internal/extractors"]
 
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P14 & P15 & P16 & P17
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P23 & P14 & P15 & P16 & P17
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -285,6 +286,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | animedia | amd.online | видео (рус. озвучки) | ✅ живой (PR56); не порт — старый JSON API animedia.online мёртв, написан по живому DLE-сайту: поиск формой сайта, серии/озвучки из kodik-блоков страницы; стримы через общий kodik-экстрактор; ru-индекс (латиница не ищется), часть тайтлов отдана через rutube — типизированная ошибка |
 | shiza | shizaproject.com | видео (рус. озвучки, субтитры) | ✅ живой (PR57); не порт — Nuxt-SPA, написан по живому GraphQL API (публичный, анонимный): поиск по RU-названию и ромадзи, серии из kodik/sibnet-эмбедов через общие экстракторы; torrent-раздел мёртв (0 сидов) и не регистрируется |
 | anime365 | smotret-anime.app | видео (русс. озвучки и субтитры) | ✅ живой (PR55), документированный JSON API (зеркала: smotret-anime.online, anime365.ru); без токена доступа (`providers.anime365.token`, нужна активная подписка) провайдер отключается при старте; ссылки на видео выдаёт embed-API по токену |
+| yummy | site.yummyani.me (API: api.yani.tv) | видео (рус. озвучки и субтитры, до 4K) | ✅ живой (PR68); порт референсной библиотеки anicli-api (source/yummy_anime.py), перепроверен живым 2026-09-19: документированный JSON API (каталог, серии одним вызовом со всеми озвучками), анонимный; плееры kodik/sibnet/alloha/aksor через общие экстракторы, CDNVideoHub-цепочка (iframe → JS-константы → плейлист → vkId) — в провайдере; RU-индекс ищет по одному токену («черная лагуна» не находит «Пираты «Чёрной лагуны»», smoke-запрос объявлен); SSR-зеркало yummyanime.in мертво (410) |
 | nyaa | nyaa.si | торрент-поиск (англ. переводы) | ✅ живой, анонимный RSS; не порт — написан по живому сайту (PR36); стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` — прямой маршрут сбрасывается (RST) |
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
@@ -296,7 +298,6 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 |----------|---------|
 | animekai | официально закрыт 2026-05-10; домены NXDOMAIN / parked |
 | anivibe | anivibe.ru не отвечает; бывший .net угнан под ad-farm |
-| yummyanime | не входил в G1-гейт порта |
 | sovetromantica | домен sovetromantica.com угнан под казино-фарм, проект заморожен с 2025; удалён в PR22 |
 
 Проверить доступность живых источников: `make parity` (см. ниже).
@@ -310,7 +311,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 19/20 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 20/21 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -322,7 +323,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 20, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 21, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

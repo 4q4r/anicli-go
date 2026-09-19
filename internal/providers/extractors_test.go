@@ -43,11 +43,12 @@ func TestResolveEmbedsDirectFallback(t *testing.T) {
 	}
 }
 
-// TestResolveEmbedsSkippedExtractorNamed covers the three Python factory
-// extractors deliberately not ported (unreachable from the 11 registered
-// providers — evidence in internal/extractors/extractors.go). Their URLs
-// surface the typed ErrExtractFailed naming the extractor, without any
-// network I/O.
+// TestResolveEmbedsSkippedExtractorNamed covers the two Python factory
+// extractors deliberately not ported (unreachable from the registered
+// providers — evidence in internal/extractors/extractors.go; askor left
+// the skipped set in PR68 when YummyAnime started emitting its URLs).
+// Their URLs surface the typed ErrExtractFailed naming the extractor,
+// without any network I/O.
 func TestResolveEmbedsSkippedExtractorNamed(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +57,6 @@ func TestResolveEmbedsSkippedExtractorNamed(t *testing.T) {
 		link string
 		want string
 	}{
-		{name: "askor", link: "https://aksor.yani.tv/embed/9", want: "askor"},
 		{name: "csst", link: "https://csst.online/embed/2", want: "csst"},
 		{name: "sovetromantica embed", link: "https://sovetromantica.com/embed/episode_1", want: "sovetromantica_embed"},
 	}

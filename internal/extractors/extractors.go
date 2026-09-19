@@ -14,7 +14,7 @@
 //     contracts.ErrExtractFailed for page-shape mismatches; transport
 //     errors pass through with the extractor name attached) — the
 //     no-silent-failure policy of this repo;
-//   - three factory extractors unreachable from the 11 registered
+//   - two factory extractors unreachable from the 21 registered
 //     providers stay unported and surface a typed "unreachable" error
 //     instead (see skippedExtractor).
 //
@@ -64,7 +64,12 @@ func NewFactory(http *netclient.Client) *Factory {
 		&cdnVideoHubExtractor{http: http, apiBase: cdnVideoHubAPIBase},
 		&allohaExtractor{http: http},
 		&sibnetExtractor{http: http},
-		&skippedExtractor{name: "askor", matches: containsAny("aksor.yani.tv")},
+		// aksor (PR68): promoted from the skipped list — the premise
+		// "no registered provider emits aksor URLs" fell when YummyAnime
+		// joined the roster (its dub rows carry player.aksor.tv embeds).
+		// Ported from anicli-api player/aksor.py; sits in the slot the
+		// skipped askor entry held (the factory order is verbatim).
+		&aksorExtractor{http: http},
 		&skippedExtractor{name: "csst", matches: containsAny("csst.online")},
 		&skippedExtractor{name: "sovetromantica_embed", matches: containsAny("sovetromantica.com/embed")},
 		&gogoPlayExtractor{http: http},
@@ -120,10 +125,6 @@ func (f *Factory) GetSources(ctx context.Context, embedURL string) (map[string]c
 // ported because no registered provider can produce its URLs. Evidence
 // (grep of anicli-py anicli/providers/, 2026-09-13):
 //
-//   - askor (aksor.yani.tv, extractors.py:394-406): no provider emits
-//     aksor URLs; the only site embedding the player is yummyanime,
-//     which is not among the registered providers (and even
-//     yummyanime.py never places aksor URLs into raw_embeds);
 //   - csst (csst.online, extractors.py:409-423): no provider in the
 //     Python tree emits csst.online embed URLs at all;
 //   - sovetromantica_embed (sovetromantica.com/embed,
@@ -133,6 +134,10 @@ func (f *Factory) GetSources(ctx context.Context, embedURL string) (map[string]c
 //     sovetromantica provider was removed in PR22 (site dead: domain
 //     hijacked off the anime project, frozen 2025), so nothing can
 //     produce these URLs here either.
+//
+// The askor entry left this list in PR68: the YummyAnime provider
+// emits player.aksor.tv embeds, so aksor is ported for real (see
+// aksor.go).
 //
 // mp4upload needs no entry: the Python factory omits it entirely
 // (extractors.py:670 comment — disabled), so its URLs match nothing and

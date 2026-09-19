@@ -114,17 +114,36 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("the foreground pick must dispatch")
 	}
-	settled, ok := cmd().(downloadSettledMsg)
-	if !ok {
-		t.Fatalf("foreground must settle into downloadSettledMsg, got %T", cmd())
+	// The batch arms the progress pump: collect the per-episode
+	// ticks while the worker runs (the worker closes the channel).
+	var lines []string
+	var lineDone = make(chan struct{})
+	go func() {
+		defer close(lineDone)
+		for line := range ss.downloadProgCh {
+			lines = append(lines, line)
+		}
+	}()
+	var settled downloadSettledMsg
+	for _, m := range runLaunchBatch(t, cmd) {
+		if d, ok := m.(downloadSettledMsg); ok {
+			settled = d
+		}
 	}
+	<-lineDone
 	next, _ = ss.Update(settled)
 	ss = next.(*sessionScreen)
+	for _, line := range lines {
+		t.Logf("PROGRESS: %s", line)
+	}
 	t.Logf("SETTLE REPORT:\n%s", ss.status)
 
 	if settled.count != 2 || settled.total != 2 {
 		t.Fatalf("both range episodes must resolve and download, got %d/%d, report:\n%s",
 			settled.count, settled.total, ss.status)
+	}
+	if len(lines) < 4 {
+		t.Fatalf("per-episode progress lines expected (2 resolve + 2 download), got %v", lines)
 	}
 	if len(rec.tasks) != 2 {
 		t.Fatalf("2 recorded tasks expected, got %d", len(rec.tasks))

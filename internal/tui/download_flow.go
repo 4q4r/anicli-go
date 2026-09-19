@@ -7,6 +7,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,12 +17,18 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
+// availabilityMaxRuns caps the rendered run list: a pathological
+// many-gap merge (1100+ gappy episodes, dozens of junk labels) must
+// not render a multi-KB status line (review fix 5).
+const availabilityMaxRuns = 8
+
 // describeAvailableEpisodes renders the compact availability line of
 // the download-range prompt (PR64 #2): the count plus the real
 // available set — consecutive episodes collapsed into runs, gaps and
 // non-numeric labels listed as-is, so the user never guesses what
 // exists before typing a range. The caller's order is preserved —
-// the session passes its merged (display) order.
+// the session passes its merged (display) order. More than
+// availabilityMaxRuns runs truncate to the first ones plus «… +N ещё».
 func describeAvailableEpisodes(order []string) string {
 	if len(order) == 0 {
 		return "Доступных серий нет"
@@ -48,6 +55,10 @@ func describeAvailableEpisodes(order []string) string {
 			runs = append(runs, order[i]+"–"+order[j-1])
 		}
 		i = j
+	}
+	if len(runs) > availabilityMaxRuns {
+		hidden := len(runs) - availabilityMaxRuns
+		runs = append(runs[:availabilityMaxRuns], fmt.Sprintf("… +%d ещё", hidden))
 	}
 	return fmt.Sprintf("Доступно серий: %d (%s)", len(order), strings.Join(runs, ", "))
 }
@@ -269,8 +280,10 @@ func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadT
 }
 
 // renderDownloadSettle composes the foreground settle line: the
-// headline (the vocabulary the earlier PRs pinned) plus the compact
-// per-episode report.
+// headline plus the compact per-episode report. The all-failed
+// headline carries the first error verbatim — the pre-PR64
+// «Ошибка загрузки: …» contract (review fix 6); the typed no-dub
+// verdict stays on its per-episode line.
 func renderDownloadSettle(msg downloadSettledMsg) string {
 	var b strings.Builder
 	switch {
@@ -280,6 +293,9 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 		fmt.Fprintf(&b, "⚠ Загружено серий: %d из %d", msg.count, msg.total)
 	default:
 		fmt.Fprintf(&b, "Ошибка загрузки: 0 из %d серий", msg.total)
+		if msg.err != nil && !errors.Is(msg.err, errNoViableDub) {
+			fmt.Fprintf(&b, " — %v", msg.err)
+		}
 	}
 	for _, r := range msg.report {
 		b.WriteString("\n")

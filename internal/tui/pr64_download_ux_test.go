@@ -199,6 +199,8 @@ func TestDescribeAvailableEpisodes(t *testing.T) {
 		{"gaps", []string{"1", "2", "3", "7", "10"}, "Доступно серий: 5 (1–3, 7, 10)"},
 		{"single", []string{"5"}, "Доступно серий: 1 (5)"},
 		{"junk-label", []string{"1", "OVA"}, "Доступно серий: 2 (1, OVA)"},
+		{"capped", []string{"1", "3", "5", "7", "9", "11", "13", "15", "17", "19", "21", "23"},
+			"Доступно серий: 12 (1, 3, 5, 7, 9, 11, 13, 15, … +4 ещё)"},
 		{"empty", nil, "Доступных серий нет"},
 	}
 	for _, tc := range cases {
@@ -444,6 +446,20 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 	}
 	if !contains(status, "Серия 7 — ✗ нет доступных озвучек") {
 		t.Fatalf("the no-dub verdict must be typed:\n%s", status)
+	}
+
+	// Review fix 6: the headline carries the first error verbatim
+	// (the pre-PR64 «Ошибка загрузки: …» contract); the typed
+	// no-dub verdict stays on its per-episode line only.
+	msg3 := downloadSettledMsg{count: 0, total: 2, err: errors.New("disk full"),
+		report: []downloadEpisodeReport{
+			{Episode: "1", Dub: "[animego] Дубль 1", Err: errors.New("disk full")},
+			{Episode: "2", Err: errNoViableDub},
+		}}
+	next, _ = s.Update(msg3)
+	status = next.(*sessionScreen).status
+	if !contains(status, "Ошибка загрузки: 0 из 2 серий — disk full") {
+		t.Fatalf("the headline must carry the first error verbatim:\n%s", status)
 	}
 }
 

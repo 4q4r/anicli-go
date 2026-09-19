@@ -589,7 +589,7 @@ func TestTokyoToshoSearchPreflightLogsTypedReason(t *testing.T) {
 		testClient(t, "tokyotosho"), newOfflineTestEngine(t))
 
 	var logBuf bytes.Buffer
-	p.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)

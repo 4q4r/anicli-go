@@ -93,7 +93,8 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	}
 
 	registry, err := providers.NewRegistry(settings, store.ProviderStats,
-		providers.WithTorrentLogger(logf(o.logger)))
+		providers.WithTorrentLogger(logf(o.logger)),
+		providers.WithProviderLogger(logf(o.logger)))
 	if err != nil {
 		return nil, fmt.Errorf("build provider registry: %w", err)
 	}

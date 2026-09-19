@@ -43,9 +43,11 @@ func newCFInstallCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Скачать стелс-Chromium в кэш (проверка SHA-256)",
-		Long: "Скачивает свежий CloakBrowser Chromium линии free с GitHub Releases " +
-			"(~/.cloakbrowser, переиспользует уже установленные версии без повторной " +
-			"загрузки), проверяет SHA-256 из метаданных релиза и распаковывает архив.",
+		Long: "Скачивает стелс-Chromium по каналу [cf] channel: auto (по умолчанию) — " +
+			"free-база с GitHub Releases и pro-апгрейд при действующем ключе, free — только " +
+			"free-релизы, pro — лицензионный канал (~/.cloakbrowser, переиспользует уже " +
+			"установленные версии без повторной загрузки), проверяет SHA-256/подписанные " +
+			"манифесты и распаковывает архив.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
@@ -55,16 +57,24 @@ func newCFInstallCommand() *cobra.Command {
 }
 
 // runCFInstall resolves-or-downloads the stealth binary with progress
-// logged to stderr. A valid license routes the download through the
-// pro channel and prints the key's plan.
+// logged to stderr. The [cf] channel selects the line: auto (default)
+// prints the key's plan and pulls pro while it stays compatible;
+// free never touches pro; pro is the license-keyed ladder.
 func runCFInstall(ctx context.Context, out io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{})
-	if repErr == nil && rep != nil && rep.Status.Valid {
-		_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
-			orDash(rep.Status.Plan), orDash(rep.Status.Expires))
+	settings, err := loadSettingsOrFail(config.ResolveConfigPath(""))
+	if err != nil {
+		return err
 	}
-	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{Logger: logger})
+	channel := settings.CF.Channel
+	if channel != cfbrowser.ChannelFree {
+		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{})
+		if repErr == nil && rep != nil && rep.Status.Valid {
+			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
+				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
+		}
+	}
+	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{Logger: logger, Channel: channel})
 	if err != nil {
 		return fmt.Errorf("cf install: %w", err)
 	}
@@ -86,13 +96,20 @@ func newCFStatusCommand() *cobra.Command {
 }
 
 // runCFStatus prints the binary, license tier/plan/expiry and update
-// bookkeeping.
+// bookkeeping. The [cf] channel scopes what "the binary" means: the
+// free channel resolves the free line even under a valid key.
 func runCFStatus(out io.Writer) error {
+	settings, err := loadSettingsOrFail(config.ResolveConfigPath(""))
+	if err != nil {
+		return fmt.Errorf("cf status: %w", err)
+	}
+	channel := settings.CF.Channel
+
 	cacheDir, err := cfbrowser.ResolveCacheDir("")
 	if err != nil {
 		return fmt.Errorf("cf status: %w", err)
 	}
-	bin, binErr := cfbrowser.ResolveCurrentBinary(cfbrowser.ResolveOptions{})
+	bin, binErr := cfbrowser.ResolveCurrentBinary(cfbrowser.ResolveOptions{Channel: channel})
 	_, _ = fmt.Fprintf(out, "кэш:            %s\n", cacheDir)
 	if binErr != nil {
 		_, _ = fmt.Fprintf(out, "бинарник:       не установлен — выполните: %s\n", cfbrowser.InstallHint)
@@ -108,8 +125,9 @@ func runCFStatus(out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "%s\n", line)
 	// Tier display mirrors what actually launches: a pro license over
 	// a free-only cache shows the gap explicitly instead of letting a
-	// "pro" license line imply a pro binary.
-	if tier == "pro" && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
+	// "pro" license line imply a pro binary. The free channel opted
+	// out of pro on purpose — no gap hint there.
+	if tier == "pro" && channel != cfbrowser.ChannelFree && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
 		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен — выполните: %s\n", cfbrowser.InstallHint)
 	}
 	if note != "" {
@@ -287,7 +305,7 @@ func runCFLogin(ctx context.Context, out io.Writer, key string) error {
 	_, _ = fmt.Fprintf(out, "лицензия действительна: план %s, действует до %s\n",
 		orDash(st.Plan), orDash(st.Expires))
 	_, _ = fmt.Fprintf(out, "ключ сохранён: %s\n", filepath.Join(cacheDir, "license.key"))
-	_, _ = fmt.Fprintln(out, "бинарники будут скачиваться по каналу Pro (anicli cf install)")
+	_, _ = fmt.Fprintln(out, "бинарники будут качаться по каналу pro, пока [cf] channel = \"auto\" (по умолчанию); \"free\" ключ игнорирует")
 	return nil
 }
 

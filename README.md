@@ -242,6 +242,13 @@ tracker_lists = [       # внешние списки трекеров: один
 [download]
 max_concurrency = 2     # одновременные фоновые загрузки
 
+[cf]
+enabled = false         # лестница обхода Cloudflare (стелс-Chromium CloakBrowser)
+channel = "auto"        # auto (по умолчанию): free-база, pro-апгрейд при действующем
+                        # ключе (anicli cf login), несовместимый pro громко пропускается;
+                        # free: pro не трогается даже с ключом; pro: всегда
+                        # лицензионный канал
+
 [torrent]
 enabled = true          # подсистема торрентов (nyaa/animetosho/…)
 trackers = ["udp://tracker.opentrackr.org:1337/announce"]  # см. ниже

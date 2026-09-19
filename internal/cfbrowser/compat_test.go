@@ -26,7 +26,7 @@ func TestChromiumMajorKnownGood(t *testing.T) {
 		{"145.9", true},
 		{"147.0.0.0.1", false},
 		{"151.0.7922.108.6", false},
-		{"", false},        // unparsable fails closed
+		{"", false},         // unparsable fails closed
 		{"banana.1", false}, // unparsable fails closed
 	}
 	for _, tc := range cases {
@@ -55,7 +55,7 @@ func TestNormalizeChannel(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"", channelAuto, true},   // zero value = auto (back-compat)
+		{"", channelAuto, true}, // zero value = auto (back-compat)
 		{"auto", channelAuto, true},
 		{"free", channelFree, true},
 		{"pro", channelPro, true},

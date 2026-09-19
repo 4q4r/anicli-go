@@ -314,14 +314,9 @@ type sessionScreen struct {
 	resolveGen  int
 	localCounts map[string]int
 
-	// status is the transient status line (play verdicts, sync
-	// notes). statusGen pins it to the substate surface that set it:
-	// setState bumps surfaceGen on every transition, so a verdict
-	// never survives onto a different screen (PR64 #1 — the file
-	// logger keeps the full history instead).
-	status     string
-	statusGen  int
-	surfaceGen int
+	// status scopes the transient verdict line to the substate
+	// surface that set it (PR64 #1) — see surfaceStatus.
+	surfaceStatus
 }
 
 // NewSessionScreen builds the session for one grouped title.
@@ -365,16 +360,9 @@ func (s *sessionScreen) setShikimoriBinding(id int64) {
 // surface that set it, and the next surface starts clean (PR64 #1).
 func (s *sessionScreen) setState(next sessionState) {
 	if s.state != next {
-		s.surfaceGen++
+		s.bumpSurface()
 	}
 	s.state = next
-}
-
-// setStatus records a transient verdict scoped to the CURRENT surface
-// (PR64 #1): View renders it only while that surface is showing.
-func (s *sessionScreen) setStatus(msg string) {
-	s.status = msg
-	s.statusGen = s.surfaceGen
 }
 
 // ID implements Screen.
@@ -2322,7 +2310,7 @@ func (s *sessionScreen) View() tea.View {
 	default:
 		body = s.list.Render()
 	}
-	if s.status != "" && s.statusGen == s.surfaceGen && s.state != sessionStatePlaying {
+	if s.statusVisible() && s.state != sessionStatePlaying {
 		body += "\n" + theme.StatusLine.Render(s.status)
 	}
 	return tea.NewView(body)

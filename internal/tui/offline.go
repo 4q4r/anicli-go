@@ -81,13 +81,10 @@ type offlineSession struct {
 	list         *PinList // action menu
 	episodeList  *PinList // episodes
 	variantList  *PinList // local variant picker
-	// status is the transient status line (play verdicts). statusGen
-	// pins it to the surface that set it; bumpSurface runs on every
-	// surface switch (episode picker ⇄ menu ⇄ variant picker) so a
-	// verdict never survives onto a different surface (PR64 #1).
-	status     string
-	statusGen  int
-	surfaceGen int
+	// status scopes the transient verdict line to the surface that
+	// set it (PR64 #1) — see surfaceStatus; bumpSurface runs on every
+	// surface switch (episode picker ⇄ menu ⇄ variant picker).
+	surfaceStatus
 }
 
 // NewOfflineSession builds the offline session for one title.
@@ -102,16 +99,6 @@ func NewOfflineSession(deps *Deps, title OfflineTitle) *offlineSession {
 
 // ID implements Screen.
 func (s *offlineSession) ID() string { return offlineSessionID }
-
-// bumpSurface invalidates the transient status line on every surface
-// switch (PR64 #1): a verdict belongs to the surface that set it.
-func (s *offlineSession) bumpSurface() { s.surfaceGen++ }
-
-// setStatus records a transient verdict scoped to the current surface.
-func (s *offlineSession) setStatus(msg string) {
-	s.status = msg
-	s.statusGen = s.surfaceGen
-}
 
 // Init implements Screen.
 func (s *offlineSession) Init() tea.Cmd { return nil }
@@ -377,7 +364,7 @@ func (s *offlineSession) View() tea.View {
 	default:
 		body = theme.Title.Render(s.header()) + "\n\n" + s.list.Render()
 	}
-	if s.status != "" && s.statusGen == s.surfaceGen {
+	if s.statusVisible() {
 		body += "\n" + theme.StatusLine.Render(s.status)
 	}
 	return tea.NewView(body)

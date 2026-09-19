@@ -171,10 +171,46 @@ type bufferedProgressMsg struct {
 type bufferedProgressEnd struct{ gen int }
 
 // downloadSettledMsg reports a finished foreground download batch
-// (I8).
+// (I8) with its per-episode report (PR64 #3): count/total successes,
+// the first error for the headline and one report line per episode.
 type downloadSettledMsg struct {
-	count int
-	err   error
+	count  int
+	total  int
+	err    error
+	report []downloadEpisodeReport
+}
+
+// backgroundQueuedMsg settles the per-episode dub resolution of a
+// background range download (PR64 #3): the RESOLVED tasks are queued
+// (never a dead dub), and the report types each episode's dub or
+// failure.
+type backgroundQueuedMsg struct {
+	queued int
+	total  int
+	report []downloadEpisodeReport
+}
+
+// downloadProgressMsg is one per-episode tick of a running foreground
+// range download (review fix 2): a resolve verdict or a download
+// start/finish. gen tags the batch — a superseded batch's ticks drop.
+// downloadProgressEnd closes the pump (channel drained).
+type downloadProgressMsg struct {
+	gen  int
+	line string
+}
+
+type downloadProgressEnd struct{ gen int }
+
+// waitDownloadProgress is the re-arming pump of the range-download
+// progress channel (the buffered-watch pattern).
+func waitDownloadProgress(ch <-chan string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return downloadProgressEnd{gen: gen}
+		}
+		return downloadProgressMsg{gen: gen, line: line}
+	}
 }
 
 // sessionScreen is the watch-session state machine: a merged episode
@@ -231,6 +267,12 @@ type sessionScreen struct {
 	bufferGen    int
 	bufferProgCh chan buffered.Progress
 
+	// Range-download batch state (review fix 2): downloadGen tags the
+	// active batch (a newer batch drops the stale pump) and
+	// downloadProgCh carries the per-episode progress ticks.
+	downloadGen    int
+	downloadProgCh chan string
+
 	state sessionState
 
 	list        *PinList // action menu
@@ -272,7 +314,9 @@ type sessionScreen struct {
 	resolveGen  int
 	localCounts map[string]int
 
-	status string // transient status line (play verdicts, sync notes)
+	// status scopes the transient verdict line to the substate
+	// surface that set it (PR64 #1) — see surfaceStatus.
+	surfaceStatus
 }
 
 // NewSessionScreen builds the session for one grouped title.
@@ -309,6 +353,16 @@ func (s *sessionScreen) setShikimoriBinding(id int64) {
 		s.primary.Meta = map[string]any{}
 	}
 	s.primary.Meta["shikimori_id"] = id
+}
+
+// setState switches the session substate surface. Every transition
+// invalidates the transient status line: a verdict belongs to the
+// surface that set it, and the next surface starts clean (PR64 #1).
+func (s *sessionScreen) setState(next sessionState) {
+	if s.state != next {
+		s.bumpSurface()
+	}
+	s.state = next
 }
 
 // ID implements Screen.
@@ -404,7 +458,7 @@ func (s *sessionScreen) loadEpisodesSync() {
 // cause can distinguish unopened episodes from genuinely empty ones.
 func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	if num == "" {
-		s.status = "Нет серий"
+		s.setStatus("Нет серий")
 		return nil
 	}
 	if s.hydrated == nil {
@@ -412,7 +466,7 @@ func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	}
 	s.hydrated[num] = true
 	s.hydrating = true
-	s.status = "Ищу источники…"
+	s.setStatus("Ищу источники…")
 	s.hydrateGen++
 	gen := s.hydrateGen
 	ep := s.episodes[num]
@@ -498,11 +552,11 @@ func (s *sessionScreen) applyHydration(msg hydrateDoneMsg) tea.Cmd {
 	s.buildActionMenu()
 	switch {
 	case len(msg.embeds) > 0:
-		s.status = fmt.Sprintf("Источники найдены: %d", len(msg.embeds))
+		s.setStatus(fmt.Sprintf("Источники найдены: %d", len(msg.embeds)))
 	case len(msg.errs) > 0:
-		s.status = "Источники не найдены — причина в заголовке"
+		s.setStatus("Источники не найдены — причина в заголовке")
 	default:
-		s.status = "Источники не найдены"
+		s.setStatus("Источники не найдены")
 	}
 	return nil
 }
@@ -536,7 +590,7 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if msg.gen != s.bufferGen {
 			return s, nil
 		}
-		s.status = formatBufferedProgress(msg.p)
+		s.setStatus(formatBufferedProgress(msg.p))
 		return s, waitBufferedProgress(s.bufferProgCh, msg.gen)
 	case bufferedProgressEnd:
 		return s, nil
@@ -553,8 +607,8 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			if msg.skipCleanup != nil {
 				msg.skipCleanup()
 			}
-			s.status = "Ошибка: " + msg.err.Error()
-			s.state = sessionStateMenu
+			s.setState(sessionStateMenu)
+			s.setStatus("Ошибка: " + msg.err.Error())
 			return s, nil
 		}
 		// A new verdict always retires the previous pending chapters
@@ -580,37 +634,37 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.buildStreamList()
 		return s, nil
 	case playedMsg:
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		// The chapters file was removed by the play pipeline's
 		// cleanup (PR61); the cache clears so the next watch of the
 		// episode re-resolves instead of replaying a dead path.
 		s.skipChapters, s.skipNote, s.skipCleanup = "", "", nil
 		if msg.err != nil {
-			s.status = "Ошибка воспроизведения: " + msg.err.Error()
+			s.setStatus("Ошибка воспроизведения: " + msg.err.Error())
 			return s, nil
 		}
 		if msg.quality != "" {
 			s.lastQuality = msg.quality
 		}
-		s.status = "Воспроизведение завершено"
+		s.setStatus("Воспроизведение завершено")
 		return s, s.maybeNext()
 	case shikiUpdatedMsg:
 		if msg.err != nil {
-			s.status = "Ошибка обновления: " + msg.err.Error()
+			s.setStatus("Ошибка обновления: " + msg.err.Error())
 			return s, nil
 		}
 		if msg.rateID != 0 {
 			s.shikiRateID = msg.rateID
 		}
-		s.status = "Информация обновлена"
+		s.setStatus("Информация обновлена")
 		return s, nil
 	case shikiSyncedMsg:
 		if msg.err != nil {
-			s.status = msg.err.Error()
+			s.setStatus(msg.err.Error())
 			return s, nil
 		}
 		if msg.note != "" {
-			s.status = msg.note
+			s.setStatus(msg.note)
 		}
 		return s, nil
 	case shikiBoundMsg:
@@ -618,12 +672,19 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.setShikimoriBinding(msg.id)
 		}
 		return s, nil
-	case downloadSettledMsg:
-		if msg.err != nil {
-			s.status = "Ошибка загрузки: " + msg.err.Error()
+	case downloadProgressMsg:
+		if msg.gen != s.downloadGen {
 			return s, nil
 		}
-		s.status = fmt.Sprintf("✓ Загружено серий: %d", msg.count)
+		s.setStatus(msg.line)
+		return s, waitDownloadProgress(s.downloadProgCh, msg.gen)
+	case downloadProgressEnd:
+		return s, nil
+	case downloadSettledMsg:
+		s.setStatus(renderDownloadSettle(msg))
+		return s, nil
+	case backgroundQueuedMsg:
+		s.setStatus(renderBackgroundQueued(msg))
 		return s, nil
 	case tea.KeyPressMsg:
 		return s.handleKey(msg)
@@ -691,7 +752,7 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.stopBuffering("Буферизация отменена")
 		return s, nil
 	default:
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 }
@@ -730,7 +791,7 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return s, nil
 	case "jump":
-		s.state = sessionStateEpisodeList
+		s.setState(sessionStateEpisodeList)
 		return s, nil
 	case "refresh":
 		if s.hydrating {
@@ -747,21 +808,22 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, replace(newRebindProgress(s.deps, s.resume))
 	case "redub":
 		s.videoDub, s.audioDub = "", ""
-		s.status = "Озвучка сброшена — выберите заново при просмотре"
+		s.setStatus("Озвучка сброшена — выберите заново при просмотре")
 		return s, nil
 	case "info":
-		s.state = sessionStateInfoMenu
+		s.setState(sessionStateInfoMenu)
 		s.buildInfoList()
 		return s, nil
 	case "download":
 		if s.deps == nil || s.deps.Download == nil {
-			s.status = "Загрузка недоступна"
+			s.setStatus("Загрузка недоступна")
 			return s, nil
 		}
-		s.state = sessionStateDownloadRange
+		s.setState(sessionStateDownloadRange)
 		s.rangeInput = NewTextPrompt(TextPromptConfig{
-			ID:    "download-range",
-			Title: "Серии для загрузки (например 1-5, 7):",
+			ID:     "download-range",
+			Title:  "Серии для загрузки (например 1-5, 7):",
+			Status: describeAvailableEpisodes(s.order),
 		})
 		return s, s.rangeInput.Init()
 	case "exit":
@@ -781,7 +843,7 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
-		s.status = "Нет серий"
+		s.setStatus("Нет серий")
 		return s, nil
 	}
 	if len(ep.RawEmbeds) == 0 {
@@ -793,11 +855,11 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 			return s, s.hydrateEpisode(ep.Num)
 		}
 		if !s.hydrating {
-			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+			s.setStatus("Нет источников — выполните «🔄 Обновить источники»")
 		}
 		return s, nil
 	}
-	s.state = sessionStateFormat
+	s.setState(sessionStateFormat)
 	s.formatList = NewPinList(NewMenu("Формат просмотра:", "", []Choice{
 		{ID: "stream", Label: "Потоковый", Value: "stream"},
 		{ID: "buffer", Label: "Буферный", Value: "buffer"},
@@ -819,7 +881,7 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 func (s *sessionScreen) autoWatchNext() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
-		s.status = "Нет серий"
+		s.setStatus("Нет серий")
 		return s, nil
 	}
 	if len(ep.RawEmbeds) == 0 {
@@ -827,17 +889,24 @@ func (s *sessionScreen) autoWatchNext() (Screen, tea.Cmd) {
 			return s, s.hydrateEpisode(ep.Num)
 		}
 		if !s.hydrating {
-			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+			s.setStatus("Нет источников — выполните «🔄 Обновить источники»")
 		}
 		return s, nil
 	}
+	warn := ""
 	if s.videoDub != "" && len(ep.RawEmbeds[s.videoDub]) == 0 {
 		// python resolve_dubs_smart: the previously used source is not
-		// on the new episode — typed note, then the usual selection.
-		s.status = fmt.Sprintf("⚠ Прошлые настройки недоступны: %s / %s",
+		// on the new episode — a typed note, then the usual selection.
+		// The note is stamped AFTER the pipeline opens its surface so
+		// it scopes to the picker that explains it (PR64 #1).
+		warn = fmt.Sprintf("⚠ Прошлые настройки недоступны: %s / %s",
 			s.videoDub, s.audioDub)
 	}
-	return s.proceedWatch()
+	scr, cmd := s.proceedWatch()
+	if warn != "" {
+		s.setStatus(warn)
+	}
+	return scr, cmd
 }
 
 // handleFormatKey resolves the format selector: the pick arms the
@@ -854,14 +923,14 @@ func (s *sessionScreen) handleFormatKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	choice, _ := resolved.(string)
 	switch choice {
 	case "buffer":
 		if s.deps == nil || s.deps.Buffered == nil {
-			s.status = "Буферный режим недоступен"
+			s.setStatus("Буферный режим недоступен")
 			return s, nil
 		}
 		s.buffered = true
@@ -882,7 +951,7 @@ func (s *sessionScreen) handleFormatKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 func (s *sessionScreen) proceedWatch() (Screen, tea.Cmd) {
 	ep := s.currentEpisodeData()
 	if ep == nil {
-		s.status = "Нет серий"
+		s.setStatus("Нет серий")
 		return s, nil
 	}
 	if s.videoDub == "" || len(ep.RawEmbeds[s.videoDub]) == 0 {
@@ -929,7 +998,7 @@ func (s *sessionScreen) openAudioSelect() (Screen, tea.Cmd) {
 			Value: k,
 		})
 	}
-	s.state = sessionStateDubAudio
+	s.setState(sessionStateDubAudio)
 	s.dubList = NewPinList(NewMenu("Выберите аудиопоток:", "Нет доступных аудиопотоков", choices...), defaultListHeight)
 	return s, nil
 }
@@ -960,11 +1029,11 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		// list when its entries are cached (python's loop back to the
 		// video prompt), else to the menu.
 		if len(s.streamEntries) > 0 {
-			s.state = sessionStateQuality
+			s.setState(sessionStateQuality)
 			s.buildStreamList()
 			return s, nil
 		}
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	pick, _ := resolved.(string)
@@ -980,7 +1049,7 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // list (PR61); a dub key scopes the resolve to the remembered dub
 // (the fast path auto-plays its result).
 func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
-	s.state = sessionStateQuality
+	s.setState(sessionStateQuality)
 	s.streamEntries = nil
 	s.buildStreamList()
 	s.resolveGen++
@@ -1124,8 +1193,8 @@ func (s *sessionScreen) startBuffered() (Screen, tea.Cmd) {
 	s.bufferCancel = cancel
 	s.bufferGen++
 	gen := s.bufferGen
-	s.state = sessionStateBuffering
-	s.status = "Буферизация: подготовка…"
+	s.setState(sessionStateBuffering)
+	s.setStatus("Буферизация: подготовка…")
 	progCh := make(chan buffered.Progress, 16)
 	s.bufferProgCh = progCh
 	download := safeCmd(sessionScreenID, func() tea.Msg {
@@ -1182,12 +1251,12 @@ func (s *sessionScreen) applyBufferReady(msg bufferReadyMsg) tea.Cmd {
 		if errors.Is(msg.err, context.Canceled) {
 			return nil // the cancel handler owns the status line
 		}
-		s.status = "Ошибка буферизации: " + msg.err.Error()
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
+		s.setStatus("Ошибка буферизации: " + msg.err.Error())
 		return nil
 	}
-	s.state = sessionStatePlaying
-	s.status = "▶ Запуск mpv…"
+	s.setState(sessionStatePlaying)
+	s.setStatus("▶ Запуск mpv…")
 	snapshot := *s
 	handle := msg.handle
 	quality := msg.quality
@@ -1255,8 +1324,8 @@ func (s *sessionScreen) stopBuffering(note string) {
 		s.bufferCancel = nil
 	}
 	s.bufferGen++ // stale progress/ready messages drop
-	s.state = sessionStateMenu
-	s.status = note
+	s.setState(sessionStateMenu)
+	s.setStatus(note)
 }
 
 // formatBufferedProgress renders the minimal progress line: percent by
@@ -1345,7 +1414,7 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	entry, ok := resolved.(streamEntry)
@@ -1393,7 +1462,7 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	sync := s.shikiSyncCmd()
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
-			s.status = "Буферный режим недоступен"
+			s.setStatus("Буферный режим недоступен")
 			return s, nil
 		}
 		_, buf := s.startBuffered()
@@ -1405,8 +1474,8 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 		}
 		return s, buf
 	}
-	s.state = sessionStatePlaying
-	s.status = "▶ Запуск mpv…"
+	s.setState(sessionStatePlaying)
+	s.setStatus("▶ Запуск mpv…")
 	if s.skipNote != "" && s.skipEpisode == s.currentEpisode() {
 		s.status += " · ⏭ " + s.skipNote
 	}
@@ -1649,7 +1718,7 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	num, _ := resolved.(string)
@@ -1659,7 +1728,7 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 			break
 		}
 	}
-	s.state = sessionStateMenu
+	s.setState(sessionStateMenu)
 	s.buildActionMenu()
 	return s, nil
 }
@@ -1678,20 +1747,20 @@ func (s *sessionScreen) handleInfoMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	id, _ := resolved.(string)
 	switch id {
 	case "status":
-		s.state = sessionStateInfoStatus
+		s.setState(sessionStateInfoStatus)
 		s.buildStatusList()
 	case "score":
-		s.state = sessionStateInfoScore
+		s.setState(sessionStateInfoScore)
 		s.infoPrompt = NewTextPrompt(TextPromptConfig{ID: "info-score", Title: "Введите оценку (0-10):"})
 		return s, s.infoPrompt.Init()
 	case "rewatches":
-		s.state = sessionStateInfoRewatches
+		s.setState(sessionStateInfoRewatches)
 		s.infoPrompt = NewTextPrompt(TextPromptConfig{ID: "info-rew", Title: "Количество пересмотров:"})
 		return s, s.infoPrompt.Init()
 	}
@@ -1721,11 +1790,11 @@ func (s *sessionScreen) handleInfoStatusKey(key tea.KeyPressMsg) (Screen, tea.Cm
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateInfoMenu
+		s.setState(sessionStateInfoMenu)
 		return s, nil
 	}
 	statusKey, _ := resolved.(string)
-	s.state = sessionStateMenu
+	s.setState(sessionStateMenu)
 	return s, s.pushShikiUpdate(statusKey, nil, nil)
 }
 
@@ -1747,19 +1816,19 @@ func (s *sessionScreen) handleInfoNumericKey(key tea.KeyPressMsg) (Screen, tea.C
 		return s, cmd
 	}
 	if resolved == Back {
-		s.state = sessionStateInfoMenu
+		s.setState(sessionStateInfoMenu)
 		return s, nil
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(resolved.(string)))
 	if err != nil {
-		s.status = "Нужно число"
+		s.setStatus("Нужно число")
 		return s, nil
 	}
 	v := value
 	// Branch on the ORIGINAL substate before returning to the menu —
 	// the score prompt must submit as score, not rewatches (C1).
 	wasScore := s.state == sessionStateInfoScore
-	s.state = sessionStateMenu
+	s.setState(sessionStateMenu)
 	if wasScore {
 		return s, s.pushShikiUpdate("", &v, nil)
 	}
@@ -1772,12 +1841,12 @@ func (s *sessionScreen) handleInfoNumericKey(key tea.KeyPressMsg) (Screen, tea.C
 // persisted so repeated patches PATCH instead of duplicating rates.
 func (s *sessionScreen) pushShikiUpdate(status string, score, rewatches *int) tea.Cmd {
 	if s.deps == nil || s.deps.Shiki == nil || !s.deps.Shiki.Enabled() {
-		s.status = "Shikimori отключён — обновление только локально невозможно"
+		s.setStatus("Shikimori отключён — обновление только локально невозможно")
 		return nil
 	}
 	id := s.shikimoriID()
 	if id == 0 {
-		s.status = "Запись не привязана к Shikimori"
+		s.setStatus("Запись не привязана к Shikimori")
 		return nil
 	}
 	deps := s.deps
@@ -1825,7 +1894,7 @@ func (s *sessionScreen) handleDownloadRangeKey(key tea.KeyPressMsg) (Screen, tea
 		return s, cmd
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	spec := resolved.(string)
@@ -1840,11 +1909,11 @@ func (s *sessionScreen) handleDownloadRangeKey(key tea.KeyPressMsg) (Screen, tea
 		}
 	}
 	if len(s.downloadEpisodes) == 0 {
-		s.status = "В диапазоне нет доступных серий"
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
+		s.setStatus("В диапазоне нет доступных серий")
 		return s, nil
 	}
-	s.state = sessionStateDownloadMode
+	s.setState(sessionStateDownloadMode)
 	s.buildModeList()
 	return s, nil
 }
@@ -1863,47 +1932,50 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 		return s, nil
 	}
 	if resolved == Back {
-		s.state = sessionStateMenu
+		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	mode, _ := resolved.(string)
-	s.state = sessionStateMenu
+	s.setState(sessionStateMenu)
 	episodes := make([]contracts.Episode, 0, len(s.downloadEpisodes))
 	for _, num := range s.downloadEpisodes {
 		episodes = append(episodes, s.episodes[num])
 	}
+	// The dub is resolved PER EPISODE inside the command (PR64 #3):
+	// the remembered dub first, per-episode fallback otherwise — the
+	// tasks leave this handler without a dub stamp.
 	tasks := make([]DownloadTask, 0, len(episodes))
 	for _, ep := range episodes {
 		tasks = append(tasks, DownloadTask{
 			AnimeTitle:  BestDisplayTitle(s.group),
 			EpisodeNum:  ep.Num,
 			ShikimoriID: s.shikimoriID(),
-			ProviderID:  providerOfTrackKey(s.videoDub),
 			Episode:     ep,
-			DubID:       s.videoDub,
 			Quality:     s.lastQuality,
 		})
 	}
+	deps := s.deps
+	preferred := s.videoDub
 	switch mode {
 	case "foreground":
-		deps := s.deps
 		count := len(tasks)
-		s.status = fmt.Sprintf("Загрузка %d серий (передний план)…", count)
-		return s, safeCmd(sessionScreenID, func() tea.Msg {
-			var firstErr error
-			for _, task := range tasks {
-				if err := deps.Download.Download(context.Background(), task); err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			return downloadSettledMsg{count: count, err: firstErr}
-		})
+		s.setStatus(fmt.Sprintf("Загрузка %d серий (передний план)…", count))
+		s.downloadGen++
+		gen := s.downloadGen
+		progCh := make(chan string, 16)
+		s.downloadProgCh = progCh
+		return s, tea.Batch(
+			safeCmd(sessionScreenID, func() tea.Msg {
+				defer close(progCh)
+				return runForegroundDownload(context.Background(), deps, tasks, preferred, progCh)
+			}),
+			waitDownloadProgress(progCh, gen),
+		)
 	case "background":
-		for _, task := range tasks {
-			s.deps.Download.Submit(task)
-		}
-		s.status = fmt.Sprintf("Отправлено в фон: %d серий", len(tasks))
-		return s, nil
+		s.setStatus(fmt.Sprintf("Разрешаю озвучки для %d серий…", len(tasks)))
+		return s, safeCmd(sessionScreenID, func() tea.Msg {
+			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred)
+		})
 	default:
 		return s, nil
 	}
@@ -1927,7 +1999,7 @@ func (s *sessionScreen) finalizeMerge() {
 	s.order = order
 	s.dubStats = DubStats(mergeValues(merged))
 	s.currentIdx = 0
-	s.state = sessionStateMenu
+	s.setState(sessionStateMenu)
 	s.attachLocalCounts()
 	s.buildActionMenu()
 	s.buildEpisodeList()
@@ -2209,9 +2281,15 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateFormat:
 		body = themedList(s.formatList)
 	case sessionStateBuffering:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
+		body = theme.Title.Render(s.renderHeader())
+		if s.statusVisible() {
+			body += "\n" + theme.Success.Render(s.status)
+		}
 	case sessionStatePlaying:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
+		body = theme.Title.Render(s.renderHeader())
+		if s.statusVisible() {
+			body += "\n" + theme.Success.Render(s.status)
+		}
 	case sessionStateInfoMenu:
 		body = s.renderInfoMenu()
 	case sessionStateInfoStatus:
@@ -2238,7 +2316,7 @@ func (s *sessionScreen) View() tea.View {
 	default:
 		body = s.list.Render()
 	}
-	if s.status != "" && s.state != sessionStatePlaying {
+	if s.statusVisible() && s.state != sessionStatePlaying {
 		body += "\n" + theme.StatusLine.Render(s.status)
 	}
 	return tea.NewView(body)

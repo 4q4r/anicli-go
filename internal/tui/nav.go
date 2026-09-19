@@ -166,6 +166,39 @@ func EmptyInput(s string) bool {
 	return strings.TrimSpace(s) == ""
 }
 
+// surfaceStatus is the transient status line of a multi-surface
+// screen (PR64 #1): every surface switch bumps the generation, a
+// verdict records the generation of the surface that set it, and
+// visible() gates rendering — a verdict never survives onto another
+// surface, and back-navigation cannot resurrect it (generations are
+// monotonic, a value is never reused). The file logger keeps the
+// full verdict history instead. Screens embed this type; the fields
+// promote unchanged.
+type surfaceStatus struct {
+	// status is the transient verdict line (play verdicts, sync
+	// notes, warnings).
+	status string
+	// statusGen is the surface generation that set status.
+	statusGen int
+	// surfaceGen is the CURRENT surface generation.
+	surfaceGen int
+}
+
+// bumpSurface invalidates the status line on a surface switch: the
+// next surface starts clean (PR64 #1).
+func (s *surfaceStatus) bumpSurface() { s.surfaceGen++ }
+
+// setStatus records a transient verdict scoped to the CURRENT surface.
+func (s *surfaceStatus) setStatus(msg string) {
+	s.status = msg
+	s.statusGen = s.surfaceGen
+}
+
+// statusVisible reports whether the current surface owns the status.
+func (s *surfaceStatus) statusVisible() bool {
+	return s.status != "" && s.statusGen == s.surfaceGen
+}
+
 // RootInterruptExits reports whether an interrupt key at the ROOT menu
 // means "exit the application": the I2 root exception applies to
 // Ctrl-C only; Esc at root merely normalizes to Back (which at root

@@ -81,7 +81,10 @@ type offlineSession struct {
 	list         *PinList // action menu
 	episodeList  *PinList // episodes
 	variantList  *PinList // local variant picker
-	status       string   // transient status line (play verdicts)
+	// status scopes the transient verdict line to the surface that
+	// set it (PR64 #1) — see surfaceStatus; bumpSurface runs on every
+	// surface switch (episode picker ⇄ menu ⇄ variant picker).
+	surfaceStatus
 }
 
 // NewOfflineSession builds the offline session for one title.
@@ -186,9 +189,9 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s.playLocal(m)
 	case offlinePlayedMsg:
 		if m.err != nil {
-			s.status = "Ошибка воспроизведения: " + m.err.Error()
+			s.setStatus("Ошибка воспроизведения: " + m.err.Error())
 		} else {
-			s.status = "Воспроизведение завершено"
+			s.setStatus("Воспроизведение завершено")
 		}
 		return s, nil
 	case tea.KeyPressMsg:
@@ -222,6 +225,7 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return s, pop()
 		}
 		s.current, _ = resolved.(string)
+		s.bumpSurface() // picker → menu (PR64 #1)
 		s.buildActionMenu()
 		return s, nil
 	}
@@ -248,6 +252,7 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "jump":
 		s.current = ""
 		s.stateVariant = false // reset the picker on exit paths (C4)
+		s.bumpSurface()        // menu → picker (PR64 #1)
 		return s, nil
 	case "variant":
 		return s.pickVariant()
@@ -269,6 +274,7 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 		return s, nil
 	}
 	s.stateVariant = false
+	s.bumpSurface() // picker ⇄ menu (PR64 #1)
 	if resolved == Back {
 		return s, nil
 	}
@@ -278,7 +284,7 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 	}
 	s.videoKey, s.audioKey, s.quality = entry.VideoKey, entry.AudioKey, entry.Quality
 	s.buildActionMenu()
-	s.status = "Локальный поток переключён"
+	s.setStatus("Локальный поток переключён")
 	return s, nil
 }
 
@@ -286,7 +292,7 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 // service (C3): [OFFLINE] title, no skip lookups ever.
 func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	if s.deps == nil || s.deps.Playback == nil {
-		s.status = "Плеер недоступен"
+		s.setStatus("Плеер недоступен")
 		return s, nil
 	}
 	deps := s.deps
@@ -343,6 +349,7 @@ func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 	}
 	s.variantList = NewPinList(NewMenu("Локальные варианты:", "Нет вариантов", choices...), defaultListHeight)
 	s.stateVariant = true
+	s.bumpSurface() // menu → picker (PR64 #1)
 	return s, nil
 }
 
@@ -357,7 +364,7 @@ func (s *offlineSession) View() tea.View {
 	default:
 		body = theme.Title.Render(s.header()) + "\n\n" + s.list.Render()
 	}
-	if s.status != "" {
+	if s.statusVisible() {
 		body += "\n" + theme.StatusLine.Render(s.status)
 	}
 	return tea.NewView(body)

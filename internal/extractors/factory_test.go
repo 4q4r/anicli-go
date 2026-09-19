@@ -78,7 +78,7 @@ func TestFactoryOrder(t *testing.T) {
 	f := newTestFactory(t)
 	want := []string{
 		"kodik", "aniboom", "cdnvideohub", "alloha", "sibnet",
-		"askor", "csst", "sovetromantica_embed",
+		"aksor", "csst", "sovetromantica_embed",
 		"gogoplay", "streamtape", "dood", "kwik", "blogger",
 	}
 	if len(f.extractors) != len(want) {
@@ -141,7 +141,8 @@ func TestGetSourcesSkippedExtractors(t *testing.T) {
 		link string
 		want string
 	}{
-		{name: "askor", link: "https://aksor.yani.tv/embed/9", want: "askor"},
+		// askor left the skipped set in PR68 (the YummyAnime provider
+		// emits player.aksor.tv embeds — aksor is ported for real).
 		{name: "csst", link: "https://csst.online/embed/2", want: "csst"},
 		{name: "sovetromantica embed", link: "https://sovetromantica.com/embed/episode_1", want: "sovetromantica_embed"},
 	}

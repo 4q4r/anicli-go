@@ -819,3 +819,26 @@ func (f *inflightEpisode) ResolveStream(ctx context.Context, prov string, ep con
 	f.mu.Unlock()
 	return f.fakeEpisode.ResolveStream(ctx, prov, ep, dub)
 }
+
+// TestPlayingViewGatesStaleStatusBehindGen (review fix 4): the
+// buffering/playing body renders must honor the surface generation —
+// a status left over from an earlier surface must not leak through
+// the body branch even when the fresh-status discipline is broken.
+func TestPlayingViewGatesStaleStatusBehindGen(t *testing.T) {
+	s := seedPlaybackVerdict(pr64Session(t))
+	// A transition WITHOUT a fresh status: the old body branch would
+	// render the stale menu verdict verbatim.
+	s.setState(sessionStatePlaying)
+	if contains(s.View().Content, "Воспроизведение завершено") {
+		t.Fatalf("the stale status leaked through the playing body render:\n%s", s.View().Content)
+	}
+	s.setState(sessionStateBuffering)
+	if contains(s.View().Content, "Воспроизведение завершено") {
+		t.Fatalf("the stale status leaked through the buffering body render:\n%s", s.View().Content)
+	}
+	// And a fresh status on the CURRENT surface still renders.
+	s.setStatus("▶ Запуск mpv…")
+	if !contains(s.View().Content, "▶ Запуск mpv…") {
+		t.Fatalf("a fresh status must render on the playing surface:\n%s", s.View().Content)
+	}
+}

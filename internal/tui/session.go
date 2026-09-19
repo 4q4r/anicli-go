@@ -2281,9 +2281,15 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateFormat:
 		body = themedList(s.formatList)
 	case sessionStateBuffering:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
+		body = theme.Title.Render(s.renderHeader())
+		if s.statusVisible() {
+			body += "\n" + theme.Success.Render(s.status)
+		}
 	case sessionStatePlaying:
-		body = theme.Title.Render(s.renderHeader()) + "\n" + theme.Success.Render(s.status)
+		body = theme.Title.Render(s.renderHeader())
+		if s.statusVisible() {
+			body += "\n" + theme.Success.Render(s.status)
+		}
 	case sessionStateInfoMenu:
 		body = s.renderInfoMenu()
 	case sessionStateInfoStatus:

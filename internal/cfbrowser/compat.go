@@ -57,13 +57,14 @@ func (e *CompatError) Error() string {
 }
 
 // versionMajor extracts the leading major segment of a dotted
-// version. ok is false for unparsable input.
+// version. ok is false for unparsable input (a value beyond a sane
+// integer range included).
 func versionMajor(version string) (major int, ok bool) {
 	head, _, _ := strings.Cut(version, ".")
 	if head == "" {
 		return 0, false
 	}
-	v, err := strconv.ParseUint(head, 10, 64)
+	v, err := strconv.ParseUint(head, 10, 32)
 	if err != nil {
 		return 0, false
 	}

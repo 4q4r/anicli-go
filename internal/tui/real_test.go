@@ -161,7 +161,7 @@ func TestRealHistoryBindSource(t *testing.T) {
 	}
 
 	h := &realHistory{store: store}
-	if err := h.BindSource(context.Background(), rec.ID, "anilib", "u2"); err != nil {
+	if err := h.BindSource(context.Background(), rec.ID, "anilib", "u2", title); err != nil {
 		t.Fatalf("BindSource: %v", err)
 	}
 

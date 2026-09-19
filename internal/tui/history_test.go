@@ -18,8 +18,11 @@ type fakeHistory struct {
 	items   []storage.AnimeProgress
 	saved   []int64
 	binds   []int64
-	byShiki map[int64]*storage.AnimeProgress
-	rateIDs map[int64]int64 // animeID -> last SetRateID
+	// bindCalls records every BindSource call (PR62 #2): the binding
+	// must persist at the checklist pick.
+	bindCalls []bindCall
+	byShiki   map[int64]*storage.AnimeProgress
+	rateIDs   map[int64]int64 // animeID -> last SetRateID
 }
 
 func (f *fakeHistory) List(_ context.Context) ([]storage.AnimeProgress, error) {
@@ -31,8 +34,9 @@ func (f *fakeHistory) SavePlayback(_ context.Context, rec storage.AnimeProgress,
 	return nil
 }
 
-func (f *fakeHistory) BindSource(_ context.Context, id int64, _, _ string) error {
+func (f *fakeHistory) BindSource(_ context.Context, id int64, sourceID, sourceURL, boundTitle string) error {
 	f.binds = append(f.binds, id)
+	f.bindCalls = append(f.bindCalls, bindCall{id: id, sourceID: sourceID, sourceURL: sourceURL, boundTitle: boundTitle})
 	return nil
 }
 

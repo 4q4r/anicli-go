@@ -430,7 +430,22 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				// PR61: every checked provider joins the session (the
 				// python merge) — the «Выберите провайдера» gate is
 				// gone; the choice happens at the stream level.
-				return m, replace(newResumedSession(m.deps, stablePrimary(group), stableGroup(group), *m.resume))
+				// PR62 #2: the pick IS the binding (python
+				// search_and_bind commits before session_loop) — the
+				// record moves onto the checked primary so the «!»
+				// badge clears and the fan-out does not re-run on
+				// re-entry.
+				primary := stablePrimary(group)
+				bindErr := bindRecordToSource(m.deps, m.resume, primary)
+				if bindErr != nil {
+					m.deps.logger().Error("search: provider binding failed",
+						"record", m.resume.ID, "source", primary.SourceID, "error", bindErr)
+				}
+				sess := newResumedSession(m.deps, primary, stableGroup(group), *m.resume)
+				if bindErr != nil {
+					sess.status = "⚠ Не удалось сохранить привязку: " + bindErr.Error()
+				}
+				return m, replace(sess)
 			}
 			return m, replace(NewSessionScreen(m.deps, stablePrimary(group), stableGroup(group)))
 		}
@@ -446,6 +461,19 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+// bindRecordToSource persists the provider binding of a catalog
+// record onto the checked primary (PR62 #2): the same write python
+// search_and_bind performs before session_loop. Fast local SQLite
+// write — inline like the other history writes in the TUI.
+func bindRecordToSource(deps *Deps, rec *storage.AnimeProgress, primary contracts.SearchResult) error {
+	if deps == nil || deps.History == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
+	defer cancel()
+	return deps.History.BindSource(ctx, rec.ID, primary.SourceID, primary.URL, primary.Title)
 }
 
 // torrentResultSuffix renders the torrent preview suffix for search

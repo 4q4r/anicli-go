@@ -101,8 +101,10 @@ type HistoryService interface {
 	// SavePlayback records the watched episode and dub preferences.
 	SavePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
 	// BindSource rebinds a record onto a new (source_id, url) pair
-	// (python search_and_bind record patch).
-	BindSource(ctx context.Context, id int64, sourceID, sourceURL string) error
+	// (python search_and_bind record patch). boundTitle is the
+	// provider-side title the record is bound to; needs_correction
+	// clears so the «!» badge goes away (PR62 #2).
+	BindSource(ctx context.Context, id int64, sourceID, sourceURL, boundTitle string) error
 	// GetByShikimoriID loads the record bound to a shikimori anime,
 	// nil when none is bound.
 	GetByShikimoriID(ctx context.Context, shikimoriID int64) (*storage.AnimeProgress, error)

@@ -404,8 +404,11 @@ func (s *realHistory) SavePlayback(ctx context.Context, rec storage.AnimeProgres
 
 // BindSource moves a record onto a new source pair (python
 // search_and_bind record patch): the modified row is upserted under
-// the new (source_id, source_url) key and the old row removed.
-func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, sourceURL string) error {
+// the new (source_id, source_url) key and the old row removed. The
+// bound title persists with its similarity against the canonical
+// shikimori title, and needs_correction clears — the data the «!»
+// badge renders from (PR62 #2).
+func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, sourceURL, boundTitle string) error {
 	rec, err := s.store.Progress.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -414,7 +417,10 @@ func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, source
 	rec.SourceID = sourceID
 	rec.SourceURL = sourceURL
 	rec.NeedsCorrection = false
-	rec.BoundTitle = &rec.Title
+	rec.BoundTitle = &boundTitle
+	canonical := derefStr(rec.ShikimoriTitle, rec.Title)
+	similarity := providers.SimilarityRatio(strings.ToLower(canonical), strings.ToLower(boundTitle))
+	rec.BoundSimilarity = &similarity
 	rec.UpdatedAt = time.Now().UTC()
 	if err := s.store.Progress.Upsert(ctx, rec); err != nil {
 		return err

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -203,10 +202,10 @@ func (p *Anilib) filterContentless(ctx context.Context, results []contracts.Sear
 		contentless, err := p.probeContentless(ctx, it.r.URL)
 		switch {
 		case err != nil:
-			slog.Info("anilib: preflight failed, keeping release", "release", it.r.URL, "reason", err)
+			p.loggerOrDiscard().Info("anilib: preflight failed, keeping release", "release", it.r.URL, "reason", err)
 		case contentless:
 			keep[it.i] = false
-			slog.Info("anilib: dropped contentless release", "release", it.r.URL, "title", it.r.Title)
+			p.loggerOrDiscard().Info("anilib: dropped contentless release", "release", it.r.URL, "title", it.r.Title)
 		}
 		return nil // never aborts the group; per-result outcomes recorded above
 	})

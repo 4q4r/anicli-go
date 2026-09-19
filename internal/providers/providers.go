@@ -11,12 +11,18 @@ package providers
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
+
+// discardLogger is the unwired provider logger's sink: output goes
+// nowhere, never to stderr (the TUI alt-screen contract, PR62 #4).
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 // Base carries the fields every provider shares: identity, site root,
 // content language and the per-provider HTTP headers applied on every
@@ -34,6 +40,24 @@ type Base struct {
 	contentLang string
 	headers     map[string]string
 	http        *netclient.Client
+	// logger routes provider-level diagnostics (search-preflight
+	// drops, …). Nil degrades to discard — NEVER slog.Default, whose
+	// stderr output corrupts the TUI alt-screen (PR62 #4; the PR42
+	// flagged seam).
+	logger *slog.Logger
+}
+
+// SetLogger injects the diagnostics sink (the registry does it for
+// every provider carrying this seam).
+func (b *Base) SetLogger(log *slog.Logger) { b.logger = log }
+
+// loggerOrDiscard returns the injected logger; nil degrades to a
+// discard logger so an unwired provider can never write to stderr.
+func (b *Base) loggerOrDiscard() *slog.Logger {
+	if b.logger == nil {
+		return discardLogger
+	}
+	return b.logger
 }
 
 // ID returns the stable provider identifier (Python source_id).

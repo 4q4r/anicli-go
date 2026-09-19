@@ -144,6 +144,10 @@ type registryOptions struct {
 	// torrentLogger routes the shared torrent engine's diagnostics;
 	// nil keeps the engine default (slog.Default).
 	torrentLogger *slog.Logger
+	// providerLogger routes provider-level diagnostics (search
+	// preflight drops, …); nil degrades to discard inside the
+	// provider — never stderr (PR62 #4).
+	providerLogger *slog.Logger
 }
 
 // RegistryOption customizes NewRegistry.
@@ -154,6 +158,14 @@ type RegistryOption func(*registryOptions)
 // alt-screen); a nil logger keeps the engine default.
 func WithTorrentLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.torrentLogger = log }
+}
+
+// WithProviderLogger routes provider-level diagnostics (search
+// preflight drops, …) to log. The TUI passes its file logger here
+// (stderr corrupts alt-screen, PR62 #4); a nil logger degrades to
+// discard inside the provider — never slog.Default.
+func WithProviderLogger(log *slog.Logger) RegistryOption {
+	return func(o *registryOptions) { o.providerLogger = log }
 }
 
 // cacheDirFor resolves the persistent cache directory for provider
@@ -282,11 +294,23 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 			return nil, err
 		}
 	}
+	// PR62 #4: every provider carrying the Base logger seam gets the
+	// configured sink (SetLogger probe, the SetEngine pattern); nil
+	// degrades to discard inside the provider — never stderr.
+	providerLog := o.providerLogger
+	if providerLog == nil {
+		providerLog = discardLogger
+	}
+	for _, p := range bare {
+		if se, ok := p.(interface{ SetLogger(*slog.Logger) }); ok {
+			se.SetLogger(providerLog)
+		}
+	}
 	for _, p := range bare {
 		if filter != nil {
 			p = dubFilteredProvider{Provider: p, filter: filter}
 		}
-		if err := reg.Register(SearchDelegator{Provider: p, stats: stats}); err != nil {
+		if err := reg.Register(SearchDelegator{Provider: p, stats: stats, logger: providerLog}); err != nil {
 			return nil, err
 		}
 	}

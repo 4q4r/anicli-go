@@ -30,7 +30,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -97,8 +96,6 @@ type TokyoTosho struct {
 	// preflightTimeout overrides the per-URL preflight budget (tests);
 	// 0 keeps ttPreflightTimeout.
 	preflightTimeout time.Duration
-	// log routes the preflight drop reasons; nil keeps slog.Default.
-	log *slog.Logger
 }
 
 // newTokyoTosho builds the provider. The engine may be nil (fails loud
@@ -224,14 +221,6 @@ const ttPreflightConcurrency = 8
 // fetch (owner ruling: short, ~10s).
 const ttPreflightTimeout = 10 * time.Second
 
-// logger returns the provider's drop-reason logger.
-func (p *TokyoTosho) logger() *slog.Logger {
-	if p.log != nil {
-		return p.log
-	}
-	return slog.Default()
-}
-
 // preflightBudget is the effective per-URL fetch budget.
 func (p *TokyoTosho) preflightBudget() time.Duration {
 	if p.preflightTimeout > 0 {
@@ -275,19 +264,19 @@ func (p *TokyoTosho) preflight(ctx context.Context, results []contracts.SearchRe
 		defer cancel()
 		resp, err := p.http.Get(probeCtx, it.r.URL, nil)
 		if err != nil {
-			p.logger().Info("tokyotosho: preflight dropped dead .torrent host", "url", it.r.URL, "reason", err)
+			p.loggerOrDiscard().Info("tokyotosho: preflight dropped dead .torrent host", "url", it.r.URL, "reason", err)
 			return nil // never aborts the group
 		}
 		mi, err := metainfo.Load(bytes.NewReader(resp.Body))
 		if err != nil {
-			p.logger().Info("tokyotosho: preflight dropped .torrent host",
+			p.loggerOrDiscard().Info("tokyotosho: preflight dropped .torrent host",
 				"url", it.r.URL,
 				"reason", fmt.Errorf("%w: %w", torrent.ErrNotMetainfo, err))
 			return nil
 		}
 		alive[it.i] = true
 		if _, err := p.IngestMetaInfo(ctx, it.r.URL, mi); err != nil {
-			p.logger().Info("tokyotosho: preflight ingest failed (resolve leg will retry by URL)", "url", it.r.URL, "reason", err)
+			p.loggerOrDiscard().Info("tokyotosho: preflight ingest failed (resolve leg will retry by URL)", "url", it.r.URL, "reason", err)
 		}
 		return nil
 	})

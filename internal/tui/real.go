@@ -93,7 +93,8 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	}
 
 	registry, err := providers.NewRegistry(settings, store.ProviderStats,
-		providers.WithTorrentLogger(logf(o.logger)))
+		providers.WithTorrentLogger(logf(o.logger)),
+		providers.WithProviderLogger(logf(o.logger)))
 	if err != nil {
 		return nil, fmt.Errorf("build provider registry: %w", err)
 	}
@@ -399,13 +400,77 @@ func (s *realHistory) SavePlayback(ctx context.Context, rec storage.AnimeProgres
 	rec.VideoDub = &videoDub
 	rec.AudioDub = &audioDub
 	rec.UpdatedAt = time.Now().UTC()
-	return s.store.Progress.Upsert(ctx, &rec)
+
+	// python save_progress merge semantics (PR62 #1): find the row
+	// under the (source_id, url) key first, then — for a bound
+	// template — under the shikimori id. A row found by shikimori id
+	// MOVES onto the watched source key (a placeholder becomes the
+	// watched row — no duplicate whose empty rate id turns every later
+	// push into a duplicate-rate CREATE), and the shikimori columns
+	// the template does not carry survive the upsert's column replace.
+	found, err := s.store.Progress.GetBySource(ctx, rec.SourceID, rec.SourceURL)
+	if err != nil && !errors.Is(err, contracts.ErrNotFound) {
+		return err
+	}
+	if found == nil && rec.ShikimoriID != nil && *rec.ShikimoriID != 0 {
+		found, err = s.store.Progress.GetByShikimoriID(ctx, *rec.ShikimoriID)
+		if err != nil && !errors.Is(err, contracts.ErrNotFound) {
+			return err
+		}
+	}
+	if found != nil {
+		rec.ID = found.ID
+		if rec.ShikimoriRateID == nil {
+			rec.ShikimoriRateID = found.ShikimoriRateID
+		}
+		if rec.ShikimoriStatus == "" {
+			rec.ShikimoriStatus = found.ShikimoriStatus
+		}
+		if rec.ShikimoriTitle == nil {
+			rec.ShikimoriTitle = found.ShikimoriTitle
+		}
+		if rec.ShikimoriID == nil {
+			rec.ShikimoriID = found.ShikimoriID
+		}
+		if rec.Poster == nil {
+			rec.Poster = found.Poster
+		}
+		if rec.Score == 0 {
+			rec.Score = found.Score
+		}
+		if rec.Rewatches == 0 {
+			rec.Rewatches = found.Rewatches
+		}
+		if rec.TotalEpisodes == 0 {
+			rec.TotalEpisodes = found.TotalEpisodes
+		}
+		if !rec.Dirty {
+			rec.Dirty = found.Dirty
+		}
+		if rec.ProgressSeconds == 0 {
+			rec.ProgressSeconds = found.ProgressSeconds
+		}
+		if rec.TotalSeconds == 0 {
+			rec.TotalSeconds = found.TotalSeconds
+		}
+	}
+	if err := s.store.Progress.Upsert(ctx, &rec); err != nil {
+		return err
+	}
+	if found != nil && found.ID != rec.ID {
+		// The row moved onto the new source key: retire the old one.
+		return s.store.Progress.Delete(ctx, found.ID)
+	}
+	return nil
 }
 
 // BindSource moves a record onto a new source pair (python
 // search_and_bind record patch): the modified row is upserted under
-// the new (source_id, source_url) key and the old row removed.
-func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, sourceURL string) error {
+// the new (source_id, source_url) key and the old row removed. The
+// bound title persists with its similarity against the canonical
+// shikimori title, and needs_correction clears — the data the «!»
+// badge renders from (PR62 #2).
+func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, sourceURL, boundTitle string) error {
 	rec, err := s.store.Progress.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -414,7 +479,10 @@ func (s *realHistory) BindSource(ctx context.Context, id int64, sourceID, source
 	rec.SourceID = sourceID
 	rec.SourceURL = sourceURL
 	rec.NeedsCorrection = false
-	rec.BoundTitle = &rec.Title
+	rec.BoundTitle = &boundTitle
+	canonical := derefStr(rec.ShikimoriTitle, rec.Title)
+	similarity := providers.SimilarityRatio(strings.ToLower(canonical), strings.ToLower(boundTitle))
+	rec.BoundSimilarity = &similarity
 	rec.UpdatedAt = time.Now().UTC()
 	if err := s.store.Progress.Upsert(ctx, rec); err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,11 @@ type deps struct {
 func realDeps() deps {
 	return deps{
 		buildRegistry: func(cfg config.Settings) (*providers.Registry, error) {
-			return providers.NewRegistry(cfg, nil)
+			// The parity CLI has no alt-screen: provider diagnostics
+			// (preflight drops) stay on the console sink (PR62 #4 —
+			// the never-stderr rule is a TUI rule).
+			return providers.NewRegistry(cfg, nil,
+				providers.WithProviderLogger(slog.Default()))
 		},
 		now:     time.Now,
 		saveDir: filepath.Join("testdata", "parity"),

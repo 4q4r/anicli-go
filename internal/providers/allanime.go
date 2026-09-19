@@ -232,6 +232,9 @@ func newAllAnime(apiBase, referer, internalBase string, http *netclient.Client, 
 		},
 		HTTP: http,
 		Now:  time.Now,
+		// PR70: derive the build-id material from the LIVE chunk
+		// automatically; the pinned tables are the last-resort tier.
+		Chunks: &aaLiveChunkSource{HTTP: http, Root: referer},
 	})
 	return p
 }

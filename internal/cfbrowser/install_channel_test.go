@@ -112,7 +112,7 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 		t.Errorf("proDownloadHits = %d, want 0 (an incompatible pro must not be pulled)", downloads)
 	}
 	note := buf.String()
-	for _, want := range []string{badPro, "несовместим", "работаем на free"} {
+	for _, want := range []string{badPro, "заблокирован", "работаем на free"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("log note %q must mention %q", note, want)
 		}

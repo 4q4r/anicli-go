@@ -122,10 +122,16 @@ func TestScanCacheFreeOnlyIncompatibleIsLoudCompatError(t *testing.T) {
 		t.Errorf("compat = %+v", compat)
 	}
 	// The error names both the rejected version and the fix.
-	for _, want := range []string{"151.0.7922.108.6", "chromedp"} {
+	for _, want := range []string{"151.0.7922.108.6", "совместимости"} {
 		if !strings.Contains(compat.Error(), want) {
 			t.Errorf("compat error %q must mention %q", compat.Error(), want)
 		}
+	}
+	// PR75 finding: the bound guards VERIFIED chromium majors, not a
+	// chromedp API defect — the old "обновите chromedp" wording
+	// promised a fix that does not exist and must not come back.
+	if strings.Contains(compat.Error(), "обновите chromedp") {
+		t.Errorf("compat error %q must not promise a chromedp fix (PR75: disproof)", compat.Error())
 	}
 }
 

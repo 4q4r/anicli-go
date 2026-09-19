@@ -117,6 +117,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		shiki: shikimori.New(settings.Shikimori, shikiNet, nil,
 			shikimori.WithTokenPersister(o.shikiPersister)),
 		settings: settings,
+		log:      logf(o.logger),
 	}
 
 	// PR43 C: the buffered watch pipeline. Playlists ride their own
@@ -201,6 +202,10 @@ type realCore struct {
 	shiki          *shikimori.Client
 	settings       config.Settings
 	downloadBridge *realDownload
+	// log is the file diagnostics sink (PR74: the download path's
+	// skip verdict is logged, so «вшиваются ли скипы?» is answerable
+	// from the log); nil degrades to discard.
+	log *slog.Logger
 }
 
 // streamingHTTPClient builds the media-byte transport of the buffered
@@ -717,6 +722,15 @@ func downloadTaskID(task DownloadTask) string {
 	return fmt.Sprintf("%s|%s|%s|%s", task.AnimeTitle, task.EpisodeNum, task.DubID, task.Quality)
 }
 
+// logger normalizes the optional diagnostics sink: nil degrades to a
+// discard logger (never stderr inside the TUI).
+func (c *realCore) logger() *slog.Logger {
+	if c.log == nil {
+		return discardSlog
+	}
+	return c.log
+}
+
 // runDownload adapts the manager Runner onto downloadOne.
 func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(float64)) error {
 	bridge := c.downloadBridge
@@ -763,17 +777,40 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		}
 	}
 
+	// The python-parity bake: the episode's skips resolve to an
+	// FFMETADATA file and ffmpeg maps them into the container. The
+	// verdict is logged either way (PR74 — the owner could never tell
+	// whether chapters were baked; pre-PR61 every fetch failed
+	// silently here).
 	chaptersFile := ""
-	if task.ShikimoriID > 0 && c.skips != nil {
+	switch {
+	case task.ShikimoriID <= 0 || c.skips == nil:
+		c.logger().Info("download: title unbound; chapters not baked",
+			"episode", task.Episode.Num)
+	default:
 		bundle, err := c.skips.Resolve(ctx, skip.ResolveRequest{
 			ShikimoriID: task.ShikimoriID,
 			EpisodeNum:  EpisodeSortKey(task.Episode.Num),
 		})
-		if err == nil && !bundle.Empty() {
-			if path, err := bundle.WriteChaptersFile(os.TempDir()); err == nil {
-				chaptersFile = path
-				defer func() { _ = os.Remove(path) }()
+		switch {
+		case err != nil:
+			c.logger().Warn("download: skips unavailable; chapters not baked",
+				"episode", task.Episode.Num, "error", err)
+		case bundle.Empty():
+			c.logger().Info("download: skips not found; chapters not baked",
+				"episode", task.Episode.Num, "details", bundle.Details)
+		default:
+			path, werr := bundle.WriteChaptersFile(os.TempDir())
+			if werr != nil {
+				c.logger().Warn("download: chapters file write failed; chapters not baked",
+					"episode", task.Episode.Num, "error", werr)
+				break
 			}
+			chaptersFile = path
+			defer func() { _ = os.Remove(path) }()
+			c.logger().Info("download: chapters baked",
+				"episode", task.Episode.Num, "provider", bundle.ProviderID,
+				"types", bundle.ChapterTypes, "chapters", len(bundle.Intervals))
 		}
 	}
 

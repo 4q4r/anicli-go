@@ -291,7 +291,7 @@ func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *Men
 			// PR62 #3: bound records skip the search — the fan-out ran
 			// ONCE when the binding was made; re-entry resumes the
 			// stored source directly (python's saved-single-source
-			// resume), «🔄 Перепривязать» re-runs the fan-out.
+			// resume), «🔗 Перепривязать» re-runs the fan-out.
 			primary := contracts.SearchResult{
 				Title:    derefStr(rec.BoundTitle, rec.Title),
 				URL:      rec.SourceURL,

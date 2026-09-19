@@ -99,6 +99,15 @@ var allFactories = []struct {
 	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
 	}},
+	// yummy (PR68): the YummyAnime REST API (api.yani.tv behind
+	// site.yummyani.me) — the first provider ported from the vypivshiy
+	// anicli-api reference library (source/yummy_anime.py), verified
+	// live 2026-09-19. No credentials and no per-provider settings;
+	// cfg.Network.UserAgent rides on the CVH video sources (okcdn ties
+	// playback to the extraction UA).
+	{"yummy", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newYummy(YummySiteBase, YummyAPIBase, yummyCDNVideoHubBase, cfg.Network.UserAgent, http)
+	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
 	// injected by NewRegistry when [torrent] is enabled (All() leaves

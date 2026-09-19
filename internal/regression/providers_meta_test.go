@@ -27,7 +27,9 @@ import (
 // latin block; animedia (PR56, the amd.online DLE site), shiza
 // (PR57, the shizaproject.com GraphQL catalog) and anime365
 // (PR55, the tokened smotret-anime JSON API) joined after yanima
-// in the RU-dub block. The roster is frozen at 21.
+// in the RU-dub block; yummy (PR68, the YummyAnime api.yani.tv JSON
+// API) joined after anime365 closing the RU-dub block. The roster is
+// frozen at 22.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -46,6 +48,7 @@ var expectedProviderOrder = []string{
 	"animedia",
 	"shiza",
 	"anime365",
+	"yummy",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

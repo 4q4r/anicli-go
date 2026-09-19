@@ -331,6 +331,9 @@ func installFreeChannel(ctx context.Context, opts InstallOptions, spec PlatformS
 			return nil, err
 		}
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
+			if !chromiumMajorKnownGood(pinned) {
+				logger.Warn(pinnedBypassNote(pinned))
+			}
 			logger.Info("cfbrowser: reusing pinned stealth chromium", "path", bin.Path, "version", bin.Version)
 			return bin, nil
 		}
@@ -404,8 +407,13 @@ func installPinned(ctx context.Context, opts InstallOptions, spec PlatformSpec, 
 
 // installPinnedFree downloads the pinned version straight from the
 // GitHub free tag (the no-license tier and the channel=free rung:
-// the pro API is never consulted).
+// the pro API is never consulted). The pinned rung is a documented
+// exemption from the chromedp compat bound — explicit user intent —
+// and the bypass is logged loud when it fires.
 func installPinnedFree(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir, pinned string, logger *slog.Logger) (*BinaryInfo, error) {
+	if !chromiumMajorKnownGood(pinned) {
+		logger.Warn(pinnedBypassNote(pinned))
+	}
 	gh := NewGitHubClient(opts.APIBase, opts.HTTPClient)
 	rel, err := gh.FreeReleaseForVersion(ctx, spec, pinned)
 	if err != nil {

@@ -107,3 +107,12 @@ func normalizeChannel(v string) (string, error) {
 		return "", fmt.Errorf("cfbrowser: unknown channel %q (want auto|free|pro)", v)
 	}
 }
+
+// pinnedBypassNote is the loud pinned-run warning: $CLOAKBROWSER_VERSION
+// is a documented exemption from the chromedp compat bound (explicit
+// user intent, like the binary-path override) — but the exemption is
+// announced, never silent.
+func pinnedBypassNote(version string) string {
+	return fmt.Sprintf("cfbrowser: pinned version %s bypasses the chromedp compat bound (major ≤ %d) — "+
+		"явное пользовательское исключение", version, maxKnownGoodChromiumMajor)
+}

@@ -144,6 +144,60 @@ func TestInstallFreeChannelNeverTouchesPro(t *testing.T) {
 	}
 }
 
+func TestInstallFreeChannelPinnedBypassWarnsLoud(t *testing.T) {
+	// The pinned rung is a documented exemption from the chromedp
+	// compat bound (explicit user intent) — but it must not be
+	// silent: a pin above the bound logs the loud bypass note.
+	fx := newProInstallFixture(t)
+	const pin = "151.0.7922.108.6"
+	archive := freeArchive(t, pin)
+	fx.addFreeRelease(tagPrefix+pin, pin, archive)
+
+	var buf bytes.Buffer
+	cache := t.TempDir()
+	opts := fx.opts(t, cache)
+	opts.Channel = channelFree
+	opts.Version = pin
+	opts.Logger = captureLogger(&buf)
+	info, err := Install(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if info.Version != pin || info.Channel != channelFree {
+		t.Errorf("info = %+v, want the free-tag pin %s", info, pin)
+	}
+	note := buf.String()
+	for _, want := range []string{pin, "bound"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("bypass note %q must mention %q", note, want)
+		}
+	}
+}
+
+func TestResolveCurrentBinaryPinnedBypassWarnsLoud(t *testing.T) {
+	cache := t.TempDir()
+	want := fakeInstalledBinary(t, cache, "151.0.7922.108.6")
+	t.Setenv(EnvVersion, "151.0.7922.108.6")
+
+	var buf bytes.Buffer
+	bin, err := ResolveCurrentBinary(ResolveOptions{
+		CacheDir: cache,
+		Logger:   captureLogger(&buf),
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if bin.Path != want {
+		t.Errorf("path = %q, want the pinned dir %q (a pin serves what the user asked for)", bin.Path, want)
+	}
+	note := buf.String()
+	for _, want := range []string{"151.0.7922.108.6", "bound"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("bypass note %q must mention %q", note, want)
+		}
+	}
+}
+
 func TestInstallFreeChannelPinnedUsesFreeTagOnly(t *testing.T) {
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true

@@ -373,16 +373,12 @@ func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec Platf
 	if freeBin != nil {
 		installedVersion = freeBin.Version
 	}
-	if compatErr != nil {
-		// The whole free line is unusable for the pinned chromedp:
-		// record and name the fix. A retry cannot move a bound.
-		u.record(cacheDir, UpdateStatus{
-			InstalledVersion: installedVersion, LastError: compatErr.Error(),
-		})
-		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", compatErr)
-		return compatErr
-	}
 
+	// auto: the pro upgrade attempt comes BEFORE the compat bail-out —
+	// Install parity. When the free cache holds only incompatible
+	// dirs, a compatible pro pull is the way out; loud-but-stuck is
+	// reserved for the state where the pro attempt was skipped or
+	// failed too.
 	if channel == channelAuto {
 		licRep, licErr := CheckLicense(ctx, LicenseOptions{
 			CacheDir:   u.cfg.CacheDir,
@@ -406,9 +402,19 @@ func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec Platf
 			if u.tryProUpgradeCycle(ctx, cacheDir, spec, licRep, logger) {
 				return nil // the pro line serves; the base is covered
 			}
-			// Pro pull skipped or failed: the notes are loud; keep
-			// the free base current below.
+			// Pro pull skipped or failed: the notes are loud; the
+			// compat verdict (if any) and the free flow follow.
 		}
+	}
+
+	if compatErr != nil {
+		// The whole free line is unusable for the pinned chromedp:
+		// record and name the fix. A retry cannot move a bound.
+		u.record(cacheDir, UpdateStatus{
+			InstalledVersion: installedVersion, LastError: compatErr.Error(),
+		})
+		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", compatErr)
+		return compatErr
 	}
 
 	return u.freeFlow(ctx, cacheDir, spec, installedVersion, logger)

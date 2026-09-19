@@ -2,6 +2,7 @@ package cfbrowser
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -42,6 +43,16 @@ type ResolveOptions struct {
 	// "free" never consults the pro line; "pro" keeps the pre-PR73
 	// order (newest pro-marked dir, then the unfiltered scan).
 	Channel string
+	// Logger receives the pinned-bypass warning (nil = slog.Default()).
+	Logger *slog.Logger
+}
+
+// logger resolves the effective slog logger.
+func (o ResolveOptions) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return slog.Default()
 }
 
 // ResolveCurrentBinary resolves the browser binary WITHOUT network
@@ -87,6 +98,9 @@ func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	}
 	if pinned := os.Getenv(EnvVersion); pinned != "" {
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
+			if !chromiumMajorKnownGood(pinned) {
+				opts.logger().Warn(pinnedBypassNote(pinned))
+			}
 			return bin, nil
 		}
 		return nil, &BinaryMissingError{

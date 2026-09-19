@@ -205,6 +205,52 @@ func TestUpdaterFreeBaselineIgnoresProMarkedDir(t *testing.T) {
 	}
 }
 
+func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
+	// Install parity corner: when the free cache holds ONLY
+	// incompatible dirs (e.g. a lone unmarked 151), auto must still
+	// attempt the compatible pro upgrade BEFORE the compat bail-out —
+	// loud-but-stuck is wrong when a working pro pull exists.
+	pub, priv := manifestTestKey(t)
+	swapManifestKey(t, pub)
+	fx := newProInstallFixture(t)
+	fx.licenseValid = true
+	t.Setenv(EnvLicenseKey, "KEY-1")
+
+	const proVer = "146.0.7680.177.9"
+	archive := freeArchive(t, proVer)
+	fx.mu.Lock()
+	fx.proVersion = proVer
+	fx.proArchives[proVer] = archive
+	fx.mu.Unlock()
+	fx.signWithProManifest(proVer, linuxX64Asset, archive, priv)
+	// No free release on the listing: if the cycle wrongly proceeded
+	// to the free flow after skipping pro, the check errors.
+
+	cache := t.TempDir()
+	t.Setenv(EnvCacheDir, cache)
+	fakeInstalledBinary(t, cache, "151.0.7922.108.6") // free line, incompatible
+
+	up := NewUpdater(UpdaterConfig{
+		Enabled:        true,
+		CacheDir:       cache,
+		APIBase:        fx.srv.URL,
+		DownloadBase:   fx.srv.URL,
+		LicenseAPIBase: fx.srv.URL,
+		ProbeURL:       fx.srv.URL + "/probe",
+		Channel:        ChannelAuto,
+		Logger:         testLogger(t),
+	})
+	if err := up.CheckAndMaybeInstall(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if st := up.Status(); st.UpdatedTo != proVer {
+		t.Errorf("status = %+v, want the compatible pro upgrade to %s (the compat bail must not preempt it)", st, proVer)
+	}
+	if _, err := os.Stat(filepath.Join(cache, VersionDirName(proVer))); err != nil {
+		t.Fatalf("pro binary must install: %v", err)
+	}
+}
+
 func TestUpdaterFreeLatestIncompatibleRecordedLoud(t *testing.T) {
 	fx := newProInstallFixture(t)
 	fx.addFreeRelease("chromium-v151.0.7922.108.6", "151.0.7922.108.6", freeArchive(t, "151.0.7922.108.6"))

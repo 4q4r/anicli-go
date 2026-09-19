@@ -126,9 +126,11 @@ func runCFStatus(out io.Writer) error {
 	// Tier display mirrors what actually launches: a pro license over
 	// a free-only cache shows the gap explicitly instead of letting a
 	// "pro" license line imply a pro binary. The free channel opted
-	// out of pro on purpose — no gap hint there.
+	// out of pro on purpose — no gap hint there. Under auto/pro the
+	// hint stays truthful for both sub-states (no pro dir, or the
+	// newest pro being compat-blocked): install retries the pull.
 	if tier == "pro" && channel != cfbrowser.ChannelFree && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
-		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен — выполните: %s\n", cfbrowser.InstallHint)
+		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен или новейший pro заблокирован границей совместимости — anicli cf install повторит попытку pro\n")
 	}
 	if note != "" {
 		_, _ = fmt.Fprintf(out, "                %s\n", note)

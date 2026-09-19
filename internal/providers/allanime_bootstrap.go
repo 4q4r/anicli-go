@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,25 +28,22 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// aaDefaultBuildID is the buildId embedded in the live player chunk
-// (obfuscated const, decoded via the sandbox as gy()). The site
-// rotates it rarely; the cache (newAABuildIDCache) persists a
-// discovered replacement and the bridge re-discovers it on rotation.
-// [LIVE-VERIFIED 2026-09-17]: page bundles "173" (was "168" on
-// 2026-09-13 — the live bootstrap now answers unknown_build_id 404 for
-// the old value).
+// aaDefaultBuildID is the buildId embedded in the pinned Go constants
+// (allanime_proto.go) — the LAST-RESORT material tier. Since PR70 the
+// manager derives the buildId material automatically from the live
+// chunk (allanime_material.go); the pinned value only matters while
+// that generation is still in the server's grace window or when the
+// chunk path is unavailable. [LIVE-VERIFIED 2026-09-17]: page bundles
+// "173" (was "168" on 2026-09-13).
 //
-// PR67 (2026-09-19): the live player rotates to "174" and the mask
-// derivation constants rotated WITH it — aaMask("174") from the pinned
-// tables diverges from the live chunk mask (the bootstrap answers 403
-// to a pinned-constants boot for 174), while "173" still bootstraps
-// (grace window; the episode resolver rejects 173-material with
-// NEED_CAPTCHA — the wall documented on errAACaptcha). When the wall
-// lifts, revival needs either a constants re-port from the live chunk
-// (PR45 procedure) or a repaired bridge harness (the mega-chunk
-// consolidation broke the pinned-name extraction; see .sdd/ledger.md
-// PR67 dossier). The pin stays "173": it is the newest buildId the
-// pure-Go tables can actually bootstrap.
+// Rotation history: the live player rotated to "174" on 2026-09-19 and
+// the mask constants rotated WITH it (the pinned aaMask("173") no
+// longer matches the live chunk; the bootstrap still accepted 173
+// within its grace window, switchAt 2026-09-25). PR70 made this
+// rotation a non-event: the fresh chunk is fetched, parsed and
+// validated on every material bootstrap, so no manual re-port is
+// needed. The pin stays "173" as the newest buildId the pure-Go tables
+// can actually bootstrap.
 const aaDefaultBuildID = "173"
 
 // Typed crypto failures for the AllAnime resolve chain. Callers
@@ -140,6 +138,11 @@ type aaMaterialDeps struct {
 	HTTP *netclient.Client
 	// Now is the clock (switchAt comparisons).
 	Now func() time.Time
+	// Chunks, when set, enables the auto-derivation tier (PR70): the
+	// manager fetches and parses the live crypto chunk FIRST and falls
+	// back to the pinned tables only when the chunk path fails. nil
+	// keeps the pinned-tables-only behavior.
+	Chunks aaChunkSource
 }
 
 // aaMaterialManager caches the per-lane key material with
@@ -152,13 +155,25 @@ type aaMaterialManager struct {
 	material     *aaMaterial
 	maskOverride []byte // bridge-provided mask (formula drift)
 	buildID      string
+	chunkProfile *aaCryptoProfile // last chunk-derived material (in-memory, PR70)
 	fetching     bool
 	done         chan struct{}
 	err          error
 }
 
-// newAAMaterialManager wires the deps.
+// aaChunkSource fetches the CURRENT crypto chunk source text (the
+// auto-derivation seam; the production implementation is
+// aaLiveChunkSource, tests inject fakes).
+type aaChunkSource interface {
+	FetchChunk(ctx context.Context) (string, error)
+}
+
+// newAAMaterialManager wires the deps. A nil Now defaults to the real
+// clock (a nil guard here beats a SIGSEGV in the detached refresher).
 func newAAMaterialManager(deps aaMaterialDeps) *aaMaterialManager {
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
 	return &aaMaterialManager{deps: deps}
 }
 
@@ -274,10 +289,18 @@ func (m *aaMaterialManager) adoptBridge(ctx context.Context, bm aaBridgeMaterial
 	return nil
 }
 
-// bootstrap runs the bT strategy: for each epoch candidate compute the
-// x-aa-boot chain, GET the bootstrap endpoint and on success derive the
-// lane key. First successful candidate wins; exhausted candidates
-// surface the last error (typed where the server said so).
+// bootstrap derives fresh material through the PR70 robustness ladder
+// and returns the first tier that bootstraps:
+//
+//  1. bridge override (browser-derived buildId/mask, set via adoptBridge);
+//  2. fresh chunk material — fetch the live crypto chunk, parse the
+//     constants, bootstrap with them (the AUTO-DERIVED primary);
+//  3. cached chunk material — the last chunk generation that worked,
+//     when the fresh fetch or parse fails (rotation re-derive uses this
+//     tier only when the site serves an older chunk than the cache);
+//  4. pinned tables — the Go-ported constants, valid while their
+//     generation stays in the server's grace window;
+//  5. nothing worked → a loud typed error naming every tier failure.
 func (m *aaMaterialManager) bootstrap(ctx context.Context) (*aaMaterial, error) {
 	// Snapshot the mutable fields under the mutex [I2]: bootstrap runs
 	// on a detached goroutine (runBootstrap) while adoptBridge and
@@ -285,7 +308,87 @@ func (m *aaMaterialManager) bootstrap(ctx context.Context) (*aaMaterial, error) 
 	m.mu.Lock()
 	buildID := m.buildID
 	maskOverride := m.maskOverride
+	cachedProfile := m.chunkProfile
 	m.mu.Unlock()
+
+	// Tier 1 — the bridge handoff is live-verified material from the
+	// browser itself; when present it decides (pre-PR70 semantics).
+	if maskOverride != nil || buildID != "" {
+		return m.bootstrapPinnedFormula(ctx, buildID, maskOverride)
+	}
+
+	// Tiers 2-3 — chunk-derived material (fresh fetch, then the cache).
+	type tier struct {
+		name  string
+		prof  *aaCryptoProfile
+		store bool // remember on success
+	}
+	var tiers []tier
+	var chunkFailures []string
+	if m.deps.Chunks != nil {
+		src, err := m.deps.Chunks.FetchChunk(ctx)
+		switch {
+		case err != nil:
+			chunkFailures = append(chunkFailures, "fresh chunk fetch: "+err.Error())
+		default:
+			prof, perr := aaParseChunkMaterial(src)
+			if perr != nil {
+				chunkFailures = append(chunkFailures, "fresh chunk parse: "+perr.Error())
+			} else {
+				tiers = append(tiers, tier{name: "fresh chunk", prof: prof, store: true})
+			}
+		}
+	}
+	if cachedProfile != nil {
+		// Skip the cached tier when the fresh parse already produced the
+		// same generation (the retry would only repeat the request).
+		if len(tiers) == 0 || tiers[0].prof.BuildID != cachedProfile.BuildID {
+			tiers = append(tiers, tier{name: "cached chunk", prof: cachedProfile})
+		}
+	}
+
+	var chunkTierErr error
+	for _, t := range tiers {
+		mat, err := m.bootstrapProfile(ctx, t.prof)
+		if err == nil {
+			if t.store {
+				m.mu.Lock()
+				m.chunkProfile = t.prof
+				m.mu.Unlock()
+			}
+			return mat, nil
+		}
+		chunkTierErr = fmt.Errorf("%s (buildId %s): %w", t.name, t.prof.BuildID, err)
+		if errors.Is(err, errAARateLimited) || ctx.Err() != nil {
+			// Throttling/cancellation is not a build verdict; the pinned
+			// tier cannot outvote it and would only add latency.
+			return nil, chunkTierErr
+		}
+	}
+
+	// Tier 4 — the pinned tables (their buildId from the cache).
+	pinnedBuildID := aaDefaultBuildID
+	if m.deps.BuildID != nil {
+		if bid, err := m.deps.BuildID(); err == nil && bid != "" {
+			pinnedBuildID = bid
+		}
+	}
+	mat, err := m.bootstrapProfile(ctx, aaPinnedProfile(pinnedBuildID))
+	if err == nil {
+		return mat, nil
+	}
+	if chunkTierErr != nil {
+		return nil, fmt.Errorf("%w (chunk tiers exhausted: %w)", err, chunkTierErr)
+	}
+	for _, f := range chunkFailures {
+		err = fmt.Errorf("%w [%s]", err, f)
+	}
+	return nil, err
+}
+
+// bootstrapPinnedFormula is the pre-PR70 derivation (pinned dm/salt/
+// frag tables + hardcoded param order) for the bridge-override path.
+func (m *aaMaterialManager) bootstrapPinnedFormula(ctx context.Context, buildID string, maskOverride []byte) (*aaMaterial, error) {
 	if buildID == "" {
 		bid, err := m.deps.BuildID()
 		if err != nil {
@@ -301,17 +404,48 @@ func (m *aaMaterialManager) bootstrap(ctx context.Context) (*aaMaterial, error) 
 		}
 		mask = ported
 	}
-
-	nowMs := m.deps.Now().UnixMilli()
-	var lastErr error
-	for _, epoch := range aaEpochCandidates(nowMs) {
-		boot, err := aaBootHeader(mask, aaBootParams{
+	return m.bootstrapWithMask(ctx, buildID, mask, aaBootPrefix, func(epoch int64) (string, error) {
+		return aaParamString(aaBootParams{
 			Lane:    m.deps.Lane,
 			BuildID: buildID,
 			Group:   aaKeyGroup(m.deps.RefererHost),
 			Host:    m.deps.RefererHost,
 			Epoch:   epoch,
-		})
+		}), nil
+	})
+}
+
+// bootstrapProfile derives the mask from a chunk/pinned profile and
+// runs the epoch-candidate loop with the parsed param order.
+func (m *aaMaterialManager) bootstrapProfile(ctx context.Context, prof *aaCryptoProfile) (*aaMaterial, error) {
+	mask, err := prof.aaProfileMask()
+	if err != nil {
+		return nil, err
+	}
+	return m.bootstrapWithMask(ctx, prof.BuildID, mask, prof.BootPrefix, func(epoch int64) (string, error) {
+		return prof.aaProfileParamString(
+			m.deps.Lane,
+			strconv.FormatInt(epoch, 10),
+			m.deps.RefererHost,
+			aaKeyGroup(m.deps.RefererHost),
+		)
+	})
+}
+
+// bootstrapWithMask runs the bT strategy with a fixed mask and a
+// per-epoch param string: for each epoch candidate compute the x-aa-boot
+// chain, GET the bootstrap endpoint and on success derive the lane key.
+// First successful candidate wins; exhausted candidates surface the
+// last error (typed where the server said so).
+func (m *aaMaterialManager) bootstrapWithMask(ctx context.Context, buildID string, mask []byte, bootPrefix string, paramString func(int64) (string, error)) (*aaMaterial, error) {
+	nowMs := m.deps.Now().UnixMilli()
+	var lastErr error
+	for _, epoch := range aaEpochCandidates(nowMs) {
+		ps, err := paramString(epoch)
+		if err != nil {
+			return nil, err
+		}
+		boot, err := aaBootHeaderFor(mask, bootPrefix+buildID, ps)
 		if err != nil {
 			return nil, err
 		}

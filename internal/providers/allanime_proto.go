@@ -186,6 +186,20 @@ func aaParamString(p aaBootParams) string {
 	return strings.Join([]string{p.Lane, strconv.FormatInt(p.Epoch, 10), p.Host, p.Group, p.BuildID}, "+")
 }
 
+// aaBootHeaderFor is the generation-independent iT chain: the x-aa-boot
+// value for an explicit mask/message/param-string triple (the profile
+// paths precompute the message and param string per generation).
+func aaBootHeaderFor(mask []byte, message, paramString string) (string, error) {
+	if len(mask) == 0 {
+		return "", errAAMaskBuildID
+	}
+	first := hmac.New(sha256.New, mask)
+	first.Write([]byte(message))
+	second := hmac.New(sha256.New, first.Sum(nil))
+	second.Write([]byte(paramString))
+	return hex.EncodeToString(second.Sum(nil)), nil
+}
+
 // aaBootHeader ports iT: the x-aa-boot value handed to the bootstrap
 // endpoint —
 //
@@ -199,11 +213,7 @@ func aaBootHeader(mask []byte, p aaBootParams) (string, error) {
 	if len(mask) == 0 {
 		return "", errAAMaskBuildID
 	}
-	first := hmac.New(sha256.New, mask)
-	first.Write([]byte(aaBootMessage(p.BuildID)))
-	second := hmac.New(sha256.New, first.Sum(nil))
-	second.Write([]byte(aaParamString(p)))
-	return hex.EncodeToString(second.Sum(nil)), nil
+	return aaBootHeaderFor(mask, aaBootMessage(p.BuildID), aaParamString(p))
 }
 
 // errAAPartBShort reports a partB under 32 bytes (live ST throws

@@ -83,7 +83,9 @@ func TestLivePR62BindPersistSkipSearchRebind(t *testing.T) {
 		ShikimoriID: ptrTo(int64(999999)), ShikimoriStatus: "planned",
 		NeedsCorrection: true, UpdatedAt: nowUTC(),
 	}
-	if err := store.Progress.Upsert(ctx, &rec); err != nil {
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer dbCancel()
+	if err := store.Progress.Upsert(dbCtx, &rec); err != nil {
 		t.Fatalf("seed placeholder: %v", err)
 	}
 
@@ -92,6 +94,13 @@ func TestLivePR62BindPersistSkipSearchRebind(t *testing.T) {
 	t.Logf("rebind screen id: %s, title: %s", rp.ID(), rp.titleOverride)
 	for id, results := range perProvider {
 		rp.Update(providerResultMsg{provider: ProviderMeta{ID: id}, results: results})
+	}
+	// Providers that never answered (dead/CF-blocked) must settle too,
+	// or the checklist never appears (Enter stays gated on pending).
+	for _, row := range rp.rows {
+		if rp.pending[row.ID] {
+			rp.Update(providerResultMsg{provider: row, results: nil})
+		}
 	}
 	next, _ := rp.Update(tea.KeyPressMsg{Code: 'a'})
 	rp = next.(*rebindProgress)
@@ -108,7 +117,7 @@ func TestLivePR62BindPersistSkipSearchRebind(t *testing.T) {
 
 	// THE #2 PROOF: the record moved onto the checked primary and the
 	// placeholder flag cleared.
-	got, err := store.Progress.GetByShikimoriID(ctx, 999999)
+	got, err := store.Progress.GetByShikimoriID(dbCtx, 999999)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

@@ -2,6 +2,7 @@ package cfbrowser
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -36,21 +37,50 @@ type ResolveOptions struct {
 	CacheDir string
 	// BinaryPath overrides $CLOAKBROWSER_BINARY_PATH.
 	BinaryPath string
+	// Channel selects the offline resolution order: "auto" (default,
+	// "" incl.) prefers the newest chromedp-compatible pro-marked dir
+	// under a valid cached license, then the filtered free scan;
+	// "free" never consults the pro line; "pro" keeps the pre-PR73
+	// order (newest pro-marked dir, then the unfiltered scan).
+	Channel string
+	// Logger receives the pinned-bypass warning (nil = slog.Default()).
+	Logger *slog.Logger
+}
+
+// logger resolves the effective slog logger.
+func (o ResolveOptions) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return slog.Default()
 }
 
 // ResolveCurrentBinary resolves the browser binary WITHOUT network
 // access: $CLOAKBROWSER_BINARY_PATH > pinned $CLOAKBROWSER_VERSION
-// (cache only) > with a valid cached license, the newest pro-marked
-// cache directory > the newest complete cache chromium-*/
-// directory. The reported channel is the resolved directory's
-// factual install line (its .channel marker), never the license
-// tier: a valid key over a free-only cache honestly reports the
-// free line (the next online install/update lands pro). It is the
-// registry-build-time check and the solver's lazy-launch
-// resolution, so auto-updated binaries are picked up on the next
-// solve. A missing binary fails with BinaryMissingError (carrying
-// the `anicli cf install` hint).
+// (cache only) > per channel —
+//
+//   - auto: with a valid cached license, the newest
+//     chromedp-compatible pro-marked cache directory > the filtered
+//     free scan (pro-marked dirs never qualify; incompatible majors
+//     are skipped, an only-incompatible cache fails with a
+//     CompatError);
+//   - free: the filtered free scan only;
+//   - pro: with a valid cached license the newest pro-marked
+//     directory > the newest complete cache chromium-*/ directory
+//     (pre-PR73 behavior).
+//
+// The reported channel is the resolved directory's factual install
+// line (its .channel marker), never the license tier: a valid key
+// over a free-only cache honestly reports the free line (the next
+// online install/update lands pro). It is the registry-build-time
+// check and the solver's lazy-launch resolution, so auto-updated
+// binaries are picked up on the next solve. A missing binary fails
+// with BinaryMissingError (carrying the `anicli cf install` hint).
 func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
+	channel, err := normalizeChannel(opts.Channel)
+	if err != nil {
+		return nil, err
+	}
 	override := opts.BinaryPath
 	if override == "" {
 		override = os.Getenv(EnvBinaryPath)
@@ -68,22 +98,41 @@ func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	}
 	if pinned := os.Getenv(EnvVersion); pinned != "" {
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
+			if !chromiumMajorKnownGood(pinned) {
+				opts.logger().Warn(pinnedBypassNote(pinned))
+			}
 			return bin, nil
 		}
 		return nil, &BinaryMissingError{
 			Cause: fmt.Errorf("pinned version %s is not installed ($%s)", pinned, EnvVersion),
 		}
 	}
-	// Pro preference under a valid cached license: the newest
-	// pro-marked directory outranks the generic free scan, so solve
-	// sessions launch the pro line whenever it is installed. With no
-	// pro directory installed the free scan keeps solves working.
-	if cachedLicenseValid(cacheDir) {
-		if bin, ok := scanProCache(cacheDir, spec); ok {
+	// Pro preference under a valid cached license (auto and pro): the
+	// newest pro-marked directory outranks the generic free scan, so
+	// solve sessions launch the pro line whenever it is installed.
+	// auto applies the chromedp bound — an incompatible pro build
+	// stays untouched and the free line serves; with no usable pro
+	// directory the free scan keeps solves working.
+	if channel != channelFree && cachedLicenseValid(cacheDir) {
+		scan := scanProCache
+		if channel == channelAuto {
+			scan = scanProCacheCompat
+		}
+		if bin, ok := scan(cacheDir, spec); ok {
 			return bin, nil
 		}
 	}
-	if bin, ok := scanCache(cacheDir, spec); ok {
+	if channel == channelPro {
+		if bin, ok := scanCache(cacheDir, spec); ok {
+			return bin, nil
+		}
+		return nil, &BinaryMissingError{}
+	}
+	bin, ok, err := scanCacheFree(cacheDir, spec)
+	if err != nil {
+		return nil, err // CompatError: loud, names the fix
+	}
+	if ok {
 		return bin, nil
 	}
 	return nil, &BinaryMissingError{}

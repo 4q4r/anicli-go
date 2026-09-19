@@ -214,7 +214,7 @@ func (p *sessionPool) closeSessionLocked(reason string) error {
 func (p *sessionPool) launchLocked() error {
 	info := p.cfg.Binary
 	if info == nil {
-		resolved, err := ResolveCurrentBinary(ResolveOptions{})
+		resolved, err := ResolveCurrentBinary(ResolveOptions{Channel: p.cfg.Channel, Logger: p.cfg.logger()})
 		if err != nil {
 			return err
 		}

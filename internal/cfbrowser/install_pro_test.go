@@ -155,7 +155,12 @@ func (fx *proInstallFixture) opts(t *testing.T, cacheDir string) InstallOptions 
 		DownloadBase:   fx.srv.URL,
 		LicenseAPIBase: fx.srv.URL,
 		Platform:       linuxSpec(t),
-		Logger:         testLogger(t),
+		// These tests pin the pre-PR73 license-keyed ladder — now the
+		// explicit pro channel. (Auto, the default, degrades a failed
+		// pro pull to the free base; the auto-specific matrix lives in
+		// install_channel_test.go.)
+		Channel: channelPro,
+		Logger:  testLogger(t),
 	}
 }
 

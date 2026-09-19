@@ -40,7 +40,7 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 	}
 	store := NewClearanceStore(filepath.Join(base, "cfstore.json"), DefaultClearanceTTL)
 
-	bin, err := ResolveCurrentBinary(ResolveOptions{})
+	bin, err := ResolveCurrentBinary(ResolveOptions{Channel: cfg.CF.Channel})
 	if err != nil {
 		return nil, err
 	}
@@ -51,10 +51,12 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 		BrowserIdleTimeout: cfg.CF.BrowserIdleTimeout,
 		Store:              store,
 		Binary:             bin,
+		Channel:            cfg.CF.Channel,
 	})
 	updater := NewUpdater(UpdaterConfig{
 		Enabled:  AutoUpdateFromConfig(cfg.CF.AutoUpdate),
 		Interval: cfg.CF.UpdateInterval,
+		Channel:  cfg.CF.Channel,
 	})
 	solver.SetUpdater(updater)
 	updater.Start()

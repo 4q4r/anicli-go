@@ -15,9 +15,9 @@ import (
 
 // fakeHistory implements HistoryService.
 type fakeHistory struct {
-	items   []storage.AnimeProgress
-	saved   []int64
-	binds   []int64
+	items []storage.AnimeProgress
+	saved []int64
+	binds []int64
 	// bindCalls records every BindSource call (PR62 #2): the binding
 	// must persist at the checklist pick.
 	bindCalls []bindCall

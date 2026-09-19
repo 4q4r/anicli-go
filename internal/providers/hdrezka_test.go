@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
@@ -715,4 +716,62 @@ func decodeAnubisFixture(t *testing.T, body []byte, v any) {
 func hdrezkaTestPoW(randomData, nonce string) string {
 	sum := sha256.Sum256([]byte(randomData + nonce))
 	return hex.EncodeToString(sum[:])
+}
+
+// ---------------------------------------------------------------------------
+// PR72 route wiring.
+//
+// Live route matrix 2026-09-19 (DE datacenter exit, Go Chrome_150
+// transport): hdrezka-home.tv and its canonicalized twins (hdrezka.ag,
+// rezka.ag) answer the search fine but REFUSE the stream links
+// (success:true, url:false; the site's own session JWT attests
+// geo:"de") — while rezka-ua.tv, the UA-geo member of the same mirror
+// family, serves full stream lists from the same exit. The default
+// route therefore moves to rezka-ua.tv, and [providers.hdrezka]
+// base_url lets the user re-point the provider without a rebuild when
+// the family rotates again.
+func TestHDRezkaDefaultBaseIsTheServingMirror(t *testing.T) {
+	t.Parallel()
+
+	if HDRezkaBase != "https://rezka-ua.tv" {
+		t.Errorf("HDRezkaBase = %q, want https://rezka-ua.tv (the mirror that serves streams)", HDRezkaBase)
+	}
+}
+
+func TestHDRezkaBaseURLOverrideFromConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.HDRezka.BaseURL = "https://rezka-mirror.example"
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var hd *HDRezka
+	for _, p := range bare {
+		if h, ok := p.(*HDRezka); ok {
+			hd = h
+			break
+		}
+	}
+	if hd == nil {
+		t.Fatal("hdrezka not in the built roster")
+	}
+	if hd.baseURL != "https://rezka-mirror.example" {
+		t.Errorf("hdrezka baseURL = %q, want the config override", hd.baseURL)
+	}
+
+	// Empty override keeps the built-in default.
+	cfg.Providers.HDRezka.BaseURL = ""
+	bare, err = All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, p := range bare {
+		if h, ok := p.(*HDRezka); ok && h.baseURL != HDRezkaBase {
+			t.Errorf("hdrezka baseURL = %q, want default %q", h.baseURL, HDRezkaBase)
+		}
+	}
 }

@@ -19,14 +19,24 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
-// HDRezkaBase is the site root [LIVE-VERIFIED 2026-09-19].
-const HDRezkaBase = "https://hdrezka-home.tv"
+// HDRezkaBase is the site root [LIVE-VERIFIED 2026-09-19, PR72 route
+// matrix]. The rezka mirror family geo-fences per domain: from the DE
+// datacenter exit hdrezka-home.tv answers pages/search but withholds
+// the stream links (success:true, url:false; the page's own session
+// JWT attests geo:"de"), while rezka-ua.tv — the UA-geo member of the
+// same family, same Anubis gate, same DLE engine — serves full stream
+// lists from that exit. hdrezka.ag and rezka.ag canonicalize onto the
+// hdrezka-home content (same refusal). The default therefore pins the
+// serving mirror; [providers.hdrezka] base_url re-points the provider
+// when the family rotates again.
+const HDRezkaBase = "https://rezka-ua.tv"
 
 // hdrezkaAnubisMarker detects the Anubis proof-of-work challenge page:
-// every path of hdrezka-home.tv is fronted by Anubis 1.25.0
+// every mirror of the rezka family is fronted by Anubis 1.25.0
 // (TecharoHQ), so the first request of any operation (and any later
 // one after the auth cookie expires) is answered with this page
-// instead of the real content. The upstream anicli-api reference has
+// instead of the real content [LIVE-VERIFIED 2026-09-19 on four
+// family mirrors]. The upstream anicli-api reference has
 // no anti-bot handling and CRASHES against the live site (its httpx
 // client receives the challenge for the anime page and the init-script
 // selector IndexErrors); this port solves the gate in pure Go.
@@ -53,11 +63,12 @@ var (
 	hdrezkaQualityRe = regexp.MustCompile(`\[.*?(\d+).*?\]`)
 )
 
-// HDRezka is the hdrezka-home.tv provider (RU anime section of the
-// rezka catalog). Port of the frozen anicli-api hdrezka source
-// (anicli_api/source/hdrezka.py + parsers/hdrezka_parser.py)
+// HDRezka is the hdrezka provider (the rezka mirror family's RU anime
+// section; default root HDRezkaBase, overridable via
+// [providers.hdrezka] base_url). Port of the frozen anicli-api hdrezka
+// source (anicli_api/source/hdrezka.py + parsers/hdrezka_parser.py)
 // re-verified live 2026-09-19, plus the pure-Go Anubis proof-of-work
-// ladder the site added on top of every path — see hdrezkaAnubisMarker.
+// ladder every family mirror serves — see hdrezkaAnubisMarker.
 // Dubs are the site's translators (одноголосые included); the player
 // is hdrezka's own CDN (up to 1080).
 type HDRezka struct {

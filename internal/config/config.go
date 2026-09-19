@@ -164,6 +164,22 @@ type Providers struct {
 	Kodik ProvidersKodik `toml:"kodik"`
 	// Anime365 configures the smotret-anime (anime365) source (PR55).
 	Anime365 ProvidersAnime365 `toml:"anime365"`
+	// HDRezka configures the hdrezka source route (PR72).
+	HDRezka ProvidersHDRezka `toml:"hdrezka"`
+}
+
+// ProvidersHDRezka carries the hdrezka mirror route override (PR72).
+// The rezka mirror family geo-fences per domain: from datacenter
+// exits hdrezka-home.tv (and its canonicalized twins hdrezka.ag /
+// rezka.ag) withhold the stream links (success:true, url:false; the
+// site's own session JWT attests geo:"de"), while rezka-ua.tv serves
+// full stream lists from the same exit [LIVE-VERIFIED 2026-09-19].
+// The built-in default follows the serving mirror; when the family
+// rotates again, base_url re-points the provider without a rebuild.
+type ProvidersHDRezka struct {
+	// BaseURL overrides the provider's site root (e.g.
+	// "https://rezka-ua.tv"); empty means the built-in default.
+	BaseURL string `toml:"base_url"`
 }
 
 // Torrent configures the BitTorrent subsystem (PR35): realtime

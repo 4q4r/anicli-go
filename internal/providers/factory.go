@@ -104,18 +104,24 @@ var allFactories = []struct {
 	{"yummy", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newYummy(YummySiteBase, YummyAPIBase, yummyCDNVideoHubBase, cfg.Network.UserAgent, http)
 	}},
-	// hdrezka (PR69): hdrezka-home.tv (RU rezka catalog, anime section) —
-	// port of the frozen anicli-api hdrezka source re-verified live
-	// 2026-09-19, PLUS a pure-Go Anubis proof-of-work gate solver: the
-	// site fronts every path with Anubis 1.25.0 and the upstream
-	// reference crashes against it. No credentials; translators are the
-	// dubs (one-voice included), hdrezka's own CDN resolves to
-	// HLS/mp4. From ISP-blocked networks network.proxy_url routes it
-	// (foreign hosting, Roskomnadzor-class SNI block on the direct
-	// route); stream links additionally require a site-accepted exit
-	// (see hdrezka.go).
-	{"hdrezka", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newHDRezka(HDRezkaBase, http)
+	// hdrezka (PR69): the RU rezka catalog's anime section — port of
+	// the frozen anicli-api hdrezka source, PLUS a pure-Go Anubis
+	// proof-of-work gate solver the site fronts every path with (see
+	// hdrezka.go). PR72 route matrix: the family geo-fences per domain
+	// (hdrezka-home.tv withholds stream links from datacenter exits —
+	// its session JWT attests geo:"de" — while rezka-ua.tv serves
+	// them), so the built-in default pins the serving mirror and
+	// [providers.hdrezka] base_url re-points it without a rebuild. No
+	// credentials; translators are the dubs (one-voice included),
+	// hdrezka's own CDN resolves to HLS/mp4. From ISP-blocked networks
+	// network.proxy_url routes it (foreign hosting, SNI-blocked direct
+	// route — verified killed mid-TLS on a RU-intercepted network).
+	{"hdrezka", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		base := cfg.Providers.HDRezka.BaseURL
+		if base == "" {
+			base = HDRezkaBase
+		}
+		return newHDRezka(base, http)
 	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is

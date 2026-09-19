@@ -819,9 +819,11 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("foreground pick must dispatch the download")
 	}
-	settled, ok := cmd().(downloadSettledMsg)
-	if !ok {
-		t.Fatalf("foreground download must settle into downloadSettledMsg, got %T", cmd())
+	var settled downloadSettledMsg
+	for _, m := range runLaunchBatch(t, cmd) {
+		if d, ok := m.(downloadSettledMsg); ok {
+			settled = d
+		}
 	}
 	if settled.err != nil {
 		t.Fatalf("fake download must succeed, got %v", settled.err)
@@ -905,7 +907,12 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	next, cmd := ss.Update(enter())
-	settled := cmd().(downloadSettledMsg)
+	var settled downloadSettledMsg
+	for _, m := range runLaunchBatch(t, cmd) {
+		if d, ok := m.(downloadSettledMsg); ok {
+			settled = d
+		}
+	}
 	if settled.err == nil {
 		t.Fatalf("download failure must be carried")
 	}

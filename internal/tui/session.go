@@ -190,6 +190,29 @@ type backgroundQueuedMsg struct {
 	report []downloadEpisodeReport
 }
 
+// downloadProgressMsg is one per-episode tick of a running foreground
+// range download (review fix 2): a resolve verdict or a download
+// start/finish. gen tags the batch — a superseded batch's ticks drop.
+// downloadProgressEnd closes the pump (channel drained).
+type downloadProgressMsg struct {
+	gen  int
+	line string
+}
+
+type downloadProgressEnd struct{ gen int }
+
+// waitDownloadProgress is the re-arming pump of the range-download
+// progress channel (the buffered-watch pattern).
+func waitDownloadProgress(ch <-chan string, gen int) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return downloadProgressEnd{gen: gen}
+		}
+		return downloadProgressMsg{gen: gen, line: line}
+	}
+}
+
 // sessionScreen is the watch-session state machine: a merged episode
 // aggregate over the grouped sources with the python session_loop
 // action set (watch / next / prev / jump / redub / info / download /
@@ -243,6 +266,12 @@ type sessionScreen struct {
 	bufferCancel context.CancelFunc
 	bufferGen    int
 	bufferProgCh chan buffered.Progress
+
+	// Range-download batch state (review fix 2): downloadGen tags the
+	// active batch (a newer batch drops the stale pump) and
+	// downloadProgCh carries the per-episode progress ticks.
+	downloadGen    int
+	downloadProgCh chan string
 
 	state sessionState
 
@@ -654,6 +683,14 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if msg.id != 0 {
 			s.setShikimoriBinding(msg.id)
 		}
+		return s, nil
+	case downloadProgressMsg:
+		if msg.gen != s.downloadGen {
+			return s, nil
+		}
+		s.setStatus(msg.line)
+		return s, waitDownloadProgress(s.downloadProgCh, msg.gen)
+	case downloadProgressEnd:
 		return s, nil
 	case downloadSettledMsg:
 		s.setStatus(renderDownloadSettle(msg))
@@ -1935,9 +1972,17 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	case "foreground":
 		count := len(tasks)
 		s.setStatus(fmt.Sprintf("Загрузка %d серий (передний план)…", count))
-		return s, safeCmd(sessionScreenID, func() tea.Msg {
-			return runForegroundDownload(context.Background(), deps, tasks, preferred)
-		})
+		s.downloadGen++
+		gen := s.downloadGen
+		progCh := make(chan string, 16)
+		s.downloadProgCh = progCh
+		return s, tea.Batch(
+			safeCmd(sessionScreenID, func() tea.Msg {
+				defer close(progCh)
+				return runForegroundDownload(context.Background(), deps, tasks, preferred, progCh)
+			}),
+			waitDownloadProgress(progCh, gen),
+		)
 	case "background":
 		s.setStatus(fmt.Sprintf("Разрешаю озвучки для %d серий…", len(tasks)))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {

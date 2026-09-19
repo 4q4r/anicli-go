@@ -13,6 +13,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -309,16 +311,20 @@ func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.M
 	if cmd == nil {
 		t.Fatalf("the %s pick must dispatch a command", mode)
 	}
-	msg := cmd()
 	switch mode {
 	case "foreground":
-		settled, ok := msg.(downloadSettledMsg)
-		if !ok {
-			t.Fatalf("foreground must settle into downloadSettledMsg, got %T", msg)
+		// The pick arms a BATCH (the worker plus the progress pump) —
+		// flatten it and keep the settle.
+		var settled downloadSettledMsg
+		for _, m := range runLaunchBatch(t, cmd) {
+			if d, ok := m.(downloadSettledMsg); ok {
+				settled = d
+			}
 		}
 		applied, _ := ss.Update(settled)
 		return settled, applied.(*sessionScreen).status
 	case "background":
+		msg := cmd()
 		queued, ok := msg.(backgroundQueuedMsg)
 		if !ok {
 			t.Fatalf("background must settle into backgroundQueuedMsg, got %T", msg)
@@ -597,4 +603,219 @@ func TestDownloadDubBudgetsArePerPhase(t *testing.T) {
 	if dub != "[animego] AniLib" {
 		t.Fatalf("the fallback candidate must still be probed after a slow first probe, got %q", dub)
 	}
+}
+
+// --- PR64 review fix 2: bounded-parallel resolution, ordered report,
+// per-episode progress ---
+
+// staggeredEpisode delays stream probes PER EPISODE (ctx-aware) so
+// the resolution completion order can be forced out of episode order.
+type staggeredEpisode struct {
+	fakeEpisode
+	delay func(episodeNum string) time.Duration
+}
+
+func (s *staggeredEpisode) ResolveStream(ctx context.Context, prov string, ep contracts.Episode, dub string) (contracts.MediaStream, error) {
+	if s.delay != nil {
+		if d := s.delay(ep.Num); d > 0 {
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+				return contracts.MediaStream{}, ctx.Err()
+			}
+		}
+	}
+	return s.fakeEpisode.ResolveStream(ctx, prov, ep, dub)
+}
+
+// TestDownloadRangeReportOrdered (review fix 2): resolution completes
+// out of order (ep 1 slowed, ep 2 instant) — the report lines and the
+// download sequence stay in EPISODE order regardless.
+func TestDownloadRangeReportOrdered(t *testing.T) {
+	s, dl := pr64RotatingSession(t, nil)
+	s.deps.Episode = &staggeredEpisode{
+		fakeEpisode: fakeEpisode{
+			episodes: map[string][]contracts.Episode{
+				"animego": {
+					{Num: "1", RawID: "a1", RawEmbeds: map[string][]string{"Дубль 1": {"u1v"}}},
+					{Num: "2", RawID: "a2", RawEmbeds: map[string][]string{"Дубль 1": {"u2v"}}},
+				},
+				"anilib": {
+					{Num: "1", RawID: "b1", RawEmbeds: map[string][]string{"AniLib": {"w1b"}}},
+					{Num: "2", RawID: "b2", RawEmbeds: map[string][]string{"AniLib": {"w2b"}}},
+				},
+			},
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v-go"}}},
+				"[anilib] AniLib":   {Links: map[string]contracts.VideoSource{"1080": {URL: "v-lib"}}},
+			},
+		},
+		delay: func(num string) time.Duration {
+			if num == "1" {
+				return 80 * time.Millisecond // ep 1 settles LAST
+			}
+			return 0
+		},
+	}
+
+	msg, status := driveDownloadRange(t, s, "1-2", "foreground")
+	settled := msg.(downloadSettledMsg)
+
+	if settled.count != 2 || settled.err != nil {
+		t.Fatalf("both episodes must download, got %d/%d err=%v", settled.count, settled.total, settled.err)
+	}
+	if len(dl.downloads) != 2 || dl.downloads[0].EpisodeNum != "1" || dl.downloads[1].EpisodeNum != "2" {
+		t.Fatalf("downloads must run in episode order, got %+v", dl.downloads)
+	}
+	idx1, idx2 := strings.Index(status, "Серия 1 —"), strings.Index(status, "Серия 2 —")
+	if idx1 == -1 || idx2 == -1 || idx1 > idx2 {
+		t.Fatalf("the report must be in episode order:\n%s", status)
+	}
+}
+
+// TestDownloadProgressLines (review fix 2): the batch ticks per
+// episode — a resolve verdict per settled episode and the reviewer's
+// exact download-start line «Загрузка i/N: эп X — [dub]…».
+func TestDownloadProgressLines(t *testing.T) {
+	s, _ := pr64RotatingSession(t, nil)
+	preferred := "[animego] Дубль 1"
+	tasks := []DownloadTask{
+		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: s.episodes["1"]},
+		{AnimeTitle: "Тайтл", EpisodeNum: "2", Episode: s.episodes["2"]},
+	}
+
+	ch := make(chan string, 64)
+	var settled downloadSettledMsg
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		settled = runForegroundDownload(context.Background(), s.deps, tasks, preferred, ch)
+		close(ch)
+	}()
+	var lines []string
+	for line := range ch {
+		lines = append(lines, line)
+	}
+	<-done
+
+	if settled.count != 2 {
+		t.Fatalf("both episodes must download, got %d", settled.count)
+	}
+	if len(lines) == 0 {
+		t.Fatal("progress lines expected")
+	}
+	var start1, resolve1 bool
+	for _, line := range lines {
+		if strings.Contains(line, "Загрузка 1/2: эп 1 — [animego] Дубль 1…") {
+			start1 = true
+		}
+		if strings.HasPrefix(line, "Разрешение озвучек ") && strings.Contains(line, "эп 1 — [animego] Дубль 1") {
+			resolve1 = true // the counter follows COMPLETION order (parallel)
+		}
+	}
+	if !start1 {
+		t.Fatalf("the download-start progress line missing:\n%s", strings.Join(lines, "\n"))
+	}
+	if !resolve1 {
+		t.Fatalf("the resolve verdict line missing:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestDownloadProgressScopesToSurface (review fix 2 + #1 semantics):
+// a progress line updates the status on the owning surface, the pump
+// re-arms, and a stale generation (a newer batch) is dropped.
+func TestDownloadProgressScopesToSurface(t *testing.T) {
+	s := pr64Session(t)
+	s.downloadProgCh = make(chan string, 8)
+
+	next, cmd := s.Update(downloadProgressMsg{gen: s.downloadGen, line: "Загрузка 1/2: эп 1 — [d]…"})
+	ss := next.(*sessionScreen)
+	if ss.status != "Загрузка 1/2: эп 1 — [d]…" {
+		t.Fatalf("progress must reach the status line, got %q", ss.status)
+	}
+	if cmd == nil {
+		t.Fatal("the progress message must re-arm the pump")
+	}
+	ss.downloadProgCh <- "Загрузка 2/2: эп 2 — [d]…"
+	m := cmd()
+	pm, ok := m.(downloadProgressMsg)
+	if !ok || pm.line != "Загрузка 2/2: эп 2 — [d]…" {
+		t.Fatalf("the pump must deliver the next line, got %#v", m)
+	}
+
+	// A stale generation (a newer batch superseded this one) drops.
+	next, cmd = ss.Update(downloadProgressMsg{gen: ss.downloadGen + 5, line: "устаревшее"})
+	ss = next.(*sessionScreen)
+	if cmd != nil || ss.status == "устаревшее" {
+		t.Fatalf("a stale generation must be dropped, status %q", ss.status)
+	}
+}
+
+// TestDownloadResolutionBounded (review fix 2): the per-episode
+// resolution runs through the repo's bounded pool — at most 8
+// concurrent probes, and actually concurrent (not sequential).
+func TestDownloadResolutionBounded(t *testing.T) {
+	const eps = 16
+	tracking := &inflightEpisode{delay: 50 * time.Millisecond}
+	tracking.fakeEpisode = fakeEpisode{
+		episodes: map[string][]contracts.Episode{},
+		streams: map[string]contracts.MediaStream{
+			"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v"}}},
+		},
+	}
+	epsSlice := make([]contracts.Episode, 0, eps)
+	for i := 1; i <= eps; i++ {
+		n := itoa(i)
+		epsSlice = append(epsSlice, contracts.Episode{Num: n, RawID: "a" + n,
+			RawEmbeds: map[string][]string{"Дубль 1": {"u" + n + "v"}}})
+	}
+	tracking.episodes = map[string][]contracts.Episode{"animego": epsSlice}
+	deps := &Deps{Episode: tracking, Download: &fakeDownload{}, Log: testLogger()}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	s.videoDub = "[animego] Дубль 1"
+
+	msg, _ := driveDownloadRange(t, s, "1-16", "foreground")
+	settled := msg.(downloadSettledMsg)
+	if settled.count != eps {
+		t.Fatalf("all %d episodes must download, got %d", eps, settled.count)
+	}
+	if tracking.maxInFlight() > 8 {
+		t.Fatalf("the resolution must be bounded at 8, peaked at %d", tracking.maxInFlight())
+	}
+	if tracking.maxInFlight() < 2 {
+		t.Fatalf("the resolution must actually parallelize, peaked at %d", tracking.maxInFlight())
+	}
+}
+
+// inflightEpisode counts concurrent stream probes (bounded-pool
+// assertion) and delays each probe so the peak is observable.
+type inflightEpisode struct {
+	fakeEpisode
+	delay time.Duration
+
+	mu   sync.Mutex
+	cur  int
+	maxi int
+}
+
+func (f *inflightEpisode) maxInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxi
+}
+
+func (f *inflightEpisode) ResolveStream(ctx context.Context, prov string, ep contracts.Episode, dub string) (contracts.MediaStream, error) {
+	f.mu.Lock()
+	f.cur++
+	if f.cur > f.maxi {
+		f.maxi = f.cur
+	}
+	f.mu.Unlock()
+	time.Sleep(f.delay)
+	f.mu.Lock()
+	f.cur--
+	f.mu.Unlock()
+	return f.fakeEpisode.ResolveStream(ctx, prov, ep, dub)
 }

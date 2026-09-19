@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // describeAvailableEpisodes renders the compact availability line of
@@ -142,53 +144,126 @@ func stampResolvedDub(task *DownloadTask, dub string) {
 	task.ProviderID = providerOfTrackKey(dub)
 }
 
-// runForegroundDownload resolves each range episode's dub (smart) and
-// downloads the batch sequentially, typing every episode's verdict in
-// the report. A dead episode never aborts its siblings.
-func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string) downloadSettledMsg {
-	report := make([]downloadEpisodeReport, 0, len(tasks))
-	ok, firstErr := 0, error(nil)
-	for _, task := range tasks {
-		// resolveDownloadDub budgets its own phases (review fix 1).
-		dub := resolveDownloadDub(ctx, deps, task.Episode, preferred)
+// downloadResolveFanout bounds the concurrent per-episode dub
+// resolutions of one range batch (review fix 2) — the same order as
+// the provider fan-out consts.
+const downloadResolveFanout = 8
+
+// emitProgress publishes one progress line without ever blocking the
+// batch: a nil channel (background mode) or a saturated buffer just
+// drops the sample (the throttle keeps the next ones coming).
+func emitProgress(ch chan<- string, line string) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- line:
+	default:
+	}
+}
+
+// downloadResolveLine / downloadProgressLine render the per-episode
+// progress ticks of a running range batch.
+func downloadResolveLine(done, total int, episode, verdict string) string {
+	return fmt.Sprintf("Разрешение озвучек %d/%d: эп %s — %s", done, total, episode, verdict)
+}
+
+func downloadProgressLine(done, total int, episode, verdict string) string {
+	return fmt.Sprintf("Загрузка %d/%d: эп %s — %s", done, total, episode, verdict)
+}
+
+// resolveDownloadDubs resolves EVERY range episode's dub through the
+// repo's bounded pool (≤ downloadResolveFanout; a probe fns never
+// fails, so one episode's error cannot cancel its siblings — the
+// watch-flow fan-out rule). The returned report stubs are in EPISODE
+// order regardless of completion order; each settled episode emits a
+// resolve tick (nil channel = silent).
+func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, progCh chan<- string) []downloadEpisodeReport {
+	type indexedTask struct {
+		idx  int
+		task DownloadTask
+	}
+	items := make([]indexedTask, len(tasks))
+	for i, task := range tasks {
+		items[i] = indexedTask{idx: i, task: task}
+	}
+	stubs := make([]downloadEpisodeReport, len(tasks))
+	var (
+		mu   sync.Mutex
+		done int
+	)
+	_ = netclient.Parallel(ctx, items, downloadResolveFanout, func(ctx context.Context, it indexedTask) error {
+		dub := resolveDownloadDub(ctx, deps, it.task.Episode, preferred)
+		mu.Lock()
+		defer mu.Unlock()
+		done++
 		if dub == "" {
-			report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Err: errNoViableDub})
+			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Err: errNoViableDub}
+			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, "✗ нет доступных озвучек"))
+			return nil
+		}
+		stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub}
+		emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, dub))
+		return nil
+	})
+	return stubs
+}
+
+// runForegroundDownload resolves the range's dubs bounded-parallel
+// (the slow leg), then downloads sequentially in episode order (the
+// heavy leg), typing every episode's verdict in the report. A dead
+// episode never aborts its siblings; every settled episode ticks the
+// progress channel.
+func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, progCh chan<- string) downloadSettledMsg {
+	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, progCh)
+	report := make([]downloadEpisodeReport, len(tasks))
+	ok, firstErr := 0, error(nil)
+	for i, task := range tasks {
+		stub := stubs[i]
+		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err}
+		if stub.Err != nil {
 			if firstErr == nil {
-				firstErr = errNoViableDub
+				firstErr = stub.Err
 			}
 			continue
 		}
-		stampResolvedDub(&task, dub)
-		path, err := deps.Download.Download(ctx, task)
-		report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Dub: dub, Path: path, Err: err})
+		stamped := task
+		stampResolvedDub(&stamped, stub.Dub)
+		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, stub.Dub+"…"))
+		path, err := deps.Download.Download(ctx, stamped)
 		if err != nil {
+			report[i].Err = err
+			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, "ошибка: "+err.Error()))
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
+		report[i].Path = path
 		ok++
+		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, "готово"))
 	}
 	return downloadSettledMsg{count: ok, total: len(tasks), err: firstErr, report: report}
 }
 
-// queueBackgroundDownloads resolves each range episode's dub (smart)
+// queueBackgroundDownloads resolves the range's dubs bounded-parallel
 // BEFORE queueing, so the background manager never receives a task
-// whose dub is dead on its episode. The settle types the verdicts.
+// whose dub is dead on its episode. The settle types the verdicts in
+// episode order.
 func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string) backgroundQueuedMsg {
-	report := make([]downloadEpisodeReport, 0, len(tasks))
+	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, nil)
+	report := make([]downloadEpisodeReport, len(tasks))
 	queued := 0
-	for _, task := range tasks {
-		// resolveDownloadDub budgets its own phases (review fix 1).
-		dub := resolveDownloadDub(ctx, deps, task.Episode, preferred)
-		if dub == "" {
-			report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Err: errNoViableDub})
+	for i, task := range tasks {
+		stub := stubs[i]
+		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err}
+		if stub.Err != nil {
 			continue
 		}
-		stampResolvedDub(&task, dub)
-		deps.Download.Submit(task)
+		stamped := task
+		stampResolvedDub(&stamped, stub.Dub)
+		deps.Download.Submit(stamped)
 		queued++
-		report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Dub: dub})
 	}
 	return backgroundQueuedMsg{queued: queued, total: len(tasks), report: report}
 }

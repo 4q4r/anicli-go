@@ -50,9 +50,16 @@ func describeAvailableEpisodes(order []string) string {
 	return fmt.Sprintf("Доступно серий: %d (%s)", len(order), strings.Join(runs, ", "))
 }
 
-// downloadResolveTimeout bounds ONE dub liveness probe of the
-// download resolution (the watch-flow lookup budget class).
-const downloadResolveTimeout = lookupTimeout
+// The download-resolution budgets are the watch-flow lookup budget
+// class (lookupTimeout), applied PER PHASE (review fix 1): hydration
+// and every candidate probe each get their own fresh budget, so one
+// slow phase can never starve the remaining probes into a false
+// «нет доступных озвучек». Vars so the budget-scoping tests can
+// shrink them.
+var (
+	downloadHydrateBudget = lookupTimeout
+	downloadProbeBudget   = lookupTimeout
+)
 
 // errNoViableDub types the verdict of a range episode whose every dub
 // is dead (PR64 #3): the report names the episode instead of silently
@@ -83,9 +90,13 @@ type downloadEpisodeReport struct {
 // viable — the caller types the failure instead of skipping silently.
 //
 // The machinery is the watch flow's own: liveness = a scoped
-// resolveAllStreams success, hydration = hydrateEpisodeCmd.
+// resolveAllStreams success, hydration = hydrateEpisodeCmd — with the
+// watch flow's budgeting too: hydration and each probe are
+// independently bounded (review fix 1).
 func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, preferred string) string {
-	ep = hydrateForDownload(ctx, deps, ep)
+	hctx, hcancel := context.WithTimeout(ctx, downloadHydrateBudget)
+	ep = hydrateForDownload(hctx, deps, ep)
+	hcancel()
 	candidates := make([]string, 0, len(ep.RawEmbeds)+1)
 	if preferred != "" {
 		candidates = append(candidates, preferred)
@@ -96,7 +107,10 @@ func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, p
 		}
 	}
 	for _, cand := range candidates {
-		if entries, err := resolveAllStreams(ctx, deps.Episode, ep, cand); err == nil && len(entries) > 0 {
+		pctx, pcancel := context.WithTimeout(ctx, downloadProbeBudget)
+		entries, err := resolveAllStreams(pctx, deps.Episode, ep, cand)
+		pcancel()
+		if err == nil && len(entries) > 0 {
 			return cand
 		}
 	}
@@ -135,9 +149,8 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 	report := make([]downloadEpisodeReport, 0, len(tasks))
 	ok, firstErr := 0, error(nil)
 	for _, task := range tasks {
-		rctx, cancel := context.WithTimeout(ctx, downloadResolveTimeout)
-		dub := resolveDownloadDub(rctx, deps, task.Episode, preferred)
-		cancel()
+		// resolveDownloadDub budgets its own phases (review fix 1).
+		dub := resolveDownloadDub(ctx, deps, task.Episode, preferred)
 		if dub == "" {
 			report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Err: errNoViableDub})
 			if firstErr == nil {
@@ -166,9 +179,8 @@ func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadT
 	report := make([]downloadEpisodeReport, 0, len(tasks))
 	queued := 0
 	for _, task := range tasks {
-		rctx, cancel := context.WithTimeout(ctx, downloadResolveTimeout)
-		dub := resolveDownloadDub(rctx, deps, task.Episode, preferred)
-		cancel()
+		// resolveDownloadDub budgets its own phases (review fix 1).
+		dub := resolveDownloadDub(ctx, deps, task.Episode, preferred)
 		if dub == "" {
 			report = append(report, downloadEpisodeReport{Episode: task.EpisodeNum, Err: errNoViableDub})
 			continue

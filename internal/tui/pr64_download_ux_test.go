@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -514,5 +515,86 @@ func TestDownloadRangeHydratesLazyEpisodes(t *testing.T) {
 	}
 	if len(fix.calls) == 0 {
 		t.Fatal("the lazy providers must have been hydrated")
+	}
+}
+
+// --- PR64 review fix 1: per-phase probe budgets ---
+
+// slowEpisode delays hydration and per-dub stream probes (ctx-aware),
+// modelling the latency that used to starve the fallback probes when
+// one shared budget covered the whole resolution.
+type slowEpisode struct {
+	fakeEpisode
+	hydrateDelay time.Duration
+	probeDelay   func(dub string) time.Duration
+}
+
+func (s *slowEpisode) HydrateDubs(ctx context.Context, providerID string, episode contracts.Episode) (contracts.Episode, error) {
+	if s.hydrateDelay > 0 {
+		select {
+		case <-time.After(s.hydrateDelay):
+		case <-ctx.Done():
+			return episode, ctx.Err()
+		}
+	}
+	return episode, nil
+}
+
+func (s *slowEpisode) ResolveStream(ctx context.Context, prov string, ep contracts.Episode, dub string) (contracts.MediaStream, error) {
+	if s.probeDelay != nil {
+		if d := s.probeDelay(dub); d > 0 {
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+				return contracts.MediaStream{}, ctx.Err()
+			}
+		}
+	}
+	return s.fakeEpisode.ResolveStream(ctx, prov, ep, dub)
+}
+
+// TestDownloadDubBudgetsArePerPhase (review fix 1): hydration and
+// every candidate probe carry their OWN budget — a slow-to-fail
+// preferred-dub probe must not starve the remaining candidates into a
+// false «нет доступных озвучек» (the Anitaku-rotation scenario under
+// latency).
+func TestDownloadDubBudgetsArePerPhase(t *testing.T) {
+	oldHydrate, oldProbe := downloadHydrateBudget, downloadProbeBudget
+	downloadHydrateBudget = 100 * time.Millisecond
+	downloadProbeBudget = 60 * time.Millisecond
+	defer func() { downloadHydrateBudget, downloadProbeBudget = oldHydrate, oldProbe }()
+
+	deps := &Deps{
+		Episode: &slowEpisode{
+			fakeEpisode: fakeEpisode{
+				episodes: map[string][]contracts.Episode{
+					"animego": {{Num: "1", RawID: "a1", RawEmbeds: map[string][]string{
+						"Дубль 1": {"u1v"},
+						"AniLib":  {"w1v"},
+					}}},
+				},
+				streams: map[string]contracts.MediaStream{
+					"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v-go"}}},
+					"[animego] AniLib":  {Links: map[string]contracts.VideoSource{"720": {URL: "v-alt"}}},
+				},
+			},
+			hydrateDelay: 40 * time.Millisecond, // fits the hydration budget
+			probeDelay: func(dub string) time.Duration {
+				if dub == "[animego] Дубль 1" {
+					return 90 * time.Millisecond // blows the probe's OWN budget
+				}
+				return 0 // the fallback probe is instant — must still run
+			},
+		},
+		Log: testLogger(),
+	}
+	ep := contracts.Episode{Num: "1", RawID: "animego:a1", RawEmbeds: map[string][]string{
+		"[animego] Дубль 1": {"u1v"},
+		"[animego] AniLib":  {"w1v"},
+	}}
+
+	dub := resolveDownloadDub(context.Background(), deps, ep, "[animego] Дубль 1")
+	if dub != "[animego] AniLib" {
+		t.Fatalf("the fallback candidate must still be probed after a slow first probe, got %q", dub)
 	}
 }

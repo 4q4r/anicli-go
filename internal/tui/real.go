@@ -668,7 +668,7 @@ type realDownload struct {
 	parts map[string]DownloadTask
 }
 
-func (s *realDownload) Download(ctx context.Context, task DownloadTask) error {
+func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string, error) {
 	return s.core.downloadOne(ctx, task)
 }
 
@@ -727,26 +727,28 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 	if !ok {
 		return fmt.Errorf("tui: download: task %q lost its parts", task.ID)
 	}
-	return c.downloadOne(ctx, parts)
+	_, err := c.downloadOne(ctx, parts) // the background runner needs no path
+	return err
 }
 
 // downloadOne performs the full pipeline: resolve stream, resolve
 // skips, merge via ffmpeg, index the result (python
-// handle_download_flow foreground path).
-func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) error {
+// handle_download_flow foreground path). The written file path
+// returns to the caller (the PR64 #3 per-episode report).
+func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, error) {
 	p, ok := c.registry.Get(task.ProviderID)
 	if !ok {
-		return fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
+		return "", fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
 	}
 
 	stream, err := p.ResolveStream(ctx, task.Episode, task.DubID)
 	if err != nil {
-		return fmt.Errorf("tui: download: resolve: %w", err)
+		return "", fmt.Errorf("tui: download: resolve: %w", err)
 	}
 	quality := pickQuality(stream.Links, task.Quality)
 	video, ok := stream.Links[quality]
 	if !ok {
-		return fmt.Errorf("tui: download: quality %q unavailable", quality)
+		return "", fmt.Errorf("tui: download: quality %q unavailable", quality)
 	}
 
 	var audio *contracts.VideoSource
@@ -788,7 +790,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) error {
 		Title:        fmt.Sprintf("%s — серия %s", task.AnimeTitle, task.Episode.Num),
 	}
 	if err := c.dl.Download(ctx, input); err != nil {
-		return err
+		return "", err
 	}
 
 	var animeID *int64
@@ -801,14 +803,17 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) error {
 	if key == "" {
 		key = task.DubID
 	}
-	return download.UpsertEntry(outDir, download.EntryInput{
+	if err := download.UpsertEntry(outDir, download.EntryInput{
 		EpisodeNum: task.Episode.Num,
 		AnimeID:    animeID,
 		VideoKey:   task.DubID,
 		AudioKey:   key,
 		Quality:    qualityIntOf(quality),
 		FilePath:   outPath,
-	})
+	}); err != nil {
+		return "", err
+	}
+	return outPath, nil
 }
 
 // audioKeyOfTask recovers the separate audio dub of a task (the

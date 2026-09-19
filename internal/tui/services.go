@@ -203,8 +203,11 @@ type DownloadResult struct {
 // DownloadService backs «Скачать серии» with foreground and background
 // modes.
 type DownloadService interface {
-	// Download runs one download to completion (foreground mode).
-	Download(ctx context.Context, task DownloadTask) error
+	// Download runs one download to completion (foreground mode) and
+	// returns the written file path (PR64 #3 — the per-episode report
+	// shows where the episode landed). A non-nil error means the
+	// episode failed; the path is then empty.
+	Download(ctx context.Context, task DownloadTask) (string, error)
 	// Submit queues one background download.
 	Submit(task DownloadTask)
 	// ActiveBanner renders the background-task summary line ("" when

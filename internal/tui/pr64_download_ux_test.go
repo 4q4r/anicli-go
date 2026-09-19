@@ -11,7 +11,11 @@ package tui
 // The file logger keeps the full verdict history instead.
 
 import (
+	"context"
+	"errors"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
@@ -217,5 +221,298 @@ func TestDownloadPromptShowsAvailableEpisodes(t *testing.T) {
 	v := ss.View().Content
 	if !contains(v, "Доступно серий: 3 (1–3)") {
 		t.Fatalf("the prompt must show the available episodes:\n%s", v)
+	}
+}
+
+// --- PR64 #3: range downloads resolve the dub PER EPISODE ---
+
+// rotatingEpisode models the Anitaku-style per-episode mirror
+// rotation: the dub is listed on the episode, but its stream resolve
+// fails for specific (episode, dub) pairs.
+type rotatingEpisode struct {
+	fakeEpisode
+	dead map[string]bool // keyed "ep|dub"
+}
+
+func (r *rotatingEpisode) ResolveStream(ctx context.Context, prov string, ep contracts.Episode, dub string) (contracts.MediaStream, error) {
+	if r.dead[ep.Num+"|"+dub] {
+		return contracts.MediaStream{}, errors.New("mirror dead")
+	}
+	return r.fakeEpisode.ResolveStream(ctx, prov, ep, dub)
+}
+
+// pr64RotatingSession builds a 3-episode session where every episode
+// carries BOTH dubs («[animego] Дубль 1» resolvable, «[anilib]
+// AniLib» resolvable — one dub per source, the merged shape) and the
+// animego dub is remembered from a previous watch — the download's
+// preferred dub.
+func pr64RotatingSession(t *testing.T, dead map[string]bool) (*sessionScreen, *fakeDownload) {
+	t.Helper()
+	eps := map[string][]contracts.Episode{
+		"animego": {
+			{Num: "1", RawID: "a1", RawEmbeds: map[string][]string{"Дубль 1": {"u1v"}}},
+			{Num: "2", RawID: "a2", RawEmbeds: map[string][]string{"Дубль 1": {"u2v"}}},
+			{Num: "3", RawID: "a3", RawEmbeds: map[string][]string{"Дубль 1": {"u3v"}}},
+		},
+		"anilib": {
+			{Num: "1", RawID: "b1", RawEmbeds: map[string][]string{"AniLib": {"w1b"}}},
+			{Num: "2", RawID: "b2", RawEmbeds: map[string][]string{"AniLib": {"w2b"}}},
+			{Num: "3", RawID: "b3", RawEmbeds: map[string][]string{"AniLib": {"w3b"}}},
+		},
+	}
+	deps := &Deps{
+		Episode: &rotatingEpisode{
+			fakeEpisode: fakeEpisode{
+				episodes: eps,
+				streams: map[string]contracts.MediaStream{
+					"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v-go"}}},
+					"[anilib] AniLib":   {Links: map[string]contracts.VideoSource{"1080": {URL: "v-lib"}}},
+				},
+			},
+			dead: dead,
+		},
+		Download: &fakeDownload{},
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{
+		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
+		{Title: "Тайтл", URL: "u2", SourceID: "anilib"},
+	}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	s.videoDub = "[animego] Дубль 1"
+	return s, deps.Download.(*fakeDownload)
+}
+
+// driveDownloadRange types the range and picks the mode; for
+// «Передний план» it settles the returned command and applies the
+// settle message, returning it with the post-settle status.
+func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.Msg, string) {
+	t.Helper()
+	s.list.Jump(sessionActionIndex(s, "download"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	if ss.state != sessionStateDownloadRange {
+		t.Fatalf("download must open the range prompt, got %v", ss.state)
+	}
+	ss.rangeInput.typeText(rng)
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+	}
+	if mode == "background" {
+		ss.modeList.Jump(1)
+	}
+	_, cmd := ss.Update(enter())
+	if cmd == nil {
+		t.Fatalf("the %s pick must dispatch a command", mode)
+	}
+	msg := cmd()
+	switch mode {
+	case "foreground":
+		settled, ok := msg.(downloadSettledMsg)
+		if !ok {
+			t.Fatalf("foreground must settle into downloadSettledMsg, got %T", msg)
+		}
+		applied, _ := ss.Update(settled)
+		return settled, applied.(*sessionScreen).status
+	case "background":
+		queued, ok := msg.(backgroundQueuedMsg)
+		if !ok {
+			t.Fatalf("background must settle into backgroundQueuedMsg, got %T", msg)
+		}
+		applied, _ := ss.Update(queued)
+		return queued, applied.(*sessionScreen).status
+	}
+	t.Fatalf("unknown mode %q", mode)
+	return nil, ""
+}
+
+// TestDownloadRangeResolvesDubPerEpisode (PR64 #3): the remembered
+// dub serves where it is alive; a dead mirror on ONE episode falls
+// back to the other dub FOR THAT EPISODE only; the report types the
+// dub used per episode.
+func TestDownloadRangeResolvesDubPerEpisode(t *testing.T) {
+	s, dl := pr64RotatingSession(t, map[string]bool{"2|[animego] Дубль 1": true})
+
+	msg, status := driveDownloadRange(t, s, "1-3", "foreground")
+	settled := msg.(downloadSettledMsg)
+
+	if settled.err != nil {
+		t.Fatalf("every episode must resolve, got %v", settled.err)
+	}
+	if settled.count != 3 || settled.total != 3 {
+		t.Fatalf("3 of 3 episodes must download, got %d/%d", settled.count, settled.total)
+	}
+	want := map[string]string{
+		"1": "[animego] Дубль 1",
+		"2": "[anilib] AniLib", // the per-episode fallback
+		"3": "[animego] Дубль 1",
+	}
+	if len(dl.downloads) != 3 {
+		t.Fatalf("3 tasks expected, got %d", len(dl.downloads))
+	}
+	for _, task := range dl.downloads {
+		if task.DubID != want[task.EpisodeNum] {
+			t.Fatalf("ep %s must use %q, got %q", task.EpisodeNum, want[task.EpisodeNum], task.DubID)
+		}
+		if task.ProviderID != providerOfTrackKey(task.DubID) {
+			t.Fatalf("ep %s provider must match its dub, got %q for %q",
+				task.EpisodeNum, task.ProviderID, task.DubID)
+		}
+	}
+	// The report types the dub per episode.
+	if !contains(status, "Серия 2 — [anilib] AniLib") {
+		t.Fatalf("the report must type the fallback dub for ep 2:\n%s", status)
+	}
+	if !contains(status, "Серия 1 — [animego] Дубль 1") {
+		t.Fatalf("the report must type the remembered dub for ep 1:\n%s", status)
+	}
+}
+
+// TestDownloadRangeTypesNoViableEpisode (PR64 #3): an episode with NO
+// viable dub is a TYPED per-episode failure — not a silent skip and
+// not a whole-range abort.
+func TestDownloadRangeTypesNoViableEpisode(t *testing.T) {
+	s, dl := pr64RotatingSession(t, map[string]bool{
+		"2|[animego] Дубль 1": true,
+		"2|[anilib] AniLib":   true,
+	})
+
+	msg, status := driveDownloadRange(t, s, "1-3", "foreground")
+	settled := msg.(downloadSettledMsg)
+
+	if settled.count != 2 || settled.total != 3 {
+		t.Fatalf("2 of 3 must download, got %d/%d", settled.count, settled.total)
+	}
+	if len(dl.downloads) != 2 {
+		t.Fatalf("the range must NOT abort: 2 tasks expected, got %d", len(dl.downloads))
+	}
+	typed := false
+	for _, r := range settled.report {
+		if r.Episode == "2" && errors.Is(r.Err, errNoViableDub) {
+			typed = true
+		}
+	}
+	if !typed {
+		t.Fatalf("ep 2's failure must be typed in the report, got %+v", settled.report)
+	}
+	if !contains(status, "Серия 2") || !contains(status, "нет доступных озвучек") {
+		t.Fatalf("the status must type ep 2's failure:\n%s", status)
+	}
+	if !contains(status, "2 из 3") {
+		t.Fatalf("the headline must carry the partial verdict:\n%s", status)
+	}
+}
+
+// TestDownloadSettleReportRendersPerEpisode (PR64 #3): the compact
+// report line shape — ep → dub → path / failure — plus the headline
+// semantics the older tests pin («Загружено», «Ошибка загрузки»).
+func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
+	s := pr64Session(t)
+	msg := downloadSettledMsg{count: 1, total: 2, err: errors.New("ffmpeg exploded"),
+		report: []downloadEpisodeReport{
+			{Episode: "1", Dub: "[animego] Дубль 1", Path: "/dl/Тайтл/EP_1_Дубль_1_720p.mp4"},
+			{Episode: "2", Dub: "[anilib] AniLib", Err: errors.New("ffmpeg exploded")},
+		}}
+	next, _ := s.Update(msg)
+	status := next.(*sessionScreen).status
+	for _, want := range []string{
+		"Загружено серий: 1 из 2",
+		"Серия 1 — [animego] Дубль 1 — /dl/Тайтл/EP_1_Дубль_1_720p.mp4",
+		"Серия 2 — [anilib] AniLib — ошибка: ffmpeg exploded",
+	} {
+		if !contains(status, want) {
+			t.Fatalf("report line %q missing:\n%s", want, status)
+		}
+	}
+
+	msg2 := downloadSettledMsg{count: 0, total: 1, err: errNoViableDub,
+		report: []downloadEpisodeReport{{Episode: "7", Err: errNoViableDub}}}
+	next, _ = s.Update(msg2)
+	status = next.(*sessionScreen).status
+	if !contains(status, "Ошибка загрузки: 0 из 1 серий") {
+		t.Fatalf("an all-failed range keeps the «Ошибка загрузки» headline:\n%s", status)
+	}
+	if !contains(status, "Серия 7 — ✗ нет доступных озвучек") {
+		t.Fatalf("the no-dub verdict must be typed:\n%s", status)
+	}
+}
+
+// TestDownloadBackgroundResolvesDubPerEpisode (PR64 #3): the
+// background mode resolves the dub per episode BEFORE queueing — the
+// submitted tasks never carry a dead dub, and the settle types the
+// per-episode verdicts.
+func TestDownloadBackgroundResolvesDubPerEpisode(t *testing.T) {
+	s, dl := pr64RotatingSession(t, map[string]bool{"2|[animego] Дубль 1": true})
+
+	msg, status := driveDownloadRange(t, s, "1-2", "background")
+	queued := msg.(backgroundQueuedMsg)
+
+	if queued.queued != 2 || queued.total != 2 {
+		t.Fatalf("both episodes must queue, got %d/%d", queued.queued, queued.total)
+	}
+	if len(dl.submitted) != 2 {
+		t.Fatalf("2 submitted tasks expected, got %d", len(dl.submitted))
+	}
+	want := map[string]string{"1": "[animego] Дубль 1", "2": "[anilib] AniLib"}
+	for _, task := range dl.submitted {
+		if task.DubID != want[task.EpisodeNum] {
+			t.Fatalf("ep %s must queue with %q, got %q",
+				task.EpisodeNum, want[task.EpisodeNum], task.DubID)
+		}
+	}
+	if !contains(status, "Отправлено в фон: 2 серий") {
+		t.Fatalf("the queued headline expected:\n%s", status)
+	}
+	if !contains(status, "Серия 2 — [anilib] AniLib") {
+		t.Fatalf("the background report must type the fallback dub:\n%s", status)
+	}
+}
+
+// TestDownloadRangeHydratesLazyEpisodes (PR64 #3): range episodes of
+// a lazily-listing provider carry NO embeds until hydrated — the
+// download resolution runs the same on-demand hydration round as the
+// watch flow, or every range download would fail outright.
+func TestDownloadRangeHydratesLazyEpisodes(t *testing.T) {
+	fix := &hydrateFixture{embeds: map[string]map[string][]string{
+		"animego": {"Дубль 1": {"u1v", "u2v", "u3v"}},
+	}}
+	eps := map[string][]contracts.Episode{
+		"animego": {
+			{Num: "1", RawID: "17166", RawEmbeds: map[string][]string{}},
+			{Num: "2", RawID: "17167", RawEmbeds: map[string][]string{}},
+			{Num: "3", RawID: "17168", RawEmbeds: map[string][]string{}},
+		},
+	}
+	deps := &Deps{
+		Episode: &hydratingEpisode{
+			fakeEpisode: fakeEpisode{
+				episodes: eps,
+				streams: map[string]contracts.MediaStream{
+					"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v-go"}}},
+				},
+			},
+			fix: fix,
+		},
+		Download: &fakeDownload{},
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	s.videoDub = "[animego] Дубль 1"
+
+	dl := deps.Download.(*fakeDownload)
+	msg, _ := driveDownloadRange(t, s, "1-3", "foreground")
+	settled := msg.(downloadSettledMsg)
+
+	if settled.count != 3 || len(dl.downloads) != 3 {
+		t.Fatalf("hydration must make all 3 episodes downloadable, got %d/%d",
+			settled.count, len(dl.downloads))
+	}
+	if len(fix.calls) == 0 {
+		t.Fatal("the lazy providers must have been hydrated")
 	}
 }

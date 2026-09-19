@@ -171,10 +171,23 @@ type bufferedProgressMsg struct {
 type bufferedProgressEnd struct{ gen int }
 
 // downloadSettledMsg reports a finished foreground download batch
-// (I8).
+// (I8) with its per-episode report (PR64 #3): count/total successes,
+// the first error for the headline and one report line per episode.
 type downloadSettledMsg struct {
-	count int
-	err   error
+	count  int
+	total  int
+	err    error
+	report []downloadEpisodeReport
+}
+
+// backgroundQueuedMsg settles the per-episode dub resolution of a
+// background range download (PR64 #3): the RESOLVED tasks are queued
+// (never a dead dub), and the report types each episode's dub or
+// failure.
+type backgroundQueuedMsg struct {
+	queued int
+	total  int
+	report []downloadEpisodeReport
 }
 
 // sessionScreen is the watch-session state machine: a merged episode
@@ -643,11 +656,10 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return s, nil
 	case downloadSettledMsg:
-		if msg.err != nil {
-			s.setStatus("Ошибка загрузки: " + msg.err.Error())
-			return s, nil
-		}
-		s.setStatus(fmt.Sprintf("✓ Загружено серий: %d", msg.count))
+		s.setStatus(renderDownloadSettle(msg))
+		return s, nil
+	case backgroundQueuedMsg:
+		s.setStatus(renderBackgroundQueued(msg))
 		return s, nil
 	case tea.KeyPressMsg:
 		return s.handleKey(msg)
@@ -1904,38 +1916,33 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	for _, num := range s.downloadEpisodes {
 		episodes = append(episodes, s.episodes[num])
 	}
+	// The dub is resolved PER EPISODE inside the command (PR64 #3):
+	// the remembered dub first, per-episode fallback otherwise — the
+	// tasks leave this handler without a dub stamp.
 	tasks := make([]DownloadTask, 0, len(episodes))
 	for _, ep := range episodes {
 		tasks = append(tasks, DownloadTask{
 			AnimeTitle:  BestDisplayTitle(s.group),
 			EpisodeNum:  ep.Num,
 			ShikimoriID: s.shikimoriID(),
-			ProviderID:  providerOfTrackKey(s.videoDub),
 			Episode:     ep,
-			DubID:       s.videoDub,
 			Quality:     s.lastQuality,
 		})
 	}
+	deps := s.deps
+	preferred := s.videoDub
 	switch mode {
 	case "foreground":
-		deps := s.deps
 		count := len(tasks)
 		s.setStatus(fmt.Sprintf("Загрузка %d серий (передний план)…", count))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {
-			var firstErr error
-			for _, task := range tasks {
-				if err := deps.Download.Download(context.Background(), task); err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			return downloadSettledMsg{count: count, err: firstErr}
+			return runForegroundDownload(context.Background(), deps, tasks, preferred)
 		})
 	case "background":
-		for _, task := range tasks {
-			s.deps.Download.Submit(task)
-		}
-		s.setStatus(fmt.Sprintf("Отправлено в фон: %d серий", len(tasks)))
-		return s, nil
+		s.setStatus(fmt.Sprintf("Разрешаю озвучки для %d серий…", len(tasks)))
+		return s, safeCmd(sessionScreenID, func() tea.Msg {
+			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred)
+		})
 	default:
 		return s, nil
 	}

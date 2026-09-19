@@ -597,9 +597,9 @@ type fakeDownload struct {
 	downloads []DownloadTask
 }
 
-func (f *fakeDownload) Download(_ context.Context, task DownloadTask) error {
+func (f *fakeDownload) Download(_ context.Context, task DownloadTask) (string, error) {
 	f.downloads = append(f.downloads, task)
-	return nil
+	return "/dl/" + task.AnimeTitle + "/EP_" + task.EpisodeNum + ".mp4", nil
 }
 
 func (f *fakeDownload) Submit(task DownloadTask) { f.submitted = append(f.submitted, task) }
@@ -789,11 +789,19 @@ func TestSessionStatusPickDispatches(t *testing.T) {
 
 // TestSessionDownloadForegroundDispatch (C2 + I8): the download-mode
 // menu persists; picking «Передний план» actually downloads the range
-// and the settle reaches the status line.
+// and the settle reaches the status line. The dub is resolved per
+// episode before each download (PR64 #3).
 func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	dl := &fakeDownload{}
 	s := newSessionForTests(t)
 	s.deps.Download = dl
+	s.deps.Episode = &fakeEpisode{
+		episodes: testEpisodeSet(),
+		streams: map[string]contracts.MediaStream{
+			"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v"}}},
+		},
+	}
+	s.videoDub = "[animego] Дубль 1"
 
 	idx := sessionActionIndex(s, "download")
 	s.list.Jump(idx)
@@ -818,8 +826,16 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	if settled.err != nil {
 		t.Fatalf("fake download must succeed, got %v", settled.err)
 	}
+	if settled.count != 2 || settled.total != 2 {
+		t.Fatalf("both episodes must download, got %d/%d", settled.count, settled.total)
+	}
 	if len(dl.downloads) != 2 {
 		t.Fatalf("foreground must download both episodes, got %d", len(dl.downloads))
+	}
+	for _, task := range dl.downloads {
+		if task.DubID != "[animego] Дубль 1" {
+			t.Fatalf("ep %s must carry its resolved dub, got %q", task.EpisodeNum, task.DubID)
+		}
 	}
 	next, _ = next.Update(settled)
 	if !contains(next.(*sessionScreen).status, "Загружено") {
@@ -828,11 +844,19 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 }
 
 // TestSessionDownloadBackgroundSubmits (C2): the background mode
-// submits tasks to the manager-backed service.
+// resolves the dubs per episode, then submits the tasks to the
+// manager-backed service (PR64 #3 — the settle types the verdicts).
 func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 	dl := &fakeDownload{}
 	s := newSessionForTests(t)
 	s.deps.Download = dl
+	s.deps.Episode = &fakeEpisode{
+		episodes: testEpisodeSet(),
+		streams: map[string]contracts.MediaStream{
+			"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v"}}},
+		},
+	}
+	s.videoDub = "[animego] Дубль 1"
 
 	idx := sessionActionIndex(s, "download")
 	s.list.Jump(idx)
@@ -842,7 +866,15 @@ func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	next, _ = ss.Update(down()) // «Фон»
-	next, _ = next.Update(enter())
+	next, cmd := next.Update(enter())
+	if cmd == nil {
+		t.Fatalf("the background pick must dispatch the resolution")
+	}
+	queued, ok := cmd().(backgroundQueuedMsg)
+	if !ok {
+		t.Fatalf("background must settle into backgroundQueuedMsg, got %T", cmd())
+	}
+	next, _ = next.Update(queued)
 	if len(dl.submitted) != 1 {
 		t.Fatalf("background pick must submit one task, got %d", len(dl.submitted))
 	}
@@ -852,11 +884,19 @@ func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 }
 
 // TestSessionDownloadSettledFailure (I8): a failed foreground download
-// surfaces its error on the status line.
+// surfaces its error on the status line. The dub resolution must
+// succeed first so the failure is genuinely the download's (PR64 #3).
 func TestSessionDownloadSettledFailure(t *testing.T) {
 	dl := &errDownload{}
 	s := newSessionForTests(t)
 	s.deps.Download = dl
+	s.deps.Episode = &fakeEpisode{
+		episodes: testEpisodeSet(),
+		streams: map[string]contracts.MediaStream{
+			"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v"}}},
+		},
+	}
+	s.videoDub = "[animego] Дубль 1"
 	idx := sessionActionIndex(s, "download")
 	s.list.Jump(idx)
 	next, _ := s.Update(enter())
@@ -878,8 +918,8 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 // errDownload fails every foreground download.
 type errDownload struct{ fakeDownload }
 
-func (f *errDownload) Download(_ context.Context, _ DownloadTask) error {
-	return errors.New("disk full")
+func (f *errDownload) Download(_ context.Context, _ DownloadTask) (string, error) {
+	return "", errors.New("disk full")
 }
 
 // watchStreaming drives «▶ Смотреть» through the PR44 format selector

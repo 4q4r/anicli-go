@@ -28,12 +28,24 @@ import (
 )
 
 // aaDefaultBuildID is the buildId embedded in the live player chunk
-// (obfuscated const cd, decoded via the sandbox as gy()). The site
+// (obfuscated const, decoded via the sandbox as gy()). The site
 // rotates it rarely; the cache (newAABuildIDCache) persists a
 // discovered replacement and the bridge re-discovers it on rotation.
 // [LIVE-VERIFIED 2026-09-17]: page bundles "173" (was "168" on
 // 2026-09-13 — the live bootstrap now answers unknown_build_id 404 for
 // the old value).
+//
+// PR67 (2026-09-19): the live player rotates to "174" and the mask
+// derivation constants rotated WITH it — aaMask("174") from the pinned
+// tables diverges from the live chunk mask (the bootstrap answers 403
+// to a pinned-constants boot for 174), while "173" still bootstraps
+// (grace window; the episode resolver rejects 173-material with
+// NEED_CAPTCHA — the wall documented on errAACaptcha). When the wall
+// lifts, revival needs either a constants re-port from the live chunk
+// (PR45 procedure) or a repaired bridge harness (the mega-chunk
+// consolidation broke the pinned-name extraction; see .sdd/ledger.md
+// PR67 dossier). The pin stays "173": it is the newest buildId the
+// pure-Go tables can actually bootstrap.
 const aaDefaultBuildID = "173"
 
 // Typed crypto failures for the AllAnime resolve chain. Callers
@@ -65,7 +77,13 @@ var (
 	errAARateLimited = errors.New("allanime: bootstrap rate limited")
 	// errAACaptcha marks a GraphQL NEED_CAPTCHA verdict on the episode
 	// query. Not a crypto failure — the bridge cannot clear it; the
-	// resolve must fail loudly instead of an empty stream.
+	// resolve must fail loudly instead of an empty stream. PR67
+	// (2026-09-19) root-caused the verdict as a site-side WALL on the
+	// episode-sources query: it persists across fresh crypto material,
+	// both egresses (proxy + direct), polite pacing, and an in-page
+	// browser fetch carrying module-native material — the live player
+	// no longer exercises this query (sources are server-provisioned
+	// player tokens). See .sdd/ledger.md PR67 dossier.
 	errAACaptcha = errors.New("allanime: captcha required (NEED_CAPTCHA)")
 	// errAAInvalidated marks a refresh whose result was invalidated by
 	// a concurrent mask-only bridge adoption before the waiter read

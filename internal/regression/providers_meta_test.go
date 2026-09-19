@@ -29,8 +29,9 @@ import (
 // (PR55, the tokened smotret-anime JSON API) joined the RU-dub
 // block; yanima left it in PR65 (dead Mitelis wall, roster pinned
 // 21→20); yummy (PR68, the YummyAnime api.yani.tv JSON API) joined
-// after anime365 closing the RU-dub block. The roster is frozen at
-// 21.
+// after anime365 and hdrezka (PR69, the hdrezka-home.tv rezka
+// catalog behind an Anubis PoW gate) joined after yummy, closing
+// the RU-dub block. The roster is frozen at 22.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -49,6 +50,7 @@ var expectedProviderOrder = []string{
 	"shiza",
 	"anime365",
 	"yummy",
+	"hdrezka",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

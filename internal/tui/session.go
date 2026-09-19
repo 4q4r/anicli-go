@@ -784,8 +784,9 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		s.setState(sessionStateDownloadRange)
 		s.rangeInput = NewTextPrompt(TextPromptConfig{
-			ID:    "download-range",
-			Title: "Серии для загрузки (например 1-5, 7):",
+			ID:     "download-range",
+			Title:  "Серии для загрузки (например 1-5, 7):",
+			Status: describeAvailableEpisodes(s.order),
 		})
 		return s, s.rangeInput.Init()
 	case "exit":

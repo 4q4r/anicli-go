@@ -176,3 +176,46 @@ func TestOfflineStatusNeverSurvivesSurfaceSwitch(t *testing.T) {
 		t.Fatalf("stale playback status leaked into the variant picker:\n%s", ss.View().Content)
 	}
 }
+
+// --- PR64 #2: the download-range prompt must describe what EXISTS ---
+
+// TestDescribeAvailableEpisodes: the compact availability line —
+// count plus the real set, consecutive episodes collapsed into runs,
+// gaps and non-numeric labels listed as-is.
+func TestDescribeAvailableEpisodes(t *testing.T) {
+	cases := []struct {
+		name  string
+		order []string
+		want  string
+	}{
+		{"contiguous", []string{"1", "2", "3"}, "Доступно серий: 3 (1–3)"},
+		{"gaps", []string{"1", "2", "3", "7", "10"}, "Доступно серий: 5 (1–3, 7, 10)"},
+		{"single", []string{"5"}, "Доступно серий: 1 (5)"},
+		{"junk-label", []string{"1", "OVA"}, "Доступно серий: 2 (1, OVA)"},
+		{"empty", nil, "Доступных серий нет"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := describeAvailableEpisodes(tc.order); got != tc.want {
+				t.Fatalf("describeAvailableEpisodes(%v) = %q, want %q", tc.order, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDownloadPromptShowsAvailableEpisodes (PR64 #2): the range prompt
+// carries the availability line so the user never guesses what exists.
+func TestDownloadPromptShowsAvailableEpisodes(t *testing.T) {
+	s := pr64Session(t) // merged episodes 1, 2, 3
+
+	s.list.Jump(sessionActionIndex(s, "download"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	if ss.state != sessionStateDownloadRange {
+		t.Fatalf("download must open the range prompt, got %v", ss.state)
+	}
+	v := ss.View().Content
+	if !contains(v, "Доступно серий: 3 (1–3)") {
+		t.Fatalf("the prompt must show the available episodes:\n%s", v)
+	}
+}

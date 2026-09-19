@@ -2038,8 +2038,9 @@ func (s *sessionScreen) restoreResume() {
 // found nothing — an unopened episode stays clickable, because
 // clicking it IS the on-demand trigger (PR44 owner model).
 // buildActionMenu assembles the action menu; a resumed record adds
-// «🔄 Перепривязать» (PR62 #3): the manual re-binding path that
-// re-runs the provider fan-out over the stored record.
+// «🔗 Перепривязать» (PR62 #3): the manual re-binding path that
+// re-runs the provider fan-out over the stored record (PR74: 🔗, not
+// 🔄 — every emoji means exactly one action).
 func (s *sessionScreen) buildActionMenu() {
 	watchDisabled := false
 	if ep := s.currentEpisodeData(); ep != nil && s.hydrated[ep.Num] && len(ep.RawEmbeds) == 0 {
@@ -2056,7 +2057,7 @@ func (s *sessionScreen) buildActionMenu() {
 		{ID: "refresh", Label: "🔄 Обновить источники"},
 	}
 	if s.resume != nil {
-		choices = append(choices, Choice{ID: "rebind", Label: "🔄 Перепривязать"})
+		choices = append(choices, Choice{ID: "rebind", Label: "🔗 Перепривязать"})
 	}
 	choices = append(choices, Choice{ID: "exit", Label: "🚪 Выход"})
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", choices...), defaultListHeight)

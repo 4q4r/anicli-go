@@ -1322,19 +1322,40 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 	return s.launchPlayback()
 }
 
+// shikiSyncCmd schedules the bounded watch-progress push for the
+// episode about to play (PR62 #1): nil when there is no wired shiki
+// service, no binding or a non-numeric episode.
+func (s *sessionScreen) shikiSyncCmd() tea.Cmd {
+	if s.deps == nil || s.deps.Shiki == nil {
+		return nil
+	}
+	if id := s.shikimoriID(); id != 0 {
+		if episode := parseWatchEpisode(s.currentEpisode()); episode > 0 {
+			return syncWatchProgressCmd(s.deps, id, episode)
+		}
+	}
+	return nil
+}
+
 // launchPlayback continues after the video (and, when fresh, audio)
 // picks: buffered mode buffers the picked stream, streaming launches
 // mpv. The skip verdict fetched during the resolve (PR61) composes
 // into the launch line and auto-clears on the playback settle. The
 // shikimori watch-progress push (PR61) runs ALONGSIDE playback —
-// python extract_and_play's update_rate at the launch moment.
+// python extract_and_play's update_rate at the launch moment — for
+// BOTH formats (PR62 #1: the buffered path used to skip it).
 func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
+	sync := s.shikiSyncCmd()
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
 			s.status = "Буферный режим недоступен"
 			return s, nil
 		}
-		return s.startBuffered()
+		_, buf := s.startBuffered()
+		if sync != nil {
+			return s, tea.Batch(buf, sync)
+		}
+		return s, buf
 	}
 	s.state = sessionStatePlaying
 	s.status = "▶ Запуск mpv…"
@@ -1342,13 +1363,8 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 		s.status += " · ⏭ " + s.skipNote
 	}
 	play := s.playCmd()
-	if s.deps == nil || s.deps.Shiki == nil {
-		return s, play
-	}
-	if id := s.shikimoriID(); id != 0 {
-		if episode := parseWatchEpisode(s.currentEpisode()); episode > 0 {
-			return s, tea.Batch(play, syncWatchProgressCmd(s.deps, id, episode))
-		}
+	if sync != nil {
+		return s, tea.Batch(play, sync)
 	}
 	return s, play
 }

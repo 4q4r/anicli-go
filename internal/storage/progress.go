@@ -117,6 +117,18 @@ func (r *ProgressRepo) GetByID(ctx context.Context, id int64) (*AnimeProgress, e
 	return p, nil
 }
 
+// GetBySource loads the most recently updated row sitting on a
+// (source_id, source_url) key; a miss maps to contracts.ErrNotFound.
+func (r *ProgressRepo) GetBySource(ctx context.Context, sourceID, sourceURL string) (*AnimeProgress, error) {
+	p, err := scanAnimeProgress(r.db.QueryRowContext(ctx,
+		animeProgressSelect+` WHERE source_id = ? AND source_url = ? ORDER BY updated_at DESC, id DESC LIMIT 1`,
+		sourceID, sourceURL))
+	if err != nil {
+		return nil, notFound(fmt.Errorf("get anime progress by source %s/%s: %w", sourceID, sourceURL, err))
+	}
+	return p, nil
+}
+
 // GetByShikimoriID loads the most recently updated row bound to a Shikimori
 // anime (python's shikimori-id fallback match).
 func (r *ProgressRepo) GetByShikimoriID(ctx context.Context, shikimoriID int64) (*AnimeProgress, error) {

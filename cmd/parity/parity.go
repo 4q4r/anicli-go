@@ -50,8 +50,8 @@ func (e *env) close() {
 // tracks the roster minus one dead-provider tolerance (11 of 12 at
 // PR24's roster; 12 of 13 since nyaa joined in PR36; 13 of 14 since
 // anilibria-torrent joined in PR37; 16 of 17 since animedia joined in
-// PR56; integration re-pin: 17 of 18 with anime365+animedia both in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59).
-const gateProviders = 20
+// PR56; integration re-pin: 17 of 18 with anime365+animedia both in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59; 19 of 20 after the PR65 provider removal).
+const gateProviders = 19
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.

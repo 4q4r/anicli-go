@@ -1,1 +1,0 @@
-{"sources":[{"source":"Kodik","priority":2,"resolution":{"name":"720p","numeric":720},"src":"https://kodik.example/hls/817aa7618b177f2b2b874d0e1a3a1a1a/720.m3u8"},{"source":"Kodik","priority":3,"resolution":{"name":"480p","numeric":480},"src":"https://kodik.example/hls/817aa7618b177f2b2b874d0e1a3a1a1a/480.m3u8"}]}

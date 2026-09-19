@@ -31,15 +31,6 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		id: "yanima",
-		disabled: func(cfg config.Settings) (string, bool) {
-			if cfg.Providers.Yanima.DDoSP1 == "" || cfg.Providers.Yanima.DDoSP2 == "" {
-				return "не заданы DDoS-куки (providers.yanima.ddoS_p1/ddoS_p2)", true
-			}
-			return "", false
-		},
-	},
-	{
 		// nyaa (PR36) has no credentials of its own, but its results
 		// resolve through the torrent core — without the [torrent]
 		// subsystem it cannot play anything (kodik-parity: never

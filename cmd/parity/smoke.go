@@ -60,7 +60,6 @@ const (
 // neutral) whether or not the config managed to register them.
 var smokeSkipped = map[string]string{
 	"kodik":     "credential-gated (API token)",
-	"yanima":    "credential-gated (DDoS cookies)",
 	"rutracker": "not implemented",
 }
 
@@ -94,7 +93,7 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 			"the failure column a sample reason); TORRENT providers still need EVERY\n" +
 			"surfaced result resolved. PASS needs search>0 either way; a budget\n" +
 			"exhaustion is an honest FAIL naming the resolved/surfaced progress.\n" +
-			"Credential-gated providers (kodik, yanima) and the unimplemented rutracker\n" +
+			"Credential-gated providers (kodik) and the unimplemented rutracker\n" +
 			"are skipped with a visible reason. Exits non-zero when any provider FAILs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -370,8 +370,6 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		cfg := config.Default()
 		cfg.Network.ProxyURL = ""
 		cfg.Providers.Kodik.Token = "test-token"
-		cfg.Providers.Yanima.DDoSP1 = "test-p1"
-		cfg.Providers.Yanima.DDoSP2 = "test-p2"
 
 		reg, err := NewRegistry(cfg, nil)
 		if err != nil {
@@ -404,8 +402,6 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		cfg := config.Default()
 		cfg.Network.ProxyURL = ""
 		cfg.Providers.Kodik.Token = "test-token"
-		cfg.Providers.Yanima.DDoSP1 = "test-p1"
-		cfg.Providers.Yanima.DDoSP2 = "test-p2"
 		cfg.Torrent.Enabled = false
 
 		reg, err := NewRegistry(cfg, nil)
@@ -431,8 +427,6 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		cfg := config.Default()
 		cfg.Network.ProxyURL = ""
 		cfg.Providers.Kodik.Token = "test-token"
-		cfg.Providers.Yanima.DDoSP1 = "test-p1"
-		cfg.Providers.Yanima.DDoSP2 = "test-p2"
 		cfg.Providers.Exclude = []string{"nyaa"}
 
 		reg, err := NewRegistry(cfg, nil)

@@ -157,17 +157,6 @@ refresh_token_ttl = "720h"
 # Переменная окружения ANICLI_KODIK_TOKEN перекрывает это значение.
 # token = "ВАШ_ТОКЕН_ЗДЕСЬ"
 
-[providers.yanima]
-# Куки DDoS-защиты yanima.space (Mitelis wall): БЕЗ них каждый запрос
-# к API отвечает 403. Оба значения копируются из DevTools браузера
-# (F12 → Application/Хранилище → Cookies → https://yanima.space),
-# как и токен kodik выше. Без обеих кук провайдер yanima отключается
-# при старте.
-# ddoS_p1 = "значение_куки_mit_ck_p1"
-# ddoS_p2 = "значение_куки_mit_ck_p2"
-# Необязательная сессионная кука для авторизованного контента.
-# session = "значение_YAA_SESS_ID"
-
 [providers.anime365]
 # Токен доступа anime365 (smotret-anime.app): каталог, эпизоды и
 # список озвучек открыты, но ссылки на видео (embed) требуют токен

@@ -593,7 +593,6 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.lastQuality = msg.quality
 		}
 		s.status = "Воспроизведение завершено"
-		s.saveProgress()
 		return s, s.maybeNext()
 	case shikiUpdatedMsg:
 		if msg.err != nil {
@@ -717,6 +716,11 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		if s.currentIdx < len(s.order)-1 {
 			s.currentIdx++
 			s.buildActionMenu()
+			// python parity (PR63 #2): the pick falls through into
+			// resolve_dubs_smart + extract_and_play — the next episode
+			// starts playing right away when the remembered dubs still
+			// fit.
+			return s.autoWatchNext()
 		}
 		return s, nil
 	case "prev":
@@ -799,6 +803,41 @@ func (s *sessionScreen) startWatch() (Screen, tea.Cmd) {
 		{ID: "buffer", Label: "Буферный", Value: "buffer"},
 	}...), defaultListHeight)
 	return s, nil
+}
+
+// autoWatchNext launches the watch pipeline for the episode «⏭ След.»
+// just advanced to (PR63 #2, python session_loop parity: the pick
+// falls through into resolve_dubs_smart + extract_and_play). The
+// remembered dubs still available on the new episode → straight to
+// playback with no manual picks; the previously used source gone →
+// the typed «⚠ Прошлые настройки недоступны» note + the usual
+// selection (the merged stream list, with the audio prompt when the
+// audio pick is fresh). The format selector does not re-open: the
+// armed buffered mode carries over — the python loop has no
+// per-episode format step. A sourceless episode hydrates first (the
+// same on-demand trigger as «Смотреть»).
+func (s *sessionScreen) autoWatchNext() (Screen, tea.Cmd) {
+	ep := s.currentEpisodeData()
+	if ep == nil {
+		s.status = "Нет серий"
+		return s, nil
+	}
+	if len(ep.RawEmbeds) == 0 {
+		if !s.hydrated[ep.Num] && !s.hydrating {
+			return s, s.hydrateEpisode(ep.Num)
+		}
+		if !s.hydrating {
+			s.status = "Нет источников — выполните «🔄 Обновить источники»"
+		}
+		return s, nil
+	}
+	if s.videoDub != "" && len(ep.RawEmbeds[s.videoDub]) == 0 {
+		// python resolve_dubs_smart: the previously used source is not
+		// on the new episode — typed note, then the usual selection.
+		s.status = fmt.Sprintf("⚠ Прошлые настройки недоступны: %s / %s",
+			s.videoDub, s.audioDub)
+	}
+	return s.proceedWatch()
 }
 
 // handleFormatKey resolves the format selector: the pick arms the
@@ -1339,12 +1378,18 @@ func (s *sessionScreen) shikiSyncCmd() tea.Cmd {
 
 // launchPlayback continues after the video (and, when fresh, audio)
 // picks: buffered mode buffers the picked stream, streaming launches
-// mpv. The skip verdict fetched during the resolve (PR61) composes
-// into the launch line and auto-clears on the playback settle. The
-// shikimori watch-progress push (PR61) runs ALONGSIDE playback —
-// python extract_and_play's update_rate at the launch moment — for
+// mpv. The local progress save runs at LAUNCH (PR63 #1, python
+// extract_and_play's db_service.save_progress before the player) for
+// BOTH formats — an early exit (Esc popping the session mid-play,
+// Ctrl+C leaving the detached mpv running, a player error) can no
+// longer lose the episode record the library display reads. The
+// skip verdict fetched during the resolve (PR61) composes into the
+// launch line and auto-clears on the playback settle. The shikimori
+// watch-progress push (PR61) runs ALONGSIDE playback — python
+// extract_and_play's update_rate at the launch moment — for
 // BOTH formats (PR62 #1: the buffered path used to skip it).
 func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
+	saveErr := s.saveProgress()
 	sync := s.shikiSyncCmd()
 	if s.buffered {
 		if s.deps == nil || s.deps.Buffered == nil {
@@ -1352,6 +1397,9 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 			return s, nil
 		}
 		_, buf := s.startBuffered()
+		if saveErr != nil {
+			s.status += " · ⚠ Не удалось сохранить прогресс: " + saveErr.Error()
+		}
 		if sync != nil {
 			return s, tea.Batch(buf, sync)
 		}
@@ -1361,6 +1409,9 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 	s.status = "▶ Запуск mpv…"
 	if s.skipNote != "" && s.skipEpisode == s.currentEpisode() {
 		s.status += " · ⏭ " + s.skipNote
+	}
+	if saveErr != nil {
+		s.status += " · ⚠ Не удалось сохранить прогресс: " + saveErr.Error()
 	}
 	play := s.playCmd()
 	if sync != nil {
@@ -1561,14 +1612,16 @@ func (s *sessionScreen) shikimoriID() int64 {
 // episode after playback).
 func (s *sessionScreen) maybeNext() tea.Cmd { return nil }
 
-// savePlayback persists progress through the history service.
-func (s *sessionScreen) saveProgress() {
+// savePlayback persists progress through the history service. The
+// error returns to the caller (PR63 #1): the launch line composes a
+// failed save into its verdict instead of silently dropping it.
+func (s *sessionScreen) saveProgress() error {
 	if s.deps == nil || s.deps.History == nil {
-		return
+		return nil
 	}
 	ep := s.currentEpisodeData()
 	if ep == nil {
-		return
+		return nil
 	}
 	rec := storage.AnimeProgress{
 		Title:          BestDisplayTitle(s.group),
@@ -1583,9 +1636,7 @@ func (s *sessionScreen) saveProgress() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
 	defer cancel()
-	if err := s.deps.History.SavePlayback(ctx, rec, ep.Num, s.videoDub, s.audioDub); err != nil {
-		s.status = "Не удалось сохранить прогресс: " + err.Error()
-	}
+	return s.deps.History.SavePlayback(ctx, rec, ep.Num, s.videoDub, s.audioDub)
 }
 
 // handleEpisodeListKey drives «Перейти к серии».

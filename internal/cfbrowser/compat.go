@@ -24,14 +24,16 @@ const (
 const ChannelAuto = channelAuto
 
 // maxKnownGoodChromiumMajor is the newest chromium major verified to
-// work with the driver end-to-end on the reference machine: 146 is
-// live-verified (PR73/PR75); 151 dies on the first real navigation —
-// PR75 root-caused it to the 151 binary's seccomp sandbox on kernel
-// 7.2.6-zen2 (exit 76, reproducible without chromedp), NOT to a
-// chromedp API defect. The limit moves only on live verification of
-// the next major. Test-overridable by assignment (the cfbrowser test
-// suite runs sequentially — no t.Parallel).
-var maxKnownGoodChromiumMajor = 146
+// work with the driver end-to-end on the reference machine: 146 was
+// live-verified in PR73/PR75; 151 initially died on the first real
+// navigation (PR75 root-caused it to the 151 binary's seccomp sandbox
+// on the then-running kernel 7.2.6-zen2 — exit 76 reproducible without
+// chromedp, NOT a chromedp API defect) and passed the same end-to-end
+// chain live on 2026-09-20 after a kernel swap, so 151 is verified
+// too. The limit moves only on live verification of the next major.
+// Test-overridable by assignment (the cfbrowser test suite runs
+// sequentially — no t.Parallel).
+var maxKnownGoodChromiumMajor = 151
 
 // CompatError reports a resolution blocked by the compatibility
 // bound: the newest available chromium build is above the last

@@ -8,11 +8,11 @@ import (
 )
 
 func TestMaxKnownGoodChromiumMajorPinned(t *testing.T) {
-	// PR73 verified live: chromium 146 drives the pinned chromedp
-	// driver; 151 kills sessions on the first Navigate. The default
-	// bound pins that fact.
-	if maxKnownGoodChromiumMajor != 146 {
-		t.Errorf("maxKnownGoodChromiumMajor = %d, want 146 (the PR73-verified bound)", maxKnownGoodChromiumMajor)
+	// PR73 verified 146 live; PR75 initially capped 151 (seccomp crash
+	// on the then-running kernel) — 151 passed the same end-to-end
+	// chain live on 2026-09-20 after a kernel swap (PR75 follow-up).
+	if maxKnownGoodChromiumMajor != 151 {
+		t.Errorf("maxKnownGoodChromiumMajor = %d, want 151 (the live-verified bound)", maxKnownGoodChromiumMajor)
 	}
 }
 
@@ -24,8 +24,9 @@ func TestChromiumMajorKnownGood(t *testing.T) {
 		{"146.0.7680.177.5", true},
 		{"146", true},
 		{"145.9", true},
-		{"147.0.0.0.1", false},
-		{"151.0.7922.108.6", false},
+		{"147.0.0.0.1", true},
+		{"151.0.7922.108.6", true},
+		{"152.0.0.0.1", false},
 		{"", false},         // unparsable fails closed
 		{"banana.1", false}, // unparsable fails closed
 	}

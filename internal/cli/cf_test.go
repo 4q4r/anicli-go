@@ -27,7 +27,21 @@ func executeCF(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+// pinHermeticConfig points $ANICLI_CONFIG at a minimal temp settings
+// file: these tests must not depend on the developer's real
+// ~/.config/anicli/settings.toml (PR80's removed-key migration error
+// fires on legacy real files and would fail the run).
+func pinHermeticConfig(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	if err := os.WriteFile(path, []byte("[cf]\nchannel = \"auto\"\n"), 0o600); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+	t.Setenv("ANICLI_CONFIG", path)
+}
+
 func TestCFStatusOutputFakeBinary(t *testing.T) {
+	pinHermeticConfig(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "chromium-146.0.7680.177.5", "chrome")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o750); err != nil {
@@ -56,6 +70,7 @@ func TestCFStatusOutputFakeBinary(t *testing.T) {
 }
 
 func TestCFStatusBinaryOverride(t *testing.T) {
+	pinHermeticConfig(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "my-chrome")
 	if err := os.WriteFile(bin, []byte("x"), 0o600); err != nil {
@@ -77,6 +92,7 @@ func TestCFStatusBinaryOverride(t *testing.T) {
 }
 
 func TestCFClearWipesStore(t *testing.T) {
+	pinHermeticConfig(t)
 	data := t.TempDir()
 	t.Setenv("ANICLI_DATA", data)
 	// Seed a store entry via the same path cf clear reads.
@@ -202,6 +218,7 @@ func TestCFLogoutRemovesKey(t *testing.T) {
 }
 
 func TestCFStatusShowsLicenseTierFromCache(t *testing.T) {
+	pinHermeticConfig(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "chromium-146.0.7680.177.5", "chrome")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o750); err != nil {
@@ -236,6 +253,7 @@ func TestCFStatusShowsLicenseTierFromCache(t *testing.T) {
 }
 
 func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
+	pinHermeticConfig(t)
 	// The tier display reflects what actually launches: a valid key
 	// with only a free-line binary cached shows the free binary plus
 	// an explicit "pro not installed" gap note — never "канал pro" on

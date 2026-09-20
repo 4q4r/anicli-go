@@ -229,14 +229,13 @@ type Torrent struct {
 	TrackerLists []string `toml:"tracker_lists"`
 }
 
-// CF configures the embedded Cloudflare bypass (CloakBrowser stealth
-// Chromium + clearance ladder). Entirely opt-in: disabled by default,
-// every provider request behaves exactly as before unless enabled.
-// Headless-only by design ruling: the solve browser always runs
-// headless (no window, no display dependency).
+// CF configures the always-on Cloudflare bypass (CloakBrowser stealth
+// Chromium + clearance ladder). PR80 owner ruling: the enabled knob is
+// removed — the machinery is integral and non-optional; the stealth
+// browser self-installs at startup when missing. Headless-only by
+// design ruling: the solve browser always runs headless (no window,
+// no display dependency).
 type CF struct {
-	// Enabled turns the challenge ladder on for all provider clients.
-	Enabled bool `toml:"enabled"`
 	// SolveTimeout bounds one challenge solve.
 	SolveTimeout time.Duration `toml:"solve_timeout"`
 	// BrowserIdleTimeout is how long an idle browser session survives
@@ -358,7 +357,6 @@ func Default() Settings {
 			ReadaheadMB: 32,
 		},
 		CF: CF{
-			Enabled:            false,
 			SolveTimeout:       90 * time.Second,
 			BrowserIdleTimeout: 15 * time.Second,
 			AutoUpdate:         true,
@@ -403,7 +401,16 @@ func applyFile(path string, s *Settings) error {
 		// toml.ParseError already renders parser line information.
 		return fmt.Errorf("parse settings %s: %w", path, err)
 	}
-	if unknown := undecodedKeys(md); len(unknown) > 0 {
+	unknown := undecodedKeys(md)
+	// PR80: [cf] enabled was removed (always-on ruling) — a legacy file
+	// carrying it gets the TARGETED migration message naming the exact
+	// fix, not the generic unknown-key error.
+	for _, key := range unknown {
+		if key == "cf.enabled" {
+			return fmt.Errorf("settings %s: [cf] enabled удалён — CF теперь всегда включён; удалите эту строку из settings.toml", path)
+		}
+	}
+	if len(unknown) > 0 {
 		return fmt.Errorf("settings %s: unknown setting %s (see settings.example.toml)",
 			path, strings.Join(unknown, ", "))
 	}

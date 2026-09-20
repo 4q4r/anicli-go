@@ -240,6 +240,11 @@ func (h *smokeHydrator) FetchDubs(_ context.Context, episode *contracts.Episode)
 func newToolDeps(t *testing.T, n int, failIdx ...int) deps {
 	t.Helper()
 
+	// Hermetic config: the parity CLI loads real settings — never the
+	// developer's own file (PR80's removed-key migration error would
+	// fire on legacy files and fail the run).
+	t.Setenv("ANICLI_CONFIG", filepath.Join(t.TempDir(), "settings.toml"))
+
 	saveDir := t.TempDir()
 	fail := map[int]bool{}
 	for _, i := range failIdx {
@@ -439,6 +444,8 @@ func TestParityAllHonorsDeclaredSmokeQuery(t *testing.T) {
 	const declared = "врата штейна"
 	declared00 := &smokeQueryProvider{parityProvider: newParityProvider(t, "p00", false), query: declared}
 	saveDir := t.TempDir()
+	// Hermetic config: never the developer's real settings file.
+	t.Setenv("ANICLI_CONFIG", filepath.Join(t.TempDir(), "settings.toml"))
 	d := deps{
 		buildRegistry: func(config.Settings) (*providers.Registry, error) {
 			reg := providers.NewEmptyRegistry()
@@ -496,6 +503,11 @@ func TestParityFlagsAccepted(t *testing.T) {
 // resolve legs sleep (per-operation budget assertions).
 func newSlowToolDeps(t *testing.T, epSleep, resSleep time.Duration) deps {
 	t.Helper()
+
+	// Hermetic config: the parity CLI loads real settings — never the
+	// developer's own file (PR80's removed-key migration error would
+	// fire on legacy files and fail the run).
+	t.Setenv("ANICLI_CONFIG", filepath.Join(t.TempDir(), "settings.toml"))
 
 	saveDir := t.TempDir()
 	return deps{

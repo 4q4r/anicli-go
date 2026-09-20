@@ -329,8 +329,7 @@ func TestAnimePaheResolveStreamBridgeBothWall(t *testing.T) {
 // world) leaves the bridge nil — the provider stays on the netclient
 // ladder.
 func TestBuildPaheBridge(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: the always-on pin below pins CLOAKBROWSER_CACHE_DIR.
 	if buildPaheBridge(nil) != nil {
 		t.Fatal("buildPaheBridge(nil) != nil, want nil")
 	}
@@ -338,23 +337,25 @@ func TestBuildPaheBridge(t *testing.T) {
 		t.Fatal("buildPaheBridge(manager without solver) != nil, want nil")
 	}
 
-	// The config-level causality of the PR78 owner failure: the
-	// SHIPPED DEFAULT ([cf] enabled = false, opt-in) yields a nil
-	// manager, so the registry wires NO bridge and the provider's
-	// search rides netclient — where the serving origin re-challenges
-	// non-browser fingerprints (PR71 dossier) and the row settles as
-	// the typed CFChallengeError naming the remedy. The bridge covers
-	// search (TestAnimePaheBridgeSearch); it never engaged because the
-	// config turned the whole stack off — not a fan-out bypass.
+	// The PR78 causality, re-scoped by PR80 (owner ruling: the enabled
+	// knob is gone, CF is always on): the config-off state that starved
+	// the bridge is structurally impossible — default settings build a
+	// live manager EVEN WITH NO BINARY INSTALLED (lazy resolution), so
+	// the bridge always wires and the serving origin's fingerprint
+	// re-challenges (PR71 dossier) always meet the stealth browser.
+	// The empty cache dir pins the missing-binary branch: construction
+	// succeeds, consumers degrade to typed errors at use, and the
+	// startup auto-download plus the background updater self-heal.
+	t.Setenv(cfbrowser.EnvCacheDir, t.TempDir())
 	mgr, err := cfbrowser.NewManager(config.Default())
 	if err != nil {
-		t.Fatalf("manager on default settings: %v", err)
+		t.Fatalf("manager on default settings with no binary: %v", err)
 	}
-	if mgr != nil {
-		t.Fatal("cf-disabled default settings must yield a nil manager")
+	if mgr == nil || mgr.Solver == nil {
+		t.Fatalf("always-on manager = %+v, want a live solver", mgr)
 	}
-	if buildPaheBridge(mgr) != nil {
-		t.Fatal("default settings must wire no bridge")
+	if buildPaheBridge(mgr) == nil {
+		t.Fatal("default settings must wire the bridge (always-on)")
 	}
 }
 

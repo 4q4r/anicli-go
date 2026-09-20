@@ -32,6 +32,7 @@ func mustDefaultSettings(t *testing.T) config.Settings {
 }
 
 func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
+	pinHermeticConfig(t)
 	// NOT parallel: doctorProbe is a global seam (see TestStubOutputs).
 	stub := &stubProbe{results: 5}
 	origProbe := doctorProbe
@@ -94,6 +95,7 @@ func TestNewRootCommandShape(t *testing.T) {
 }
 
 func TestStubOutputs(t *testing.T) {
+	pinHermeticConfig(t)
 	// NOT parallel: doctorProbe is a global seam; concurrent doctor
 	// tests would race the swap (PR24).
 	// The doctor case performs real searches — stub the probe so the
@@ -168,6 +170,7 @@ func TestStubOutputs(t *testing.T) {
 // of the old stub banner — proving the wiring is live. The data dir
 // is isolated so the storage open never touches the real library.
 func TestBareInvocationLaunchesTUI(t *testing.T) {
+	pinHermeticConfig(t)
 	// Uses t.Setenv: no t.Parallel here.
 	t.Setenv("ANICLI_DATA", t.TempDir())
 

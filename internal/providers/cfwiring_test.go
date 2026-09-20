@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,11 +11,10 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 )
 
-func cfEnabledSettings(t *testing.T) (config.Settings, string) {
+func cfWiredSettings(t *testing.T) (config.Settings, string) {
 	t.Helper()
 	s := config.Default()
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
-	s.CF.Enabled = true
 	s.CF.SolveTimeout = 5 * time.Second
 	s.CF.UpdateInterval = time.Hour
 	cache := t.TempDir()
@@ -40,25 +38,32 @@ func cfEnabledSettings(t *testing.T) (config.Settings, string) {
 	return s, cache
 }
 
-func TestRegistryEnabledRequiresBinary(t *testing.T) {
+// TestRegistryMissingBinaryStillBoots (PR80 always-on): a missing
+// stealth-Chromium binary no longer fails the registry construction —
+// the app boots and CF consumers surface typed errors at use, while
+// the startup auto-download and the background updater self-heal the
+// install (the old loud `anicli cf install` abort is retired).
+func TestRegistryMissingBinaryStillBoots(t *testing.T) {
 	s := config.Default()
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
-	s.CF.Enabled = true
 	t.Setenv("CLOAKBROWSER_CACHE_DIR", t.TempDir())
 	t.Setenv("CLOAKBROWSER_BINARY_PATH", "")
 	t.Setenv("ANICLI_DATA", t.TempDir())
 
-	_, err := NewRegistry(s, nil)
-	if err == nil {
-		t.Fatal("enabled CF without a binary must fail loud")
+	reg, err := NewRegistry(s, nil)
+	if err != nil {
+		t.Fatalf("registry with a missing binary must still boot (degradation, not abort): %v", err)
 	}
-	if !strings.Contains(err.Error(), "anicli cf install") {
-		t.Errorf("error must carry the install hint (RU), got: %v", err)
+	defer func() { _ = reg.Close() }()
+	// The full roster still registers — CF degradation is per-use, not
+	// a registry-level exclusion.
+	if len(reg.List()) != 22 {
+		t.Errorf("roster = %d, want 22", len(reg.List()))
 	}
 }
 
 func TestRegistryEnabledWiresSolverAndCloses(t *testing.T) {
-	s, _ := cfEnabledSettings(t)
+	s, _ := cfWiredSettings(t)
 	reg, err := NewRegistry(s, nil)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -89,7 +94,7 @@ func TestRegistryDisabledKeepsPlainClients(t *testing.T) {
 }
 
 func TestCFSolverAdapterConvertsClearance(t *testing.T) {
-	s, _ := cfEnabledSettings(t)
+	s, _ := cfWiredSettings(t)
 	mgr, err := cfbrowser.NewManager(s)
 	if err != nil {
 		t.Fatalf("manager: %v", err)

@@ -10,9 +10,8 @@ import (
 
 func TestCFDefaults(t *testing.T) {
 	s := Default()
-	if s.CF.Enabled {
-		t.Error("cf.enabled must default to false (opt-in, zero behavior change)")
-	}
+	// PR80: the enabled knob is removed — CF is always on (the
+	// always-engaged invariant lives in cfbrowser.NewManager).
 	if s.CF.SolveTimeout != 90*time.Second {
 		t.Errorf("cf.solve_timeout default = %v, want 90s", s.CF.SolveTimeout)
 	}
@@ -35,7 +34,6 @@ func TestCFFileOverrides(t *testing.T) {
 	path := filepath.Join(dir, "settings.toml")
 	content := `
 [cf]
-enabled = true
 solve_timeout = "2m"
 browser_idle_timeout = "5s"
 auto_update = false
@@ -48,9 +46,6 @@ channel = "free"
 	s, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
-	}
-	if !s.CF.Enabled {
-		t.Errorf("cf.enabled: %+v", s.CF)
 	}
 	if s.CF.SolveTimeout != 2*time.Minute {
 		t.Errorf("solve_timeout = %v", s.CF.SolveTimeout)

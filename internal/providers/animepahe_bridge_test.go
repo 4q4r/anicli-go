@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/cfbrowser"
+	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
@@ -335,6 +336,25 @@ func TestBuildPaheBridge(t *testing.T) {
 	}
 	if buildPaheBridge(&cfbrowser.Manager{}) != nil {
 		t.Fatal("buildPaheBridge(manager without solver) != nil, want nil")
+	}
+
+	// The config-level causality of the PR78 owner failure: the
+	// SHIPPED DEFAULT ([cf] enabled = false, opt-in) yields a nil
+	// manager, so the registry wires NO bridge and the provider's
+	// search rides netclient — where the serving origin re-challenges
+	// non-browser fingerprints (PR71 dossier) and the row settles as
+	// the typed CFChallengeError naming the remedy. The bridge covers
+	// search (TestAnimePaheBridgeSearch); it never engaged because the
+	// config turned the whole stack off — not a fan-out bypass.
+	mgr, err := cfbrowser.NewManager(config.Default())
+	if err != nil {
+		t.Fatalf("manager on default settings: %v", err)
+	}
+	if mgr != nil {
+		t.Fatal("cf-disabled default settings must yield a nil manager")
+	}
+	if buildPaheBridge(mgr) != nil {
+		t.Fatal("default settings must wire no bridge")
 	}
 }
 

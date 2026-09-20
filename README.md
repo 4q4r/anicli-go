@@ -284,7 +284,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |
 | gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
-| animepahe | animepahe.ru | видео | ⚠️ периодические блокировки |
+| animepahe | animepahe.pw | видео (англ. субтитры) | ⚠️ только с `[cf] enabled = true` (PR78-заметка): сайт пере-челленджит небраузерные отпечатки даже с повторенными clearance-куками (досье PR71), поэтому поиск и resolve ходят через стелс-браузерный мост CloakBrowser; с выключенным [cf] строка поиска отвечает типизированной ошибкой «cloudflare challenge … (no solver attached; enable [cf]…)». Не сайт-зеркало: `animepahe.ru` мёртв, `.si` умер в 04.2026 |
 | kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | dreamcast | dreamerscast.com | видео | ✅ живой |

@@ -1,6 +1,7 @@
 package cfbrowser
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,11 +39,17 @@ type ResolveOptions struct {
 	// BinaryPath overrides $CLOAKBROWSER_BINARY_PATH.
 	BinaryPath string
 	// Channel selects the offline resolution order: "auto" (default,
-	// "" incl.) prefers the newest chromedp-compatible pro-marked dir
+	// "" incl.) prefers the newest verdict-usable pro-marked dir
 	// under a valid cached license, then the filtered free scan;
 	// "free" never consults the pro line; "pro" keeps the pre-PR73
 	// order (newest pro-marked dir, then the unfiltered scan).
 	Channel string
+	// NoProbe skips the launch probe (verdicts only): a candidate
+	// without a verdict is served tentatively with a loud note,
+	// nothing persisted. For the advisory surfaces (`cf status`)
+	// where a browser launch would be disproportionate; the solve
+	// path always probes.
+	NoProbe bool
 	// Logger receives the pinned-bypass warning (nil = slog.Default()).
 	Logger *slog.Logger
 }
@@ -55,27 +62,30 @@ func (o ResolveOptions) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// ResolveCurrentBinary resolves the browser binary WITHOUT network
-// access: $CLOAKBROWSER_BINARY_PATH > pinned $CLOAKBROWSER_VERSION
-// (cache only) > per channel —
+// ResolveCurrentBinary resolves the browser binary for the solve
+// path: $CLOAKBROWSER_BINARY_PATH > pinned $CLOAKBROWSER_VERSION
+// (cache only) > the PR76 verdict walk, per channel —
 //
-//   - auto: with a valid cached license, the newest
-//     chromedp-compatible pro-marked cache directory > the filtered
-//     free scan (pro-marked dirs never qualify; incompatible majors
-//     are skipped, an only-incompatible cache fails with a
-//     CompatError);
-//   - free: the filtered free scan only;
-//   - pro: with a valid cached license the newest pro-marked
-//     directory > the newest complete cache chromium-*/ directory
-//     (pre-PR73 behavior).
+//   - auto: with a valid cached license, the pro-marked candidate
+//     list > the filtered free candidate list; with no license, the
+//     free list only;
+//   - free: the filtered free candidate list only;
+//   - pro: with a valid cached license the pro-marked list; without
+//     one the unfiltered scan (pre-PR73 degraded rung).
 //
-// The reported channel is the resolved directory's factual install
-// line (its .channel marker), never the license tier: a valid key
-// over a free-only cache honestly reports the free line (the next
-// online install/update lands pro). It is the registry-build-time
-// check and the solver's lazy-launch resolution, so auto-updated
-// binaries are picked up on the next solve. A missing binary fails
-// with BinaryMissingError (carrying the `anicli cf install` hint).
+// Within a walk: a good verdict short-circuits, a fresh bad verdict
+// skips, a missing (or expired) verdict is decided by the bounded
+// launch probe (~20s, the walk's one network touch — the resolve
+// itself stays download-free); exhausted candidates fall to the
+// last-known-good rung and a total failure fails loud and typed
+// (CompatError inside BinaryMissingError). The reported channel is
+// the resolved directory's factual install line (its .channel
+// marker), never the license tier: a valid key over a free-only
+// cache honestly reports the free line (the next online
+// install/update lands pro). It is the registry-build-time check and
+// the solver's lazy-launch resolution, so auto-updated binaries are
+// picked up on the next solve. A missing binary fails with
+// BinaryMissingError (carrying the `anicli cf install` hint).
 func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	channel, err := normalizeChannel(opts.Channel)
 	if err != nil {
@@ -96,46 +106,45 @@ func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	logger := opts.logger()
 	if pinned := os.Getenv(EnvVersion); pinned != "" {
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
-			if !chromiumMajorKnownGood(pinned) {
-				opts.logger().Warn(pinnedBypassNote(pinned))
-			}
+			logger.Warn(pinnedBypassNote(pinned))
 			return bin, nil
 		}
 		return nil, &BinaryMissingError{
 			Cause: fmt.Errorf("pinned version %s is not installed ($%s)", pinned, EnvVersion),
 		}
 	}
-	// Pro preference under a valid cached license (auto and pro): the
-	// newest pro-marked directory outranks the generic free scan, so
-	// solve sessions launch the pro line whenever it is installed.
-	// auto applies the chromedp bound — an incompatible pro build
-	// stays untouched and the free line serves; with no usable pro
-	// directory the free scan keeps solves working.
-	if channel != channelFree && cachedLicenseValid(cacheDir) {
-		scan := scanProCache
-		if channel == channelAuto {
-			scan = scanProCacheCompat
+	// The candidate lists, in the channel's posture order (see the
+	// doc comment); the walk evaluates them back to back with ONE
+	// last-known-good rung at the very end.
+	var groups [][]*BinaryInfo
+	filter := channel
+	switch {
+	case channel == channelFree:
+		groups = append(groups, freeLineCandidates(cacheDir, spec))
+	case channel == channelPro && cachedLicenseValid(cacheDir):
+		groups = append(groups, proLineCandidates(cacheDir, spec))
+	case channel == channelPro:
+		// Pre-PR73 degraded rung: the unfiltered scan, factual line.
+		filter = channelAuto
+		groups = append(groups, scanCacheOrdered(cacheDir, spec))
+	default: // auto
+		if cachedLicenseValid(cacheDir) {
+			groups = append(groups, proLineCandidates(cacheDir, spec))
 		}
-		if bin, ok := scan(cacheDir, spec); ok {
-			return bin, nil
-		}
+		groups = append(groups, freeLineCandidates(cacheDir, spec))
 	}
-	if channel == channelPro {
-		if bin, ok := scanCache(cacheDir, spec); ok {
-			return bin, nil
-		}
-		return nil, &BinaryMissingError{}
+	flat := make([]*BinaryInfo, 0, 8)
+	for _, g := range groups {
+		flat = append(flat, g...)
 	}
-	bin, ok, err := scanCacheFree(cacheDir, spec)
+	bin, _, err := evaluateCandidates(context.Background(), cacheDir, filter, opts.NoProbe, logger, flat)
 	if err != nil {
-		return nil, err // CompatError: loud, names the fix
+		return nil, &BinaryMissingError{Cause: err}
 	}
-	if ok {
-		return bin, nil
-	}
-	return nil, &BinaryMissingError{}
+	return bin, nil
 }
 
 // cachedLicenseValid reports the offline license state: a cache

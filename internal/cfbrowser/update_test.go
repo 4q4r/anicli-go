@@ -87,6 +87,7 @@ func updaterCfg(t *testing.T, fx *updateFixture, cache string) UpdaterConfig {
 }
 
 func TestUpdaterInstallsNewerKeepsPreviousPrunesThird(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	fakeInstalledBinary(t, cache, "144.0.0.0.1") // third: must be pruned
 	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
@@ -199,6 +200,7 @@ func TestUpdaterOfflineMarksDeferred(t *testing.T) {
 }
 
 func TestUpdaterDeferredThenOnlineRetry(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
 
@@ -308,6 +310,7 @@ func TestUpdaterBinaryOverrideSkipsUpdates(t *testing.T) {
 }
 
 func TestUpdaterTickerRetriesAndCloseStops(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
 
@@ -437,6 +440,7 @@ func TestUpdaterPreSolveKickNonBlocking(t *testing.T) {
 }
 
 func TestUpdaterSingleFlight(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
 	newArchive := buildTarGz(t, map[string]struct {

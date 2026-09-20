@@ -121,7 +121,11 @@ func newSolverHarness(t *testing.T, nav *fakeNav) *solverHarness {
 		PollInterval:       10 * time.Millisecond,
 		BrowserIdleTimeout: time.Hour, // sessions survive until Close in these tests
 		Store:              store,
-		Logger:             testLogger(t),
+		// Binary pinned: these tests fake the driver, and a pinned
+		// binary skips lazy resolution entirely (never probes or
+		// writes the real user verdict store — PR76 lesson).
+		Binary: &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree},
+		Logger: testLogger(t),
 		DriverFactory: func(LaunchOptions) (Naviger, error) {
 			if nav.launchErr != nil {
 				return nil, nav.launchErr
@@ -439,6 +443,7 @@ func TestSolveChallengeLaunchFailureRetryable(t *testing.T) {
 }
 
 func TestSolveNotBlockedBySlowUpdater(t *testing.T) {
+	probeAlways(t)
 	// Deferred update with a slow API: solving must proceed on the
 	// current binary while the update crawls in the background.
 	nav := &fakeNav{reloadsToSolve: 1, userAgent: "UA"}

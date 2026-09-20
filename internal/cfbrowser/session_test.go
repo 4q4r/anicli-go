@@ -125,8 +125,12 @@ func newSessionSolver(t *testing.T, idle time.Duration, factory DriverFactory) (
 		PollInterval:       5 * time.Millisecond,
 		BrowserIdleTimeout: idle,
 		Store:              store,
-		Logger:             testLogger(t),
-		DriverFactory:      factory,
+		// Binary pinned: lazy resolution must never run here — these
+		// tests fake the driver and must stay hermetic against the
+		// real user cache and verdict store (PR76 lesson).
+		Binary:        &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree},
+		Logger:        testLogger(t),
+		DriverFactory: factory,
 	}
 	return NewSolver(cfg), store
 }
@@ -252,7 +256,11 @@ func TestIdleCloseLogsReason(t *testing.T) {
 		PollInterval:       5 * time.Millisecond,
 		BrowserIdleTimeout: time.Minute,
 		Store:              store,
-		Logger:             logger,
+		// Binary pinned: lazy resolution must never run here — the
+		// driver is faked and the real user cache/store is off-limits
+		// (PR76 lesson: an unpinned resolve probes real binaries).
+		Binary: &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree},
+		Logger: logger,
 		DriverFactory: func(LaunchOptions) (Naviger, error) {
 			return &fakeNav{reloadsToSolve: 0, userAgent: "UA"}, nil
 		},

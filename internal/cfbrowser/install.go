@@ -208,17 +208,19 @@ func ResolveCacheDir(explicit string) (string, error) {
 //     verified). Otherwise the free rung: newest cached binary >
 //     latest free GitHub release.
 //
-// The free rung of the free and auto channels never serves a chromium
-// major above maxKnownGoodChromiumMajor (the pinned chromedp driver
-// cannot control newer builds): pro-marked dirs never qualify for the
-// free scan, incompatible majors are skipped while a compatible dir
-// exists, and an only-incompatible cache — or an incompatible free
-// latest — fails with the typed CompatError naming the fix. The pro
-// channel itself is untouched by the bound (explicit opt-in, current
-// behavior). Every downloaded archive — either channel — passes the
-// pinned Ed25519 signed-manifest verification (verify.go); the free
-// channel alone keeps the GitHub API digest field as a documented
-// fallback for releases whose manifests are absent from both origins.
+// The free rung of the free and auto channels never serves a binary
+// the verdict store freshly rejects (PR76: the probe, not a hardcoded
+// bound, decides): pro-marked dirs never qualify for the free scan,
+// fresh-bad majors are skipped while a usable dir exists, and a
+// totally unusable line fails with the typed CompatError naming every
+// attempt — after the last-known-good rung had its say. Every
+// downloaded archive — either channel — passes the pinned Ed25519
+// signed-manifest verification (verify.go); the free channel alone
+// keeps the GitHub API digest field as a documented fallback for
+// releases whose manifests are absent from both origins. A freshly
+// downloaded candidate proves itself with the bounded launch probe
+// before it is served (probe-bad → recorded and rejected; the bytes
+// stay cached so the +7d re-probe costs a launch, not a download).
 func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 	spec, err := opts.platform()
 	if err != nil {
@@ -304,22 +306,27 @@ func Install(ctx context.Context, opts InstallOptions) (*BinaryInfo, error) {
 				return bin, nil
 			}
 		} else {
-			return installProLatest(ctx, opts, spec, cacheDir, licRep, logger)
+			bin, err := installProLatest(ctx, opts, spec, cacheDir, licRep, logger)
+			if err != nil {
+				// PR76: before the loud failure, the last-known-good
+				// rung gets its say (pro filter; the emergency serve).
+				if lkg, lkgOk := lastKnownGoodRung(cacheDir, channelPro, logger); lkgOk {
+					return lkg, nil
+				}
+				return nil, err
+			}
+			return bin, nil
 		}
 	}
 
 	// 4. Free base. auto: the filtered free ladder (pro-marked dirs
-	// and incompatible majors never qualify). pro without a valid
-	// license keeps the pre-PR73 degraded rung verbatim.
+	// never qualify; fresh-bad verdicts skip). pro without a valid
+	// license keeps the pre-PR73 degraded rung verbatim (unfiltered
+	// scan, factual channel reporting).
 	if channel == channelPro {
-		if bin, ok := scanCache(cacheDir, spec); ok {
-			logger.Info("cfbrowser: reusing cached stealth chromium",
-				"path", bin.Path, "version", bin.Version, "channel", bin.Channel)
-			return bin, nil
-		}
-		return installFreeLatest(ctx, opts, spec, cacheDir, logger)
+		return cachedOrLatestLadder(ctx, opts, spec, cacheDir, channelAuto, scanCacheOrdered(cacheDir, spec), logger)
 	}
-	return installFreeLadder(ctx, opts, spec, cacheDir, logger)
+	return cachedOrLatestLadder(ctx, opts, spec, cacheDir, channelFree, freeLineCandidates(cacheDir, spec), logger)
 }
 
 // installFreeChannel is the channel=free ladder: the pinned rung
@@ -331,40 +338,48 @@ func installFreeChannel(ctx context.Context, opts InstallOptions, spec PlatformS
 			return nil, err
 		}
 		if bin, ok := scanCacheVersion(cacheDir, spec, pinned); ok {
-			if !chromiumMajorKnownGood(pinned) {
-				logger.Warn(pinnedBypassNote(pinned))
-			}
+			logger.Warn(pinnedBypassNote(pinned))
 			logger.Info("cfbrowser: reusing pinned stealth chromium", "path", bin.Path, "version", bin.Version)
 			return bin, nil
 		}
 		return installPinnedFree(ctx, opts, spec, cacheDir, pinned, logger)
 	}
-	return installFreeLadder(ctx, opts, spec, cacheDir, logger)
+	return cachedOrLatestLadder(ctx, opts, spec, cacheDir, channelFree, freeLineCandidates(cacheDir, spec), logger)
 }
 
-// installFreeLadder is the free rung of the free and auto channels:
-// newest compatible free-line cached dir (pro-marked dirs and majors
-// above the chromedp bound never qualify) > the bound-checked latest
-// free GitHub release. An only-incompatible cache fails loud with a
-// CompatError — never a knowingly-broken binary.
-func installFreeLadder(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, logger *slog.Logger) (*BinaryInfo, error) {
-	bin, ok, err := scanCacheFree(cacheDir, spec)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
+// cachedOrLatestLadder is the shared free-rung tail of Install: the
+// verdict walk over the caller's candidate list (the channel posture
+// is encoded in the list + filter) > the latest free GitHub release,
+// which must pass the launch probe after install > a re-walk (the
+// fresh verdicts recorded above steer it to the last working
+// candidate or the last-known-good rung) > the loud typed failure.
+func cachedOrLatestLadder(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir, filter string, cands []*BinaryInfo, logger *slog.Logger) (*BinaryInfo, error) {
+	if bin, _, err := evaluateCandidates(ctx, cacheDir, filter, false, logger, cands); err == nil {
 		logger.Info("cfbrowser: reusing cached stealth chromium",
 			"path", bin.Path, "version", bin.Version, "channel", bin.Channel)
 		return bin, nil
 	}
-	return installFreeLatest(ctx, opts, spec, cacheDir, logger)
+	bin, err := installFreeLatest(ctx, opts, spec, cacheDir, logger)
+	if err != nil {
+		// The latest was probed-bad (or the download failed): walk
+		// again — verdicts recorded above steer this walk to the last
+		// working candidate, the last-known-good rung included.
+		if bin2, _, walkErr := evaluateCandidates(ctx, cacheDir, filter, false, logger, cands); walkErr == nil {
+			logger.Warn("cfbrowser: последняя версия отклонена — работаем на последней проверенной",
+				"version", bin2.Version, "error", err)
+			return bin2, nil
+		}
+		return nil, err
+	}
+	return bin, nil
 }
 
 // installFreeLatest is the classic free ladder rung: latest release
-// carrying the platform asset, downloaded and verified. The chromedp
-// compatibility bound gates the resolution: an incompatible latest
-// fails with a typed CompatError instead of installing a build the
-// driver cannot control.
+// carrying the platform asset, downloaded and verified — then proven
+// by the bounded launch probe (PR76): a probe-bad candidate is
+// recorded fresh-bad and rejected with the typed CompatError; an
+// inconclusive (network-level) probe serves the verified bytes with a
+// loud note and persists no verdict.
 func installFreeLatest(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, logger *slog.Logger) (*BinaryInfo, error) {
 	gh := NewGitHubClient(opts.APIBase, opts.HTTPClient)
 	rel, err := gh.LatestFreeRelease(ctx, spec)
@@ -375,10 +390,14 @@ func installFreeLatest(ctx context.Context, opts InstallOptions, spec PlatformSp
 		}
 		return nil, &OfflineError{Cause: err}
 	}
-	if err := checkChromiumCompat(rel.Version); err != nil {
+	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	if err != nil {
 		return nil, err
 	}
-	return downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	if out := probeAndRecord(ctx, cacheDir, bin, logger); !out.ok && !out.inconclusive {
+		return nil, &CompatError{Newest: bin.Version, Reason: out.reason}
+	}
+	return bin, nil
 }
 
 // installPinned downloads the pinned version via the tier it
@@ -389,6 +408,7 @@ func installPinned(ctx context.Context, opts InstallOptions, spec PlatformSpec, 
 	if licenseValid {
 		info, err := installProVersion(ctx, opts, spec, cacheDir, pinned, licRep, logger)
 		if err == nil {
+			probePinnedLenient(ctx, cacheDir, info, logger)
 			return info, nil
 		}
 		var offline *OfflineError
@@ -405,13 +425,27 @@ func installPinned(ctx context.Context, opts InstallOptions, spec PlatformSpec, 
 	return installPinnedFree(ctx, opts, spec, cacheDir, pinned, logger)
 }
 
+// probePinnedLenient probes a pinned install and records the verdict
+// (a working pin refreshes last-known-good) but never gates serving:
+// the pin is explicit user intent. A failed probe logs loud — the
+// user asked for this exact binary and gets it, eyes open.
+func probePinnedLenient(ctx context.Context, cacheDir string, bin *BinaryInfo, logger *slog.Logger) {
+	if out := probeAndRecord(ctx, cacheDir, bin, logger); !out.ok && !out.inconclusive {
+		logger.Warn("cfbrowser: пин установлен, но проверку запуска не прошёл — "+
+			"версия помечена bad в хранилище вердиктов", "version", bin.Version, "reason", out.reason)
+	}
+}
+
 // installPinnedFree downloads the pinned version straight from the
 // GitHub free tag (the no-license tier and the channel=free rung:
 // the pro API is never consulted). The pinned rung is a documented
-// exemption from the chromedp compat bound — explicit user intent —
-// and the bypass is logged loud when it fires.
+// exemption from the launch-verdict mechanism — explicit user intent —
+// and the bypass is logged loud when it fires. The probe still runs
+// after install and records its verdict, but never gates the pin.
 func installPinnedFree(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir, pinned string, logger *slog.Logger) (*BinaryInfo, error) {
-	if !chromiumMajorKnownGood(pinned) {
+	if _, bad := freshBadVerdict(cacheDir, pinned); bad {
+		logger.Warn(pinnedBypassNote(pinned) + " — действует вердикт bad")
+	} else {
 		logger.Warn(pinnedBypassNote(pinned))
 	}
 	gh := NewGitHubClient(opts.APIBase, opts.HTTPClient)
@@ -423,7 +457,12 @@ func installPinnedFree(ctx context.Context, opts InstallOptions, spec PlatformSp
 		}
 		return nil, &OfflineError{Cause: err}
 	}
-	return downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	if err != nil {
+		return nil, err
+	}
+	probePinnedLenient(ctx, cacheDir, bin, logger)
+	return bin, nil
 }
 
 // isProNotFound reports whether err is the pro API answering 404 for
@@ -436,8 +475,11 @@ func isProNotFound(err error) bool {
 // installProLatest resolves the newest pro version and installs it.
 // Cache reuse follows the upstream rule: the pro-resolved version
 // must match an installed PRO-marked directory (scanCacheVersionPro)
-// — a free-installed dir of the same version does not qualify. Any
-// failure is loud: no silent free downgrade. (channel=pro only —
+// — a free-installed dir of the same version does not qualify. The
+// candidate must vouch for itself through the verdict store (a fresh
+// bad verdict refuses the rung loud — re-downloading identical bytes
+// cannot heal it) or, with no verdict yet, through the launch probe.
+// Any failure is loud: no silent free downgrade. (channel=pro only —
 // auto mode upgrades through upgradeToProBestEffort instead.)
 func installProLatest(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, licRep *LicenseReport, logger *slog.Logger) (*BinaryInfo, error) {
 	tag := spec.Tag()
@@ -450,18 +492,32 @@ func installProLatest(ctx context.Context, opts InstallOptions, spec PlatformSpe
 		return nil, fmt.Errorf("cfbrowser: pro channel (лицензия действует, откат на free не выполняется): %w", err)
 	}
 	if bin, ok := scanCacheVersionPro(cacheDir, spec, version); ok {
-		logger.Info("cfbrowser: reusing cached pro stealth chromium",
-			"path", bin.Path, "version", bin.Version, "channel", channelPro)
-		return bin, nil
+		got, _, evalErr := evaluateCandidates(ctx, cacheDir, channelPro, false, logger, []*BinaryInfo{bin})
+		if evalErr == nil && got != nil {
+			logger.Info("cfbrowser: reusing cached pro stealth chromium",
+				"path", got.Path, "version", got.Version, "channel", channelPro)
+			return got, nil
+		}
+		return nil, fmt.Errorf("cfbrowser: pro %s установлен, но проверку запуска не проходит — "+
+			"переустановка идентичных байт не поможет: %w", version, evalErr)
 	}
-	return installProVersion(ctx, opts, spec, cacheDir, version, licRep, logger)
+	info, err := installProVersion(ctx, opts, spec, cacheDir, version, licRep, logger)
+	if err != nil {
+		return nil, err
+	}
+	if out := probeAndRecord(ctx, cacheDir, info, logger); !out.ok && !out.inconclusive {
+		return nil, &CompatError{Newest: version, Reason: out.reason}
+	}
+	return info, nil
 }
 
 // upgradeToProBestEffort is auto mode's pro pull: resolve the newest
-// pro version and reuse or download it — but only while it resolves
-// to a chromedp-compatible build. Any pro failure returns the error
-// for the caller to log loudly while the free base serves; an
-// incompatible newest pro returns (nil, nil) after the loud note.
+// pro version and reuse or download it — but only while it proves
+// itself (PR76: a fresh bad verdict refuses the pull without
+// downloading; an unknown candidate is downloaded and must pass the
+// launch probe, which records the verdict). Any pro failure returns
+// the error for the caller to log loudly while the free base serves;
+// a rejected newest pro returns (nil, nil) after the loud note.
 // Never a panic, never a silent downgrade: the log line and the
 // caller's factual channel reporting carry the story.
 func upgradeToProBestEffort(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, licRep *LicenseReport, logger *slog.Logger) (*BinaryInfo, error) {
@@ -473,29 +529,42 @@ func upgradeToProBestEffort(ctx context.Context, opts InstallOptions, spec Platf
 	if err != nil {
 		return nil, err
 	}
-	if !chromiumMajorKnownGood(version) {
-		// The upgrade would land a build the driver cannot control:
-		// name both facts (incompatible pro; working free) and stay
-		// on the free base.
-		logger.Warn(proIncompatNote(version))
+	if e, bad := freshBadVerdict(cacheDir, version); bad {
+		// The store freshly rejected this build: the pull is skipped,
+		// both facts named (rejected pro; working free).
+		logger.Warn(proBadVerdictNote(version, e.Reason))
 		return nil, nil
 	}
 	if bin, ok := scanCacheVersionPro(cacheDir, spec, version); ok {
-		logger.Info("cfbrowser: reusing cached pro stealth chromium",
-			"path", bin.Path, "version", bin.Version, "channel", channelPro)
-		return bin, nil
+		got, _, evalErr := evaluateCandidates(ctx, cacheDir, channelPro, false, logger, []*BinaryInfo{bin})
+		if evalErr == nil && got != nil {
+			logger.Info("cfbrowser: reusing cached pro stealth chromium",
+				"path", got.Path, "version", got.Version, "channel", channelPro)
+			return got, nil
+		}
+		// The cached pro build does not vouch (fresh-bad or probe-bad):
+		// stay on the free base, loudly.
+		logger.Warn(proBadVerdictNote(version, evalErr.Error()))
+		return nil, nil
 	}
-	return installProVersion(ctx, opts, spec, cacheDir, version, licRep, logger)
+	info, err := installProVersion(ctx, opts, spec, cacheDir, version, licRep, logger)
+	if err != nil {
+		return nil, err
+	}
+	if out := probeAndRecord(ctx, cacheDir, info, logger); !out.ok && !out.inconclusive {
+		logger.Warn(proBadVerdictNote(version, out.reason))
+		return nil, nil
+	}
+	return info, nil
 }
 
-// proIncompatNote is the loud auto-mode note that the newest pro
-// build is blocked by the verified-major bound, so the free base
-// stays in service. PR75: deliberately does NOT promise a chromedp
-// fix — the standalone repro disproved that attribution.
-func proIncompatNote(version string) string {
-	return fmt.Sprintf("cfbrowser: pro %s заблокирован границей совместимости (проверенный максимум ≤ %d) — "+
-		"работаем на free; лимит поднимет только живая проверка новой chromium",
-		version, maxKnownGoodChromiumMajor)
+// proBadVerdictNote is the loud auto-mode note that the newest pro
+// build carries a fresh bad verdict (probe-failed), so the free base
+// stays in service. The verdict expires (badVerdictTTL) and the pull
+// is retried then — kernel swaps can resurrect broken builds (PR75).
+func proBadVerdictNote(version, reason string) string {
+	return fmt.Sprintf("cfbrowser: pro %s заблокирован вердиктом bad (%s) — "+
+		"работаем на free; перепроверка при истечении TTL вердикта", version, reason)
 }
 
 // installProVersion downloads one exact pro version. The archive
@@ -655,16 +724,14 @@ func scanProCache(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) {
 	return nil, false
 }
 
-// scanCacheFree returns the newest complete FREE-line (unmarked or
-// free-marked) chromium-<version> directory within the chromedp
-// compatibility bound — the free channel's "newest cached" rung.
-// Pro-marked directories never qualify (the free-line mirror of the
-// pro activation rule: a quiet skip by marker, not by bound). Dirs
-// above the known-good major bound are skipped too; when candidates
-// existed but none is compatible, it returns a *CompatError naming
-// the fix (bump chromedp) — never a silent fallthrough.
-func scanCacheFree(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool, error) {
-	newestRejected := ""
+// freeLineCandidates lists the complete FREE-line (unmarked or
+// free-marked) chromium-<version> directories, newest first — the
+// free channel's candidate list. Pro-marked directories never qualify
+// (the free-line mirror of the pro activation rule: a quiet skip by
+// marker, not by verdict). Usability is NOT decided here: the verdict
+// walk (evaluateCandidates) consults the store and probes.
+func freeLineCandidates(cacheDir string, spec PlatformSpec) []*BinaryInfo {
+	var out []*BinaryInfo
 	for _, name := range cachedVersions(cacheDir) {
 		dir := filepath.Join(cacheDir, name)
 		if dirChannel(dir) == channelPro {
@@ -675,26 +742,17 @@ func scanCacheFree(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool, error
 			continue // incomplete install: skip
 		}
 		version, _ := VersionFromDirName(name)
-		if !chromiumMajorKnownGood(version) {
-			if newestRejected == "" {
-				newestRejected = version
-			}
-			continue
-		}
-		return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelFree}, true, nil
+		out = append(out, &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelFree})
 	}
-	if newestRejected != "" {
-		return nil, false, &CompatError{Newest: newestRejected, Bound: maxKnownGoodChromiumMajor}
-	}
-	return nil, false, nil
+	return out
 }
 
-// scanProCacheCompat is scanProCache with the chromedp compatibility
-// bound applied: the newest pro-marked directory within the bound.
-// Dirs above the bound are skipped quietly — the caller (auto mode's
-// solver resolution) falls through to the free line rather than
-// launching a build the driver cannot control.
-func scanProCacheCompat(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) {
+// proLineCandidates lists the complete PRO-marked chromium-<version>
+// directories, newest first — the offline pro line's candidate list
+// (solver resolution under a valid cached license; the updater's
+// auto baseline through newestServingCandidate).
+func proLineCandidates(cacheDir string, spec PlatformSpec) []*BinaryInfo {
+	var out []*BinaryInfo
 	for _, name := range cachedVersions(cacheDir) {
 		dir := filepath.Join(cacheDir, name)
 		if dirChannel(dir) != channelPro {
@@ -705,12 +763,27 @@ func scanProCacheCompat(cacheDir string, spec PlatformSpec) (*BinaryInfo, bool) 
 			continue // incomplete install: skip
 		}
 		version, _ := VersionFromDirName(name)
-		if !chromiumMajorKnownGood(version) {
-			continue
-		}
-		return &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelPro}, true
+		out = append(out, &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: channelPro})
 	}
-	return nil, false
+	return out
+}
+
+// scanCacheOrdered lists every complete chromium-<version> directory
+// regardless of install line, newest first — the pre-PR73
+// channel=pro degraded rung's candidate list (factual channel
+// reported per directory).
+func scanCacheOrdered(cacheDir string, spec PlatformSpec) []*BinaryInfo {
+	var out []*BinaryInfo
+	for _, name := range cachedVersions(cacheDir) {
+		dir := filepath.Join(cacheDir, name)
+		execPath, err := locateExecutable(dir, spec.ExecName)
+		if err != nil {
+			continue // incomplete install: skip
+		}
+		version, _ := VersionFromDirName(name)
+		out = append(out, &BinaryInfo{Path: execPath, Dir: dir, Version: version, Channel: dirChannel(dir)})
+	}
+	return out
 }
 
 // dirChannel reports the install line of a cache directory from its

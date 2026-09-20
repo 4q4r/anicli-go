@@ -11,6 +11,7 @@ import (
 )
 
 func TestUpdaterFreeChannelNeverTouchesPro(t *testing.T) {
+	probeAlways(t)
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true // even a VALID key must not flip the free channel
 	t.Setenv(EnvLicenseKey, "KEY-1")
@@ -47,6 +48,7 @@ func TestUpdaterFreeChannelNeverTouchesPro(t *testing.T) {
 }
 
 func TestUpdaterAutoNoKeyKeepsFreeFlowWithoutProTraffic(t *testing.T) {
+	probeAlways(t)
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true // the server WOULD validate — no key configured though
 	fx.mu.Lock()
@@ -82,10 +84,13 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true
 	t.Setenv(EnvLicenseKey, "KEY-1")
+	probeAlways(t) // the free-base walk probes 146 (no verdict yet)
 
-	// The post-lift real-world shape: pro latest is 152, above the
-	// verified bound (151). The cycle must note it loudly and record
-	// the FREE line in the status — never the pro 152.
+	// The PR76 shape: pro latest is 152 and the verdict store holds a
+	// FRESH BAD verdict (a previous probe failed). The cycle must
+	// note it loudly and record the FREE line in the status — never
+	// the pro 152.
+	overrideChromedpVersion(t, "test-chromedp")
 	fx.mu.Lock()
 	fx.proVersion = "152.0.0.0.1"
 	fx.mu.Unlock()
@@ -94,6 +99,7 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 	cache := t.TempDir()
 	t.Setenv(EnvCacheDir, cache)
 	fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+	seedFreshBadVerdict(t, cache, 152, "seccomp exit 76")
 
 	var buf bytes.Buffer
 	up := NewUpdater(UpdaterConfig{
@@ -128,6 +134,7 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 }
 
 func TestUpdaterAutoWithKeyCompatibleProUpdatesPro(t *testing.T) {
+	probeAlways(t)
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -170,6 +177,7 @@ func TestUpdaterAutoWithKeyCompatibleProUpdatesPro(t *testing.T) {
 }
 
 func TestUpdaterFreeBaselineIgnoresProMarkedDir(t *testing.T) {
+	probeAlways(t)
 	// The PR73 bug class: a pro-marked 151 in the cache must not
 	// suppress the free line's updates (the old update-status.json
 	// tracked pro 151 while the free line fell behind).
@@ -204,12 +212,12 @@ func TestUpdaterFreeBaselineIgnoresProMarkedDir(t *testing.T) {
 	}
 }
 
-func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
-	// Install parity corner: when the free cache holds ONLY
-	// incompatible dirs (e.g. a lone unmarked 152 above the verified
-	// bound 151), auto must still attempt the compatible pro upgrade
-	// BEFORE the compat bail-out — loud-but-stuck is wrong when a
-	// working pro pull exists.
+func TestUpdaterAutoCompatibleProSavesVerdictlessFreeCache(t *testing.T) {
+	// Install parity corner: when the free cache holds only a dir
+	// with no verdict yet (e.g. a lone unmarked 152), auto must still
+	// attempt the pro upgrade FIRST — a working pro pull covers the
+	// cycle before the free flow ever runs.
+	probeAlways(t)
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -251,9 +259,21 @@ func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
 	}
 }
 
-func TestUpdaterFreeLatestIncompatibleRecordedLoud(t *testing.T) {
+func TestUpdaterFreeLatestProbeBadRecordedLoud(t *testing.T) {
 	fx := newProInstallFixture(t)
 	fx.addFreeRelease("chromium-v152.0.0.0.1", "152.0.0.0.1", freeArchive(t, "152.0.0.0.1"))
+	overrideChromedpVersion(t, "test-chromedp")
+
+	// PR76: the newer release is downloaded and verified, then must
+	// pass the launch probe. A probe-bad install is recorded fresh-bad
+	// and the update refused — the working 146 stays the serving line.
+	var calls int
+	overrideProbe(t, func(_ context.Context, p string) probeOutcome {
+		if strings.Contains(p, "152") {
+			return probeOutcome{reason: "exit 76 (seccomp)"}
+		}
+		return probeOutcome{ok: true}
+	}, &calls)
 
 	cache := t.TempDir()
 	t.Setenv(EnvCacheDir, cache)
@@ -280,11 +300,16 @@ func TestUpdaterFreeLatestIncompatibleRecordedLoud(t *testing.T) {
 	if st.UpdatedTo != "" || st.InstalledVersion != "146.0.7680.177.5" {
 		t.Errorf("status = %+v, want the working free 146 untouched", st)
 	}
-	if !strings.Contains(st.LastError, "152.0.0.0.1") {
-		t.Errorf("status.LastError = %q, want the rejected version named", st.LastError)
+	if !strings.Contains(st.LastError, "152.0.0.0.1") && !strings.Contains(st.LastError, "exit 76") {
+		t.Errorf("status.LastError = %q, want the rejected version or probe reason", st.LastError)
 	}
-	if _, statErr := os.Stat(filepath.Join(cache, VersionDirName("152.0.0.0.1"))); !os.IsNotExist(statErr) {
-		t.Error("an incompatible free latest must not install")
+	// The verdict persisted; the bytes stay cached for the cheap +7d
+	// re-probe (the update simply never declared).
+	if e, has := loadVerdictStore(cache).verdictFor(152); !has || e.Verdict != "bad" {
+		t.Errorf("verdictFor(152) = (%+v, %v), want fresh bad", e, has)
+	}
+	if _, statErr := os.Stat(filepath.Join(cache, VersionDirName("152.0.0.0.1"))); statErr != nil {
+		t.Errorf("probed-bad bytes must stay cached: %v", statErr)
 	}
 }
 

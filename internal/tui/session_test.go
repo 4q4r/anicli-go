@@ -1399,8 +1399,8 @@ func TestSessionWatchSyncsShikiProgress(t *testing.T) {
 			if sm.err != nil {
 				t.Fatalf("sync must succeed, got %v", sm.err)
 			}
-			if !strings.Contains(sm.note, "прогресс синхронизирован (эп 1)") {
-				t.Fatalf("note = %q, want the synced verdict", sm.note)
+			if !strings.Contains(sm.note, "Shikimori: прогресс синхронизирован (эп 1)") {
+				t.Fatalf("note = %q, want the synced verdict with the full product name", sm.note)
 			}
 		}
 	}

@@ -333,6 +333,50 @@ func TestCatalogResumeMultiSelectionResumes(t *testing.T) {
 	}
 }
 
+// TestChecklistCursorWrap (PR78): the checklist wraps within its REAL
+// items — the trailing Back row exists in the underlying menu for nav
+// resolution but is not part of the cursor domain, so the wrap must
+// never land on it (the old behavior dead-ended at the last row).
+func TestChecklistCursorWrap(t *testing.T) {
+	choices := func(n int) []Choice {
+		items := make([]Choice, 0, n)
+		for i := range n {
+			items = append(items, Choice{ID: fmt.Sprintf("i%d", i), Label: fmt.Sprintf("Строка %d", i)})
+		}
+		return items
+	}
+
+	t.Run("down from the last real item wraps to the first", func(t *testing.T) {
+		c := NewCheckList("Т", choices(3))
+		c.MoveDown()
+		c.MoveDown()
+		if c.list.Cursor() != 2 {
+			t.Fatalf("cursor must sit on the last real item first, got %d", c.list.Cursor())
+		}
+		c.MoveDown()
+		if c.list.Cursor() != 0 {
+			t.Fatalf("down from the last item must wrap to 0, got %d", c.list.Cursor())
+		}
+	})
+
+	t.Run("up from the first real item wraps to the last", func(t *testing.T) {
+		c := NewCheckList("Т", choices(3))
+		c.MoveUp()
+		if c.list.Cursor() != 2 {
+			t.Fatalf("up from the first item must wrap to the last real item, got %d", c.list.Cursor())
+		}
+	})
+
+	t.Run("single item wrap is a no-op", func(t *testing.T) {
+		c := NewCheckList("Т", choices(1))
+		c.MoveDown()
+		c.MoveUp()
+		if c.list.Cursor() != 0 {
+			t.Fatalf("single-item wrap must be a no-op, got %d", c.list.Cursor())
+		}
+	})
+}
+
 // firstMsg drains a command into its first concrete message (nil when
 // the command is nil).
 func firstMsg(cmd tea.Cmd) tea.Msg {

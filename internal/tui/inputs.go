@@ -134,17 +134,32 @@ func (c *CheckList) clampBody() {
 	}
 }
 
-// MoveDown moves the cursor to the next item.
+// MoveDown moves the cursor to the next item, wrapping from the last
+// real item onto the first (PR78 wrap — the trailing Back row is never
+// part of the checklist cursor domain).
 func (c *CheckList) MoveDown() {
+	if len(c.items) == 0 {
+		return
+	}
+	if c.list.Cursor() >= len(c.items)-1 {
+		c.list.Jump(0)
+		return
+	}
 	c.list.MoveDown()
 	c.clampBody()
 }
 
-// MoveUp moves the cursor to the previous item (clamped at the first).
+// MoveUp moves the cursor to the previous item, wrapping from the
+// first real item onto the last (PR78).
 func (c *CheckList) MoveUp() {
-	if c.list.Cursor() > 0 {
-		c.list.MoveUp()
+	if len(c.items) == 0 {
+		return
 	}
+	if c.list.Cursor() <= 0 {
+		c.list.Jump(len(c.items) - 1)
+		return
+	}
+	c.list.MoveUp()
 }
 
 // Toggle flips the checked state of the current item.

@@ -18,6 +18,7 @@ func captureLogger(buf *bytes.Buffer) *slog.Logger {
 }
 
 func TestInstallAutoNoKeyResolvesFreeWithoutProTraffic(t *testing.T) {
+	probeAlways(t)
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true // the server WOULD validate — no key configured though
 	// No EnvLicenseKey: auto must not spend a single pro-API request.
@@ -42,6 +43,7 @@ func TestInstallAutoNoKeyResolvesFreeWithoutProTraffic(t *testing.T) {
 }
 
 func TestInstallAutoWithValidKeyPullsCompatiblePro(t *testing.T) {
+	probeAlways(t)
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -79,10 +81,13 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true
 	t.Setenv(EnvLicenseKey, "KEY-1")
+	probeAlways(t) // the free-base walk probes 146 (no verdict yet)
 
-	// The post-lift real-world shape: pro latest is 152, above the
-	// verified bound (151). Auto must keep the free binary working
-	// and say so — loudly.
+	// The PR76 real-world shape: pro latest is 152 and the verdict
+	// store holds a FRESH BAD verdict for it (a previous probe
+	// failed). Auto must skip the pro pull without downloading,
+	// loudly, and keep the free binary working.
+	overrideChromedpVersion(t, "test-chromedp")
 	const badPro = "152.0.0.0.1"
 	archive := proArchive(t)
 	fx.mu.Lock()
@@ -93,6 +98,7 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 
 	cache := t.TempDir()
 	cached := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+	seedFreshBadVerdict(t, cache, 152, "seccomp exit 76")
 
 	var buf bytes.Buffer
 	opts := fx.opts(t, cache)
@@ -109,7 +115,7 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 	downloads := fx.proDownloadHits
 	fx.mu.Unlock()
 	if downloads != 0 {
-		t.Errorf("proDownloadHits = %d, want 0 (an incompatible pro must not be pulled)", downloads)
+		t.Errorf("proDownloadHits = %d, want 0 (a fresh-bad pro must not be pulled)", downloads)
 	}
 	note := buf.String()
 	for _, want := range []string{badPro, "заблокирован", "работаем на free"} {
@@ -120,6 +126,7 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 }
 
 func TestInstallFreeChannelNeverTouchesPro(t *testing.T) {
+	probeAlways(t)
 	fx := newProInstallFixture(t)
 	fx.licenseValid = true // even a VALID key must not flip the free channel
 	t.Setenv(EnvLicenseKey, "KEY-1")
@@ -145,9 +152,10 @@ func TestInstallFreeChannelNeverTouchesPro(t *testing.T) {
 }
 
 func TestInstallFreeChannelPinnedBypassWarnsLoud(t *testing.T) {
-	// The pinned rung is a documented exemption from the chromedp
-	// compat bound (explicit user intent) — but it must not be
-	// silent: a pin above the bound logs the loud bypass note.
+	probeAlways(t)
+	// The pinned rung is a documented exemption from the launch-
+	// verdict mechanism (explicit user intent) — but it must not be
+	// silent: a pinned install logs the loud bypass note.
 	fx := newProInstallFixture(t)
 	const pin = "152.0.0.0.1"
 	archive := freeArchive(t, pin)
@@ -167,7 +175,7 @@ func TestInstallFreeChannelPinnedBypassWarnsLoud(t *testing.T) {
 		t.Errorf("info = %+v, want the free-tag pin %s", info, pin)
 	}
 	note := buf.String()
-	for _, want := range []string{pin, "bound"} {
+	for _, want := range []string{pin, "исключение"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("bypass note %q must mention %q", note, want)
 		}
@@ -191,7 +199,7 @@ func TestResolveCurrentBinaryPinnedBypassWarnsLoud(t *testing.T) {
 		t.Errorf("path = %q, want the pinned dir %q (a pin serves what the user asked for)", bin.Path, want)
 	}
 	note := buf.String()
-	for _, want := range []string{"152.0.0.0.1", "bound"} {
+	for _, want := range []string{"152.0.0.0.1", "исключение"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("bypass note %q must mention %q", note, want)
 		}
@@ -243,17 +251,26 @@ func TestInstallUnknownChannelFailsLoud(t *testing.T) {
 	}
 }
 
-func TestInstallFreeLatestIncompatibleIsLoudCompatError(t *testing.T) {
+func TestInstallFreeLatestProbeBadIsLoudCompatError(t *testing.T) {
+	// PR76: an unverified free latest is downloaded (bytes verified),
+	// then must pass the launch probe. A probe-bad candidate is
+	// recorded fresh-bad and rejected with the typed CompatError.
+	// The installed bytes stay cached ON PURPOSE: the +7d verdict
+	// expiry re-probe must cost a launch, not a re-download.
 	fx := newProInstallFixture(t)
 	const bad = "152.0.0.0.1"
 	fx.addFreeRelease(tagPrefix+bad, bad, freeArchive(t, bad))
+	overrideChromedpVersion(t, "test-chromedp")
+	overrideProbe(t, func(context.Context, string) probeOutcome {
+		return probeOutcome{reason: "exit 76 (seccomp)"}
+	}, nil)
 
 	cache := t.TempDir()
 	opts := fx.opts(t, cache)
 	opts.Channel = ChannelAuto
 	_, err := Install(context.Background(), opts)
 	if err == nil {
-		t.Fatal("expected the compat guard to refuse an incompatible free latest")
+		t.Fatal("expected the probe to reject the free latest")
 	}
 	var compat *CompatError
 	if !errors.As(err, &compat) {
@@ -262,16 +279,19 @@ func TestInstallFreeLatestIncompatibleIsLoudCompatError(t *testing.T) {
 	if compat.Newest != bad {
 		t.Errorf("compat = %+v, want Newest %s", compat, bad)
 	}
-	// Nothing may be installed behind the refusal.
-	entries, _ := os.ReadDir(cache)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "chromium-") {
-			t.Errorf("residue %q must not survive a compat refusal", e.Name())
-		}
+	// The verdict persisted: the next install skips the re-download
+	// and jumps straight to the loud refusal (or the LKG rung).
+	if e, has := loadVerdictStore(cache).verdictFor(152); !has || e.Verdict != "bad" {
+		t.Errorf("verdictFor(152) = (%+v, %v), want fresh bad", e, has)
+	}
+	// The rejected candidate's bytes remain for the cheap re-probe.
+	if _, statErr := os.Stat(filepath.Join(cache, VersionDirName(bad))); statErr != nil {
+		t.Errorf("probed-bad bytes must stay cached for the TTL re-probe: %v", statErr)
 	}
 }
 
 func TestInstallAutoSkipsProMarkedCachedDir(t *testing.T) {
+	probeAlways(t)
 	// The user's real cache shape: a pro-marked 151 (bound-compatible,
 	// but marker-skipped) plus a free 146. Auto with no key must run
 	// on the free line — the pro dir never satisfies the free scan,

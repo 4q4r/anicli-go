@@ -84,6 +84,7 @@ func TestScanProCachePicksNewestProDir(t *testing.T) {
 // marker round-trip (the pro half is pinned by the pro install
 // tests): every install records its line inside the versioned dir.
 func TestInstallWritesChannelMarker(t *testing.T) {
+	probeAlways(t)
 	archive := buildTarGz(t, map[string]struct {
 		mode os.FileMode
 		data string

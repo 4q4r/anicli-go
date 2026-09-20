@@ -228,6 +228,7 @@ func freeArchive(t *testing.T, version string) []byte {
 }
 
 func TestInstallProDownloadVerifiesAndInstalls(t *testing.T) {
+	probeAlways(t)
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -257,6 +258,7 @@ func TestInstallProDownloadVerifiesAndInstalls(t *testing.T) {
 }
 
 func TestInstallProVerifiesAgainstProManifestOrigin(t *testing.T) {
+	probeAlways(t)
 	// Production reality (upstream download.py:584): pro manifests
 	// live ONLY on the distinct pro release line. With the pro line
 	// as the sole manifest source, the pro install must verify — and
@@ -336,6 +338,7 @@ func TestInstallPinnedVersionDownloadsFreeTagWithoutLicense(t *testing.T) {
 }
 
 func TestInstallProValidLicenseFreeCachedDownloadsPro(t *testing.T) {
+	probeAlways(t)
 	// The live-verified bug: a valid license must NOT reuse the
 	// newest cached dir merely because it exists — that dir came from
 	// the FREE line. Pro-cached activation means "the pro-resolved
@@ -376,6 +379,7 @@ func TestInstallProValidLicenseFreeCachedDownloadsPro(t *testing.T) {
 }
 
 func TestInstallProProCachedExactVersionReusesWithoutDownload(t *testing.T) {
+	probeAlways(t)
 	// Corrected reuse semantics: the pro-resolved version matches a
 	// PRO-installed dir → activate it, zero archive traffic.
 	fx := newProInstallFixture(t)
@@ -406,6 +410,7 @@ func TestInstallProProCachedExactVersionReusesWithoutDownload(t *testing.T) {
 }
 
 func TestInstallInvalidLicenseReusesFreeCache(t *testing.T) {
+	probeAlways(t)
 	// An invalid key keeps the classic free semantics: the newest
 	// cached binary is reused, reported as the free line.
 	fx := newProInstallFixture(t)
@@ -501,6 +506,7 @@ func TestInstallFreeBadManifestBeatsGoodDigest(t *testing.T) {
 }
 
 func TestInstallFreeDigestFallbackOnlyWithoutManifests(t *testing.T) {
+	probeAlways(t)
 	// Manifests absent everywhere (origin1 404, origin2 404 via env
 	// rewrite): the documented digest-field fallback installs.
 	archive := freeArchive(t, "146.0.7680.177.5")
@@ -528,6 +534,7 @@ func TestInstallFreeDigestFallbackOnlyWithoutManifests(t *testing.T) {
 }
 
 func TestInstallLicenseResolutionFailureFallsToFree(t *testing.T) {
+	probeAlways(t)
 	// A key holder whose validate API is unreachable (no cache)
 	// fails open to the FREE tier — public, signed — instead of
 	// bricking the install.
@@ -607,6 +614,7 @@ func TestInstallPinnedVersionPro404FallsToFreeTag(t *testing.T) {
 }
 
 func TestInstallFreePlanDropsVersionPin(t *testing.T) {
+	probeAlways(t)
 	// Upstream parity (download.py): a VALID license on plan "free"
 	// has its version pin dropped — the server force-serves the
 	// latest build to free keys, so fetching the pinned version's
@@ -640,6 +648,7 @@ func TestInstallFreePlanDropsVersionPin(t *testing.T) {
 }
 
 func TestInstallRejectedLicenseKeyWarnsAndFallsToFree(t *testing.T) {
+	probeAlways(t)
 	// A definitively rejected key (valid:false) resolves as the free
 	// tier — loudly. The never-downgrade rule guards VERIFICATION
 	// failures; an invalid key is a configuration signal the user

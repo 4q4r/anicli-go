@@ -109,12 +109,15 @@ func runCFStatus(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("cf status: %w", err)
 	}
-	bin, binErr := cfbrowser.ResolveCurrentBinary(cfbrowser.ResolveOptions{Channel: channel})
+	bin, binErr := cfbrowser.ResolveCurrentBinary(cfbrowser.ResolveOptions{Channel: channel, NoProbe: true})
 	_, _ = fmt.Fprintf(out, "кэш:            %s\n", cacheDir)
 	if binErr != nil {
 		_, _ = fmt.Fprintf(out, "бинарник:       не установлен — выполните: %s\n", cfbrowser.InstallHint)
 	} else {
 		printCFBinary(out, bin)
+	}
+	if vs := cfbrowser.VerdictSummaryLine(cacheDir); vs != "" {
+		_, _ = fmt.Fprintf(out, "вердикты:       %s\n", vs)
 	}
 
 	tier, plan, expires, note := cfbrowser.StatusLicenseReport(context.Background(), cfbrowser.LicenseOptions{})
@@ -130,7 +133,7 @@ func runCFStatus(out io.Writer) error {
 	// hint stays truthful for both sub-states (no pro dir, or the
 	// newest pro being compat-blocked): install retries the pull.
 	if tier == "pro" && channel != cfbrowser.ChannelFree && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
-		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен или новейший pro заблокирован границей совместимости — anicli cf install повторит попытку pro\n")
+		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен или новейший pro не прошёл проверку запуска — anicli cf install повторит попытку pro\n")
 	}
 	if note != "" {
 		_, _ = fmt.Fprintf(out, "                %s\n", note)

@@ -10,6 +10,7 @@ import (
 // updaterProFixture reuses proInstallFixture and seeds a valid
 // license + a current free-era binary, then drives the updater.
 func TestUpdaterProChannelInstallsProVersion(t *testing.T) {
+	probeAlways(t)
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -90,6 +91,7 @@ func TestUpdaterProChannelStaysCurrent(t *testing.T) {
 }
 
 func TestUpdaterProOnlyFreeCachedSameVersionTriggersProDownload(t *testing.T) {
+	probeAlways(t)
 	// The sharpest edge of the bug class: the free cache holds the
 	// SAME version the pro channel resolves to. A free dir must not
 	// satisfy a pro update check — the pro build of that exact
@@ -216,11 +218,12 @@ func TestUpdaterPinnedVersionDisablesSelfUpdate(t *testing.T) {
 }
 
 func TestUpdaterFreeLicenseOfflineDefersThenFreeChannel(t *testing.T) {
+	probeAlways(t)
 	// No license at all: the updater behaves exactly as before
 	// (network-gated free flow) — the license machinery adds no
 	// network dependency when no key exists. (The newer fixture
-	// release stays within the chromedp compat bound: the free flow
-	// refuses incompatible latest builds, channel-agnostically.)
+	// release passes the injected launch probe: the free flow serves
+	// probe-verified installs, channel-agnostically.)
 	archive := freeArchive(t, "146.0.7680.177.9")
 	srv := newUpdateFixture(t,
 		[]string{"chromium-v146.0.7680.177.9"},

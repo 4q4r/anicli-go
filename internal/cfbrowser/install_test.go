@@ -60,6 +60,7 @@ func linuxSpec(t *testing.T) PlatformSpec {
 }
 
 func TestInstallReusesExistingBinary(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	existing := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
 
@@ -115,6 +116,7 @@ func TestInstallBinaryPathOverrideWins(t *testing.T) {
 }
 
 func TestInstallPrefersNewestCached(t *testing.T) {
+	probeAlways(t)
 	cache := t.TempDir()
 	fakeInstalledBinary(t, cache, "146.0.7680.177.4")
 	newer := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
@@ -134,6 +136,7 @@ func TestInstallPrefersNewestCached(t *testing.T) {
 }
 
 func TestInstallDownloadsAndVerifies(t *testing.T) {
+	probeAlways(t)
 	archive := buildTarGz(t, map[string]struct {
 		mode os.FileMode
 		data string

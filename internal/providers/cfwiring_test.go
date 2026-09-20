@@ -21,15 +21,20 @@ func cfEnabledSettings(t *testing.T) (config.Settings, string) {
 	s.CF.UpdateInterval = time.Hour
 	cache := t.TempDir()
 	t.Setenv("CLOAKBROWSER_CACHE_DIR", cache)
-	t.Setenv("CLOAKBROWSER_BINARY_PATH", "")
-	// Fake installed binary in the cache.
+	// Fake installed binary in the cache, served through the explicit
+	// $CLOAKBROWSER_BINARY_PATH override: the override channel is
+	// user-owned and never probe-gated (PR76), so the wiring tests
+	// exercise composition, not binary health (the fake bytes cannot
+	// launch a real browser).
 	dir := filepath.Join(cache, "chromium-146.0.7680.177.5")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "chrome"), []byte("x"), 0o600); err != nil {
+	fake := filepath.Join(dir, "chrome")
+	if err := os.WriteFile(fake, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("CLOAKBROWSER_BINARY_PATH", fake)
 	// Store lives under the data dir: pin it.
 	t.Setenv("ANICLI_DATA", t.TempDir())
 	return s, cache

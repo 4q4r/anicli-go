@@ -300,15 +300,15 @@ func (u *Updater) CheckAndMaybeInstall(ctx context.Context) error {
 //   - pro: the pre-PR73 cycle verbatim — a valid license updates
 //     within the pro channel (failures defer, never downgrade to
 //     free); no license keeps the classic free flow.
-//   - free: the bound-checked free flow only — the license API and
+//   - free: the verdict-gated free flow only — the license API and
 //     the pro channel are never consulted.
 //   - auto (default): the free-base cycle — the filtered free line's
-//     bookkeeping (pro-marked dirs never satisfy it, the chromedp
-//     compat bound blocks incompatible pulls), plus the pro upgrade
-//     attempt while a valid license resolves to a compatible pro
-//     latest. While the pro line serves, the free base's check is
-//     done for the cycle; when the pro pull is skipped or fails, a
-//     loud note is logged and the free flow keeps the base current.
+//     bookkeeping (pro-marked dirs never satisfy it, fresh-bad
+//     verdicts gate incompatible pulls), plus the pro upgrade
+//     attempt while a valid license resolves to a verdict-usable
+//     pro latest. While the pro line serves, the free base's check
+//     is done for the cycle; when the pro pull is skipped or fails,
+//     a loud note is logged and the free flow keeps the base current.
 func (u *Updater) check(ctx context.Context) error {
 	logger := u.cfg.logger()
 	cacheDir, err := ResolveCacheDir(u.cfg.CacheDir)
@@ -344,41 +344,34 @@ func (u *Updater) check(ctx context.Context) error {
 }
 
 // baselineVersion reports the working line's installed version for
-// the status bookkeeping: pro — the newest cache dir (pre-PR73
-// posture); free/auto — the newest free-line dir (pro-marked dirs
-// never satisfy the free line).
+// the status bookkeeping: pro — the newest cache dir the store does
+// not freshly reject (pre-PR73 posture, verdict-filtered); free/auto
+// — the newest free-line dir (pro-marked dirs never satisfy the free
+// line). Verdicts only — the baseline never probes.
 func (u *Updater) baselineVersion(cacheDir string, spec PlatformSpec, channel string) string {
+	var cands []*BinaryInfo
 	if channel == channelPro {
-		bin, _ := scanCache(cacheDir, spec)
-		if bin != nil {
-			return bin.Version
-		}
-		return ""
+		cands = scanCacheOrdered(cacheDir, spec)
+	} else {
+		cands = freeLineCandidates(cacheDir, spec)
 	}
-	bin, _, _ := scanCacheFree(cacheDir, spec)
-	if bin != nil {
+	if bin := newestServingCandidate(cacheDir, cands); bin != nil {
 		return bin.Version
 	}
 	return ""
 }
 
 // checkFreeBase is the free/auto update cycle. The free line's
-// comparison baseline is the filtered free scan (a pro-marked dir
-// must never gate a free update), the compat bound gates both the
-// cached-major verdict and the latest release, and — under auto — a
-// valid license offers the cycle to the pro upgrade first.
+// comparison baseline is the filtered free scan through the verdict
+// store (a pro-marked dir must never gate a free update; a fresh-bad
+// dir cannot be the baseline), and — under auto — a valid license
+// offers the cycle to the pro upgrade first.
 func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec PlatformSpec, channel string, logger *slog.Logger) error {
-	freeBin, _, compatErr := scanCacheFree(cacheDir, spec)
-	installedVersion := ""
-	if freeBin != nil {
-		installedVersion = freeBin.Version
-	}
+	installedVersion := u.baselineVersion(cacheDir, spec, channel)
 
-	// auto: the pro upgrade attempt comes BEFORE the compat bail-out —
-	// Install parity. When the free cache holds only incompatible
-	// dirs, a compatible pro pull is the way out; loud-but-stuck is
-	// reserved for the state where the pro attempt was skipped or
-	// failed too.
+	// auto: the pro upgrade attempt comes first — Install parity.
+	// When the free cache holds only fresh-bad dirs, a working pro
+	// pull is the way out.
 	if channel == channelAuto {
 		licRep, licErr := CheckLicense(ctx, LicenseOptions{
 			CacheDir:   u.cfg.CacheDir,
@@ -403,27 +396,19 @@ func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec Platf
 				return nil // the pro line serves; the base is covered
 			}
 			// Pro pull skipped or failed: the notes are loud; the
-			// compat verdict (if any) and the free flow follow.
+			// free flow follows.
 		}
-	}
-
-	if compatErr != nil {
-		// The whole free line is unusable for the pinned chromedp:
-		// record and name the fix. A retry cannot move a bound.
-		u.record(cacheDir, UpdateStatus{
-			InstalledVersion: installedVersion, LastError: compatErr.Error(),
-		})
-		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", compatErr)
-		return compatErr
 	}
 
 	return u.freeFlow(ctx, cacheDir, spec, installedVersion, logger)
 }
 
 // freeFlow is the shared free-release tail of both update cycles:
-// latest release → chromedp compat bound → compare against the
-// caller's baseline → forced verified install. The bound applies on
-// every channel — it guards the driver, not a tier.
+// latest release → the verdict store's gate (a fresh bad verdict on
+// the release skips the whole download — the +7d expiry retries it)
+// → compare against the caller's baseline → verified install → the
+// launch probe, which records the verdict before the update is
+// declared. The gate guards the driver, not a tier.
 func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSpec, installedVersion string, logger *slog.Logger) error {
 	rel, err := u.gh.LatestFreeRelease(ctx, spec)
 	if err != nil {
@@ -435,13 +420,13 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 		})
 		return err
 	}
-	if err := checkChromiumCompat(rel.Version); err != nil {
+	if e, bad := freshBadVerdict(cacheDir, rel.Version); bad {
 		u.record(cacheDir, UpdateStatus{
 			LatestVersion: rel.Version, InstalledVersion: installedVersion,
-			LastError: err.Error(),
+			LastError: "verdict bad: " + e.Reason,
 		})
-		logger.Warn("cfbrowser: auto-update blocked by the chromedp compatibility bound", "error", err)
-		return err
+		logger.Warn("cfbrowser: auto-update skipped — релиз держит вердикт bad", "version", rel.Version, "reason", e.Reason)
+		return &CompatError{Newest: rel.Version, Reason: e.Reason}
 	}
 
 	if CompareVersions(rel.Version, installedVersion) <= 0 {
@@ -461,6 +446,18 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 		})
 		return fmt.Errorf("cfbrowser: auto-update install %s: %w", rel.Version, err)
 	}
+	// PR76: the freshly installed candidate proves itself before the
+	// update is declared. A probe-bad build is recorded and the
+	// update refused — the previous binary stays the serving line.
+	if out := probeAndRecord(ctx, cacheDir, info, logger); !out.ok && !out.inconclusive {
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: rel.Version, InstalledVersion: installedVersion,
+			LastError: "probe failed: " + out.reason,
+		})
+		logger.Warn("cfbrowser: auto-update installed but probe FAILED — остаёмся на предыдущей версии",
+			"version", rel.Version, "reason", out.reason)
+		return &CompatError{Newest: rel.Version, Reason: out.reason}
+	}
 	pruneCacheDirs(cacheDir, 2) // newest + rollback
 	u.record(cacheDir, UpdateStatus{
 		LatestVersion: rel.Version, InstalledVersion: info.Version,
@@ -473,10 +470,11 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 
 // tryProUpgradeCycle is auto mode's pro upgrade: with the license
 // already validated, resolve the newest pro version and update the
-// pro line — but only while that version stays within the chromedp
-// compatibility bound. Reports whether the pro line is confirmed
-// serving (updated now or already current); false hands the cycle
-// back to the free base, with the reason logged loud.
+// pro line — but only while that version carries no fresh bad
+// verdict (the store's +7d expiry re-tries it). Reports whether the
+// pro line is confirmed serving (updated now or already current);
+// false hands the cycle back to the free base, with the reason logged
+// loud.
 func (u *Updater) tryProUpgradeCycle(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger) bool {
 	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
 		CacheDir:     u.cfg.CacheDir,
@@ -487,8 +485,8 @@ func (u *Updater) tryProUpgradeCycle(ctx context.Context, cacheDir string, spec 
 		logger.Warn("cfbrowser: pro upgrade skipped — работаем на free", "error", err)
 		return false
 	}
-	if !chromiumMajorKnownGood(version) {
-		logger.Warn(proIncompatNote(version))
+	if e, bad := freshBadVerdict(cacheDir, version); bad {
+		logger.Warn(proBadVerdictNote(version, e.Reason))
 		return false
 	}
 	if err := u.checkPro(ctx, cacheDir, spec, licRep, logger, channelAuto); err != nil {
@@ -530,28 +528,31 @@ func (u *Updater) checkProChannel(ctx context.Context, cacheDir string, spec Pla
 		return u.checkPro(ctx, cacheDir, spec, licRep, logger, channelPro)
 	}
 
-	// Free channel: the shared free flow (the compat bound rides it —
+	// Free channel: the shared free flow (the verdict gate rides it —
 	// it guards the driver, not a tier).
 	return u.freeFlow(ctx, cacheDir, spec, installedVersion, logger)
 }
 
 // checkPro runs the pro-channel update cycle: marker-gated latest
 // version, comparison against the PRO-installed line, verified pro
-// install. The comparison baseline is the newest pro-marked cache
-// directory only — a free-installed dir (same or newer version)
-// must never satisfy a pro update check; with no pro dir installed
-// the resolved version always downloads. Under auto the baseline is
-// compat-filtered (an incompatible pro dir never gates a compatible
-// update). Failures defer (the network-gated retry semantics are
-// identical to the free channel); a free download is NEVER
-// substituted.
+// install, then the launch probe that records the verdict before the
+// update is declared. The comparison baseline is the newest
+// pro-marked cache directory the store does not freshly reject — a
+// free-installed dir (same or newer version) must never satisfy a
+// pro update check; with no pro dir installed the resolved version
+// always downloads. Failures defer (the network-gated retry
+// semantics are identical to the free channel); a free download is
+// NEVER substituted. A probe-bad install is recorded and refused —
+// the previous binary stays the serving line.
 func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger, channel string) error {
-	// The pro line's baseline: pro-marked dirs only ("" when none).
-	scanBaseline := scanProCache
-	if channel == channelAuto {
-		scanBaseline = scanProCacheCompat
+	// The pro line's baseline: pro-marked dirs (auto keeps the same
+	// marker rule — the verdict store, not a bound, filters).
+	scanCands := proLineCandidates(cacheDir, spec)
+	if channel == channelPro {
+		// Pre-PR73 posture: the unfiltered scan, verdict-filtered.
+		scanCands = scanCacheOrdered(cacheDir, spec)
 	}
-	proInstalled, _ := scanBaseline(cacheDir, spec)
+	proInstalled := newestServingCandidate(cacheDir, scanCands)
 	installedVersion := ""
 	if proInstalled != nil {
 		installedVersion = proInstalled.Version
@@ -592,6 +593,17 @@ func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSp
 			Deferred: true, LastError: err.Error(),
 		})
 		return fmt.Errorf("cfbrowser: auto-update install %s (pro): %w", version, err)
+	}
+	// PR76: prove the fresh install by launching it before declaring
+	// the update; a probe-bad build is recorded and refused.
+	if out := probeAndRecord(ctx, cacheDir, info, logger); !out.ok && !out.inconclusive {
+		u.record(cacheDir, UpdateStatus{
+			LatestVersion: version, InstalledVersion: installedVersion,
+			LastError: "probe failed: " + out.reason,
+		})
+		logger.Warn("cfbrowser: pro update installed but probe FAILED — остаёмся на предыдущей версии",
+			"version", version, "reason", out.reason)
+		return &CompatError{Newest: version, Reason: out.reason}
 	}
 	pruneCacheDirs(cacheDir, 2) // newest + rollback
 	u.record(cacheDir, UpdateStatus{

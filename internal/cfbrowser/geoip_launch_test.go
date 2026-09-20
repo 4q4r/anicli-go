@@ -40,7 +40,9 @@ func TestLaunchGeoipAlignmentWithProxy(t *testing.T) {
 		ProxyURL:    proxy.URL,
 		GeoEndpoint: geo.URL,
 		Store:       store,
-		Logger:      testLogger(t),
+		// Binary pinned: hermetic tests never resolve (PR76).
+		Binary: &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree},
+		Logger: testLogger(t),
 		DriverFactory: func(opts LaunchOptions) (Naviger, error) {
 			got = opts
 			return &fakeNav{reloadsToSolve: 0, userAgent: "UA"}, nil
@@ -65,6 +67,7 @@ func TestLaunchDirectKeepsSystemDefaults(t *testing.T) {
 	store := NewClearanceStore(filepath.Join(t.TempDir(), "cfstore.json"), time.Minute)
 	s := NewSolver(SolverConfig{
 		Store:  store,
+		Binary: &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree}, // hermetic (PR76)
 		Logger: testLogger(t),
 		DriverFactory: func(opts LaunchOptions) (Naviger, error) {
 			got = opts
@@ -90,6 +93,7 @@ func TestLaunchGeoFailureSlogOnly(t *testing.T) {
 		ProxyURL:    "http://127.0.0.1:9",
 		GeoEndpoint: deadURL,
 		Store:       store,
+		Binary:      &BinaryInfo{Path: "/fake/chrome", Dir: "/fake", Version: "0.0.0.0.1", Channel: channelFree}, // hermetic (PR76)
 		Logger:      testLogger(t),
 		DriverFactory: func(opts LaunchOptions) (Naviger, error) {
 			got = opts

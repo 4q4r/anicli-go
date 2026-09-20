@@ -212,6 +212,18 @@ func TestLivePR62AnilibDropsOnlyInFileLog(t *testing.T) {
 		t.Fatalf("live anilib search: %v", err)
 	}
 	t.Logf("live anilib search %q → %d results", query, len(results))
+	// The smoke suite's convention (smokeQueryLatin fallback): anilib's
+	// RU index answers 0 to the RU probe from some exit regions at some
+	// moments (documented IP-region filtering) — one latin retry before
+	// declaring the probe dead.
+	if len(results) == 0 && query == "черная лагуна" {
+		query = "black lagoon"
+		results, err = real.Deps.Search.Search(ctx, "anilib", query)
+		if err != nil {
+			t.Fatalf("live anilib search (latin fallback): %v", err)
+		}
+		t.Logf("live anilib search %q (fallback) → %d results", query, len(results))
+	}
 
 	logged := sink.String()
 	if !strings.Contains(logged, "anilib: dropped contentless release") {

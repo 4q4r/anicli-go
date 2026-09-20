@@ -12,15 +12,28 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // liveSmokeArgs composes the parity invocation from the env knobs.
-func liveSmokeArgs(target string) []string {
+// PR80: without an explicit ANICLI_CONFIG the suite pins a HERMETIC
+// temp config — it must never depend on the developer's real
+// settings file (the cf.enabled migration error would fail the run
+// on legacy machines).
+func liveSmokeArgs(t *testing.T, target string) []string {
 	args := []string{}
 	if cfg := os.Getenv("ANICLI_CONFIG"); cfg != "" {
 		args = append(args, "--config", cfg)
+	} else {
+		cfg := "channel = \"auto\"\n"
+		path := filepath.Join(t.TempDir(), "settings.toml")
+		if err := os.WriteFile(path, []byte("[cf]\n"+cfg), 0o600); err != nil {
+			t.Fatalf("seed hermetic config: %v", err)
+		}
+		args = append(args, "--config", path)
 	}
 	if proxy := os.Getenv("SMOKE_PROXY"); proxy != "" {
 		args = append(args, "--proxy", proxy)
@@ -34,8 +47,14 @@ func liveSmokeArgs(target string) []string {
 // the desired visibility: their FAIL is reported honestly, never
 // special-cased.
 func TestSmokeAllProvidersLive(t *testing.T) {
+	// Browser-transport providers (animepahe) serialize a dozen
+	// navigations per surfaced result — the 90s plain-HTTP default
+	// starves them mid-surface. The live suite is the acceptance
+	// harness: it gets the same 6m budget the CLI flag exposes.
+	d := realDeps()
+	d.smokeTimeout = 6 * time.Minute
 	var out, errOut strings.Builder
-	code := run(liveSmokeArgs("all"), &out, &errOut, realDeps())
+	code := run(liveSmokeArgs(t, "all"), &out, &errOut, d)
 
 	t.Logf("smoke table:\n%s", out.String())
 	if code != 0 {
@@ -51,7 +70,7 @@ func TestSmokeOneProviderLive(t *testing.T) {
 		t.Skip("set SMOKE_PROVIDER=<id> to smoke one provider")
 	}
 	var out, errOut strings.Builder
-	code := run(liveSmokeArgs(target), &out, &errOut, realDeps())
+	code := run(liveSmokeArgs(t, target), &out, &errOut, realDeps())
 
 	t.Logf("smoke table:\n%s", out.String())
 	if code != 0 {

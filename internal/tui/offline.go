@@ -80,7 +80,10 @@ type offlineSession struct {
 	stateVariant bool
 	list         *PinList // action menu
 	episodeList  *PinList // episodes
-	variantList  *PinList // local variant picker
+	// episodeFilter is the PR78 type-to-search over the episode
+	// picker (the download file list).
+	episodeFilter listFilter
+	variantList   *PinList // local variant picker
 	// status scopes the transient verdict line to the surface that
 	// set it (PR64 #1) — see surfaceStatus; bumpSurface runs on every
 	// surface switch (episode picker ⇄ menu ⇄ variant picker).
@@ -144,9 +147,11 @@ func (s *offlineSession) variants() []download.Entry {
 	return out
 }
 
-// buildEpisodeList renders the episode picker with variant counts.
+// buildEpisodeList renders the episode picker with variant counts. The
+// PR78 type-to-search query narrows it live.
 func (s *offlineSession) buildEpisodeList() {
 	eps := s.episodes()
+	prev := cursorID(s.episodeList)
 	choices := make([]Choice, 0, len(eps))
 	for _, num := range eps {
 		choices = append(choices, Choice{
@@ -155,7 +160,9 @@ func (s *offlineSession) buildEpisodeList() {
 			Value: num,
 		})
 	}
+	choices = filterChoices(choices, s.episodeFilter.value())
 	s.episodeList = NewPinList(NewMenu("Выберите серию:", "Локальные серии не найдены", choices...), defaultListHeight)
+	restoreCursor(s.episodeList, prev)
 }
 
 // buildActionMenu renders the offline action set (python
@@ -209,11 +216,26 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleVariantKey(key)
 	}
 	if IsCancelKey(key) {
+		// PR78 type-to-search: an engaged episode-filter clears
+		// first — only the NEXT Esc pops the session.
+		if s.current == "" && s.episodeFilter.active() {
+			s.episodeFilter.clear()
+			s.buildEpisodeList()
+			return s, nil
+		}
 		return s, pop()
 	}
 
 	// Two surfaces: episode picker then action menu.
 	if s.current == "" {
+		// PR78 type-to-search: printable keys narrow the list live;
+		// the first Esc clears, the second falls through to Back.
+		if consumed, changed := s.episodeFilter.consume(key, pinListBoundRunes); consumed {
+			if changed {
+				s.buildEpisodeList()
+			}
+			return s, nil
+		}
 		if s.episodeList.HandleKey(key) {
 			return s, nil
 		}
@@ -358,7 +380,7 @@ func (s *offlineSession) View() tea.View {
 	var body string
 	switch {
 	case s.current == "":
-		body = themedList(s.episodeList)
+		body = filterLineAbove(s.episodeFilter, themedList(s.episodeList))
 	case s.stateVariant && s.variantList != nil:
 		body = themedList(s.variantList)
 	default:

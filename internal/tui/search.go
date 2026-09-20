@@ -402,7 +402,10 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
-		if IsCancelKey(msg) {
+		// PR78 type-to-search: with an engaged checklist filter the
+		// first Esc clears it — only the second one pops (the
+		// checklist is nil until the fan-out settles).
+		if IsCancelKey(msg) && (m.resultCheck == nil || !m.resultCheck.filterActive()) {
 			return m, pop()
 		}
 		if m.resultCheck != nil {
@@ -669,7 +672,8 @@ func (g *searchGroup) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if !ok {
 		return g, nil
 	}
-	if IsCancelKey(key) {
+	// PR78 type-to-search: the first Esc clears an engaged filter.
+	if IsCancelKey(key) && !g.check.filterActive() {
 		return g, pop()
 	}
 	if g.check.HandleKey(key) {

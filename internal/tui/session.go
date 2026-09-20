@@ -275,10 +275,11 @@ type sessionScreen struct {
 
 	state sessionState
 
-	list        *PinList // action menu
-	episodeList *PinList // «Перейти к серии»
-	dubList     *PinList // video/audio dub pickers
-	qualityList *PinList
+	list          *PinList   // action menu
+	episodeList   *PinList   // «Перейти к серии»
+	episodeFilter listFilter // PR78 type-to-search over the jump list
+	dubList       *PinList   // video/audio dub pickers
+	qualityList   *PinList
 	// formatList is the pre-play format selector (PR44): «▶ Смотреть»
 	// opens it with exactly two items («Потоковый», «Буферный»); the
 	// pick arms the buffered mode and continues the watch pipeline.
@@ -752,6 +753,13 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.stopBuffering("Буферизация отменена")
 		return s, nil
 	default:
+		// PR78 type-to-search: an engaged episode-filter clears
+		// first — only the NEXT Esc leaves the list for the menu.
+		if s.state == sessionStateEpisodeList && s.episodeFilter.active() {
+			s.episodeFilter.clear()
+			s.buildEpisodeList()
+			return s, nil
+		}
 		s.setState(sessionStateMenu)
 		return s, nil
 	}
@@ -1710,6 +1718,14 @@ func (s *sessionScreen) saveProgress() error {
 
 // handleEpisodeListKey drives «Перейти к серии».
 func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	// PR78 type-to-search: printable keys narrow the list live; the
+	// first Esc clears, the second falls through to the Back below.
+	if consumed, changed := s.episodeFilter.consume(key, pinListBoundRunes); consumed {
+		if changed {
+			s.buildEpisodeList()
+		}
+		return s, nil
+	}
 	if s.episodeList.HandleKey(key) {
 		return s, nil
 	}
@@ -2063,8 +2079,9 @@ func (s *sessionScreen) buildActionMenu() {
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", choices...), defaultListHeight)
 }
 
-// buildEpisodeList builds the jump list with local markers.
-func (s *sessionScreen) buildEpisodeList() {
+// episodeChoices builds the full jump-list choices (one per episode in
+// watch order).
+func (s *sessionScreen) episodeChoices() []Choice {
 	choices := make([]Choice, 0, len(s.order))
 	for _, num := range s.order {
 		ep := s.episodes[num]
@@ -2074,12 +2091,22 @@ func (s *sessionScreen) buildEpisodeList() {
 		}
 		choices = append(choices, Choice{ID: num, Label: label, Value: num})
 	}
+	return choices
+}
+
+// buildEpisodeList builds the jump list with local markers. The PR78
+// type-to-search query narrows it live; the cursor stays parked on the
+// same episode when the filter keeps it.
+func (s *sessionScreen) buildEpisodeList() {
+	prev := cursorID(s.episodeList)
+	choices := filterChoices(s.episodeChoices(), s.episodeFilter.value())
 	s.episodeList = NewPinList(NewMenu("Выберите серию:", "Нет серий", choices...), defaultListHeight)
-	for i, num := range s.order {
-		if s.localCounts[num] > 0 {
+	for i, ch := range choices {
+		if s.localCounts[ch.ID] > 0 {
 			s.episodeList.SetMarker(i, "★")
 		}
 	}
+	restoreCursor(s.episodeList, prev)
 }
 
 // attachLocalCounts fills per-episode local variant counts from the
@@ -2274,7 +2301,8 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateMenu:
 		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.list.Render()
 	case sessionStateEpisodeList:
-		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.episodeList.Render()
+		body = theme.Title.Render(s.renderHeader()) + "\n\n" +
+			filterLineAbove(s.episodeFilter, s.episodeList.Render())
 	case sessionStateDubAudio:
 		body = themedList(s.dubList)
 	case sessionStateQuality:

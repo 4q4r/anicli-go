@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -110,6 +111,11 @@ type CheckList struct {
 	items   []Choice
 	checked map[string]bool
 	list    *PinList
+	// filter is the type-to-search state (PR78); visible holds the
+	// real-item indices of the filtered view (nil = unfiltered —
+	// every item shows).
+	filter  listFilter
+	visible []int
 }
 
 // NewCheckList builds the multi-select over items (the trailing Back
@@ -125,34 +131,96 @@ func NewCheckList(title string, items []Choice) *CheckList {
 	}
 }
 
+// filterActive reports whether a type-to-search query is engaged (the
+// owning screens delegate Esc to the checklist while it is).
+func (c *CheckList) filterActive() bool { return c.filter.active() }
+
+// viewLen is the number of rows in the current (possibly filtered)
+// view.
+func (c *CheckList) viewLen() int {
+	if c.visible == nil {
+		return len(c.items)
+	}
+	return len(c.visible)
+}
+
+// realIndex maps a view row onto its full item index.
+func (c *CheckList) realIndex(viewIdx int) int {
+	if c.visible == nil {
+		return viewIdx
+	}
+	return c.visible[viewIdx]
+}
+
+// applyFilter rebuilds the underlying PinList over the filtered
+// choices, keeping the cursor parked on the same item when it survives
+// (viewport follows through the normal PinList windowing).
+func (c *CheckList) applyFilter() {
+	prev := cursorID(c.list)
+	shown := filterChoices(c.items, c.filter.value())
+	if !c.filter.active() {
+		c.visible = nil
+		c.list = NewPinList(NewMenu(c.title, "Нет элементов", c.items...), defaultListHeight)
+		restoreCursor(c.list, prev)
+		return
+	}
+	index := make(map[string]int, len(c.items))
+	for i, item := range c.items {
+		index[item.ID] = i
+	}
+	c.visible = make([]int, 0, len(shown))
+	choices := make([]Choice, 0, len(shown))
+	for _, item := range shown {
+		c.visible = append(c.visible, index[item.ID])
+		choices = append(choices, item)
+	}
+	c.list = NewPinList(NewMenu(c.title, "Нет элементов", choices...), defaultListHeight)
+	restoreCursor(c.list, prev)
+}
+
 // clampBody keeps the cursor on a real item (never the trailing Back
-// row, never out of range).
+// row, never out of range of the current view).
 func (c *CheckList) clampBody() {
-	if c.list.Cursor() >= len(c.items) {
-		c.list.Jump(max(len(c.items)-1, 0))
+	if c.list.Cursor() >= c.viewLen() {
+		c.list.Jump(max(c.viewLen()-1, 0))
 	}
 }
 
-// MoveDown moves the cursor to the next item.
+// MoveDown moves the cursor to the next item, wrapping from the last
+// visible item onto the first (PR78 wrap — within the filtered view).
 func (c *CheckList) MoveDown() {
+	if c.viewLen() == 0 {
+		return
+	}
+	if c.list.Cursor() >= c.viewLen()-1 {
+		c.list.Jump(0)
+		return
+	}
 	c.list.MoveDown()
 	c.clampBody()
 }
 
-// MoveUp moves the cursor to the previous item (clamped at the first).
+// MoveUp moves the cursor to the previous item, wrapping from the
+// first visible item onto the last (PR78).
 func (c *CheckList) MoveUp() {
-	if c.list.Cursor() > 0 {
-		c.list.MoveUp()
+	if c.viewLen() == 0 {
+		return
 	}
+	if c.list.Cursor() <= 0 {
+		c.list.Jump(c.viewLen() - 1)
+		return
+	}
+	c.list.MoveUp()
 }
 
 // Toggle flips the checked state of the current item.
 func (c *CheckList) Toggle() {
 	idx := c.list.Cursor()
-	if idx < 0 || idx >= len(c.items) {
+	if idx < 0 || idx >= c.viewLen() {
 		return
 	}
-	c.checked[c.items[idx].ID] = !c.checked[c.items[idx].ID]
+	item := c.items[c.realIndex(idx)]
+	c.checked[item.ID] = !c.checked[item.ID]
 }
 
 // Checked reports the checked state of one body item.
@@ -204,9 +272,22 @@ func (c *CheckList) InvertSelection() {
 	}
 }
 
-// HandleKey applies movement and toggle keys, reporting whether the
-// key was consumed.
+// checklistBoundRunes are the checklist's own single-letter hotkeys
+// (a all/none, i invert, j/k movement, space toggle) — at rest they
+// keep their meaning and never start the filter.
+var checklistBoundRunes = map[rune]bool{'a': true, 'i': true, 'j': true, 'k': true, ' ': true}
+
+// HandleKey applies filter, movement and toggle keys, reporting
+// whether the key was consumed. While the filter is engaged it takes
+// every printable key and Backspace; Esc clears it (the owning screen
+// routes the NEXT Esc to its own Back).
 func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
+	if consumed, changed := c.filter.consume(key, checklistBoundRunes); consumed {
+		if changed {
+			c.applyFilter()
+		}
+		return true
+	}
 	switch key.Code { //nolint:exhaustive // movement + toggle only
 	case tea.KeyDown:
 		c.MoveDown()
@@ -235,14 +316,28 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 	return true
 }
 
-// Render draws the list with ● markers on checked items (python
-// questionary.checkbox parity: ○ unchecked, ● checked). The title
-// renders with the PR24 padding (one leading pad + blank line).
+// Render draws the VISIBLE WINDOW of the list with ● markers on
+// checked items (python questionary.checkbox parity: ○ unchecked, ●
+// checked). The window comes from the internal PinList — the same
+// viewport machinery the sources list scrolls with (PR78: the
+// unbounded render dumped every merged row, and the cursor escaped
+// below the screen bottom «никогда больше не возвращаясь»). The title
+// renders above the window and stays pinned; the type-to-search line
+// (when engaged) sits between title and rows; the «ещё N» hint
+// mirrors the PinList convention. The cursor never parks on the
+// trailing Back row, so the window domain is exactly the list rows.
 func (c *CheckList) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Title.Render(c.title))
 	b.WriteString("\n\n")
-	for i, item := range c.items {
+	if line := c.filter.render(); line != "" {
+		b.WriteString(line)
+		b.WriteString("\n\n")
+	}
+	menu := c.list.Menu()
+	lo, hi := c.list.VisibleBody()
+	for i := lo; i < hi; i++ {
+		item := menu.Items[i]
 		marker := "○"
 		if c.checked[item.ID] {
 			marker = "●"
@@ -252,6 +347,10 @@ func (c *CheckList) Render() string {
 		} else {
 			b.WriteString(theme.Item.Render("  " + marker + " " + item.Label))
 		}
+		b.WriteString("\n")
+	}
+	if remaining := c.list.bodyEnd() - hi; remaining > 0 {
+		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", remaining)))
 		b.WriteString("\n")
 	}
 	b.WriteString(theme.StatusLine.Render("space — отметить · a — все/ничего · i — инверт · enter — продолжить · esc — назад"))

@@ -44,7 +44,7 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 
 	t.Run("back label still visible when scrolled to the end", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(50)...), 10)
-		for range 60 {
+		for range 50 { // exactly to the end (further downs wrap — PR78)
 			m.MoveDown()
 		}
 		if !strings.Contains(m.Render(), BackLabel) {
@@ -97,17 +97,44 @@ func TestPinListCursorAndPaging(t *testing.T) {
 		}
 	})
 
-	t.Run("cursor clamps at both ends (0 and the pinned Back row)", func(t *testing.T) {
+	t.Run("move down from the pinned last row wraps to the first item (PR78)", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(3)...), 10)
-		m.MoveUp()
-		if m.Cursor() != 0 {
-			t.Fatalf("cursor must clamp at 0, got %d", m.Cursor())
-		}
-		for range 10 {
+		for range 3 {
 			m.MoveDown()
 		}
 		if m.Cursor() != 3 {
-			t.Fatalf("cursor must clamp at the pinned Back row, got %d", m.Cursor())
+			t.Fatalf("cursor must reach the pinned row first, got %d", m.Cursor())
+		}
+		m.MoveDown()
+		if m.Cursor() != 0 {
+			t.Fatalf("down from the pinned row must wrap to 0, got %d", m.Cursor())
+		}
+	})
+
+	t.Run("move up from the first item wraps to the pinned last row (PR78)", func(t *testing.T) {
+		m := NewPinList(NewMenu("М", "", numberedChoices(3)...), 10)
+		m.MoveUp()
+		if m.Cursor() != 3 {
+			t.Fatalf("up from the first item must wrap to the pinned row, got %d", m.Cursor())
+		}
+		m.MoveUp()
+		if m.Cursor() != 2 {
+			t.Fatalf("up from the pinned row must land on the last body item, got %d", m.Cursor())
+		}
+	})
+
+	t.Run("wrap is a no-op on single-item and empty menus (PR78)", func(t *testing.T) {
+		single := NewPinList(NewMenu("Один", "", numberedChoices(1)...), 10)
+		single.MoveDown()
+		single.MoveUp()
+		if single.Cursor() != 0 {
+			t.Fatalf("single-item wrap must be a no-op, got %d", single.Cursor())
+		}
+		empty := NewPinList(NewMenu("Пусто", "Ничего"), 10)
+		empty.MoveDown()
+		empty.MoveUp()
+		if empty.Cursor() != 0 {
+			t.Fatalf("empty-list wrap must be a no-op, got %d", empty.Cursor())
 		}
 	})
 

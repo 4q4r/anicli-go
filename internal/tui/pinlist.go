@@ -68,19 +68,31 @@ func (l *PinList) VisibleBody() (int, int) {
 // index).
 func (l *PinList) bodyEnd() int { return max(len(l.menu.Items)-1, 0) }
 
-// MoveDown moves the cursor one item down, clamping at the pinned
-// bottom row and keeping the cursor inside the visible window.
+// MoveDown moves the cursor one item down, wrapping at the pinned
+// bottom row back onto the first item (PR78: «бесконечный скролл» —
+// uniform boundary wrap on every list); the wrap is a no-op on empty
+// and single-row menus. follow keeps the cursor inside the window.
 func (l *PinList) MoveDown() {
-	if l.cursor < len(l.menu.Items)-1 {
+	if len(l.menu.Items) <= 1 {
+		return
+	}
+	if l.cursor >= len(l.menu.Items)-1 {
+		l.cursor = 0
+	} else {
 		l.cursor++
 	}
 	l.follow()
 }
 
-// MoveUp moves the cursor one item up, clamping at the first body
-// item (position 0).
+// MoveUp moves the cursor one item up, wrapping at the first item onto
+// the pinned bottom row (PR78 wrap; single/empty menus are a no-op).
 func (l *PinList) MoveUp() {
-	if l.cursor > 0 {
+	if len(l.menu.Items) <= 1 {
+		return
+	}
+	if l.cursor <= 0 {
+		l.cursor = len(l.menu.Items) - 1
+	} else {
 		l.cursor--
 	}
 	l.follow()

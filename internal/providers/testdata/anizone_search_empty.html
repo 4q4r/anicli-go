@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="csrf-token" content="8q2gJyICKCFjQGZB83FrExIT9ErEBOpu9RKuyr6v">
+
+        <title>Anime Index — AniZone</title>
+
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+        <link rel="manifest" href="/site.webmanifest">
+
+        <!-- Fonts -->
+        <link rel="preconnect" href="https://fonts.bunny.net">
+        <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+
+        <!-- Scripts -->
+        <link rel="preload" as="style" href="https://anizone.to/build/assets/app-Bh4QYU5Z.css" /><link rel="preload" as="style" href="https://anizone.to/build/assets/app-BTMyseaN.css" /><link rel="preload" as="style" href="https://anizone.to/build/assets/vidstack-_etrU88d.css" /><link rel="modulepreload" as="script" href="https://anizone.to/build/assets/app-D7l3y0y9.js" /><link rel="modulepreload" as="script" href="https://anizone.to/build/assets/vidstack-BP4q_Q2B.js" /><link rel="modulepreload" as="script" href="https://anizone.to/build/assets/vidstack-BGSTndAW-DRhAKVwu.js" /><link rel="stylesheet" href="https://anizone.to/build/assets/app-Bh4QYU5Z.css" data-navigate-track="reload" /><link rel="stylesheet" href="https://anizone.to/build/assets/app-BTMyseaN.css" data-navigate-track="reload" /><link rel="stylesheet" href="https://anizone.to/build/assets/vidstack-_etrU88d.css" data-navigate-track="reload" /><script type="module" src="https://anizone.to/build/assets/app-D7l3y0y9.js" data-navigate-track="reload"></script><script type="module" src="https://anizone.to/build/assets/vidstack-BP4q_Q2B.js" data-navigate-track="reload"></script>            <!-- Livewire Styles --><style >[wire\:loading][wire\:loading], [wire\:loading\.delay][wire\:loading\.delay], [wire\:loading\.inline-block][wire\:loading\.inline-block], [wire\:loading\.inline][wire\:loading\.inline], [wire\:loading\.block][wire\:loading\.block], [wire\:loading\.flex][wire\:loading\.flex], [wire\:loading\.table][wire\:loading\.table], [wire\:loading\.grid][wire\:loading\.grid], [wire\:loading\.inline-flex][wire\:loading\.inline-flex] {display: none;}[wire\:loading\.delay\.none][wire\:loading\.delay\.none], [wire\:loading\.delay\.shortest][wire\:loading\.delay\.shortest], [wire\:loading\.delay\.shorter][wire\:loading\.delay\.shorter], [wire\:loading\.delay\.short][wire\:loading\.delay\.short], [wire\:loading\.delay\.default][wire\:loading\.delay\.default], [wire\:loading\.delay\.long][wire\:loading\.delay\.long], [wire\:loading\.delay\.longer][wire\:loading\.delay\.longer], [wire\:loading\.delay\.longest][wire\:loading\.delay\.longest] {display: none;}[wire\:offline][wire\:offline] {display: none;}[wire\:dirty]:not(textarea):not(input):not(select) {display: none;}:root {--livewire-progress-bar-color: #2299dd;}[x-cloak] {display: none !important;}[wire\:cloak] {display: none !important;}dialog#livewire-error::backdrop {background-color: rgba(0, 0, 0, .6);}</style>
+</head>
+
+    <body class="min-h-screen font-sans antialiased text-slate-300 bg-slate-800">
+                    <nav wire:snapshot="{&quot;data&quot;:{&quot;search&quot;:null},&quot;memo&quot;:{&quot;id&quot;:&quot;l8uvkEkgng0e06LWE2pn&quot;,&quot;name&quot;:&quot;layout.navbar&quot;,&quot;path&quot;:&quot;anime&quot;,&quot;method&quot;:&quot;GET&quot;,&quot;release&quot;:&quot;a-a-a&quot;,&quot;children&quot;:[],&quot;scripts&quot;:[],&quot;assets&quot;:[],&quot;errors&quot;:[],&quot;locale&quot;:&quot;en&quot;},&quot;checksum&quot;:&quot;48e43c8a350d68c7c27a4d3912e902a4f99700d61348b71c025538f2dda2ee66&quot;}" wire:effects="[]" wire:id="l8uvkEkgng0e06LWE2pn" class="md:sticky top-0 z-40 w-full bg-gray-800/50 backdrop-blur-2xl border-gray-700/40 border-b transition-colors duration-300 ease-in-out">
+
+    <div x-data="{ isOpen: false }" class="mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-6 md:gap-0">
+        <div class="flex justify-between items-center gap-3 md:grow">
+
+            <div class="flex items-center gap-2">
+                <a href="https://anizone.to" class="p-2.5 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Home" wire:navigate>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" class="block h-5 w-auto fill-current">
+    <path d="M575.8 255.5c0 18-15 32.1-32 32.1h-32l.7 160.2c0 2.7-.2 5.4-.5 8.1V472c0 22.1-17.9 40-40 40H456c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1H416 392c-22.1 0-40-17.9-40-40V448 384c0-17.7-14.3-32-32-32H256c-17.7 0-32 14.3-32 32v64 24c0 22.1-17.9 40-40 40H160 128.1c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2H104c-22.1 0-40-17.9-40-40V360c0-.9 0-1.9 .1-2.8V287.6H32c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z"/>
+</svg>                </a>
+
+                <div class="hidden md:flex gap-2">
+                    <a href="https://anizone.to/anime" class="px-4 py-2 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out text-white bg-rose-500/90" aria-label="Anime Index" wire:navigate>Anime</a>
+
+                    <a href="https://anizone.to/episode" class="px-4 py-2 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Episode Index" wire:navigate>Episode</a>
+
+                    <a href="https://anizone.to/tag" class="px-4 py-2 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Tag Index" wire:navigate>Tags</a>
+
+                    <button
+                        type="button"
+                        class="px-4 py-2 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out"
+                        aria-label="Random Anime"
+                        wire:click="randomAnime"
+                    >Random</button>
+                </div>
+            </div>
+
+            <div class="flex flex-row gap-3 grow md:grow-0">
+            <form wire:submit="simpleSearch" class="grow md:grow-0">
+                <input wire:model="search" class="w-full border border-gray-700/40 rounded-full bg-slate-900/30 hocus:bg-slate-900/50 focus:ring-0 transition-colors duration-300 ease-in-out" />
+            </form>
+
+            <a href="https://anizone.to/settings" class="p-2.5 rounded-lg hocus:text-white hocus:bg-gray-700/90 focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Settings" wire:navigate>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="h-5 fill-current">
+    <path d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/>
+</svg>            </a>
+            </div>
+        </div>
+    </div>
+
+</nav>            <div wire:snapshot="{&quot;data&quot;:[],&quot;memo&quot;:{&quot;id&quot;:&quot;sAyXCyUhHpUpWVKD7C7J&quot;,&quot;name&quot;:&quot;layout.navbar-mobile&quot;,&quot;path&quot;:&quot;anime&quot;,&quot;method&quot;:&quot;GET&quot;,&quot;release&quot;:&quot;a-a-a&quot;,&quot;children&quot;:[],&quot;scripts&quot;:[],&quot;assets&quot;:[],&quot;errors&quot;:[],&quot;locale&quot;:&quot;en&quot;},&quot;checksum&quot;:&quot;1cee75f2080668d3a406e250d57c8e47abadedf5af239b8a0bcdea4f528cc111&quot;}" wire:effects="[]" wire:id="sAyXCyUhHpUpWVKD7C7J" class="w-full bg-gray-800 border-gray-700 border-t bottom-0 fixed z-40 md:hidden">
+    <div class="flex text-center text-sm">
+        <a href="https://anizone.to" class="flex flex-col flex-1 justify-center py-2 gap-1
+            focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Anime Index" wire:navigate>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" class="h-5 fill-current">
+    <path d="M575.8 255.5c0 18-15 32.1-32 32.1h-32l.7 160.2c0 2.7-.2 5.4-.5 8.1V472c0 22.1-17.9 40-40 40H456c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1H416 392c-22.1 0-40-17.9-40-40V448 384c0-17.7-14.3-32-32-32H256c-17.7 0-32 14.3-32 32v64 24c0 22.1-17.9 40-40 40H160 128.1c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2H104c-22.1 0-40-17.9-40-40V360c0-.9 0-1.9 .1-2.8V287.6H32c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z"/>
+</svg>            <span>Home</span>
+        </a>
+        <a href="https://anizone.to/anime" class="flex flex-col flex-1 justify-center py-2 gap-1
+            focus:outline-none transition-colors duration-300 ease-in-out text-sky-500/90" aria-label="Anime Index" wire:navigate>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" class="h-5 fill-current">
+    <path d="M64 64V352H576V64H64zM0 64C0 28.7 28.7 0 64 0H576c35.3 0 64 28.7 64 64V352c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V64zM128 448H512c17.7 0 32 14.3 32 32s-14.3 32-32 32H128c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/>
+</svg>            <span>Anime</span>
+        </a>
+
+        <a href="https://anizone.to/episode" class="flex flex-col flex-1 justify-center py-2 gap-1
+            focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Episode Index" wire:navigate>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="h-5 fill-current">
+    <path d="M0 96C0 60.7 28.7 32 64 32H448c35.3 0 64 28.7 64 64V416c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V96zM48 368v32c0 8.8 7.2 16 16 16H96c8.8 0 16-7.2 16-16V368c0-8.8-7.2-16-16-16H64c-8.8 0-16 7.2-16 16zm368-16c-8.8 0-16 7.2-16 16v32c0 8.8 7.2 16 16 16h32c8.8 0 16-7.2 16-16V368c0-8.8-7.2-16-16-16H416zM48 240v32c0 8.8 7.2 16 16 16H96c8.8 0 16-7.2 16-16V240c0-8.8-7.2-16-16-16H64c-8.8 0-16 7.2-16 16zm368-16c-8.8 0-16 7.2-16 16v32c0 8.8 7.2 16 16 16h32c8.8 0 16-7.2 16-16V240c0-8.8-7.2-16-16-16H416zM48 112v32c0 8.8 7.2 16 16 16H96c8.8 0 16-7.2 16-16V112c0-8.8-7.2-16-16-16H64c-8.8 0-16 7.2-16 16zM416 96c-8.8 0-16 7.2-16 16v32c0 8.8 7.2 16 16 16h32c8.8 0 16-7.2 16-16V112c0-8.8-7.2-16-16-16H416zM160 128v64c0 17.7 14.3 32 32 32H320c17.7 0 32-14.3 32-32V128c0-17.7-14.3-32-32-32H192c-17.7 0-32 14.3-32 32zm32 160c-17.7 0-32 14.3-32 32v64c0 17.7 14.3 32 32 32H320c17.7 0 32-14.3 32-32V320c0-17.7-14.3-32-32-32H192z"/>
+</svg>            <span>Episode</span>
+        </a>
+
+        <a href="https://anizone.to/tag" class="flex flex-col flex-1 justify-center py-2 gap-1
+            focus:outline-none transition-colors duration-300 ease-in-out " aria-label="Tag Index" wire:navigate>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" class="h-5 fill-current">
+    <path d="M74.6 373.2c41.7 36.1 108 82.5 166.1 73.7c6.1-.9 12.1-2.5 18-4.5c-9.2-12.3-17.3-24.4-24.2-35.4c-21.9-35-28.8-75.2-25.9-113.6c-20.6 4.1-39.2 13-54.7 25.4c-6.5 5.2-16.3 1.3-14.8-7c6.4-33.5 33-60.9 68.2-66.3c2.6-.4 5.3-.7 7.9-.8l19.4-131.3c2-13.8 8-32.7 25-45.9C278.2 53.2 310.5 37 363.2 32.2c-.8-.7-1.6-1.4-2.4-2.1C340.6 14.5 288.4-11.5 175.7 5.6S20.5 63 5.7 83.9C0 91.9-.8 102 .6 111.8L24.8 276.1c5.5 37.3 21.5 72.6 49.8 97.2zm87.7-219.6c4.4-3.1 10.8-2 11.8 3.3c.1 .5 .2 1.1 .3 1.6c3.2 21.8-11.6 42-33.1 45.3s-41.5-11.8-44.7-33.5c-.1-.5-.1-1.1-.2-1.6c-.6-5.4 5.2-8.4 10.3-6.7c9 3 18.8 3.9 28.7 2.4s19.1-5.3 26.8-10.8zM261.6 390c29.4 46.9 79.5 110.9 137.6 119.7s124.5-37.5 166.1-73.7c28.3-24.5 44.3-59.8 49.8-97.2l24.2-164.3c1.4-9.8 .6-19.9-5.1-27.9c-14.8-20.9-57.3-61.2-170-78.3S299.4 77.2 279.2 92.8c-7.8 6-11.5 15.4-12.9 25.2L242.1 282.3c-5.5 37.3-.4 75.8 19.6 107.7zM404.5 235.3c-7.7-5.5-16.8-9.3-26.8-10.8s-19.8-.6-28.7 2.4c-5.1 1.7-10.9-1.3-10.3-6.7c.1-.5 .1-1.1 .2-1.6c3.2-21.8 23.2-36.8 44.7-33.5s36.3 23.5 33.1 45.3c-.1 .5-.2 1.1-.3 1.6c-1 5.3-7.4 6.4-11.8 3.3zm136.2 15.5c-1 5.3-7.4 6.4-11.8 3.3c-7.7-5.5-16.8-9.3-26.8-10.8s-19.8-.6-28.7 2.4c-5.1 1.7-10.9-1.3-10.3-6.7c.1-.5 .1-1.1 .2-1.6c3.2-21.8 23.2-36.8 44.7-33.5s36.3 23.5 33.1 45.3c-.1 .5-.2 1.1-.3 1.6zM530 350.2c-19.6 44.7-66.8 72.5-116.8 64.9s-87.1-48.2-93-96.7c-1-8.3 8.9-12.1 15.2-6.7c23.9 20.8 53.6 35.3 87 40.3s66.1 .1 94.9-12.8c7.6-3.4 16 3.2 12.6 10.9z"/>
+</svg>            <span>Tags</span>
+        </a>
+
+        <button
+            type="button"
+            class="items-center flex flex-col flex-1 justify-center py-2 gap-1 focus:outline-none transition-colors duration-300 ease-in-out"
+            aria-label="Random Anime"
+            wire:click="randomAnime"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="h-5 fill-current">
+    <path d="M403.8 34.4c12-5 25.7-2.2 34.9 6.9l64 64c6 6 9.4 14.1 9.4 22.6s-3.4 16.6-9.4 22.6l-64 64c-9.2 9.2-22.9 11.9-34.9 6.9s-19.8-16.6-19.8-29.6V160H352c-10.1 0-19.6 4.7-25.6 12.8L284 229.3 244 176l31.2-41.6C293.3 110.2 321.8 96 352 96h32V64c0-12.9 7.8-24.6 19.8-29.6zM164 282.7L204 336l-31.2 41.6C154.7 401.8 126.2 416 96 416H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H96c10.1 0 19.6-4.7 25.6-12.8L164 282.7zm274.6 188c-9.2 9.2-22.9 11.9-34.9 6.9s-19.8-16.6-19.8-29.6V416H352c-30.2 0-58.7-14.2-76.8-38.4L121.6 172.8c-6-8.1-15.5-12.8-25.6-12.8H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H96c30.2 0 58.7 14.2 76.8 38.4L326.4 339.2c6 8.1 15.5 12.8 25.6 12.8h32V320c0-12.9 7.8-24.6 19.8-29.6s25.7-2.2 34.9 6.9l64 64c6 6 9.4 14.1 9.4 22.6s-3.4 16.6-9.4 22.6l-64 64z"/>
+</svg>            <span>Random</span>
+        </button>
+    </div>
+</div>        
+        <main class="flex flex-col items-center">
+                            <div class="w-full px-4 mt-8">
+                    <div class="w-full flex justify-center select-none overflow-hidden" 
+     x-data="{ 
+        blocked: false,
+        checkAd() {
+            setTimeout(() => {
+                const slot = this.$refs.slot;
+                if (!slot) return;
+
+                const hasNoChildren = slot.children.length === 0;
+                let elementsHidden = false;
+
+                if (!hasNoChildren) {
+                    elementsHidden = Array.from(slot.children).every(child => {
+                        const style = window.getComputedStyle(child);
+                        return style.display === 'none' || 
+                               style.visibility === 'hidden' || 
+                               child.offsetHeight < 10;
+                    });
+                }
+
+                if (hasNoChildren || elementsHidden) {
+                    this.blocked = true;
+                }
+            }, 2500);
+        }
+     }" 
+     x-init="checkAd()">
+    
+    <div class="relative max-w-[728px] min-h-[90px] w-full">
+        <div x-show="blocked" 
+            x-transition.opacity.duration.500ms
+            x-cloak
+            class="absolute inset-0 flex items-center justify-center bg-gray-700 text-center text-balance text-gray-500 font-semibold border-4 border-dashed border-gray-600 rounded-xl overflow-hidden">
+            <p class="px-4 xs:text-lg sm:text-xl md:text-2xl">
+                We don't use intrusive ads and hope you disable your adblock.
+            </p>
+        </div>
+
+        <div x-ref="slot" class="w-full h-full flex justify-center">
+            <div id="frame" style="width: 728px;margin: auto;z-index: 99998;height: auto">
+          <iframe data-aa='2419912' src='//ad.a-ads.com/2419912/?size=728x90'
+                            style='border:0; padding:0; width:728px; height:90px; overflow:hidden;display: block;margin: auto'></iframe>
+        </div>
+        </div>
+    </div>
+</div>
+                </div>
+            
+            <div wire:snapshot="{&quot;data&quot;:{&quot;title&quot;:&quot;Anime Index&quot;,&quot;search&quot;:&quot;\u0410\u0442\u0435\u043b\u044c\u0435 \u043a\u043e\u043b\u0434\u043e\u0432\u0441\u043a\u0438\u0445 \u043a\u043e\u043b\u043f\u0430\u043a\u043e\u0432&quot;,&quot;sort&quot;:&quot;title-asc&quot;,&quot;type&quot;:&quot;0&quot;,&quot;sortOptions&quot;:[{&quot;title-asc&quot;:&quot;A-Z&quot;,&quot;title-desc&quot;:&quot;Z-A&quot;,&quot;release-asc&quot;:&quot;Earliest Release&quot;,&quot;release-desc&quot;:&quot;Latest Release&quot;,&quot;added-asc&quot;:&quot;First Added&quot;,&quot;added-desc&quot;:&quot;Last Added&quot;},{&quot;s&quot;:&quot;arr&quot;}],&quot;typeOptions&quot;:[[&quot;All&quot;,&quot;Unknown&quot;,&quot;TV Series&quot;,&quot;OVA&quot;,&quot;Movie&quot;,&quot;Other&quot;,&quot;Web&quot;,&quot;TV Special&quot;,&quot;Music Video&quot;],{&quot;s&quot;:&quot;arr&quot;}]},&quot;memo&quot;:{&quot;id&quot;:&quot;rvafv0ojObxImesKSZnH&quot;,&quot;name&quot;:&quot;pages.anime-index&quot;,&quot;path&quot;:&quot;anime&quot;,&quot;method&quot;:&quot;GET&quot;,&quot;release&quot;:&quot;a-a-a&quot;,&quot;children&quot;:[],&quot;scripts&quot;:[],&quot;assets&quot;:[],&quot;errors&quot;:[],&quot;locale&quot;:&quot;en&quot;},&quot;checksum&quot;:&quot;750735298f1ec9d1afa6d7ce7b2d1be9993c24f99a29a5d0ac5fe94f018c6348&quot;}" wire:effects="{&quot;url&quot;:{&quot;search&quot;:{&quot;as&quot;:null,&quot;use&quot;:&quot;replace&quot;,&quot;alwaysShow&quot;:false,&quot;except&quot;:&quot;&quot;}}}" wire:id="rvafv0ojObxImesKSZnH" 
+    x-data="{
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        loading: false,
+        view: 'list',
+
+        get activeGridItems() {
+            return this.view === 'grid' ? this.items : [];
+        },
+
+        get activeListItems() {
+            return this.view === 'list' ? this.items : [];
+        },
+
+        init() {
+            const match = document.cookie.match(/(?:^|; )anime-view=([^;]*)/);
+            if (match) {
+                this.view = decodeURIComponent(match[1]);
+            }
+        },
+
+        setView(newView) {
+            this.view = newView;
+            document.cookie = `anime-view=${newView}; path=/; max-age=31536000; SameSite=Lax`;
+        },
+
+        getTitle(anime) {
+            return window.getTitle(anime.title_list, anime.main_title);
+        },
+
+        isBlurred(anime) {
+            return anime.is_unsafe && (window.getUnsafeState?.().blur ?? false);
+        },
+
+        loadMore() {
+            if (this.loading || !this.hasMore || !this.nextCursor) return;
+            this.loading = true;
+            $wire.loadPage(this.nextCursor);
+        }
+    }"
+    @items-loaded.window="
+        if ($event.detail.items && $event.detail.items.length) {
+            items.push(...$event.detail.items);
+        }
+        nextCursor = $event.detail.nextCursor;
+        hasMore = $event.detail.hasMore;
+        loading = false;
+    "
+    @filters-reset.window="
+        items.splice(0, items.length, ...$event.detail.items);
+        nextCursor = $event.detail.nextCursor;
+        hasMore = $event.detail.hasMore;
+        loading = false;
+    "
+    class="w-full lg:container pb-[109px] md:pb-12 pt-12 px-4 space-y-12"
+>
+    <div class="space-y-4">
+        <h1 class="text-xl xs:text-2xl md:text-3xl text-center lg:text-start text-slate-100">Anime Index</h1>
+
+        <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between mb-4 gap-3">
+
+    
+    <div class="w-full lg:w-96 flex flex-col gap-1">
+        <input
+            wire:model.live.debounce.500="search"
+            class="w-full rounded-lg bg-slate-900 border border-slate-700 placeholder:text-slate-200/50 focus:outline-none focus:ring-0 px-4 py-2.5"
+            placeholder="Search Title"
+        />
+        <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->    </div>
+
+    
+    <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-4" role="group">
+
+        
+        <div class="grid grid-cols-2 sm:flex items-center gap-2 sm:gap-4 grow sm:grow-0">
+            <!--[if BLOCK]><![endif]-->                <div class="w-full">
+                    <select wire:model.live="type" class="w-full sm:w-auto rounded-lg bg-slate-900 border border-slate-700 focus:outline-none focus:ring-0 pl-4 pr-9 py-2.5">
+<!--[if BLOCK]><![endif]-->    <option value="0">All</option>
+    <option value="1">Unknown</option>
+    <option value="2">TV Series</option>
+    <option value="3">OVA</option>
+    <option value="4">Movie</option>
+    <option value="5">Other</option>
+    <option value="6">Web</option>
+    <option value="7">TV Special</option>
+    <option value="8">Music Video</option>
+<!--[if ENDBLOCK]><![endif]-->
+</select>
+                </div>
+            <!--[if ENDBLOCK]><![endif]-->
+            <!--[if BLOCK]><![endif]-->                <div class="w-full">
+                    <select wire:model.live="sort" class="w-full sm:w-auto rounded-lg bg-slate-900 border border-slate-700 focus:outline-none focus:ring-0 pl-4 pr-9 py-2.5">
+<!--[if BLOCK]><![endif]-->    <option value="title-asc">A-Z</option>
+    <option value="title-desc">Z-A</option>
+    <option value="release-asc">Earliest Release</option>
+    <option value="release-desc">Latest Release</option>
+    <option value="added-asc">First Added</option>
+    <option value="added-desc">Last Added</option>
+<!--[if ENDBLOCK]><![endif]-->
+</select>
+                </div>
+            <!--[if ENDBLOCK]><![endif]-->        </div>
+
+        
+        <div wire:ignore class="flex items-center space-x-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shrink-0 ml-auto lg:ml-0">
+            <button 
+                type="button"
+                @click="setView('list')"
+                :class="view === 'list' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'"
+                class="p-2 rounded-md transition-colors"
+                aria-label="List View"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="w-5 h-5" fill="currentColor">
+    <path d="M40 48C26.7 48 16 58.7 16 72v48c0 13.3 10.7 24 24 24H88c13.3 0 24-10.7 24-24V72c0-13.3-10.7-24-24-24H40zM192 64c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zM16 232v48c0 13.3 10.7 24 24 24H88c13.3 0 24-10.7 24-24V232c0-13.3-10.7-24-24-24H40c-13.3 0-24 10.7-24 24zM40 368c-13.3 0-24 10.7-24 24v48c0 13.3 10.7 24 24 24H88c13.3 0 24-10.7 24-24V392c0-13.3-10.7-24-24-24H40z"/>
+</svg>            </button>
+
+            <button 
+                type="button"
+                @click="setView('grid')"
+                :class="view === 'grid' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'"
+                class="p-2 rounded-md transition-colors"
+                aria-label="Grid View"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
+    <path fill-rule="evenodd" d="M3 6a3 3 0 0 1 3-3h2.25a3 3 0 0 1 3 3v2.25a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6Zm9.75 0a3 3 0 0 1 3-3H18a3 3 0 0 1 3 3v2.25a3 3 0 0 1-3 3h-2.25a3 3 0 0 1-3-3V6ZM3 15.75a3 3 0 0 1 3-3h2.25a3 3 0 0 1 3 3V18a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-2.25Zm9.75 0a3 3 0 0 1 3-3H18a3 3 0 0 1 3 3V18a3 3 0 0 1-3 3h-2.25a3 3 0 0 1-3-3v-2.25Z" clip-rule="evenodd" />
+</svg>
+              </button>
+        </div>
+
+    </div>
+
+</div>
+        <div 
+            x-show="window.getUnsafeState?.()?.blur"
+            x-cloak
+            class="max-w-xl flex justify-center mx-auto"
+        >
+            <div class="w-full text-white text-center bg-rose-600/90 p-4 py-3 border border-rose-500/90 rounded-md">
+                Safesearch filter is active. You can disable it in the 
+                <a href="https://anizone.to/settings" wire:navigate class="text-white font-bold underline">Settings</a> page.
+            </div>
+        </div>
+
+        
+        <div wire:ignore>
+            
+            <div x-show="view === 'grid'">
+                <ul x-show="items.length > 0" class="grid grid-cols-2 xs:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-4 sm:gap-8 list-none">
+                    <template x-for="anime in activeGridItems" :key="'grid-' + anime.slug">
+                        <li 
+    x-data="{ inView: false, loaded: false }"
+    class="space-y-3 pb-6"
+>
+    
+    <div class="relative block aspect-[5/7] overflow-hidden drop-shadow-lg rounded-lg bg-gray-700">
+        <a
+            wire:navigate
+            :href="anime.url"
+            x-intersect.margin.200px.once="inView = true"
+            class="block w-full h-full"
+        >
+            <template x-if="inView">
+                <img
+                    :src="anime.cover"
+                    :alt="getTitle(anime)"
+                    @load="loaded = true"
+                    :class="{ 
+                        'blur-md': isBlurred(anime),
+                        'opacity-0': !loaded,
+                        'opacity-100': loaded 
+                    }"
+                    class="absolute object-cover h-full w-full transition-opacity duration-300 ease-in-out"
+                />
+            </template>
+        </a>
+    </div>
+
+    
+    <div class="space-y-3">
+        <div class="line-clamp-2">
+            <a
+                wire:navigate
+                :href="anime.url"
+                :title="getTitle(anime)"
+                class="text-white hocus:text-amber-300 focus:outline-none focus:ring-0 transition-colors duration-300 ease-in-out"
+            >
+                <span x-text="getTitle(anime)"></span>
+            </a>
+        </div>
+
+        <div class="flex flex-row text-xs pb-6 text-center">
+            <span class="inline-block not-first:before:mx-1 not-first:before:content-['•']" x-text="anime.type"></span>
+            <span class="inline-block not-first:before:mx-1 not-first:before:content-['•']" x-text="anime.is_ongoing ? 'Ongoing' : 'Completed'"></span>
+        </div>
+    </div>
+</li>                    </template>
+                </ul>
+            </div>
+
+            
+            <div x-show="view === 'list'">
+                <ul x-show="items.length > 0" class="grid grid-cols-1 2xl:grid-cols-2 gap-4 list-none">
+                    <template x-for="anime in activeListItems" :key="'list-' + anime.slug">
+                        <li 
+    x-data="{ inView: false, loaded: false }"
+    class="relative overflow-hidden h-26 rounded-lg px-4 py-3 bg-slate-900 drop-shadow-lg"
+>
+    
+    <template x-if="!isBlurred(anime)">
+        <div 
+            x-intersect.margin.200px.once="inView = true"
+            class="absolute -inset-y-0 -right-0 w-80"
+        >
+            <template x-if="inView">
+                <img
+                    :src="anime.cover"
+                    :alt="getTitle(anime)"
+                    @load="loaded = true"
+                    :class="loaded ? 'opacity-25' : 'opacity-0'"
+                    class="absolute w-full h-full object-cover bg-slate-700 transition-opacity duration-300 ease-in-out"
+                />
+            </template>
+            <div class="absolute right-0 w-full h-full bg-gradient-to-l from-transparent to-slate-900"></div>
+        </div>
+    </template>
+
+    
+    <div class="relative flex flex-col gap-2">
+        <div class="h-6 inline truncate">
+            <a
+                wire:navigate
+                :href="anime.url"
+                :title="getTitle(anime)"
+                class="text-white inline hocus:text-amber-300 transition-colors duration-300 ease-in-out focus:outline-none focus:ring-0"
+            >
+                <span x-text="getTitle(anime)"></span>
+            </a>
+        </div>
+
+        <div class="inline text-xs h-4 line-clamp-1">
+            <span class="not-last:after:mx-1 not-last:after:content-['•']" x-text="anime.type"></span>
+
+            <template x-if="anime.start_year">
+                <span class="not-last:after:mx-1 not-last:after:content-['•']" x-text="anime.start_year"></span>
+            </template>
+
+            <template x-if="anime.episode_count">
+                <span class="not-last:after:mx-1 not-last:after:content-['•']" x-text="`${anime.episode_count} Eps`"></span>
+            </template>
+
+            <span class="not-last:after:mx-1 not-last:after:content-['•']" x-text="anime.is_ongoing ? 'Ongoing' : 'Completed'"></span>
+        </div>
+
+        <template x-if="anime.tags && anime.tags.length">
+            <div class="flex flex-wrap gap-2 line-clamp-1 h-6">
+                <template x-for="tag in anime.tags" :key="tag.slug">
+                    <a
+                        wire:navigate
+                        :href="tag.url"
+                        :title="tag.name"
+                        x-text="tag.name"
+                        class="px-2 py-1 rounded-full text-xs text-white bg-gray-600 hocus:bg-emerald-600 focus:outline-none transition-colors duration-300 ease-in-out"
+                    ></a>
+                </template>
+            </div>
+        </template>
+    </div>
+</li>                    </template>
+                </ul>
+            </div>
+        </div>
+
+        
+        <div x-show="items.length === 0" x-cloak class="max-w-xl flex justify-center mx-auto">
+            <div class="w-full text-center bg-sky-600 p-4 py-3 border border-sky-500 rounded-md">Nothing found.</div>
+        </div>
+    </div>
+
+    <div x-show="loading" class="w-full">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="fill-current h-12 w-12 mx-auto animate-spin">
+    <path d="M304 48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zm0 416a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM48 304a48 48 0 1 0 0-96 48 48 0 1 0 0 96zm464-48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM142.9 437A48 48 0 1 0 75 369.1 48 48 0 1 0 142.9 437zm0-294.2A48 48 0 1 0 75 75a48 48 0 1 0 67.9 67.9zM369.1 437A48 48 0 1 0 437 369.1 48 48 0 1 0 369.1 437z"/>
+</svg>    </div>
+
+    <div
+        x-show="hasMore && !loading"
+        class="h-12"
+        x-intersect="loadMore()"
+    ></div>
+</div>
+        </div>
+    <script src="/livewire/livewire.min.js?id=42cd7fd5"   data-csrf="8q2gJyICKCFjQGZB83FrExIT9ErEBOpu9RKuyr6v" data-update-uri="/livewire/update" data-navigate-once="true"></script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a3e20d333ef29b35',t:'MTc4OTkyMDExNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

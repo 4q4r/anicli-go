@@ -131,8 +131,8 @@ type Client struct {
 	// the pre-CF behavior for plain responses, with one deliberate
 	// delta: a genuine challenge page (403/503 carrying challenge
 	// markers) now maps onto the typed CFChallengeError instead of the
-	// old ErrProvider403/StatusError — a challenge is actionable
-	// (enable [cf], install the solver), a plain 403 is not.
+	// old ErrProvider403/StatusError — a challenge is actionable (the
+	// stealth browser self-installs at startup), a plain 403 is not.
 	cfSolver CFSolver
 
 	// mu guards the clearance UA/language overrides set after a solve.

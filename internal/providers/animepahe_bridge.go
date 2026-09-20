@@ -176,8 +176,10 @@ type paheBrowser interface {
 	SubmitDownload(ctx context.Context, pageURL, action string) (string, error)
 }
 
-// errPaheBridgeDisabled reports a bridge invocation without a solver.
-var errPaheBridgeDisabled = errors.New("animepahe bridge: no cf browser configured ([cf].enabled required)")
+// errPaheBridgeDisabled reports a bridge invocation without a solver
+// (PR80: CF is always on — reachable only through anomalous wiring;
+// the stealth browser self-installs at startup).
+var errPaheBridgeDisabled = errors.New("animepahe bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; при повторении выполните `anicli cf install`")
 
 // paheCFBrowserBridge is the production paheBrowser: a thin cfbrowser
 // adapter. Session lifecycle is owned by the solver's pool
@@ -193,9 +195,9 @@ type paheCFBrowserBridge struct {
 	seq int // fire-and-poll result key sequence (mu-guarded)
 }
 
-// buildPaheBridge wires the animepahe bridge when [cf].enabled supplies
-// a stealth browser (nil otherwise — the provider stays on the
-// netclient + CF-ladder path).
+// buildPaheBridge wires the animepahe bridge (always on, PR80 — the
+// manager supplies the stealth browser; nil otherwise, keeping the
+// provider on the netclient + CF-ladder path for API users).
 func buildPaheBridge(cf *cfbrowser.Manager) paheBrowser {
 	if cf == nil || cf.Solver == nil {
 		return nil

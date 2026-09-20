@@ -73,10 +73,11 @@ func BaseURLFor(id string) (string, bool) {
 	return u, ok
 }
 
-// buildCFOptions wires the CF ladder into provider clients when
-// [cf].enabled: receives the already-built manager (shared with the
+// buildCFOptions wires the CF ladder into provider clients (always
+// on, PR80): receives the already-built manager (shared with the
 // AllAnime bridge — NewRegistry builds it once) and returns the solver
-// option plus its closer. mgr may be nil when [cf] is disabled.
+// option plus its closer. mgr may be nil only for callers that skip
+// NewManager; buildCFOptions then builds a fresh manager.
 func buildCFOptions(cfg config.Settings, mgr *cfbrowser.Manager) (opts []netclient.Option, closer func(), err error) {
 	if mgr == nil {
 		mgr, err = cfbrowser.NewManager(cfg)

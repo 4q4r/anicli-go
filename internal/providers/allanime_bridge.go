@@ -10,8 +10,9 @@ package providers
 // back to the Go path. The browser closes with the session pool; the
 // Go path continues offline until the material rotates again.
 //
-// Gating: the bridge requires [cf].enabled (a stealth binary); a
-// disabled bridge leaves the pure-Go typed errors in place.
+// Gating: the bridge needs the stealth browser (always supplied by
+// NewManager since PR80); a nil-solver call leaves the pure-Go typed
+// errors in place.
 
 import (
 	"context"
@@ -49,8 +50,10 @@ type aaCFBrowserBridge struct {
 	Lane string
 }
 
-// errAABridgeDisabled reports a bridge invocation without a solver.
-var errAABridgeDisabled = errors.New("allanime bridge: no cf browser configured ([cf].enabled required)")
+// errAABridgeDisabled reports a bridge invocation without a solver
+// (PR80: CF is always on — reachable only through anomalous wiring;
+// the stealth browser self-installs at startup).
+var errAABridgeDisabled = errors.New("allanime bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; при повторении выполните `anicli cf install`")
 
 // ExtractCrypto navigates the root page and runs the extraction script.
 func (b *aaCFBrowserBridge) ExtractCrypto(ctx context.Context) (aaBridgeMaterial, error) {

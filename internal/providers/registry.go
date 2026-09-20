@@ -28,8 +28,7 @@ type Registry struct {
 	// doctor surfaces render them as ОТКЛЮЧЁН.
 	disabled []DisabledProvider
 	// cfClose releases the shared CF-bypass stack (browser session +
-	// updater ticker) when the registry was built with [cf].enabled;
-	// nil otherwise.
+	// updater ticker) — always built (CF is always on, PR80).
 	cfClose func()
 	// engine is the ONE shared lazy torrent engine (PR36): built when
 	// [torrent].enabled, injected into every torrent provider and

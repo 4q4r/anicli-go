@@ -83,12 +83,11 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 	fx.licenseValid = true
 	t.Setenv(EnvLicenseKey, "KEY-1")
 
-	// The PR73 live shape: pro latest is 151 (incompatible), the free
-	// base is current. The cycle must note it loudly and record the
-	// FREE line in the status — never the pro 151 the old code
-	// tracked.
+	// The post-lift real-world shape: pro latest is 152, above the
+	// verified bound (151). The cycle must note it loudly and record
+	// the FREE line in the status — never the pro 152.
 	fx.mu.Lock()
-	fx.proVersion = "151.0.7922.108.6"
+	fx.proVersion = "152.0.0.0.1"
 	fx.mu.Unlock()
 	fx.addFreeRelease("chromium-v146.0.7680.177.5", "146.0.7680.177.5", freeArchive(t, "146.0.7680.177.5"))
 
@@ -118,10 +117,10 @@ func TestUpdaterAutoWithKeyIncompatibleProFallsToFreeFlowLoud(t *testing.T) {
 	}
 	st := up.Status()
 	if st.InstalledVersion != "146.0.7680.177.5" || st.LatestVersion != "146.0.7680.177.5" {
-		t.Errorf("status = %+v, want the free line recorded (the working binary), not pro 151", st)
+		t.Errorf("status = %+v, want the free line recorded (the working binary), not pro 152", st)
 	}
 	note := buf.String()
-	for _, want := range []string{"151.0.7922.108.6", "заблокирован", "работаем на free"} {
+	for _, want := range []string{"152.0.0.0.1", "заблокирован", "работаем на free"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("log note %q must mention %q", note, want)
 		}
@@ -207,9 +206,10 @@ func TestUpdaterFreeBaselineIgnoresProMarkedDir(t *testing.T) {
 
 func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
 	// Install parity corner: when the free cache holds ONLY
-	// incompatible dirs (e.g. a lone unmarked 151), auto must still
-	// attempt the compatible pro upgrade BEFORE the compat bail-out —
-	// loud-but-stuck is wrong when a working pro pull exists.
+	// incompatible dirs (e.g. a lone unmarked 152 above the verified
+	// bound 151), auto must still attempt the compatible pro upgrade
+	// BEFORE the compat bail-out — loud-but-stuck is wrong when a
+	// working pro pull exists.
 	pub, priv := manifestTestKey(t)
 	swapManifestKey(t, pub)
 	fx := newProInstallFixture(t)
@@ -228,7 +228,7 @@ func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
 
 	cache := t.TempDir()
 	t.Setenv(EnvCacheDir, cache)
-	fakeInstalledBinary(t, cache, "151.0.7922.108.6") // free line, incompatible
+	fakeInstalledBinary(t, cache, "152.0.0.0.1") // free line, above the bound
 
 	up := NewUpdater(UpdaterConfig{
 		Enabled:        true,
@@ -253,7 +253,7 @@ func TestUpdaterAutoCompatibleProSavesOnlyIncompatibleFreeCache(t *testing.T) {
 
 func TestUpdaterFreeLatestIncompatibleRecordedLoud(t *testing.T) {
 	fx := newProInstallFixture(t)
-	fx.addFreeRelease("chromium-v151.0.7922.108.6", "151.0.7922.108.6", freeArchive(t, "151.0.7922.108.6"))
+	fx.addFreeRelease("chromium-v152.0.0.0.1", "152.0.0.0.1", freeArchive(t, "152.0.0.0.1"))
 
 	cache := t.TempDir()
 	t.Setenv(EnvCacheDir, cache)
@@ -273,17 +273,17 @@ func TestUpdaterFreeLatestIncompatibleRecordedLoud(t *testing.T) {
 	if !asCompat(err, &compat) {
 		t.Fatalf("err = %v, want *CompatError", err)
 	}
-	if compat.Newest != "151.0.7922.108.6" {
+	if compat.Newest != "152.0.0.0.1" {
 		t.Errorf("compat = %+v", compat)
 	}
 	st := up.Status()
 	if st.UpdatedTo != "" || st.InstalledVersion != "146.0.7680.177.5" {
 		t.Errorf("status = %+v, want the working free 146 untouched", st)
 	}
-	if !strings.Contains(st.LastError, "151.0.7922.108.6") {
+	if !strings.Contains(st.LastError, "152.0.0.0.1") {
 		t.Errorf("status.LastError = %q, want the rejected version named", st.LastError)
 	}
-	if _, statErr := os.Stat(filepath.Join(cache, VersionDirName("151.0.7922.108.6"))); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(cache, VersionDirName("152.0.0.0.1"))); !os.IsNotExist(statErr) {
 		t.Error("an incompatible free latest must not install")
 	}
 }

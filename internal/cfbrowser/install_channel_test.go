@@ -80,10 +80,10 @@ func TestInstallAutoWithValidKeyIncompatibleProStaysFreeLoud(t *testing.T) {
 	fx.licenseValid = true
 	t.Setenv(EnvLicenseKey, "KEY-1")
 
-	// The real-world state: pro latest is 151, incompatible with the
-	// pinned chromedp driver. Auto must keep the free binary working
+	// The post-lift real-world shape: pro latest is 152, above the
+	// verified bound (151). Auto must keep the free binary working
 	// and say so — loudly.
-	const badPro = "151.0.7922.108.6"
+	const badPro = "152.0.0.0.1"
 	archive := proArchive(t)
 	fx.mu.Lock()
 	fx.proVersion = badPro
@@ -149,7 +149,7 @@ func TestInstallFreeChannelPinnedBypassWarnsLoud(t *testing.T) {
 	// compat bound (explicit user intent) — but it must not be
 	// silent: a pin above the bound logs the loud bypass note.
 	fx := newProInstallFixture(t)
-	const pin = "151.0.7922.108.6"
+	const pin = "152.0.0.0.1"
 	archive := freeArchive(t, pin)
 	fx.addFreeRelease(tagPrefix+pin, pin, archive)
 
@@ -176,8 +176,8 @@ func TestInstallFreeChannelPinnedBypassWarnsLoud(t *testing.T) {
 
 func TestResolveCurrentBinaryPinnedBypassWarnsLoud(t *testing.T) {
 	cache := t.TempDir()
-	want := fakeInstalledBinary(t, cache, "151.0.7922.108.6")
-	t.Setenv(EnvVersion, "151.0.7922.108.6")
+	want := fakeInstalledBinary(t, cache, "152.0.0.0.1")
+	t.Setenv(EnvVersion, "152.0.0.0.1")
 
 	var buf bytes.Buffer
 	bin, err := ResolveCurrentBinary(ResolveOptions{
@@ -191,7 +191,7 @@ func TestResolveCurrentBinaryPinnedBypassWarnsLoud(t *testing.T) {
 		t.Errorf("path = %q, want the pinned dir %q (a pin serves what the user asked for)", bin.Path, want)
 	}
 	note := buf.String()
-	for _, want := range []string{"151.0.7922.108.6", "bound"} {
+	for _, want := range []string{"152.0.0.0.1", "bound"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("bypass note %q must mention %q", note, want)
 		}
@@ -245,7 +245,7 @@ func TestInstallUnknownChannelFailsLoud(t *testing.T) {
 
 func TestInstallFreeLatestIncompatibleIsLoudCompatError(t *testing.T) {
 	fx := newProInstallFixture(t)
-	const bad = "151.0.7922.108.6"
+	const bad = "152.0.0.0.1"
 	fx.addFreeRelease(tagPrefix+bad, bad, freeArchive(t, bad))
 
 	cache := t.TempDir()
@@ -272,9 +272,10 @@ func TestInstallFreeLatestIncompatibleIsLoudCompatError(t *testing.T) {
 }
 
 func TestInstallAutoSkipsProMarkedCachedDir(t *testing.T) {
-	// The user's real cache shape: a pro-marked 151 plus a free 146.
-	// Auto with no key must run on the free line — the pro dir never
-	// satisfies the free scan, whatever its version.
+	// The user's real cache shape: a pro-marked 151 (bound-compatible,
+	// but marker-skipped) plus a free 146. Auto with no key must run
+	// on the free line — the pro dir never satisfies the free scan,
+	// whatever its version.
 	fx := newProInstallFixture(t)
 	cache := t.TempDir()
 	proDir := filepath.Dir(fakeInstalledBinary(t, cache, "151.0.7922.108.6"))

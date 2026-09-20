@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,32 @@ func TestCFUnknownKeyRejected(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("unknown cf key must fail loud")
+	}
+}
+
+// TestCFProxyValidation (PR80): [cf] proxy gates download/update
+// traffic — empty stays direct; supported schemes load; unknown
+// schemes fail loud at load time.
+func TestCFProxyValidation(t *testing.T) {
+	t.Parallel()
+
+	for _, proxy := range []string{"", "http://127.0.0.1:10809", "https://p.example", "socks5://p:1080", "socks5h://p:1080"} {
+		path := writeTOML(t, fmt.Sprintf("[cf]\nproxy = %q\n", proxy))
+		s, err := Load(path)
+		if err != nil {
+			t.Fatalf("proxy %q: load: %v", proxy, err)
+		}
+		if s.CF.Proxy != proxy {
+			t.Errorf("proxy = %q, want %q", s.CF.Proxy, proxy)
+		}
+	}
+
+	path := writeTOML(t, "[cf]\nproxy = \"ftp://127.0.0.1:21\"\n")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("ftp scheme must fail loud at load")
+	}
+	if !strings.Contains(err.Error(), "unsupported scheme") {
+		t.Fatalf("err = %v, want the unsupported-scheme message", err)
 	}
 }

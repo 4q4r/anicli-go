@@ -250,6 +250,13 @@ type CF struct {
 	AutoUpdate bool `toml:"auto_update"`
 	// UpdateInterval is the auto-update retry ticker cadence.
 	UpdateInterval time.Duration `toml:"update_interval"`
+	// Proxy is the proxy for cfbrowser DOWNLOAD/UPDATE traffic only —
+	// free GitHub fetches, pro version/download calls, license checks
+	// and update checks (PR80). It never touches the stealth browser's
+	// own page traffic and never touches netclient/provider traffic
+	// (that is network.proxy_url). Empty = direct. Schemes: http,
+	// https, socks5, socks5h — validated at load.
+	Proxy string `toml:"proxy"`
 	// Channel selects the stealth-Chromium line (PR73):
 	//
 	//   - "auto" (default): free is the base — public GitHub free
@@ -362,6 +369,7 @@ func Default() Settings {
 			AutoUpdate:         true,
 			UpdateInterval:     30 * time.Minute,
 			Channel:            "auto",
+			Proxy:              "", // download/update traffic only; empty = direct
 		},
 	}
 }
@@ -472,6 +480,22 @@ func (s *Settings) Validate() error {
 		default:
 			return fmt.Errorf("network.proxy_url %q: unsupported scheme %q (want http, https or socks5)",
 				s.Network.ProxyURL, u.Scheme)
+		}
+	}
+	if s.CF.Proxy != "" {
+		// PR80: the download/update proxy (download traffic only —
+		// never the stealth browser's page traffic, never provider
+		// traffic). Scheme gate mirrors network.proxy_url plus socks5h.
+		u, err := url.Parse(s.CF.Proxy)
+		if err != nil {
+			return fmt.Errorf("cf.proxy %q: %w", s.CF.Proxy, err)
+		}
+		switch u.Scheme {
+		case "http", "https", "socks5", "socks5h":
+			// ok
+		default:
+			return fmt.Errorf("cf.proxy %q: unsupported scheme %q (want http, https, socks5 or socks5h)",
+				s.CF.Proxy, u.Scheme)
 		}
 	}
 	// Invalid exclude_streams regexes fail here, at startup, instead

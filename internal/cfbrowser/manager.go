@@ -53,6 +53,7 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 		Enabled:  AutoUpdateFromConfig(cfg.CF.AutoUpdate),
 		Interval: cfg.CF.UpdateInterval,
 		Channel:  cfg.CF.Channel,
+		ProxyURL: cfg.CF.Proxy,
 	})
 	solver.SetUpdater(updater)
 	updater.Start()

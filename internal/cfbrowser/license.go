@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -85,6 +86,9 @@ type LicenseOptions struct {
 	APIBase string
 	// HTTPClient overrides transport (nil = default).
 	HTTPClient *http.Client
+	// ProxyURL is the [cf] proxy for license check traffic (PR80;
+	// empty = direct). Ignored when HTTPClient is set.
+	ProxyURL string
 }
 
 // licenseCacheEntry is the .license_cache JSON shape.
@@ -118,7 +122,14 @@ func (o LicenseOptions) httpClient() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	return &http.Client{Timeout: licenseRequestTimeout}
+	// [cf] proxy (PR80): config load validated the scheme, so a build
+	// failure here is a loud-warned fallback to direct, never silent.
+	hc, err := DownloadHTTPClient(o.ProxyURL, licenseRequestTimeout)
+	if err != nil {
+		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		return &http.Client{Timeout: licenseRequestTimeout}
+	}
+	return hc
 }
 
 // ResolveLicenseKey returns the license key: $CLOAKBROWSER_LICENSE_KEY

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -339,4 +340,72 @@ func firstMsg(cmd tea.Cmd) tea.Msg {
 		return nil
 	}
 	return cmd()
+}
+
+// TestChecklistViewportScrolling (PR78): the provider checklist shares
+// the sources list's PinList viewport. The owner's report: the «Выберите
+// провайдеры:» list rendered ALL merged rows with no viewport, so the
+// cursor escaped below the screen bottom and «никогда больше не
+// возвращается». The window must follow the cursor, pin at the top and
+// keep the header block (counter + checklist title) rendered.
+func TestChecklistViewportScrolling(t *testing.T) {
+	fs, deps := checklistTestDeps()
+	const total = 64 // the owner's screenshot size
+	results := make([]contracts.SearchResult, 0, total)
+	for i := range total {
+		results = append(results, contracts.SearchResult{
+			Title:    fmt.Sprintf("Тайтл %02d", i),
+			URL:      fmt.Sprintf("u%02d", i),
+			SourceID: "animego",
+		})
+	}
+	sp := NewSearchProgress(deps, "запрос")
+	sp = settleSearch(sp,
+		providerResultMsg{provider: fs.providers[0], results: results},
+		providerResultMsg{provider: fs.providers[1], results: nil})
+
+	assertBounded := func(stage string, view string) {
+		t.Helper()
+		if lines := strings.Count(view, "\n"); lines > defaultListHeight+20 {
+			t.Fatalf("%s: rendered %d lines, want a bounded viewport (≤%d)\n%s",
+				stage, lines, defaultListHeight+20, view)
+		}
+	}
+
+	// Settled at the top: the header block renders, the tail stays
+	// outside the window.
+	view := sp.View().Content
+	if !strings.Contains(view, "Выберите провайдеры:") || !strings.Contains(view, "Ответившие:") {
+		t.Fatalf("header block must stay rendered, got:\n%s", view)
+	}
+	if strings.Contains(view, "Тайтл 63") {
+		t.Fatalf("the last row must not render before the cursor reaches it:\n%s", view)
+	}
+	assertBounded("settled", view)
+
+	// Cursor below the fold: the window follows, the cursor row and the
+	// «ещё» hint stay visible.
+	for range defaultListHeight + 3 {
+		next, _ := sp.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		sp = next.(*searchProgress)
+	}
+	view = sp.View().Content
+	if !strings.Contains(view, "Тайтл 14") {
+		t.Fatalf("cursor row 14 must be visible after moving below the fold:\n%s", view)
+	}
+	assertBounded("scrolled", view)
+
+	// Cursor back at the top: the window pins to the first row again.
+	for range defaultListHeight + 3 {
+		next, _ := sp.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+		sp = next.(*searchProgress)
+	}
+	view = sp.View().Content
+	if !strings.Contains(view, "Тайтл 00") {
+		t.Fatalf("row 0 must be visible when the cursor returns to the top:\n%s", view)
+	}
+	if strings.Contains(view, "Тайтл 20") {
+		t.Fatalf("rows beyond the viewport must not render at the top:\n%s", view)
+	}
+	assertBounded("back-to-top", view)
 }

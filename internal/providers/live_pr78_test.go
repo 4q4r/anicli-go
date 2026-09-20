@@ -16,8 +16,8 @@
 //     NO extra retry by design (the mandate's no-stacking rule); the
 //     probe shows the live outcome either way.
 //
-//	ANICLI_LIVE_PROXY=http://127.0.0.1:10809 \
-//	  go test -tags live -run TestLivePR78 -count=1 -v ./internal/providers/
+//     ANICLI_LIVE_PROXY=http://127.0.0.1:10809 \
+//     go test -tags live -run TestLivePR78 -count=1 -v ./internal/providers/
 package providers
 
 import (

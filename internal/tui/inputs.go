@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -235,14 +236,22 @@ func (c *CheckList) HandleKey(key tea.KeyPressMsg) bool {
 	return true
 }
 
-// Render draws the list with ● markers on checked items (python
-// questionary.checkbox parity: ○ unchecked, ● checked). The title
-// renders with the PR24 padding (one leading pad + blank line).
+// Render draws the VISIBLE WINDOW of the list with ● markers on checked
+// items (python questionary.checkbox parity: ○ unchecked, ● checked).
+// The window comes from the internal PinList — the same viewport
+// machinery the sources list scrolls with (PR78: the unbounded render
+// dumped every merged row, and the cursor escaped below the screen
+// bottom «никогда больше не возвращаясь»). The title renders above the
+// window and stays pinned; the «ещё N» hint mirrors the PinList
+// convention. The cursor never parks on the trailing Back row, so the
+// window domain is exactly the real items.
 func (c *CheckList) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Title.Render(c.title))
 	b.WriteString("\n\n")
-	for i, item := range c.items {
+	lo, hi := c.list.VisibleBody()
+	for i := lo; i < hi; i++ {
+		item := c.items[i]
 		marker := "○"
 		if c.checked[item.ID] {
 			marker = "●"
@@ -252,6 +261,10 @@ func (c *CheckList) Render() string {
 		} else {
 			b.WriteString(theme.Item.Render("  " + marker + " " + item.Label))
 		}
+		b.WriteString("\n")
+	}
+	if remaining := len(c.items) - hi; remaining > 0 {
+		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", remaining)))
 		b.WriteString("\n")
 	}
 	b.WriteString(theme.StatusLine.Render("space — отметить · a — все/ничего · i — инверт · enter — продолжить · esc — назад"))

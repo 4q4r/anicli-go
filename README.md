@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 22 провайдера"]
+    subgraph sources["Источники — 23 провайдера"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -125,6 +125,7 @@ graph TD
         P18[anime365]
         P23[yummy]
         P24[hdrezka]
+        P25[anistar]
         P14[nyaa]
         P15[anilibria-torrent]
         P16[animetosho]
@@ -136,7 +137,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P23 & P24 & P14 & P15 & P16 & P17
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P23 & P24 & P25 & P14 & P15 & P16 & P17
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -296,6 +297,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anime365 | smotret-anime.app | видео (русс. озвучки и субтитры) | ✅ живой (PR55), документированный JSON API (зеркала: smotret-anime.online, anime365.ru); без токена доступа (`providers.anime365.token`, нужна активная подписка) провайдер отключается при старте; ссылки на видео выдаёт embed-API по токену |
 | yummy | site.yummyani.me (API: api.yani.tv) | видео (рус. озвучки и субтитры, до 4K) | ✅ живой (PR68); порт референсной библиотеки anicli-api (source/yummy_anime.py), перепроверен живым 2026-09-19: документированный JSON API (каталог, серии одним вызовом со всеми озвучками), анонимный; плееры kodik/sibnet/alloha/aksor через общие экстракторы, CDNVideoHub-цепочка (iframe → JS-константы → плейлист → vkId) — в провайдере; RU-индекс ищет по одному токену («черная лагуна» не находит «Пираты «Чёрной лагуны»», smoke-запрос объявлен); SSR-зеркало yummyanime.in мертво (410) |
 | hdrezka | rezka-ua.tv (зеркало семейства, [providers.hdrezka] base_url перекрывает) | видео (рус. озвучки, до 1080) | ✅ живой (PR72); порт замороженного anicli-api + чистый Go-решатель антибота Anubis 1.25 (PoW sha256); PR72-матрица маршрутов: семейство зеркал гео-фенсит по домену — hdrezka-home.tv с датацентровых выходов держит ссылки на видео (JWT сессии честно пишет geo:"de"), rezka-ua.tv с того же выхода отдаёт полностью, поэтому маршрут по умолчанию — он; из заблокированных сетей нужен `network.proxy_url` (прямой маршрут режется по SNI) |
+| anistar | anistar.org | видео (рус. озвучки, до 720) | ✅ живой (PR77); не порт — написан по живому сайту: DLE-каталог на Windows-1251 (первый некириллически-UTF сайт в ростере — поиск POST-формой в cp1251), серии/озвучки из JS-массива p2p-плеера /test/player2/, стримы — прямые HLS/MP4 на an-media.org с обязательным Referer; анонимный; news- и manga-карточки поиска отфильтрованы |
 | nyaa | nyaa.si | торрент-поиск (англ. переводы) | ✅ живой, анонимный RSS; не порт — написан по живому сайту (PR36); стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` — прямой маршрут сбрасывается (RST) |
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
@@ -320,7 +322,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 21/22 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 22/23 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -332,7 +334,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 22, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 23, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

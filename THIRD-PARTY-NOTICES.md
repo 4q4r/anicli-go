@@ -27,6 +27,7 @@ that clause requires notice reproduction in binary distributions.
 | `github.com/anacrolix/torrent` | v1.61.0 | **MPL-2.0** (note below) |
 | `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause (Go Authors) |
+| `golang.org/x/text` | v0.41.0 | BSD-3-Clause (Go Authors) — direct since PR77 (the anistar provider's cp1251 form encoding and page decoding) |
 | `modernc.org/sqlite` | v1.58.0 | BSD-3-Clause |
 
 ## Key indirect dependencies (TLS/QUIC stack)

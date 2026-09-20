@@ -31,7 +31,9 @@ import (
 // 21→20); yummy (PR68, the YummyAnime api.yani.tv JSON API) joined
 // after anime365 and hdrezka (PR69, the hdrezka-home.tv rezka
 // catalog behind an Anubis PoW gate) joined after yummy, closing
-// the RU-dub block. The roster is frozen at 22.
+// the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
+// its self-hosted an-media player stack) joined after hdrezka. The
+// roster is frozen at 23.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -51,6 +53,7 @@ var expectedProviderOrder = []string{
 	"anime365",
 	"yummy",
 	"hdrezka",
+	"anistar",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

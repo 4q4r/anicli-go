@@ -20,8 +20,9 @@ func seedValidLicenseCache(t *testing.T, cacheDir string) {
 func TestResolveCurrentBinaryPrefersProDirWithValidLicense(t *testing.T) {
 	// Solve sessions pick pro when the license is valid: a
 	// chromedp-compatible pro directory outranks the free scan even
-	// when a free dir is newer. (The default bound would reject both
-	// 150/152 — the test raises it to exercise the preference order.)
+	// when a free dir is newer. (The default bound now admits 150 but
+	// still refuses 152 — the test raises it to 152 so BOTH sides are
+	// compatible and the preference order is what's exercised.)
 	old := maxKnownGoodChromiumMajor
 	t.Cleanup(func() { maxKnownGoodChromiumMajor = old })
 	maxKnownGoodChromiumMajor = 152
@@ -44,15 +45,15 @@ func TestResolveCurrentBinaryPrefersProDirWithValidLicense(t *testing.T) {
 	}
 }
 
-// TestResolveCurrentBinaryAutoSkipsIncompatibleProDir is the PR73
-// live shape: a valid key plus a pro-marked 151 the pinned chromedp
-// cannot drive, next to a working free 146. Auto must launch the
-// free line — never the incompatible pro build.
+// TestResolveCurrentBinaryAutoSkipsIncompatibleProDir is the post-lift
+// live shape: a valid key plus a pro-marked 152 the verified bound
+// (151) still refuses, next to a working free 146. Auto must launch
+// the free line — never the above-bound pro build.
 func TestResolveCurrentBinaryAutoSkipsIncompatibleProDir(t *testing.T) {
 	cache := t.TempDir()
 	seedValidLicenseCache(t, cache)
-	proDir := filepath.Join(cache, VersionDirName("151.0.7922.108.6"))
-	fakeInstalledBinary(t, cache, "151.0.7922.108.6")
+	proDir := filepath.Join(cache, VersionDirName("152.0.0.0.1"))
+	fakeInstalledBinary(t, cache, "152.0.0.0.1")
 	markProBinary(t, proDir)
 	want := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
 
@@ -86,14 +87,14 @@ func TestResolveCurrentBinaryFreeChannelNeverPrefersPro(t *testing.T) {
 
 func TestResolveCurrentBinaryOnlyIncompatibleFreeIsCompatError(t *testing.T) {
 	cache := t.TempDir()
-	fakeInstalledBinary(t, cache, "151.0.7922.108.6")
+	fakeInstalledBinary(t, cache, "152.0.0.0.1")
 
 	_, err := ResolveCurrentBinary(ResolveOptions{CacheDir: cache, Channel: ChannelAuto})
 	var compat *CompatError
 	if !errors.As(err, &compat) {
 		t.Fatalf("want *CompatError, got %T: %v", err, err)
 	}
-	if compat.Newest != "151.0.7922.108.6" {
+	if compat.Newest != "152.0.0.0.1" {
 		t.Errorf("compat = %+v", compat)
 	}
 }

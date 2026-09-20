@@ -27,6 +27,7 @@ func TestChromiumMajorKnownGood(t *testing.T) {
 		{"147.0.0.0.1", true},
 		{"151.0.7922.108.6", true},
 		{"152.0.0.0.1", false},
+		{"152", false},
 		{"", false},         // unparsable fails closed
 		{"banana.1", false}, // unparsable fails closed
 	}
@@ -40,13 +41,18 @@ func TestChromiumMajorKnownGood(t *testing.T) {
 func TestCompatBoundIsTestOverridable(t *testing.T) {
 	old := maxKnownGoodChromiumMajor
 	t.Cleanup(func() { maxKnownGoodChromiumMajor = old })
-	maxKnownGoodChromiumMajor = 151
+	maxKnownGoodChromiumMajor = 152
 
-	if !chromiumMajorKnownGood("151.0.7922.108.6") {
-		t.Error("raised bound must admit 151")
+	if !chromiumMajorKnownGood("152.0.0.0.1") {
+		t.Error("raised bound must admit 152")
 	}
-	if chromiumMajorKnownGood("152.0.0.0.1") {
-		t.Error("152 must stay above the raised bound")
+	if chromiumMajorKnownGood("153.0.0.0.1") {
+		t.Error("153 must stay above the raised bound")
+	}
+	// The raise must actually move the verdict from the default (151):
+	// 152 is above the default bound but inside the raised one.
+	if !chromiumMajorKnownGood("152") {
+		t.Error("bare major 152 must be admitted under the raised bound")
 	}
 }
 
@@ -84,12 +90,13 @@ func TestNormalizeChannel(t *testing.T) {
 func TestScanCacheFreeSkipsProMarkedAndIncompatibleDirs(t *testing.T) {
 	cache := t.TempDir()
 	spec := linuxSpec(t)
-	// pro-marked 151: newest overall, but the free line never
-	// satisfies a free scan (mirror of the pro-tier marker rule).
+	// pro-marked 151: newest BOUND-COMPATIBLE dir, yet the free line
+	// never satisfies a free scan (mirror of the pro-tier marker rule)
+	// — the marker skip wins even when the major is inside the bound.
 	proDir := filepath.Dir(fakeInstalledBinary(t, cache, "151.0.7922.108.6"))
 	markProBinary(t, proDir)
-	// free 147: incompatible with the pinned chromedp driver.
-	fakeInstalledBinary(t, cache, "147.0.0.0.1")
+	// free 152: above the verified bound (151) — skipped.
+	fakeInstalledBinary(t, cache, "152.0.0.0.1")
 	// free 146: compatible — the expected pick.
 	want := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
 
@@ -108,8 +115,9 @@ func TestScanCacheFreeSkipsProMarkedAndIncompatibleDirs(t *testing.T) {
 func TestScanCacheFreeOnlyIncompatibleIsLoudCompatError(t *testing.T) {
 	cache := t.TempDir()
 	spec := linuxSpec(t)
-	fakeInstalledBinary(t, cache, "151.0.7922.108.6")
-	fakeInstalledBinary(t, cache, "150.0.0.0.1")
+	// The lone free dir sits above the verified bound (151): the free
+	// line exists but none of it is drivable — loud, not silent.
+	fakeInstalledBinary(t, cache, "152.0.0.0.1")
 
 	bin, ok, err := scanCacheFree(cache, spec)
 	if ok || bin != nil {
@@ -119,11 +127,11 @@ func TestScanCacheFreeOnlyIncompatibleIsLoudCompatError(t *testing.T) {
 	if !errors.As(err, &compat) {
 		t.Fatalf("want *CompatError, got %T: %v", err, err)
 	}
-	if compat.Newest != "151.0.7922.108.6" || compat.Bound != maxKnownGoodChromiumMajor {
+	if compat.Newest != "152.0.0.0.1" || compat.Bound != maxKnownGoodChromiumMajor {
 		t.Errorf("compat = %+v", compat)
 	}
 	// The error names both the rejected version and the fix.
-	for _, want := range []string{"151.0.7922.108.6", "совместимости"} {
+	for _, want := range []string{"152.0.0.0.1", "совместимости"} {
 		if !strings.Contains(compat.Error(), want) {
 			t.Errorf("compat error %q must mention %q", compat.Error(), want)
 		}

@@ -37,8 +37,8 @@ type env struct {
 	route string
 }
 
-// close releases the registry's shared resources (the CF bypass stack
-// when [cf] is enabled; a no-op otherwise).
+// close releases the registry's shared resources (the CF bypass
+// stack; a no-op without one).
 func (e *env) close() {
 	if e.reg != nil {
 		_ = e.reg.Close()

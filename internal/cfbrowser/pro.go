@@ -60,6 +60,9 @@ type ProVersionOptions struct {
 	DownloadBase string
 	// HTTPClient overrides transport (nil = default).
 	HTTPClient *http.Client
+	// ProxyURL is the [cf] proxy for pro version traffic (PR80;
+	// empty = direct). Ignored when HTTPClient is set.
+	ProxyURL string
 }
 
 func (o ProVersionOptions) downloadBase() string {
@@ -82,7 +85,14 @@ func (o ProVersionOptions) httpClient() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	return &http.Client{Timeout: 10 * time.Second}
+	// [cf] proxy (PR80): config load validated the scheme; a build
+	// failure here loud-warns and falls back to direct.
+	hc, err := DownloadHTTPClient(o.ProxyURL, 10*time.Second)
+	if err != nil {
+		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		return &http.Client{Timeout: 10 * time.Second}
+	}
+	return hc
 }
 
 // ResolveProVersion resolves the newest pro-channel version for the

@@ -62,6 +62,11 @@ type UpdaterConfig struct {
 	// only while a valid key sees a chromedp-compatible pro latest;
 	// "free" never touches pro; "pro" keeps the pre-PR73 cycle.
 	Channel string
+	// ProxyURL is the [cf] proxy for update/download traffic (PR80;
+	// empty = direct): the reachability probe, the free GitHub client,
+	// pro version/download calls and manifest verification. It never
+	// touches the stealth browser's page traffic.
+	ProxyURL string
 	// Logger receives outcome lines (nil = slog.Default()).
 	Logger *slog.Logger
 	// HTTPClient overrides transport (tests).
@@ -141,7 +146,7 @@ func NewUpdater(cfg UpdaterConfig) *Updater {
 	}
 	return &Updater{
 		cfg:      cfg,
-		gh:       NewGitHubClient(cfg.APIBase, cfg.HTTPClient),
+		gh:       NewGitHubClient(cfg.APIBase, updaterHTTPClient(cfg)),
 		probeURL: cfg.ProbeURL,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -328,7 +333,7 @@ func (u *Updater) check(ctx context.Context) error {
 	u.probeMu.RLock()
 	probeURL := u.probeURL
 	u.probeMu.RUnlock()
-	if !reachable(ctx, probeURL, u.cfg.HTTPClient) {
+	if !reachable(ctx, probeURL, u.downloadClient()) {
 		u.record(cacheDir, UpdateStatus{
 			InstalledVersion: u.baselineVersion(cacheDir, spec, channel), Deferred: true,
 			LastError: "probe: network unreachable",
@@ -377,6 +382,7 @@ func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec Platf
 			CacheDir:   u.cfg.CacheDir,
 			APIBase:    u.cfg.LicenseAPIBase,
 			HTTPClient: u.cfg.HTTPClient,
+			ProxyURL:   u.cfg.ProxyURL,
 		})
 		if licErr != nil {
 			// License unprovable after the probe said "online": a
@@ -438,7 +444,7 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 
 	// Newer release: forced install of exactly this release (the
 	// generic Install ladder would reuse the cached older binary).
-	info, err := downloadAndInstall(ctx, u.gh, rel, spec, cacheDir, resolveDownloadBase(u.cfg.DownloadBase), logger)
+	info, err := downloadAndInstall(ctx, u.gh, rel, spec, cacheDir, resolveDownloadBase(u.cfg.DownloadBase), logger, nil)
 	if err != nil {
 		u.record(cacheDir, UpdateStatus{
 			LatestVersion: rel.Version, InstalledVersion: installedVersion,
@@ -477,6 +483,7 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 // loud.
 func (u *Updater) tryProUpgradeCycle(ctx context.Context, cacheDir string, spec PlatformSpec, licRep *LicenseReport, logger *slog.Logger) bool {
 	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
+		ProxyURL:     u.cfg.ProxyURL,
 		CacheDir:     u.cfg.CacheDir,
 		DownloadBase: u.cfg.DownloadBase,
 		HTTPClient:   u.cfg.HTTPClient,
@@ -510,6 +517,7 @@ func (u *Updater) checkProChannel(ctx context.Context, cacheDir string, spec Pla
 		CacheDir:   u.cfg.CacheDir,
 		APIBase:    u.cfg.LicenseAPIBase,
 		HTTPClient: u.cfg.HTTPClient,
+		ProxyURL:   u.cfg.ProxyURL,
 	})
 	if licErr != nil {
 		// License unprovable after the probe said "online": treat as
@@ -559,6 +567,7 @@ func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSp
 	}
 
 	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
+		ProxyURL:     u.cfg.ProxyURL,
 		CacheDir:     u.cfg.CacheDir,
 		DownloadBase: u.cfg.DownloadBase,
 		HTTPClient:   u.cfg.HTTPClient,
@@ -644,6 +653,28 @@ func (u *Updater) Status() UpdateStatus {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.status
+}
+
+// updaterHTTPClient resolves the updater's transport: the explicit
+// HTTPClient override wins (tests); otherwise the [cf] proxy transport
+// (PR80); otherwise direct.
+func updaterHTTPClient(cfg UpdaterConfig) *http.Client {
+	if cfg.HTTPClient != nil {
+		return cfg.HTTPClient
+	}
+	hc, err := DownloadHTTPClient(cfg.ProxyURL, 10*time.Minute)
+	if err != nil {
+		cfg.logger().Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		return &http.Client{Timeout: 10 * time.Minute}
+	}
+	return hc
+}
+
+// downloadClient resolves the effective update/download transport:
+// the explicit HTTPClient override wins (tests); otherwise the [cf]
+// proxy transport (PR80); otherwise direct.
+func (u *Updater) downloadClient() *http.Client {
+	return updaterHTTPClient(u.cfg)
 }
 
 // reachable probes url with a bounded HEAD request; any HTTP response

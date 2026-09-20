@@ -32,7 +32,6 @@ func apPr71Provider(t *testing.T) (*AnimePahe, *cfbrowser.Manager) {
 	t.Helper()
 
 	cfg := config.Default()
-	cfg.CF.Enabled = true
 	if proxy := os.Getenv("ANICLI_LIVE_PROXY"); proxy != "" {
 		cfg.Network.ProxyURL = proxy
 	}

@@ -23,7 +23,7 @@ var cfChallengeMarkers = []string{
 const cfBodyScan = 4096
 
 // CFChallengeError reports a Cloudflare challenge response that could
-// not be cleared (no solver attached, or the solve failed).
+// not be cleared (solver unavailable, or the solve failed).
 type CFChallengeError struct {
 	// URL is the challenged request URL.
 	URL string
@@ -36,7 +36,10 @@ func (e *CFChallengeError) Error() string {
 	if e.Cause != nil {
 		return fmt.Sprintf("cloudflare challenge on %s (solve failed: %v)", e.URL, e.Cause)
 	}
-	return fmt.Sprintf("cloudflare challenge on %s (no solver attached; enable [cf] and run `anicli cf install`)", e.URL)
+	// PR80: CF is always on — the solver is wired at startup and the
+	// browser self-installs. This branch survives only for anomalous
+	// wiring; the text names the remedy instead of the removed knob.
+	return fmt.Sprintf("cloudflare challenge on %s (CF-solver недоступен — браузер скачивается автоматически при запуске; при повторении выполните `anicli cf install`, при блокировках настройте [cf] proxy)", e.URL)
 }
 
 // Unwrap exposes the solve failure.
@@ -73,8 +76,9 @@ type CFSolver interface {
 // detected challenge maps onto the typed CFChallengeError — a
 // deliberate delta from the pre-CF code, where such responses
 // surfaced as the generic ErrProvider403/StatusError mapping: an
-// unsolved challenge is a distinct, actionable failure (enable [cf],
-// run `anicli cf install`), not a plain status.
+// unsolved challenge is a distinct, actionable failure (the stealth
+// browser self-installs at startup; `anicli cf install` forces it),
+// not a plain status.
 func WithCFSolver(solver CFSolver) Option {
 	return func(c *Client) { c.cfSolver = solver }
 }

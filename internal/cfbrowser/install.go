@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Upstream cache-contract environment variables.
@@ -131,8 +132,33 @@ type InstallOptions struct {
 	Channel string
 	// Logger receives progress lines (nil = slog.Default()).
 	Logger *slog.Logger
+	// OnProgress, when set, receives integer download percents (0-100,
+	// monotone, ~5% granularity) plus the version being downloaded —
+	// the CLI's colored pre-TUI progress line (PR80). Nil = ignored.
+	OnProgress func(pct int, version string)
+	// ProxyURL is the [cf] proxy for download/update traffic (PR80):
+	// free GitHub fetches, pro version/download calls, license checks
+	// and manifest verification. Empty = direct. It never touches the
+	// stealth browser's page traffic.
+	ProxyURL string
 	// HTTPClient overrides the download/API client (nil = default).
 	HTTPClient *http.Client
+}
+
+// downloadHTTPClient resolves the effective download/update transport:
+// the explicit HTTPClient override wins (tests); otherwise the [cf]
+// proxy transport (PR80); otherwise direct. A proxy build failure
+// (impossible after config validation) degrades loud-warned to direct.
+func (o InstallOptions) downloadHTTPClient(timeout time.Duration) *http.Client {
+	if o.HTTPClient != nil {
+		return o.HTTPClient
+	}
+	hc, err := DownloadHTTPClient(o.ProxyURL, timeout)
+	if err != nil {
+		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		return &http.Client{Timeout: timeout}
+	}
+	return hc
 }
 
 // logger resolves the effective slog logger.
@@ -161,7 +187,7 @@ func (o InstallOptions) pinnedVersion() string {
 
 // licenseOptions maps the install options onto license resolution.
 func (o InstallOptions) licenseOptions() LicenseOptions {
-	return LicenseOptions{CacheDir: o.CacheDir, APIBase: o.LicenseAPIBase, HTTPClient: o.HTTPClient}
+	return LicenseOptions{CacheDir: o.CacheDir, APIBase: o.LicenseAPIBase, HTTPClient: o.HTTPClient, ProxyURL: o.ProxyURL}
 }
 
 // ResolveCacheDir resolves the CloakBrowser cache directory:
@@ -381,7 +407,7 @@ func cachedOrLatestLadder(ctx context.Context, opts InstallOptions, spec Platfor
 // inconclusive (network-level) probe serves the verified bytes with a
 // loud note and persists no verdict.
 func installFreeLatest(ctx context.Context, opts InstallOptions, spec PlatformSpec, cacheDir string, logger *slog.Logger) (*BinaryInfo, error) {
-	gh := NewGitHubClient(opts.APIBase, opts.HTTPClient)
+	gh := NewGitHubClient(opts.APIBase, opts.downloadHTTPClient(10*time.Minute))
 	rel, err := gh.LatestFreeRelease(ctx, spec)
 	if err != nil {
 		var unavailable *AssetUnavailableError
@@ -390,7 +416,7 @@ func installFreeLatest(ctx context.Context, opts InstallOptions, spec PlatformSp
 		}
 		return nil, &OfflineError{Cause: err}
 	}
-	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger, opts.OnProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +474,7 @@ func installPinnedFree(ctx context.Context, opts InstallOptions, spec PlatformSp
 	} else {
 		logger.Warn(pinnedBypassNote(pinned))
 	}
-	gh := NewGitHubClient(opts.APIBase, opts.HTTPClient)
+	gh := NewGitHubClient(opts.APIBase, opts.downloadHTTPClient(10*time.Minute))
 	rel, err := gh.FreeReleaseForVersion(ctx, spec, pinned)
 	if err != nil {
 		var unavailable *AssetUnavailableError
@@ -457,7 +483,7 @@ func installPinnedFree(ctx context.Context, opts InstallOptions, spec PlatformSp
 		}
 		return nil, &OfflineError{Cause: err}
 	}
-	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger)
+	bin, err := downloadAndInstall(ctx, gh, rel, spec, cacheDir, opts.downloadBase(), logger, opts.OnProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +512,7 @@ func installProLatest(ctx context.Context, opts InstallOptions, spec PlatformSpe
 	version, err := ResolveProVersion(ctx, tag, ProVersionOptions{
 		CacheDir:     opts.CacheDir,
 		DownloadBase: opts.DownloadBase,
-		HTTPClient:   opts.HTTPClient,
+		HTTPClient:   opts.downloadHTTPClient(10 * time.Minute),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cfbrowser: pro channel (лицензия действует, откат на free не выполняется): %w", err)
@@ -524,7 +550,7 @@ func upgradeToProBestEffort(ctx context.Context, opts InstallOptions, spec Platf
 	version, err := ResolveProVersion(ctx, spec.Tag(), ProVersionOptions{
 		CacheDir:     opts.CacheDir,
 		DownloadBase: opts.DownloadBase,
-		HTTPClient:   opts.HTTPClient,
+		HTTPClient:   opts.downloadHTTPClient(10 * time.Minute),
 	})
 	if err != nil {
 		return nil, err
@@ -599,10 +625,13 @@ func installProVersion(ctx context.Context, opts InstallOptions, spec PlatformSp
 		Key:          key,
 		Tag:          spec.Tag(),
 		DownloadBase: opts.DownloadBase,
-		HTTPClient:   opts.HTTPClient,
+		HTTPClient:   opts.downloadHTTPClient(10 * time.Minute),
 	}, f, func(pct int) {
 		if pct-lastPct >= 5 {
 			logger.Info("cfbrowser: download progress", "pct", pct, "version", version)
+			if opts.OnProgress != nil {
+				opts.OnProgress(pct, version)
+			}
 			lastPct = pct
 		}
 	})
@@ -625,7 +654,7 @@ func installProVersion(ctx context.Context, opts InstallOptions, spec PlatformSp
 		Channel:       channelPro,
 		ArchiveName:   spec.Asset,
 		ArchiveDigest: digest,
-	}, opts.HTTPClient)
+	}, opts.downloadHTTPClient(manifestFetchTimeout))
 	if err != nil {
 		return nil, err
 	}
@@ -807,7 +836,7 @@ func dirChannel(dir string) string {
 // payload into chromium-<version>/ and returns the BinaryInfo.
 // Every failure cleans the work directory and leaves no partial
 // chromium-<version> directory behind.
-func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease, spec PlatformSpec, cacheDir, downloadBase string, logger *slog.Logger) (*BinaryInfo, error) {
+func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease, spec PlatformSpec, cacheDir, downloadBase string, logger *slog.Logger, onProgress func(pct int, version string)) (*BinaryInfo, error) {
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return nil, fmt.Errorf("cfbrowser: create cache dir %s: %w", cacheDir, err)
 	}
@@ -838,6 +867,9 @@ func downloadAndInstall(ctx context.Context, gh *GitHubClient, rel *FreeRelease,
 	digest, dlErr := gh.DownloadAsset(ctx, rel.Asset, func(pct int) {
 		if pct-lastPct >= 5 {
 			logger.Info("cfbrowser: download progress", "pct", pct, "version", rel.Version)
+			if onProgress != nil {
+				onProgress(pct, rel.Version)
+			}
 			lastPct = pct
 		}
 	}, f)

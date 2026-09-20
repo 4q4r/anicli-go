@@ -21,15 +21,14 @@ type Manager struct {
 	Updater *Updater
 }
 
-// NewManager builds the stack from settings. A disabled [cf] section
-// returns a nil Manager without error — callers treat nil as "no
-// ladder". An enabled section with no resolvable binary fails loud
-// with the `anicli cf install` hint (BinaryMissingError).
+// NewManager builds the stack from settings. PR80: CF is always on —
+// the enabled knob is gone. The stealth-Chromium binary resolves
+// LAZILY (at the first solve or bridge use): a missing binary no
+// longer fails the construction — the CLI startup auto-downloads it
+// before the TUI; when that install failed, the app still boots and
+// CF consumers surface typed errors at use while the background
+// updater self-heals the install.
 func NewManager(cfg config.Settings) (*Manager, error) {
-	if !cfg.CF.Enabled {
-		return nil, nil
-	}
-
 	base := cfg.General.DataDir
 	if base == "" {
 		var err error
@@ -40,23 +39,21 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 	}
 	store := NewClearanceStore(filepath.Join(base, "cfstore.json"), DefaultClearanceTTL)
 
-	bin, err := ResolveCurrentBinary(ResolveOptions{Channel: cfg.CF.Channel})
-	if err != nil {
-		return nil, err
-	}
-
 	solver := NewSolver(SolverConfig{
 		ProxyURL:           cfg.Network.ProxyURL,
 		SolveTimeout:       cfg.CF.SolveTimeout,
 		BrowserIdleTimeout: cfg.CF.BrowserIdleTimeout,
 		Store:              store,
-		Binary:             bin,
-		Channel:            cfg.CF.Channel,
+		// Binary nil: the lazy launch resolves the newest complete
+		// cache build at first use, so installs landing mid-session
+		// are picked up without a restart.
+		Channel: cfg.CF.Channel,
 	})
 	updater := NewUpdater(UpdaterConfig{
 		Enabled:  AutoUpdateFromConfig(cfg.CF.AutoUpdate),
 		Interval: cfg.CF.UpdateInterval,
 		Channel:  cfg.CF.Channel,
+		ProxyURL: cfg.CF.Proxy,
 	})
 	solver.SetUpdater(updater)
 	updater.Start()

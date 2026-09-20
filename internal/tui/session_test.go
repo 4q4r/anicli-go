@@ -1399,8 +1399,8 @@ func TestSessionWatchSyncsShikiProgress(t *testing.T) {
 			if sm.err != nil {
 				t.Fatalf("sync must succeed, got %v", sm.err)
 			}
-			if !strings.Contains(sm.note, "прогресс синхронизирован (эп 1)") {
-				t.Fatalf("note = %q, want the synced verdict", sm.note)
+			if !strings.Contains(sm.note, "Shikimori: прогресс синхронизирован (эп 1)") {
+				t.Fatalf("note = %q, want the synced verdict with the full product name", sm.note)
 			}
 		}
 	}
@@ -1464,7 +1464,7 @@ func TestSessionWatchSyncSkipsUnauthenticated(t *testing.T) {
 	msgs := shikiPlayToLaunch(t, s)
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
-			if !strings.Contains(sm.note, "нет авторизации") {
+			if !strings.Contains(sm.note, "Shikimori: нет авторизации") {
 				t.Fatalf("note = %q, want the typed unauth skip", sm.note)
 			}
 		}
@@ -1489,7 +1489,7 @@ func TestSessionWatchSyncDisabledTyped(t *testing.T) {
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
 			found = true
-			if !strings.Contains(sm.note, "трекер отключён") {
+			if !strings.Contains(sm.note, "Shikimori: трекер отключён") {
 				t.Fatalf("note = %q, want the disabled skip", sm.note)
 			}
 		}
@@ -1519,7 +1519,7 @@ func TestSessionWatchSyncNeverRollsBack(t *testing.T) {
 	sawNote := false
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
-			if !strings.Contains(sm.note, "не откатывается") {
+			if !strings.Contains(sm.note, "Shikimori: серия") && !strings.Contains(sm.note, "не откатывается") {
 				t.Fatalf("note = %q, want the rollback guard", sm.note)
 			}
 			sawNote = true
@@ -1561,7 +1561,7 @@ func TestSessionWatchSyncFailureLogged(t *testing.T) {
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok && sm.err != nil {
 			sawErr = true
-			if !strings.Contains(sm.err.Error(), "ошибка синхронизации") {
+			if !strings.Contains(sm.err.Error(), "Shikimori: ошибка синхронизации") {
 				t.Fatalf("err = %v, want the sync failure prefix", sm.err)
 			}
 		}

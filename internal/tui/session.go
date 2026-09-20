@@ -1525,12 +1525,12 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 	log := deps.logger()
 	if deps.Shiki == nil || !deps.Shiki.Enabled() {
 		log.Info("tui: shiki: tracker disabled; progress push skipped", "episode", episode)
-		return shikiSyncedMsg{note: "шики: трекер отключён — прогресс не отправлен"}
+		return shikiSyncedMsg{note: "Shikimori: трекер отключён — прогресс не отправлен"}
 	}
 	if mode := deps.Shiki.Mode(); mode == "none" || mode == "disabled" {
 		log.Info("tui: shiki: no auth; progress push skipped",
 			"episode", episode, "mode", mode)
-		return shikiSyncedMsg{note: "шики: нет авторизации — прогресс не отправлен"}
+		return shikiSyncedMsg{note: "Shikimori: нет авторизации — прогресс не отправлен"}
 	}
 
 	var (
@@ -1562,13 +1562,14 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 		log.Info("tui: shiki: episode behind local progress; push skipped",
 			"episode", episode, "prior", prior)
 		return shikiSyncedMsg{note: fmt.Sprintf(
-			"шики: серия %d — прогресс уже %d, счётчик не откатывается", episode, prior)}
+			"Shikimori: серия %d — прогресс уже %d, счётчик не откатывается", episode, prior)}
 	}
 
 	newRate, err := deps.Shiki.UpdateEpisodes(ctx, shikimoriID, rateID, episode, status)
 	if err != nil {
 		log.Warn("tui: shiki: progress push failed", "episode", episode, "error", err)
-		return shikiSyncedMsg{err: fmt.Errorf("шики: ошибка синхронизации: %w", err)}
+		//nolint:staticcheck // ST1005: user-facing verdict carries the product name (PR80 owner ruling)
+		return shikiSyncedMsg{err: fmt.Errorf("Shikimori: ошибка синхронизации: %w", err)}
 	}
 	// A created rate id is persisted so the next push PATCHes instead
 	// of duplicating (SyncEpisodeProgress pattern: the id write
@@ -1580,7 +1581,7 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 	}
 	log.Info("tui: shiki: progress synced",
 		"episode", episode, "rate", newRate, "status", status)
-	return shikiSyncedMsg{note: fmt.Sprintf("шики: прогресс синхронизирован (эп %d)", episode)}
+	return shikiSyncedMsg{note: fmt.Sprintf("Shikimori: прогресс синхронизирован (эп %d)", episode)}
 }
 
 // playCmd runs the player; it settles into playedMsg.

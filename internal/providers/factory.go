@@ -14,10 +14,10 @@ import (
 // allFactories lists the provider constructors in registry order. Each
 // entry gets its own netclient client: providers never share cookie
 // jars, and errors are tagged with the provider id. The build function
-// receives the full settings plus the shared CF manager (nil when
-// [cf] is disabled): wave-2 providers consume per-provider
-// configuration (kodik's API token), allanime consumes the browser
-// bridge.
+// receives the full settings plus the shared CF manager (always built
+// since PR80; nil only for callers that skip NewManager): wave-2
+// providers consume per-provider configuration (kodik's API token),
+// allanime consumes the browser bridge.
 var allFactories = []struct {
 	id    string
 	build func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
@@ -167,8 +167,9 @@ var allFactories = []struct {
 	}},
 }
 
-// buildAABridge wires the AllAnime crypto bridge when [cf].enabled
-// supplies a stealth browser (nil otherwise — pure-Go typed errors).
+// buildAABridge wires the AllAnime crypto bridge (CF is always on —
+// the manager always supplies a stealth browser; a nil-manager call
+// remains guarded for API users who skip NewManager).
 func buildAABridge(cf *cfbrowser.Manager) aaBridgeSource {
 	if cf == nil || cf.Solver == nil {
 		return nil
@@ -295,8 +296,8 @@ func sortDisabled(disabled []DisabledProvider) {
 // in a SearchDelegator recording into stats, and — when
 // [providers].exclude_streams is configured — in a dub stream filter
 // that drops trash streams from episode listings (PR23). stats may be
-// nil: searches then simply are not recorded. When [cf].enabled the CF
-// challenge ladder is wired into every client; Close releases it.
+// nil: searches then simply are not recorded. The CF challenge ladder
+// is always wired into every client (PR80); Close releases it.
 // When [torrent].enabled the registry also builds the ONE shared lazy
 // torrent engine, injects it into every torrent provider (SetEngine)
 // and owns its teardown (PR36): the TUI reuses the same engine via

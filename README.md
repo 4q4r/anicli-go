@@ -244,11 +244,18 @@ tracker_lists = [       # внешние списки трекеров: один
 max_concurrency = 2     # одновременные фоновые загрузки
 
 [cf]
-enabled = false         # лестница обхода Cloudflare (стелс-Chromium CloakBrowser)
+                        # PR80: параметр enabled удалён — обход Cloudflare
+                        # всегда включён; стелс-Chromium скачивается
+                        # автоматически при первом запуске.
 channel = "auto"        # auto (по умолчанию): free-база, pro-апгрейд при действующем
                         # ключе (anicli cf login), несовместимый pro громко пропускается;
                         # free: pro не трогается даже с ключом; pro: всегда
                         # лицензионный канал
+proxy = ""              # прокси ТОЛЬКО для скачиваний/обновлений CloakBrowser (PR80):
+                        # загрузка браузера, free/pro-каналы, лицензия, проверки
+                        # обновлений; пусто = прямое соединение; схемы http/https/socks5/socks5h.
+                        # ГРАНИЦЫ: не касается страниц стелс-браузера и трафика источников —
+                        # те ходят через network.proxy_url
 
 [torrent]
 enabled = true          # подсистема торрентов (nyaa/animetosho/…)
@@ -284,7 +291,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |
 | gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
-| animepahe | animepahe.pw | видео (англ. субтитры) | ⚠️ только с `[cf] enabled = true` (PR78-заметка): сайт пере-челленджит небраузерные отпечатки даже с повторенными clearance-куками (досье PR71), поэтому поиск и resolve ходят через стелс-браузерный мост CloakBrowser; с выключенным [cf] строка поиска отвечает типизированной ошибкой «cloudflare challenge … (no solver attached; enable [cf]…)». Не сайт-зеркало: `animepahe.ru` мёртв, `.si` умер в 04.2026 |
+| animepahe | animepahe.pw | видео (англ. субтитры) | ✅ через стелс-браузерный мост CloakBrowser (всегда включён, PR80): сайт пере-челленджит небраузерные отпечатки даже с повторенными clearance-куками (досье PR71), поэтому поиск и resolve ходят через мост. Не сайт-зеркало: `animepahe.ru` мёртв, `.si` умер в 04.2026 |
 | kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | dreamcast | dreamerscast.com | видео | ✅ живой |

@@ -42,8 +42,8 @@ type RealDeps struct {
 	// shikimori client.
 	ShikiNet *netclient.Client
 	// registry is the provider set (closed on Close: releases the CF
-	// bypass stack when [cf] is enabled, and tears down the shared
-	// torrent engine when it was ever started).
+	// bypass stack — always built since PR80 — and tears down the
+	// shared torrent engine when it was ever started).
 	registry *providers.Registry
 	// buffered is the PR43 buffered-watch downloader; Close sweeps its
 	// active temp dirs.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,11 @@ import (
 // production default (90s) — the timeout scenario overrides it.
 func smokeDeps(t *testing.T, smokeTimeout time.Duration, ps ...contracts.Provider) deps {
 	t.Helper()
+
+	// Hermetic config: never the developer's real settings file (the
+	// PR80 removed-key migration error would fail the run on legacy
+	// files).
+	t.Setenv("ANICLI_CONFIG", filepath.Join(t.TempDir(), "settings.toml"))
 
 	return deps{
 		buildRegistry: func(config.Settings) (*providers.Registry, error) {

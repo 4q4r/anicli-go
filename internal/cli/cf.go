@@ -68,13 +68,17 @@ func runCFInstall(ctx context.Context, out io.Writer) error {
 	}
 	channel := settings.CF.Channel
 	if channel != cfbrowser.ChannelFree {
-		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{})
+		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{ProxyURL: settings.CF.Proxy})
 		if repErr == nil && rep != nil && rep.Status.Valid {
 			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
 				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
 		}
 	}
-	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{Logger: logger, Channel: channel})
+	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{
+		Logger:   logger,
+		Channel:  channel,
+		ProxyURL: settings.CF.Proxy,
+	})
 	if err != nil {
 		return fmt.Errorf("cf install: %w", err)
 	}
@@ -204,16 +208,11 @@ func runCFSolve(ctx context.Context, out io.Writer, providerID string) error {
 	if err != nil {
 		return err
 	}
-	// Explicit command: the ladder is wanted even when [cf] is off.
-	settings.CF.Enabled = true
+	// PR80: CF is always on — no enabled override needed.
 
 	mgr, err := cfbrowser.NewManager(*settings)
 	if err != nil {
 		return fmt.Errorf("cf solve: %w", err)
-	}
-	if mgr == nil {
-		// Unreachable with Enabled=true; kept for safety.
-		return fmt.Errorf("cf solve: обход не сконфигурирован")
 	}
 	defer func() { _ = mgr.Close() }()
 

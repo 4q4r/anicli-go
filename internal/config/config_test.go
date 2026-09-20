@@ -592,3 +592,43 @@ exclude_streams = ["([unclosed"]
 		t.Fatalf("invalid exclude_streams regex must fail loud naming the key, got %v", err)
 	}
 }
+
+// TestLoadCFEnabledRemovedKey (PR80): the [cf] enabled knob is removed —
+// CF is always on. A legacy settings file carrying the key must fail
+// loud with the TARGETED migration message naming the exact fix, not
+// the generic unknown-key error.
+func TestLoadCFEnabledRemovedKey(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, "[cf]\nenabled = false\nsolve_timeout = \"90s\"\n")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load err = nil, want the removed-key migration error")
+	}
+	want := "[cf] enabled удалён — CF теперь всегда включён; удалите эту строку из settings.toml"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+	// The generic unknown-key hint must not shadow the targeted fix.
+	if strings.Contains(err.Error(), "unknown setting") {
+		t.Fatalf("err = %v, want the targeted message without the generic hint", err)
+	}
+}
+
+// TestLoadCFWithoutEnabledKeyStillLoads: the surviving [cf] keys keep
+// loading; only the removed knob triggers the migration message.
+func TestLoadCFWithoutEnabledKeyStillLoads(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, "[cf]\nsolve_timeout = \"60s\"\nbrowser_idle_timeout = \"10s\"\n")
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.CF.SolveTimeout != 60*time.Second {
+		t.Errorf("SolveTimeout = %v, want 60s", got.CF.SolveTimeout)
+	}
+	if got.CF.BrowserIdleTimeout != 10*time.Second {
+		t.Errorf("BrowserIdleTimeout = %v, want 10s", got.CF.BrowserIdleTimeout)
+	}
+}

@@ -229,14 +229,13 @@ type Torrent struct {
 	TrackerLists []string `toml:"tracker_lists"`
 }
 
-// CF configures the embedded Cloudflare bypass (CloakBrowser stealth
-// Chromium + clearance ladder). Entirely opt-in: disabled by default,
-// every provider request behaves exactly as before unless enabled.
-// Headless-only by design ruling: the solve browser always runs
-// headless (no window, no display dependency).
+// CF configures the always-on Cloudflare bypass (CloakBrowser stealth
+// Chromium + clearance ladder). PR80 owner ruling: the enabled knob is
+// removed — the machinery is integral and non-optional; the stealth
+// browser self-installs at startup when missing. Headless-only by
+// design ruling: the solve browser always runs headless (no window,
+// no display dependency).
 type CF struct {
-	// Enabled turns the challenge ladder on for all provider clients.
-	Enabled bool `toml:"enabled"`
 	// SolveTimeout bounds one challenge solve.
 	SolveTimeout time.Duration `toml:"solve_timeout"`
 	// BrowserIdleTimeout is how long an idle browser session survives
@@ -251,6 +250,13 @@ type CF struct {
 	AutoUpdate bool `toml:"auto_update"`
 	// UpdateInterval is the auto-update retry ticker cadence.
 	UpdateInterval time.Duration `toml:"update_interval"`
+	// Proxy is the proxy for cfbrowser DOWNLOAD/UPDATE traffic only —
+	// free GitHub fetches, pro version/download calls, license checks
+	// and update checks (PR80). It never touches the stealth browser's
+	// own page traffic and never touches netclient/provider traffic
+	// (that is network.proxy_url). Empty = direct. Schemes: http,
+	// https, socks5, socks5h — validated at load.
+	Proxy string `toml:"proxy"`
 	// Channel selects the stealth-Chromium line (PR73):
 	//
 	//   - "auto" (default): free is the base — public GitHub free
@@ -358,12 +364,12 @@ func Default() Settings {
 			ReadaheadMB: 32,
 		},
 		CF: CF{
-			Enabled:            false,
 			SolveTimeout:       90 * time.Second,
 			BrowserIdleTimeout: 15 * time.Second,
 			AutoUpdate:         true,
 			UpdateInterval:     30 * time.Minute,
 			Channel:            "auto",
+			Proxy:              "", // download/update traffic only; empty = direct
 		},
 	}
 }
@@ -403,7 +409,16 @@ func applyFile(path string, s *Settings) error {
 		// toml.ParseError already renders parser line information.
 		return fmt.Errorf("parse settings %s: %w", path, err)
 	}
-	if unknown := undecodedKeys(md); len(unknown) > 0 {
+	unknown := undecodedKeys(md)
+	// PR80: [cf] enabled was removed (always-on ruling) — a legacy file
+	// carrying it gets the TARGETED migration message naming the exact
+	// fix, not the generic unknown-key error.
+	for _, key := range unknown {
+		if key == "cf.enabled" {
+			return fmt.Errorf("settings %s: [cf] enabled удалён — CF теперь всегда включён; удалите эту строку из settings.toml", path)
+		}
+	}
+	if len(unknown) > 0 {
 		return fmt.Errorf("settings %s: unknown setting %s (see settings.example.toml)",
 			path, strings.Join(unknown, ", "))
 	}
@@ -465,6 +480,22 @@ func (s *Settings) Validate() error {
 		default:
 			return fmt.Errorf("network.proxy_url %q: unsupported scheme %q (want http, https or socks5)",
 				s.Network.ProxyURL, u.Scheme)
+		}
+	}
+	if s.CF.Proxy != "" {
+		// PR80: the download/update proxy (download traffic only —
+		// never the stealth browser's page traffic, never provider
+		// traffic). Scheme gate mirrors network.proxy_url plus socks5h.
+		u, err := url.Parse(s.CF.Proxy)
+		if err != nil {
+			return fmt.Errorf("cf.proxy %q: %w", s.CF.Proxy, err)
+		}
+		switch u.Scheme {
+		case "http", "https", "socks5", "socks5h":
+			// ok
+		default:
+			return fmt.Errorf("cf.proxy %q: unsupported scheme %q (want http, https, socks5 or socks5h)",
+				s.CF.Proxy, u.Scheme)
 		}
 	}
 	// Invalid exclude_streams regexes fail here, at startup, instead

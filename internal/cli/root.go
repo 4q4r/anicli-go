@@ -132,6 +132,15 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 		return err
 	}
 
+	// PR80: the stealth browser is startup infrastructure. Interactive
+	// face: colored progress, and the countdown only when an install
+	// completed this run; normal runs boot straight away. The [cf]
+	// channel and download proxy ride the install.
+	styled := colorsEnabled(out)
+	if newBrowserEnsure(settings.CF.Proxy, settings.CF.Channel).run(ctx, out, styled) {
+		runCountdown(out, styled)
+	}
+
 	// Startup notices render INSIDE the TUI (on the root screen), not
 	// here — pre-alt-screen terminal output is invisible after the TUI
 	// takes over.
@@ -313,6 +322,11 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 		return fmt.Errorf("api server is disabled: set api.enabled = true in settings (bind %s)",
 			settings.API.Bind)
 	}
+
+	// PR80: the server face downloads the stealth browser silently —
+	// slog progress lines only, no colors, no countdown (the countdown
+	// belongs to the interactive TUI boot).
+	ensureBrowserSilent(ctx, settings.CF.Proxy, settings.CF.Channel)
 
 	dbPath, err := settings.DBPath()
 	if err != nil {

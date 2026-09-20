@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,9 +11,8 @@ import (
 
 func TestCFDefaults(t *testing.T) {
 	s := Default()
-	if s.CF.Enabled {
-		t.Error("cf.enabled must default to false (opt-in, zero behavior change)")
-	}
+	// PR80: the enabled knob is removed — CF is always on (the
+	// always-engaged invariant lives in cfbrowser.NewManager).
 	if s.CF.SolveTimeout != 90*time.Second {
 		t.Errorf("cf.solve_timeout default = %v, want 90s", s.CF.SolveTimeout)
 	}
@@ -35,7 +35,6 @@ func TestCFFileOverrides(t *testing.T) {
 	path := filepath.Join(dir, "settings.toml")
 	content := `
 [cf]
-enabled = true
 solve_timeout = "2m"
 browser_idle_timeout = "5s"
 auto_update = false
@@ -48,9 +47,6 @@ channel = "free"
 	s, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
-	}
-	if !s.CF.Enabled {
-		t.Errorf("cf.enabled: %+v", s.CF)
 	}
 	if s.CF.SolveTimeout != 2*time.Minute {
 		t.Errorf("solve_timeout = %v", s.CF.SolveTimeout)
@@ -143,5 +139,32 @@ func TestCFUnknownKeyRejected(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("unknown cf key must fail loud")
+	}
+}
+
+// TestCFProxyValidation (PR80): [cf] proxy gates download/update
+// traffic — empty stays direct; supported schemes load; unknown
+// schemes fail loud at load time.
+func TestCFProxyValidation(t *testing.T) {
+	t.Parallel()
+
+	for _, proxy := range []string{"", "http://127.0.0.1:10809", "https://p.example", "socks5://p:1080", "socks5h://p:1080"} {
+		path := writeTOML(t, fmt.Sprintf("[cf]\nproxy = %q\n", proxy))
+		s, err := Load(path)
+		if err != nil {
+			t.Fatalf("proxy %q: load: %v", proxy, err)
+		}
+		if s.CF.Proxy != proxy {
+			t.Errorf("proxy = %q, want %q", s.CF.Proxy, proxy)
+		}
+	}
+
+	path := writeTOML(t, "[cf]\nproxy = \"ftp://127.0.0.1:21\"\n")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("ftp scheme must fail loud at load")
+	}
+	if !strings.Contains(err.Error(), "unsupported scheme") {
+		t.Fatalf("err = %v, want the unsupported-scheme message", err)
 	}
 }

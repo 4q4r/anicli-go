@@ -3,12 +3,15 @@ package cfbrowser
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -318,5 +321,119 @@ func TestScanCacheSkipsIncompleteDirs(t *testing.T) {
 	}
 	if runtime.GOOS == "windows" {
 		t.Skip("exec-bit check is unix-only")
+	}
+}
+
+// TestInstallReportsProgressCallback (PR80): the OnProgress seam feeds
+// the CLI's colored pre-TUI progress line — integer percents, monotone,
+// the installed version attached.
+func TestInstallReportsProgressCallback(t *testing.T) {
+	probeAlways(t)
+	archive := buildTarGz(t, map[string]struct {
+		mode os.FileMode
+		data string
+	}{
+		"chromium-146.0.7680.177.5/chrome":        {0o755, "ELF"},
+		"chromium-146.0.7680.177.5/resources.pak": {0o644, "pak"},
+	})
+	fx := newInstallFixture(t, archive, "")
+
+	var mu sync.Mutex
+	type tick struct {
+		pct     int
+		version string
+	}
+	var ticks []tick
+	info, err := Install(context.Background(), InstallOptions{
+		CacheDir: t.TempDir(),
+		APIBase:  fx.apiURL,
+		Platform: linuxSpec(t),
+		Logger:   testLogger(t),
+		OnProgress: func(pct int, version string) {
+			mu.Lock()
+			defer mu.Unlock()
+			ticks = append(ticks, tick{pct, version})
+		},
+	})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ticks) == 0 {
+		t.Fatal("OnProgress never fired")
+	}
+	last := 0
+	for _, tk := range ticks {
+		if tk.pct < last || tk.pct < 0 || tk.pct > 100 {
+			t.Fatalf("non-monotone or out-of-range pct: %v", ticks)
+		}
+		if tk.version != "146.0.7680.177.5" {
+			t.Errorf("version = %q", tk.version)
+		}
+		last = tk.pct
+	}
+	// The 5%-granularity throttle can swallow the exact 100 tick
+	// (96 → 100 crosses 4); the renderer paints the final state on
+	// Install success regardless.
+	if ticks[len(ticks)-1].pct < 95 {
+		t.Errorf("last pct = %d, want >= 95", ticks[len(ticks)-1].pct)
+	}
+	_ = info
+}
+
+// TestInstallRidesConfiguredProxy (PR80): with [cf] proxy set, the
+// free-channel download/update traffic flows THROUGH the configured
+// proxy (a transparent stub records and forwards to the fixture);
+// the install completes only because the proxy carried every request.
+func TestInstallRidesConfiguredProxy(t *testing.T) {
+	probeAlways(t)
+	archive := buildTarGz(t, map[string]struct {
+		mode os.FileMode
+		data string
+	}{
+		"chromium-146.0.7680.177.5/chrome":        {0o755, "ELF"},
+		"chromium-146.0.7680.177.5/resources.pak": {0o644, "pak"},
+	})
+	fx := newInstallFixture(t, archive, "")
+
+	var seen atomic.Int64
+	prox := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Add(1)
+		// Absolute-form request: forward to the recorded target host.
+		target := "http://" + r.Host + r.URL.RequestURI()
+		//nolint:gosec // G704: test-owned stub forwarding to the test fixture
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(prox.Close)
+
+	if _, err := Install(context.Background(), InstallOptions{
+		CacheDir: t.TempDir(),
+		APIBase:  fx.apiURL,
+		Platform: linuxSpec(t),
+		Logger:   testLogger(t),
+		ProxyURL: prox.URL,
+	}); err != nil {
+		t.Fatalf("install through the configured proxy: %v", err)
+	}
+	if seen.Load() == 0 {
+		t.Fatal("the download traffic never touched the configured proxy")
 	}
 }

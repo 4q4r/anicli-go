@@ -78,7 +78,6 @@ func TestLivePR78AniZoneNoResults(t *testing.T) {
 // rides the kwik WAF wall class and is not part of this proof.
 func TestLivePR78AnimePaheBridgeSearch(t *testing.T) {
 	cfg := config.Default()
-	cfg.CF.Enabled = true
 	if proxy := os.Getenv("ANICLI_LIVE_PROXY"); proxy != "" {
 		cfg.Network.ProxyURL = proxy
 	}

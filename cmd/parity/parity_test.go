@@ -368,19 +368,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 22)
+	d := newToolDeps(t, 23)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("22/22 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("23/23 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "22/22") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "23/23") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 22 {
+	for i := range 23 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -389,30 +389,31 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 
 // TestParityAllGateToleratesOneDead pins the tolerance semantics: the
 // floor is the roster minus one (16 of 17 since animedia joined in
-// PR56; 21 of 22 since hdrezka joined in PR69).
+// PR56; 21 of 22 since hdrezka joined in PR69; 22 of 23 since
+// anistar joined in PR77).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 22, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 23, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("21/22 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("22/23 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "21/22") {
-		t.Fatalf("summary must show 21/22:\n%s", out.String())
+	if !strings.Contains(out.String(), "22/23") {
+		t.Fatalf("summary must show 22/23:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 22, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 23, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("20/22 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("21/23 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "20/22") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 20/22 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "21/23") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 21/23 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())

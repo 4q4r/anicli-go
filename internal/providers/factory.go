@@ -127,6 +127,15 @@ var allFactories = []struct {
 		}
 		return newHDRezka(base, http)
 	}},
+	// anistar (PR77): the anistar.org DLE catalog with its self-hosted
+	// an-media.org player stack — the roster's first Windows-1251 site
+	// (search form POST and page bodies both ride cp1251). Written
+	// from the live site, not ported; no credentials. The p2p player
+	// page exposes direct per-quality HLS/MP4 links behind a media_id;
+	// the an-media edge requires the site Referer on playback.
+	{"anistar", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniStar(AniStarBase, http)
+	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
 	// injected by NewRegistry when [torrent] is enabled (All() leaves

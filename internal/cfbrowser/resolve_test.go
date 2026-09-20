@@ -160,36 +160,41 @@ func TestResolveCurrentBinaryAllFreshBadIsLoudCompatError(t *testing.T) {
 func TestResolveCurrentBinaryFallsBackToLastKnownGood(t *testing.T) {
 	overrideChromedpVersion(t, "test-chromedp")
 	overrideProbe(t, func(context.Context, string) probeOutcome {
-		t.Error("an all-fresh-bad cache must fall to the LKG rung without probing")
+		t.Error("an all-fresh-bad free line must fall to the LKG rung without probing")
 		return probeOutcome{}
 	}, nil)
 
-	// Every candidate freshly rejected; the store remembers 146 as
-	// the last binary a probe verified working. The LKG rung serves
-	// it — the owner's mechanism: when the new one fails, force the
-	// last one that worked.
+	// Every FREE candidate freshly rejected; the store's
+	// last-known-good is the installed pro-marked 150 a past probe
+	// verified (its own verdict expired long ago — expired bads do
+	// not block the rung). The owner's mechanism: when the new one
+	// fails, force the last one that worked — off-filter exempt
+	// because it is installed, loud.
 	cache := t.TempDir()
 	p152 := fakeInstalledBinary(t, cache, "152.0.0.0.1")
-	lkgPath := fakeInstalledBinary(t, cache, "146.0.7680.177.5")
+	proDir := filepath.Join(cache, VersionDirName("150.0.0.0.1"))
+	lkgPath := fakeInstalledBinary(t, cache, "150.0.0.0.1")
+	markProBinary(t, proDir)
 	now := time.Now().Format(time.RFC3339Nano)
+	expired := time.Now().Add(-badVerdictTTL - time.Hour).Format(time.RFC3339Nano)
 	writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
 		"verdicts": map[string]any{
 			"152": map[string]any{"verdict": "bad", "checked_at": now,
 				"re_probe_after": time.Now().Add(time.Hour).Format(time.RFC3339Nano), "reason": "seccomp"},
-			"146": map[string]any{"verdict": "bad", "checked_at": now,
-				"re_probe_after": time.Now().Add(time.Hour).Format(time.RFC3339Nano), "reason": "also broken"},
+			"150": map[string]any{"verdict": "bad", "checked_at": expired,
+				"re_probe_after": expired, "reason": "old kernel"},
 		},
 		"last_known_good": map[string]any{
-			"version": "146.0.7680.177.5", "channel": channelFree, "path": lkgPath,
-			"major": 146, "chromedp": "test-chromedp", "checked_at": now,
+			"version": "150.0.0.0.1", "channel": channelPro, "path": lkgPath,
+			"major": 150, "chromedp": "test-chromedp", "checked_at": now,
 		},
 	})
 
-	bin, err := ResolveCurrentBinary(ResolveOptions{CacheDir: cache, Channel: ChannelAuto})
+	bin, err := ResolveCurrentBinary(ResolveOptions{CacheDir: cache, Channel: channelFree})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if bin.Path != lkgPath || bin.Version != "146.0.7680.177.5" {
+	if bin.Path != lkgPath || bin.Version != "150.0.0.0.1" {
 		t.Errorf("bin = %+v (p152=%s), want the last-known-good %q", bin, p152, lkgPath)
 	}
 }
@@ -214,8 +219,8 @@ func TestResolveCurrentBinaryMissingVerdictProbesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if bin.Path != want || calls != 1 {
-		t.Fatalf("bin = %+v, probe calls = %d, want the candidate probed once", bin, calls)
+	if bin.Path != want || calls != 2 {
+		t.Fatalf("bin = %+v, probe calls = %d, want the candidate probed with two consecutive passes", bin, calls)
 	}
 	s := loadVerdictStore(cache)
 	if e, ok := s.verdictFor(151); !ok || e.Verdict != "good" {

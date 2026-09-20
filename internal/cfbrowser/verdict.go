@@ -30,6 +30,7 @@ package cfbrowser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,6 +49,13 @@ const (
 	// resolution re-probes: the environment can heal (PR75's kernel
 	// swap resurrected 151).
 	badVerdictTTL = 7 * 24 * time.Hour
+	// goodVerdictTTL is how long a good verdict binds before the next
+	// resolution re-probes it. A good verdict is earned by TWO
+	// consecutive probe passes (one lucky launch must never lock a
+	// flaky major in), and even then it decays after a day: a major
+	// that turned flaky must surface again instead of being trusted
+	// forever (PR76 review blocker).
+	goodVerdictTTL = 24 * time.Hour
 	// probeBudget bounds one probe (launch + navigate + title).
 	probeBudget = 20 * time.Second
 	// probeTargetURL is the probe navigation target: a minimal real
@@ -62,8 +70,10 @@ type verdictEntry struct {
 	Verdict string `json:"verdict"`
 	// CheckedAt is when the probe decided.
 	CheckedAt time.Time `json:"checked_at"`
-	// ReProbeAfter is when a bad verdict stops binding (bad only).
-	ReProbeAfter time.Time `json:"re_probe_after,omitempty"`
+	// ReProbeAfter is when the verdict stops binding: bad after
+	// badVerdictTTL, good after goodVerdictTTL. Nil/absent (legacy
+	// entries) reads as expired — the entry self-heals on re-probe.
+	ReProbeAfter *time.Time `json:"re_probe_after,omitempty"`
 	// Reason is the typed probe failure (bad only).
 	Reason string `json:"reason,omitempty"`
 }
@@ -152,24 +162,28 @@ func (s *verdictStore) bucket() *verdictBucket {
 	return b
 }
 
-// verdictFor reports the verdict for a major, honoring the bad-verdict
-// TTL: a fresh bad binds; an expired bad reads as no verdict so a
-// re-probe decides again.
+// verdictFor reports the verdict for a major, honoring the verdict
+// TTL: a verdict whose re-probe horizon is absent or past reads as no
+// verdict so a re-probe decides again (bad decays after 7d, good
+// after 24h; legacy entries without a horizon read as expired and
+// self-heal).
 func (s *verdictStore) verdictFor(major int) (verdictEntry, bool) {
 	e, ok := s.bucket().Verdicts[fmt.Sprint(major)]
 	if !ok {
 		return verdictEntry{}, false
 	}
-	if e.Verdict == "bad" && !time.Now().Before(e.ReProbeAfter) {
+	if e.ReProbeAfter == nil || !time.Now().Before(*e.ReProbeAfter) {
 		return verdictEntry{}, false
 	}
 	return e, true
 }
 
-// recordGood persists a good verdict and refreshes last-known-good.
+// recordGood persists a good verdict (with its ~goodVerdictTTL
+// re-probe horizon) and refreshes last-known-good.
 func (s *verdictStore) recordGood(major int, lkg lastKnownGood) {
+	horizon := time.Now().Add(goodVerdictTTL)
 	s.bucket().Verdicts[fmt.Sprint(major)] = verdictEntry{
-		Verdict: "good", CheckedAt: time.Now(),
+		Verdict: "good", CheckedAt: time.Now(), ReProbeAfter: &horizon,
 	}
 	lkg.Chromedp = s.chromedp
 	lkg.Major = major
@@ -181,9 +195,10 @@ func (s *verdictStore) recordGood(major int, lkg lastKnownGood) {
 // recordBad persists a bad verdict with its typed reason and the
 // default re-probe horizon (+badVerdictTTL).
 func (s *verdictStore) recordBad(major int, reason string) {
+	horizon := time.Now().Add(badVerdictTTL)
 	s.bucket().Verdicts[fmt.Sprint(major)] = verdictEntry{
 		Verdict: "bad", CheckedAt: time.Now(),
-		ReProbeAfter: time.Now().Add(badVerdictTTL), Reason: reason,
+		ReProbeAfter: &horizon, Reason: reason,
 	}
 	s.save()
 }
@@ -262,6 +277,14 @@ func probeWithChromedp(ctx context.Context, binaryPath string) probeOutcome {
 		if strings.HasPrefix(navErr.Error(), "page load error ") {
 			return probeOutcome{inconclusive: true, reason: navErr.Error()}
 		}
+		// The probe context is only ever cancelled by chromedp itself
+		// (the probe owns its deadline): a surfaced context.Canceled
+		// means the target/renderer died mid-navigation — the exact
+		// seccomp-crash shape. Name it for what it is.
+		if errors.Is(navErr, context.Canceled) {
+			return probeOutcome{reason: fmt.Sprintf(
+				"browser process died during navigation of %s (renderer crash): %v", probeTargetURL, navErr)}
+		}
 		return probeOutcome{reason: fmt.Sprintf("navigate %s: %v", probeTargetURL, navErr)}
 	}
 	if strings.TrimSpace(st.Title) == "" {
@@ -271,21 +294,48 @@ func probeWithChromedp(ctx context.Context, binaryPath string) probeOutcome {
 }
 
 // probeAndRecord runs the probe and persists its verdict (good also
-// refreshes last-known-good; inconclusive persists nothing). Shared
-// by the resolution evaluator and the install/update call sites.
+// refreshes last-known-good; inconclusive persists nothing). A verdict
+// good requires TWO CONSECUTIVE passes — each pass is a fresh launch,
+// so a single lucky launch (the reviewer's live-reproduced flaky 151)
+// can never lock a good in. A first-pass failure short-circuits: one
+// launch spent. Shared by the resolution evaluator and the
+// install/update call sites.
 func probeAndRecord(ctx context.Context, cacheDir string, bin *BinaryInfo, logger *slog.Logger) probeOutcome {
 	out := probeBinary(ctx, bin.Path)
-	s := loadVerdictStore(cacheDir)
-	major, _ := versionMajor(bin.Version)
 	switch {
 	case out.ok:
-		logger.Info("cfbrowser: probe passed — verdict good", "version", bin.Version, "path", bin.Path)
-		s.recordGood(major, lastKnownGood{Version: bin.Version, Channel: bin.Channel, Path: bin.Path})
+		// First pass alone proves nothing: demand a second
+		// consecutive pass before any good is recorded.
+		out2 := probeBinary(ctx, bin.Path)
+		switch {
+		case out2.ok:
+			out = out2
+			logger.Info("cfbrowser: probe passed twice — verdict good",
+				"version", bin.Version, "path", bin.Path)
+		case out2.inconclusive:
+			// The second pass could not navigate: no verdict either
+			// way — the first pass alone proves nothing.
+			logger.Warn("cfbrowser: второй проход неубечный (сеть) — вердикт не записан",
+				"version", bin.Version, "reason", out2.reason)
+			return out2
+		default:
+			logger.Warn("cfbrowser: второй проход провалился после удачного первого — вердикт bad (flaky)",
+				"version", bin.Version, "reason", out2.reason)
+			out = probeOutcome{reason: out2.reason}
+		}
 	case out.inconclusive:
 		logger.Warn("cfbrowser: probe inconclusive (network) — вердикт не записан",
 			"version", bin.Version, "reason", out.reason)
+		return out
 	default:
 		logger.Warn("cfbrowser: probe FAILED — вердикт bad", "version", bin.Version, "reason", out.reason)
+	}
+
+	s := loadVerdictStore(cacheDir)
+	major, _ := versionMajor(bin.Version)
+	if out.ok {
+		s.recordGood(major, lastKnownGood{Version: bin.Version, Channel: bin.Channel, Path: bin.Path})
+	} else if !out.inconclusive {
 		s.recordBad(major, out.reason)
 	}
 	return out
@@ -367,6 +417,15 @@ func lastKnownGoodRung(cacheDir, filter string, logger *slog.Logger) (*BinaryInf
 	if _, err := os.Stat(lkg.Path); err != nil {
 		logger.Warn("cfbrowser: last-known-good недоступен (бинарник удалён из кэша)",
 			"version", lkg.Version, "path", lkg.Path)
+		return nil, false
+	}
+	// A FRESH bad verdict on the LKG's own major is a guaranteed
+	// failed launch — the emergency rung must not serve it (PR76
+	// review minor). An expired bad does not block: the expiry IS the
+	// decision that the old bad no longer binds.
+	if e, has := s.verdictFor(lkg.Major); has && e.Verdict == "bad" {
+		logger.Warn("cfbrowser: last-known-good держит свежий вердикт bad — запуск заведомо провалится",
+			"version", lkg.Version, "reason", e.Reason)
 		return nil, false
 	}
 	if !channelHonorsFilter(filter, lkg.Channel) {

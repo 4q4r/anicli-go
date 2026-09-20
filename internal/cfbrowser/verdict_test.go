@@ -68,6 +68,9 @@ func TestVerdictStorePersistsGoodAndBad(t *testing.T) {
 	if !ok || got.Verdict != "good" {
 		t.Errorf("verdictFor(%d) = (%+v, %v), want good", major, got, ok)
 	}
+	if got.ReProbeAfter == nil || time.Until(*got.ReProbeAfter) <= goodVerdictTTL-time.Minute {
+		t.Errorf("good verdict must carry a ~%v re-probe horizon, got %v", goodVerdictTTL, got.ReProbeAfter)
+	}
 	bad, ok := reloaded.verdictFor(major + 1)
 	if !ok || bad.Verdict != "bad" {
 		t.Fatalf("verdictFor(%d) = (%+v, %v), want bad", major+1, bad, ok)
@@ -75,8 +78,151 @@ func TestVerdictStorePersistsGoodAndBad(t *testing.T) {
 	if bad.Reason == "" || !strings.Contains(bad.Reason, "exit 76") {
 		t.Errorf("bad verdict must carry the typed reason, got %q", bad.Reason)
 	}
-	if bad.ReProbeAfter.IsZero() || time.Until(bad.ReProbeAfter) <= badVerdictTTL-time.Minute {
+	if bad.ReProbeAfter == nil || time.Until(*bad.ReProbeAfter) <= badVerdictTTL-time.Minute {
 		t.Errorf("bad verdict re-probe-after must be ~now+%v, got %v", badVerdictTTL, bad.ReProbeAfter)
+	}
+}
+
+// TestGoodVerdictRequiresTwoConsecutivePasses is the review BLOCKER
+// regression: one lucky probe must never persist a TTL-less good. A
+// verdict good requires two consecutive passes (a fresh launch each
+// time); an ok-then-fail pair records bad, and a first-pass failure
+// never spends a second launch.
+func TestGoodVerdictRequiresTwoConsecutivePasses(t *testing.T) {
+	overrideChromedpVersion(t, "test-chromedp")
+	bin := &BinaryInfo{Path: "/x/chrome", Version: "151.0.0.0.1", Channel: channelFree}
+
+	t.Run("ok then ok locks good", func(t *testing.T) {
+		cache := t.TempDir()
+		var calls int
+		overrideProbe(t, func(context.Context, string) probeOutcome {
+			return probeOutcome{ok: true}
+		}, &calls)
+		out := probeAndRecord(context.Background(), cache, bin, testLogger(t))
+		if !out.ok || calls != 2 {
+			t.Fatalf("probe = %+v, calls = %d, want two passes and good", out, calls)
+		}
+		if e, has := loadVerdictStore(cache).verdictFor(151); !has || e.Verdict != "good" {
+			t.Errorf("verdict = (%+v, %v), want good", e, has)
+		}
+	})
+
+	t.Run("ok then fail records bad — no lucky good", func(t *testing.T) {
+		cache := t.TempDir()
+		// The flaky-major simulation: the probe alternates. The single
+		// pass must never lock a good off one lucky launch.
+		results := []probeOutcome{{ok: true}, {reason: "navigate: context canceled"}}
+		overrideProbe(t, func(context.Context, string) probeOutcome {
+			r := results[0]
+			results = results[1:]
+			return r
+		}, nil)
+		out := probeAndRecord(context.Background(), cache, bin, testLogger(t))
+		if out.ok || out.inconclusive {
+			t.Fatalf("probe = %+v, want bad", out)
+		}
+		e, has := loadVerdictStore(cache).verdictFor(151)
+		if !has || e.Verdict != "bad" {
+			t.Fatalf("verdict = (%+v, %v), want bad after ok-then-fail", e, has)
+		}
+		if !strings.Contains(e.Reason, "context canceled") {
+			t.Errorf("reason %q must carry the second pass failure", e.Reason)
+		}
+		if lkg := loadVerdictStore(cache).lastKnownGoodFor(); lkg != nil && lkg.Path == bin.Path {
+			t.Error("an ok-then-fail major must never become last-known-good")
+		}
+	})
+
+	t.Run("first-pass failure spends no second launch", func(t *testing.T) {
+		cache := t.TempDir()
+		var calls int
+		overrideProbe(t, func(context.Context, string) probeOutcome {
+			return probeOutcome{reason: "exit 76 (seccomp)"}
+		}, &calls)
+		out := probeAndRecord(context.Background(), cache, bin, testLogger(t))
+		if out.ok || calls != 1 {
+			t.Fatalf("probe = %+v, calls = %d, want bad after exactly one launch", out, calls)
+		}
+	})
+}
+
+// TestGoodVerdictTTLExpires: good verdicts are not forever — after
+// the TTL the next resolution re-probes (flaky majors must not stay
+// locked; bad keeps its own longer 7d horizon).
+func TestGoodVerdictTTLExpires(t *testing.T) {
+	overrideChromedpVersion(t, "test-chromedp")
+	cache := t.TempDir()
+	fresh := time.Now().Add(time.Hour).Format(time.RFC3339Nano)
+	expired := time.Now().Add(-goodVerdictTTL - time.Hour).Format(time.RFC3339Nano)
+	writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+		"verdicts": map[string]any{
+			"151": map[string]any{"verdict": "good", "checked_at": fresh, "re_probe_after": fresh},
+			"152": map[string]any{"verdict": "good", "checked_at": expired, "re_probe_after": expired},
+		},
+	})
+	s := loadVerdictStore(cache)
+	if e, ok := s.verdictFor(151); !ok || e.Verdict != "good" {
+		t.Errorf("fresh good must bind, got (%+v, %v)", e, ok)
+	}
+	if e, ok := s.verdictFor(152); ok {
+		t.Errorf("expired good must read as no-verdict, got (%+v, %v)", e, ok)
+	}
+	// Legacy format (no re_probe_after at all — written by the
+	// pre-review build): treated as expired, self-heals on re-probe.
+	writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+		"verdicts": map[string]any{
+			"150": map[string]any{"verdict": "good", "checked_at": fresh},
+		},
+	})
+	if _, ok := loadVerdictStore(cache).verdictFor(150); ok {
+		t.Error("a legacy good without a re-probe horizon must not bind")
+	}
+}
+
+// TestFlakyMajorDoesNotLockGood is the end-to-end flake regression:
+// across repeated evaluations with alternating probe results, the
+// walk must never end up serving (or storing) a good locked off a
+// single lucky pass.
+func TestFlakyMajorDoesNotLockGood(t *testing.T) {
+	overrideChromedpVersion(t, "test-chromedp")
+	cache := t.TempDir()
+	seed := func(t *testing.T, cache string, versions ...string) {
+		t.Helper()
+		for _, v := range versions {
+			fakeInstalledBinary(t, cache, v)
+		}
+	}
+	seed(t, cache, "152.0.0.0.1", "146.0.7680.177.5")
+	cands := []*BinaryInfo{
+		{Path: filepath.Join(cache, VersionDirName("152.0.0.0.1"), "chrome"),
+			Dir: filepath.Join(cache, VersionDirName("152.0.0.0.1")), Version: "152.0.0.0.1", Channel: channelFree},
+		{Path: filepath.Join(cache, VersionDirName("146.0.7680.177.5"), "chrome"),
+			Dir: filepath.Join(cache, VersionDirName("146.0.7680.177.5")), Version: "146.0.7680.177.5", Channel: channelFree},
+	}
+	// The flaky major alternates: pass, fail, pass, fail, …
+	pass := true
+	overrideProbe(t, func(_ context.Context, p string) probeOutcome {
+		if strings.Contains(p, "152") {
+			pass = !pass
+			if pass {
+				return probeOutcome{ok: true}
+			}
+			return probeOutcome{reason: "context canceled"}
+		}
+		return probeOutcome{ok: true} // 146 is solid
+	}, nil)
+
+	for i := range 3 {
+		bin, _, err := evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands)
+		if err != nil || bin == nil {
+			t.Fatalf("round %d: bin = %+v, err = %v", i, bin, err)
+		}
+		if bin.Version != "146.0.7680.177.5" {
+			t.Fatalf("round %d: served %s, want the solid 146 (flaky 152 must not win)", i, bin.Version)
+		}
+		if e, has := loadVerdictStore(cache).verdictFor(152); !has || e.Verdict != "bad" {
+			t.Fatalf("round %d: 152 verdict = (%+v, %v), want bad (never good off one pass)", i, e, has)
+		}
 	}
 }
 
@@ -208,6 +354,46 @@ func TestLastKnownGoodRungHonorsChannelFilter(t *testing.T) {
 	}
 }
 
+// TestLastKnownGoodRungRefusesFreshBadMajor is the review minor: an
+// LKG record whose major carries a FRESH bad verdict is a guaranteed
+// failed launch — it must fall through to the loud typed error, not
+// serve.
+func TestLastKnownGoodRungRefusesFreshBadMajor(t *testing.T) {
+	overrideChromedpVersion(t, "test-chromedp")
+	cache := t.TempDir()
+	lkgPath := fakeInstalledBinary(t, cache, "151.0.7922.108.6")
+	now := time.Now().Format(time.RFC3339Nano)
+	writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+		"verdicts": map[string]any{
+			"151": map[string]any{"verdict": "bad", "checked_at": now,
+				"re_probe_after": time.Now().Add(time.Hour).Format(time.RFC3339Nano), "reason": "seccomp"},
+		},
+		"last_known_good": map[string]any{
+			"version": "151.0.7922.108.6", "channel": channelFree, "path": lkgPath,
+			"major": 151, "chromedp": "test-chromedp", "checked_at": now,
+		},
+	})
+	if bin, ok := lastKnownGoodRung(cache, ChannelAuto, testLogger(t)); ok {
+		t.Errorf("a fresh-bad LKG = (%+v, %v), want a miss (guaranteed failed launch)", bin, ok)
+	}
+	// An expired bad on the LKG major does not block the rung: the
+	// expiry IS the decision that the old bad no longer binds.
+	expired := time.Now().Add(-badVerdictTTL - time.Hour).Format(time.RFC3339Nano)
+	writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+		"verdicts": map[string]any{
+			"151": map[string]any{"verdict": "bad", "checked_at": expired,
+				"re_probe_after": expired, "reason": "seccomp"},
+		},
+		"last_known_good": map[string]any{
+			"version": "151.0.7922.108.6", "channel": channelFree, "path": lkgPath,
+			"major": 151, "chromedp": "test-chromedp", "checked_at": now,
+		},
+	})
+	if bin, ok := lastKnownGoodRung(cache, ChannelAuto, testLogger(t)); !ok || bin.Path != lkgPath {
+		t.Errorf("expired-bad LKG = (%+v, %v), want it served", bin, ok)
+	}
+}
+
 func TestProbeWithChromedpLaunchFailureIsBad(t *testing.T) {
 	// A nonexistent binary cannot even start: that is a BAD verdict
 	// (browser-side), not an inconclusive one.
@@ -227,13 +413,17 @@ func TestProbeGoodPersistsVerdictAndLastKnownGood(t *testing.T) {
 	overrideProbe(t, func(context.Context, string) probeOutcome { return probeOutcome{ok: true} }, &calls)
 
 	out := probeAndRecord(context.Background(), cache, bin, testLogger(t))
-	if !out.ok || calls != 1 {
-		t.Fatalf("probe = %+v, calls = %d", out, calls)
+	if !out.ok || calls != 2 {
+		t.Fatalf("probe = %+v, calls = %d, want good after two consecutive passes", out, calls)
 	}
 	s := loadVerdictStore(cache)
 	major, _ := versionMajor(bin.Version)
-	if e, ok := s.verdictFor(major); !ok || e.Verdict != "good" {
-		t.Errorf("good verdict not persisted: (%+v, %v)", e, ok)
+	e, has := s.verdictFor(major)
+	if !has || e.Verdict != "good" {
+		t.Fatalf("good verdict not persisted: (%+v, %v)", e, has)
+	}
+	if e.ReProbeAfter == nil || time.Until(*e.ReProbeAfter) <= goodVerdictTTL-time.Minute {
+		t.Errorf("good verdict must carry the ~%v TTL, got %v", goodVerdictTTL, e.ReProbeAfter)
 	}
 	lkg := s.lastKnownGoodFor()
 	if lkg == nil || lkg.Path != bin.Path || lkg.Version != bin.Version || lkg.Channel != channelFree || lkg.Major != major {
@@ -241,6 +431,25 @@ func TestProbeGoodPersistsVerdictAndLastKnownGood(t *testing.T) {
 	}
 	if lkg != nil && lkg.Chromedp == "" {
 		t.Error("last-known-good must record the chromedp module version")
+	}
+}
+
+// TestGoodVerdictJSONOmitsZeroReProbe: a good entry serializes without
+// a "re_probe_after" key (the zero time must never leak into the
+// store file).
+func TestGoodVerdictJSONOmitsZeroReProbe(t *testing.T) {
+	overrideChromedpVersion(t, "test-chromedp")
+	cache := t.TempDir()
+	loadVerdictStore(cache).recordGood(151, lastKnownGood{Version: "151.0.0.0.1", Channel: channelFree, Path: "/x/chrome"})
+	raw, err := os.ReadFile(filepath.Join(cache, verdictStoreFile)) //nolint:gosec // test-owned temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "0001-01-01") {
+		t.Errorf("zero time leaked into the store:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `"re_probe_after": ""`) {
+		t.Errorf("empty re_probe_after leaked into the store:\n%s", raw)
 	}
 }
 
@@ -284,6 +493,22 @@ func TestProbeInconclusivePersistsNothing(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(storePath); err == nil && strings.Contains(string(raw), "\"good\"") { //nolint:gosec // test-owned temp path
 		t.Errorf("inconclusive probe persisted a verdict: %s", raw)
+	}
+
+	// ok-then-inconclusive: the second pass could not navigate — no
+	// verdict either (the first pass alone proves nothing).
+	results := []probeOutcome{{ok: true}, {inconclusive: true, reason: "page load error ERR_TIMEOUT"}}
+	overrideProbe(t, func(context.Context, string) probeOutcome {
+		r := results[0]
+		results = results[1:]
+		return r
+	}, nil)
+	out2 := probeAndRecord(context.Background(), cache, bin, testLogger(t))
+	if !out2.inconclusive {
+		t.Fatalf("ok-then-inconclusive = %+v, want inconclusive", out2)
+	}
+	if s := loadVerdictStore(cache); s.lastKnownGoodFor() != nil {
+		t.Error("ok-then-inconclusive must not write last-known-good")
 	}
 }
 
@@ -342,9 +567,10 @@ func TestEvaluateCandidatesMatrix(t *testing.T) {
 	t.Run("good verdict short-circuits without a probe", func(t *testing.T) {
 		cache, calls := newState(t)
 		seed(t, cache, newest, older)
+		horizon := time.Now().Add(time.Hour).Format(time.RFC3339Nano)
 		writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
 			"verdicts": map[string]any{
-				"152": map[string]any{"verdict": "good", "checked_at": time.Now().Format(time.RFC3339Nano)},
+				"152": map[string]any{"verdict": "good", "checked_at": horizon, "re_probe_after": horizon},
 			},
 		})
 		overrideProbe(t, func(context.Context, string) probeOutcome {
@@ -397,8 +623,8 @@ func TestEvaluateCandidatesMatrix(t *testing.T) {
 		if err != nil || bin == nil || bin.Version != newest {
 			t.Fatalf("bin = %+v, err = %v", bin, err)
 		}
-		if *calls != 1 || attempts[0].Outcome != "probe-good" {
-			t.Errorf("calls = %d, attempts = %+v, want exactly one probe-good", *calls, attempts)
+		if *calls != 2 || attempts[0].Outcome != "probe-good" {
+			t.Errorf("calls = %d, attempts = %+v, want exactly two probe calls (consecutive passes) and probe-good", *calls, attempts)
 		}
 		if s := loadVerdictStore(cache); s.lastKnownGoodFor() == nil {
 			t.Error("probe-good must record last-known-good")
@@ -407,9 +633,16 @@ func TestEvaluateCandidatesMatrix(t *testing.T) {
 
 	t.Run("probe failure falls back to last-known-good", func(t *testing.T) {
 		cache, calls := newState(t)
+		// One free candidate (152): probed bad. The LKG points to a
+		// DIFFERENT major (146) with no verdict — the review minor
+		// refuses an LKG whose own major holds a fresh bad.
 		seed(t, cache, newest, oldest)
-		overrideProbe(t, func(context.Context, string) probeOutcome {
-			return probeOutcome{reason: "exit 76"}
+		overrideProbe(t, func(_ context.Context, p string) probeOutcome {
+			if strings.Contains(p, "152") {
+				return probeOutcome{reason: "exit 76"}
+			}
+			t.Errorf("only the newest candidate should be probed, got %q", p)
+			return probeOutcome{ok: true}
 		}, calls)
 
 		// Pre-seed the LKG the store would carry from a past good probe.
@@ -422,20 +655,50 @@ func TestEvaluateCandidatesMatrix(t *testing.T) {
 			},
 		})
 
-		bin, attempts, err := evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands(cache, newest, oldest))
+		// The walk only ever sees 152 (the caller's candidate list);
+		// 146's dir exists on disk for the LKG path.
+		bin, attempts, err := evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands(cache, newest))
 		if err != nil || bin == nil || bin.Version != oldest {
 			t.Fatalf("bin = %+v, err = %v, want LKG %s", bin, err, oldest)
 		}
-		if *calls != 2 {
-			t.Errorf("probe calls = %d, want one per candidate (2)", *calls)
+		if *calls != 1 {
+			t.Errorf("probe calls = %d, want one (the newest candidate only)", *calls)
 		}
 		last := attempts[len(attempts)-1]
 		if last.Outcome != "last-known-good" {
 			t.Errorf("final attempt = %+v, want last-known-good", last)
 		}
-		// The failed probes were persisted as bad verdicts.
+		// The failed probe was persisted as a bad verdict.
 		if s := loadVerdictStore(cache); func() bool { _, ok := s.verdictFor(152); return !ok }() {
 			t.Error("probe failure must persist the bad verdict")
+		}
+	})
+
+	t.Run("LKG whose own major is fresh-bad falls through to the loud error", func(t *testing.T) {
+		// The review minor: serving an LKG whose major carries a fresh
+		// bad verdict is a guaranteed failed launch — the rung must
+		// refuse it and the resolution must fail loud and typed.
+		cache, calls := newState(t)
+		seed(t, cache, newest)
+		overrideProbe(t, func(context.Context, string) probeOutcome {
+			return probeOutcome{reason: "exit 76"}
+		}, calls)
+		lkgPath := filepath.Join(cache, VersionDirName(newest), "chrome")
+		now := time.Now().Format(time.RFC3339Nano)
+		writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+			"last_known_good": map[string]any{
+				"version": newest, "channel": channelFree, "path": lkgPath,
+				"major": 152, "chromedp": "test-chromedp", "checked_at": now,
+			},
+		})
+
+		bin, _, err := evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands(cache, newest))
+		if bin != nil || err == nil {
+			t.Fatalf("bin = %+v, err = %v, want the loud refusal", bin, err)
+		}
+		var compat *CompatError
+		if !errors.As(err, &compat) {
+			t.Fatalf("want *CompatError, got %T: %v", err, err)
 		}
 	})
 
@@ -474,8 +737,53 @@ func TestEvaluateCandidatesMatrix(t *testing.T) {
 		if err != nil || bin == nil || bin.Version != newest {
 			t.Fatalf("bin = %+v, err = %v, want %s re-verified", bin, err, newest)
 		}
-		if *calls != 1 {
-			t.Errorf("probe calls = %d, want the expired bad re-probed once", *calls)
+		if *calls != 2 {
+			t.Errorf("probe calls = %d, want the expired bad re-probed with two consecutive passes", *calls)
+		}
+	})
+
+	t.Run("expired good re-probes", func(t *testing.T) {
+		cache, calls := newState(t)
+		seed(t, cache, newest)
+		expired := time.Now().Add(-goodVerdictTTL - time.Hour).Format(time.RFC3339Nano)
+		writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+			"verdicts": map[string]any{
+				"152": map[string]any{"verdict": "good", "checked_at": expired, "re_probe_after": expired},
+			},
+		})
+		var seq []probeOutcome
+		overrideProbe(t, func(context.Context, string) probeOutcome {
+			r := seq[0]
+			seq = seq[1:]
+			return r
+		}, calls)
+
+		// A flaky flip after expiry: pass then fail — no good is
+		// re-locked; the walk falls through.
+		seq = []probeOutcome{{ok: true}, {reason: "context canceled"}}
+		bin, _, err := evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands(cache, newest))
+		if bin != nil || err == nil {
+			t.Fatalf("bin = %+v, err = %v, want the loud total failure (no candidates left)", bin, err)
+		}
+		if e, has := loadVerdictStore(cache).verdictFor(152); !has || e.Verdict != "bad" {
+			t.Errorf("152 verdict = (%+v, %v), want bad after pass-fail", e, has)
+		}
+
+		// A genuinely healed major re-locks good with two passes.
+		writeVerdictStoreRaw(t, cache, "test-chromedp", map[string]any{
+			"verdicts": map[string]any{
+				"152": map[string]any{"verdict": "good", "checked_at": expired, "re_probe_after": expired},
+			},
+		})
+		seq = []probeOutcome{{ok: true}, {ok: true}}
+		bin, _, err = evaluateCandidates(context.Background(), cache, channelFree, false, testLogger(t), cands(cache, newest))
+		if err != nil || bin == nil || bin.Version != newest {
+			t.Fatalf("bin = %+v, err = %v, want %s re-verified good", bin, err, newest)
+		}
+		h := loadVerdictStore(cache)
+		e, has := h.verdictFor(152)
+		if !has || e.Verdict != "good" {
+			t.Errorf("152 verdict = (%+v, %v), want fresh good", e, has)
 		}
 	})
 

@@ -382,6 +382,7 @@ func (u *Updater) checkFreeBase(ctx context.Context, cacheDir string, spec Platf
 			CacheDir:   u.cfg.CacheDir,
 			APIBase:    u.cfg.LicenseAPIBase,
 			HTTPClient: u.cfg.HTTPClient,
+			ProxyURL:   u.cfg.ProxyURL,
 		})
 		if licErr != nil {
 			// License unprovable after the probe said "online": a
@@ -516,6 +517,7 @@ func (u *Updater) checkProChannel(ctx context.Context, cacheDir string, spec Pla
 		CacheDir:   u.cfg.CacheDir,
 		APIBase:    u.cfg.LicenseAPIBase,
 		HTTPClient: u.cfg.HTTPClient,
+		ProxyURL:   u.cfg.ProxyURL,
 	})
 	if licErr != nil {
 		// License unprovable after the probe said "online": treat as

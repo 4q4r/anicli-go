@@ -135,9 +135,10 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// PR80: the stealth browser is startup infrastructure. Interactive
 	// face: colored progress, and the countdown only when an install
 	// completed this run; normal runs boot straight away. The [cf]
-	// proxy (download/update traffic) rides the install.
-	if newBrowserEnsure(settings.CF.Proxy).run(ctx, out) {
-		runCountdown(out)
+	// channel and download proxy ride the install.
+	styled := colorsEnabled(out)
+	if newBrowserEnsure(settings.CF.Proxy, settings.CF.Channel).run(ctx, out, styled) {
+		runCountdown(out, styled)
 	}
 
 	// Startup notices render INSIDE the TUI (on the root screen), not
@@ -325,7 +326,7 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 	// PR80: the server face downloads the stealth browser silently —
 	// slog progress lines only, no colors, no countdown (the countdown
 	// belongs to the interactive TUI boot).
-	ensureBrowserSilent(ctx, settings.CF.Proxy)
+	ensureBrowserSilent(ctx, settings.CF.Proxy, settings.CF.Channel)
 
 	dbPath, err := settings.DBPath()
 	if err != nil {

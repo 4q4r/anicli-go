@@ -68,13 +68,17 @@ func runCFInstall(ctx context.Context, out io.Writer) error {
 	}
 	channel := settings.CF.Channel
 	if channel != cfbrowser.ChannelFree {
-		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{})
+		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{ProxyURL: settings.CF.Proxy})
 		if repErr == nil && rep != nil && rep.Status.Valid {
 			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
 				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
 		}
 	}
-	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{Logger: logger, Channel: channel})
+	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{
+		Logger:   logger,
+		Channel:  channel,
+		ProxyURL: settings.CF.Proxy,
+	})
 	if err != nil {
 		return fmt.Errorf("cf install: %w", err)
 	}

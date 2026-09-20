@@ -190,6 +190,12 @@ var (
 	azDoubleUnicodeRe = regexp.MustCompile(`\\\\u([0-9a-fA-F]{4})`)
 	// The recipe's search-slug shape guard.
 	azSlugRe = regexp.MustCompile(`(?i)^[a-z0-9-]+$`)
+	// azSearchInputRe witnesses the rendered Anime Index page: the
+	// Livewire search input's binding (`wire:model.live.debounce.500=
+	// "search"` verbatim in the 2026-09-20 captures, with and without
+	// results). Its presence with NO items payload is the site's legit
+	// no-results answer, not a shape drift.
+	azSearchInputRe = regexp.MustCompile(`wire:model[\w.-]*="search"`)
 )
 
 // azJSONArg builds the extraction pattern for `name: JSON.parse('…')`
@@ -345,6 +351,17 @@ func (p *AniZone) Search(ctx context.Context, query string) ([]contracts.SearchR
 
 	m := azItemsRe.FindSubmatch(resp.Body)
 	if m == nil {
+		if azSearchInputRe.Match(resp.Body) {
+			// The legit no-results page: the full Anime Index page
+			// rendered with an empty result block and NO items
+			// payload script (verbatim capture 2026-09-20, cyrillic
+			// query — testdata/anizone_search_empty.html). A clean
+			// miss, not a shape drift: the fan-out legitimately
+			// reaches this latin-only index with cyrillic-only
+			// variant sets (enrichment off), and a miss must settle
+			// the row as zero results, never an error (PR78).
+			return []contracts.SearchResult{}, nil
+		}
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpSearch, resp.StatusCode,
 			fmt.Errorf("search payload not found: %w", contracts.ErrExtractFailed))
 	}

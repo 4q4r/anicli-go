@@ -176,6 +176,34 @@ func TestAniZoneSearchTypedErrors(t *testing.T) {
 	})
 }
 
+// TestAniZoneSearchNoResultsPage pins the PR78 clean-miss semantics: the
+// site's legit no-results answer (verbatim capture, cyrillic query —
+// testdata/anizone_search_empty.html) is the FULL Anime Index Livewire
+// page with an empty result block and NO items payload script at all.
+// That page must settle as zero results, not the typed extract failure —
+// the fan-out reaches this provider with cyrillic-only variant sets
+// (enrichment off), and a miss is a normal search outcome (PR78:
+// «Ателье колдовских колпаков» row failed with "search payload not
+// found" live). A page without the index chrome still fails loud (the
+// "payload not found" subtest above).
+func TestAniZoneSearchNoResultsPage(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		_, _ = w.Write(fixture(t, "anizone_search_empty.html"))
+	})
+	p := newAniZone(srv.URL, testClient(t, "anizone"))
+
+	results, err := p.Search(context.Background(), "Ателье колдовских колпаков")
+	if err != nil {
+		t.Fatalf("Search on the no-results page must be a clean miss, got: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %d, want 0", len(results))
+	}
+}
+
 // TestAzDecodeJSONArgument pins the JS-string-literal decoding: the
 // server double-escapes ("\\u041F" in the raw literal is a literal JSON
 // "\u041F" escape; "\u0022" is a JS quote escape), and surrogate pairs

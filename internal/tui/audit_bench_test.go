@@ -48,7 +48,9 @@ func BenchmarkGroupByTitle100(b *testing.B) {
 }
 
 // BenchmarkDownloadRangeJoin1178 mirrors handleDownloadRangeKey's
-// nested loop: ParseRange("1-1178") (1178 nums) joined against a
+// nested loop VERBATIM (session.go:1917-1925 — no break: the inner
+// scan runs to the end of the order slice on every num, faithful to
+// production): ParseRange("1-1178") (1178 nums) joined against a
 // 1178-entry episode order by repeated linear scan (the One Piece
 // batch-download case).
 func BenchmarkDownloadRangeJoin1178(b *testing.B) {
@@ -65,7 +67,6 @@ func BenchmarkDownloadRangeJoin1178(b *testing.B) {
 			for _, o := range order {
 				if o == label {
 					downloadEpisodes = append(downloadEpisodes, label)
-					break
 				}
 			}
 		}

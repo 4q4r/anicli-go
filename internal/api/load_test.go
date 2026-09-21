@@ -46,11 +46,18 @@ const (
 	loadIteration = 10
 
 	// loadStressP99 bounds every endpoint's p99 under the 200-VU heavy
-	// journey: ~10× the worst healthy measured p99 (library, 9.4 s in
-	// the PR81 baseline run). A structural blowup (e.g. the pre-fix
-	// /history N+1: 1001 queries/request) cannot complete the profile
-	// at all — that test run timed out at 5 minutes.
-	loadStressP99 = 10 * time.Second
+	// journey. At 200 VUs on the single-connection sqlite pool the p99
+	// is QUEUE WAIT, not endpoint work: each iteration fires a ×6
+	// /history burst over the 1000-row table, and the endpoints riding
+	// behind that burst (library, home/feed) inherit its backlog
+	// (measured healthy p99: library 11.06 s, feed 7.20 s across
+	// rounds; standalone endpoint costs are milliseconds — pinned by
+	// the storage HistoryListBatched benchmark). The 30 s envelope is
+	// ~3× the worst observed healthy backlog and still a structural
+	// tripwire: the pre-fix /history N+1 could not complete this
+	// profile at all (5-min timeout), and a new per-row query pattern
+	// amplifies through the same queue into the minutes.
+	loadStressP99 = 30 * time.Second
 	// loadSLOErrorRate bounds the fraction of failed requests.
 	loadSLOErrorRate = 0.001 // 0.1%
 
@@ -136,10 +143,22 @@ func newLoadApp(t *testing.T) *App {
 
 	// Seed the 1000-row history: /history is the unbounded ListHistory
 	// scan under audit (P1#3) — the load must ride a realistic roster.
+	// One anime_source row per record, so the batched source query
+	// (ListAll) scans real data instead of an empty table.
 	seedCtx := context.Background()
 	for i := range loadHistoryRows {
-		if err := store.Progress.Upsert(seedCtx, loadSeedRow(i)); err != nil {
+		rec := loadSeedRow(i)
+		if err := store.Progress.Upsert(seedCtx, rec); err != nil {
 			t.Fatalf("seed history row %d: %v", i, err)
+		}
+		row, err := store.Progress.GetBySource(seedCtx, rec.SourceID, rec.SourceURL)
+		if err != nil {
+			t.Fatalf("seed source lookup %d: %v", i, err)
+		}
+		if err := store.Sources.ReplaceForAnime(seedCtx, row.ID, []storage.AnimeSource{
+			{SourceID: "load", SourceURL: rec.SourceURL},
+		}); err != nil {
+			t.Fatalf("seed anime_source %d: %v", i, err)
 		}
 	}
 
@@ -262,11 +281,18 @@ func (s *loadStats) total() (calls int, failures int) {
 	return calls, failures
 }
 
-// loadJourney runs one virtual-user iteration: login → me → home/feed
-// → episodes (varying URL: provider path, not only cache) → resolve →
-// history ×6 (the unbounded ListHistory scan, P1#3 evidence) →
-// library → search → providers → calendar → shikimori page → health →
-// refresh (chained: each response rotates the per-VU refresh token).
+// loadJourney runs one virtual-user iteration over the SAFE route set:
+// login → me → home/feed → episodes → streams/resolve → history list
+// ×6 (the unbounded ListHistory scan, P1#3 evidence) → history one →
+// history episodes → history progress → library → search → providers →
+// calendar → shikimori page → health → refresh (chained: each response
+// rotates the per-VU refresh token).
+//
+// MUTATING ROUTES DELIBERATELY EXCLUDED (documented exclusions, PR81
+// fix-round review): POST /auth/logout (revokes the per-VU session the
+// chained refresh depends on), PATCH /history/{id},
+// PATCH /history/{id}/progress (mutate seeded rows mid-run), POST
+// /library/bind (creates rows). The journey is read-only by design.
 func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadStats, refreshToken *string) {
 	call := func(endpoint, method, path, body string, auth string) {
 		start := time.Now()
@@ -332,10 +358,15 @@ func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadS
 		token)
 
 	// /history ×6: the unbounded ListHistory scan (P1#3) — measured
-	// over the 1000-row seeded table every iteration.
+	// over the 1000-row seeded table every iteration. The per-record
+	// GETs rotate over the seeded ids (AUTOINCREMENT 1..1000).
+	historyID := 1 + (vu+iter)%loadHistoryRows
 	for range 6 {
 		call("history", http.MethodGet, "/api/v1/history", "", token)
 	}
+	call("history/one", http.MethodGet, fmt.Sprintf("/api/v1/history/%d", historyID), "", token)
+	call("history/episodes", http.MethodGet, fmt.Sprintf("/api/v1/history/%d/episodes", historyID), "", token)
+	call("history/progress", http.MethodGet, fmt.Sprintf("/api/v1/history/%d/progress", historyID), "", token)
 	call("library", http.MethodGet, "/api/v1/library", "", token)
 	call("search", http.MethodGet, fmt.Sprintf("/api/v1/search?q=load%%20anime%%20%d", vu), "", token)
 	call("providers", http.MethodGet, "/api/v1/providers", "", token)

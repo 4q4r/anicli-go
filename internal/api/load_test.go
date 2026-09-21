@@ -18,23 +18,46 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
+	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // Load profile: 200 concurrent virtual users each run the full read
-// journey (login → me → home/feed → episodes → streams/resolve) 10
-// times against a REAL chi server on a random loopback port. The
-// provider is an in-process fake, so the measured latencies are honest
-// for the server layer (routing, auth, cache, sqlite, serialization)
-// without site I/O.
+// journey (login → me → home/feed → episodes → streams/resolve →
+// history ×6 over the 1000-row seeded table → library → search →
+// providers → calendar → shikimori page → health → chained refresh)
+// 10 times against a REAL chi server on a random loopback port. The
+// provider and the Shikimori client are in-process fakes, so the
+// measured latencies are honest for the server layer (routing, auth,
+// cache, sqlite, serialization) without site I/O.
+//
+// SLO split (PR81 review): this is the STRESS profile — at 200 VUs the
+// single-connection sqlite pool makes queue wait, not endpoint work,
+// dominate p99 (healthy measured p99 ≈ 1-9 s depending on endpoint).
+// The assertions here are completion + zero errors + the stress p99
+// envelope; the 250 ms latency net lives in TestLoadAPIRamp (light
+// journey) and the /history endpoint cost is pinned standalone by the
+// storage HistoryListBatched benchmark (12 ms @1000 rows).
 
 const (
 	loadVUs       = 200
 	loadIteration = 10
 
-	// loadSLOp99 bounds every endpoint's p99 latency.
-	loadSLOp99 = 250 * time.Millisecond
+	// loadStressP99 bounds every endpoint's p99 under the 200-VU heavy
+	// journey. At 200 VUs on the single-connection sqlite pool the p99
+	// is QUEUE WAIT, not endpoint work: each iteration fires a ×6
+	// /history burst over the 1000-row table, and the endpoints riding
+	// behind that burst (library, home/feed) inherit its backlog
+	// (measured healthy p99: library 11.06 s, feed 7.20 s across
+	// rounds; standalone endpoint costs are milliseconds — pinned by
+	// the storage HistoryListBatched benchmark). The 30 s envelope is
+	// ~3× the worst observed healthy backlog and still a structural
+	// tripwire: the pre-fix /history N+1 could not complete this
+	// profile at all (5-min timeout), and a new per-row query pattern
+	// amplifies through the same queue into the minutes.
+	loadStressP99 = 30 * time.Second
 	// loadSLOErrorRate bounds the fraction of failed requests.
 	loadSLOErrorRate = 0.001 // 0.1%
 
@@ -104,8 +127,11 @@ func (loadProvider) ResolveStream(_ context.Context, episode contracts.Episode, 
 	}, nil
 }
 
-// newLoadApp builds the app under load: memory store, one fake
-// provider, low-iteration credentials, discard logger.
+// newLoadApp builds the app under load: memory store seeded with 1000
+// history rows (the real ListHistory scan the /history endpoint pays
+// for), one fake provider, an instant fake Shikimori client (search
+// enrichment, feed, library, calendar, anime page), low-iteration
+// credentials, discard logger.
 func newLoadApp(t *testing.T) *App {
 	t.Helper()
 
@@ -114,6 +140,27 @@ func newLoadApp(t *testing.T) *App {
 		t.Fatalf("open memory store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+
+	// Seed the 1000-row history: /history is the unbounded ListHistory
+	// scan under audit (P1#3) — the load must ride a realistic roster.
+	// One anime_source row per record, so the batched source query
+	// (ListAll) scans real data instead of an empty table.
+	seedCtx := context.Background()
+	for i := range loadHistoryRows {
+		rec := loadSeedRow(i)
+		if err := store.Progress.Upsert(seedCtx, rec); err != nil {
+			t.Fatalf("seed history row %d: %v", i, err)
+		}
+		row, err := store.Progress.GetBySource(seedCtx, rec.SourceID, rec.SourceURL)
+		if err != nil {
+			t.Fatalf("seed source lookup %d: %v", i, err)
+		}
+		if err := store.Sources.ReplaceForAnime(seedCtx, row.ID, []storage.AnimeSource{
+			{SourceID: "load", SourceURL: rec.SourceURL},
+		}); err != nil {
+			t.Fatalf("seed anime_source %d: %v", i, err)
+		}
+	}
 
 	reg := providers.NewEmptyRegistry()
 	if err := reg.Register(loadProvider{}); err != nil {
@@ -129,11 +176,69 @@ func newLoadApp(t *testing.T) *App {
 		loadLogin: {PasswordHash: loadUserHash(t)},
 	}
 
-	app, err := NewApp(Config{Settings: cfg, Store: store, Registry: reg, Logger: logDiscard()})
+	app, err := NewApp(Config{Settings: cfg, Store: store, Registry: reg, Logger: logDiscard(), Shiki: loadShikiFake(), ShikiNet: loadShikiNet()})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
 	return app
+}
+
+// loadHistoryRows is the seeded history roster size (review #3: the
+// /history p95 must be measured over a realistic 1000-row table).
+const loadHistoryRows = 1000
+
+// loadSeedRow builds one deterministic history row.
+func loadSeedRow(i int) *storage.AnimeProgress {
+	poster := fmt.Sprintf("https://load.example/poster/%d.jpg", i)
+	return &storage.AnimeProgress{
+		Title:          fmt.Sprintf("Load History Anime %d", i),
+		Poster:         &poster,
+		SourceID:       "load",
+		SourceURL:      fmt.Sprintf("https://load.example/anime/%d", i),
+		CurrentEpisode: fmt.Sprint(i%24 + 1),
+		TotalEpisodes:  24,
+		Score:          i % 11,
+		UpdatedAt:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute).UTC(),
+	}
+}
+
+// loadShikiFake builds the in-process Shikimori client fake wired into
+// the load app: 25 bound rates over 25 anime (feed, library, calendar
+// and search-enrichment all do real work).
+func loadShikiFake() *fakeShiki {
+	rates := make([]shikimori.UserRate, 0, 25)
+	animes := make([]shikimori.Anime, 0, 25)
+	for i := range 25 {
+		rates = append(rates, shikimori.UserRate{
+			ID: int64(9000 + i), UserID: 50, TargetID: int64(500 + i),
+			TargetType: "Anime", Status: [4]string{"watching", "completed", "planned", "rewatching"}[i%4],
+			Episodes: i % 12, Score: i % 10,
+		})
+		animes = append(animes, shikimori.Anime{
+			ID: int64(500 + i), Name: fmt.Sprintf("Load Shiki Anime %d", i),
+			Russian: fmt.Sprintf("Лоад аниме %d", i), Episodes: 24, Status: "ongoing", Kind: "TV",
+		})
+	}
+	ongoing := make([]shikimori.OngoingCandidate, 0, 5)
+	for i := range 5 {
+		ongoing = append(ongoing, shikimori.OngoingCandidate{ShikimoriID: int64(500 + i), TitleRu: loadPtr("Лоад онгоинг")})
+	}
+	return &fakeShiki{rates: rates, animes: animes, ongoing: ongoing, authed: true}
+}
+
+// loadPtr returns a pointer to the string (the ongoing candidates'
+// nullable titles).
+func loadPtr(s string) *string { return &s }
+
+// loadShikiNet builds the request-scoped shikimori netclient the app
+// requires alongside any shikimori client (never used by the fake —
+// the fake answers in-process).
+func loadShikiNet() *netclient.Client {
+	net, err := netclient.New(config.Network{ProxyURL: ""})
+	if err != nil {
+		panic("load shiki netclient: " + err.Error())
+	}
+	return net
 }
 
 // loadStats accumulates per-endpoint latencies and failures.
@@ -176,9 +281,19 @@ func (s *loadStats) total() (calls int, failures int) {
 	return calls, failures
 }
 
-// loadJourney runs one virtual-user iteration: login → me → home/feed
-// → episodes (varying URL: provider path, not only cache) → resolve.
-func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadStats) {
+// loadJourney runs one virtual-user iteration over the SAFE route set:
+// login → me → home/feed → episodes → streams/resolve → history list
+// ×6 (the unbounded ListHistory scan, P1#3 evidence) → history one →
+// history episodes → history progress → library → search → providers →
+// calendar → shikimori page → health → refresh (chained: each response
+// rotates the per-VU refresh token).
+//
+// MUTATING ROUTES DELIBERATELY EXCLUDED (documented exclusions, PR81
+// fix-round review): POST /auth/logout (revokes the per-VU session the
+// chained refresh depends on), PATCH /history/{id},
+// PATCH /history/{id}/progress (mutate seeded rows mid-run), POST
+// /library/bind (creates rows). The journey is read-only by design.
+func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadStats, refreshToken *string) {
 	call := func(endpoint, method, path, body string, auth string) {
 		start := time.Now()
 		var rd io.Reader
@@ -221,7 +336,8 @@ func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadS
 		return
 	}
 	var payload struct {
-		AccessToken string `json:"access_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
 	closeErr := resp.Body.Close()
@@ -230,6 +346,7 @@ func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadS
 		return
 	}
 	token := payload.AccessToken
+	*refreshToken = payload.RefreshToken
 
 	call("auth/me", http.MethodGet, "/api/v1/auth/me", "", token)
 	call("home/feed", http.MethodGet, "/api/v1/home/feed", "", token)
@@ -239,6 +356,49 @@ func loadJourney(client *http.Client, baseURL string, vu, iter int, stats *loadS
 	call("streams/resolve", http.MethodPost, "/api/v1/streams/resolve",
 		`{"source_id": "load", "episode_num": "1", "episode_raw_id": "ep-1", "video_key": "1080", "urls_video": ["https://load.example/embed/1/1080"]}`,
 		token)
+
+	// /history ×6: the unbounded ListHistory scan (P1#3) — measured
+	// over the 1000-row seeded table every iteration. The per-record
+	// GETs rotate over the seeded ids (AUTOINCREMENT 1..1000).
+	historyID := 1 + (vu+iter)%loadHistoryRows
+	for range 6 {
+		call("history", http.MethodGet, "/api/v1/history", "", token)
+	}
+	call("history/one", http.MethodGet, fmt.Sprintf("/api/v1/history/%d", historyID), "", token)
+	call("history/episodes", http.MethodGet, fmt.Sprintf("/api/v1/history/%d/episodes", historyID), "", token)
+	call("history/progress", http.MethodGet, fmt.Sprintf("/api/v1/history/%d/progress", historyID), "", token)
+	call("library", http.MethodGet, "/api/v1/library", "", token)
+	call("search", http.MethodGet, fmt.Sprintf("/api/v1/search?q=load%%20anime%%20%d", vu), "", token)
+	call("providers", http.MethodGet, "/api/v1/providers", "", token)
+	call("calendar", http.MethodGet, "/api/v1/releases/calendar?days=7", "", token)
+	call("shikimori/page", http.MethodGet, fmt.Sprintf("/api/v1/shikimori/anime/%d/page", 500+vu%25), "", token)
+	call("health", http.MethodGet, "/api/v1/health", "", "")
+
+	// refresh: chain the rotated token (each refresh invalidates the
+	// previous one — using a stale token would fail the zero-error SLO).
+	start = time.Now()
+	req, err = http.NewRequest(http.MethodPost, baseURL+"/api/v1/auth/refresh",
+		strings.NewReader(fmt.Sprintf(`{"refresh_token": %q}`, *refreshToken)))
+	if err != nil {
+		stats.record("auth/refresh", 0, true)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(req)
+	if err != nil {
+		stats.record("auth/refresh", time.Since(start), true)
+		return
+	}
+	var refreshed struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	decodeErr = json.NewDecoder(resp.Body).Decode(&refreshed)
+	closeErr = resp.Body.Close()
+	failed := decodeErr != nil || resp.StatusCode != http.StatusOK || closeErr != nil
+	if !failed && refreshed.RefreshToken != "" {
+		*refreshToken = refreshed.RefreshToken
+	}
+	stats.record("auth/refresh", time.Since(start), failed)
 }
 
 // TestLoadAPIServer hammers the real server with 200 VUs and asserts
@@ -275,8 +435,9 @@ func TestLoadAPIServer(t *testing.T) {
 		wg.Add(1)
 		go func(vu int) {
 			defer wg.Done()
+			refresh := "" // per-VU rotated refresh chain
 			for iter := range loadIteration {
-				loadJourney(client, baseURL, vu, iter, stats)
+				loadJourney(client, baseURL, vu, iter, stats, &refresh)
 			}
 		}(vu)
 	}
@@ -308,9 +469,9 @@ func TestLoadAPIServer(t *testing.T) {
 		fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%d\n",
 			endpoint, p50.Round(time.Microsecond), p95.Round(time.Microsecond), p99.Round(time.Microsecond),
 			stats.failures[endpoint])
-		if p99 >= loadSLOp99 {
+		if p99 >= loadStressP99 {
 			sloBroken = true
-			t.Errorf("SLO violated: %s p99 %s >= %s", endpoint, p99, loadSLOp99)
+			t.Errorf("stress p99 envelope violated: %s p99 %s >= %s", endpoint, p99, loadStressP99)
 		}
 	}
 	rps := float64(calls) / wall.Seconds()

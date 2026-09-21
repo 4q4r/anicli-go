@@ -198,6 +198,11 @@ var (
 		`function (\w+)\((\w+)(?:,(\w+))?\)\{return (\w+)\((\w+)-(?:\{(\w+):(\d+)\}\.\w+|(\s*-?\d+))\)\}`)
 	// aaIIFECallRe: the rotate-IIFE invocation tail: })(TABLE,SEED);
 	aaIIFECallRe = regexp.MustCompile(`\}\)\((\w+),([-+\d*\s]+?)\);`)
+	// aaNanRe: unresolved fragment markers in checksum arithmetic
+	// (hoisted — aaEvalChecksum runs per rotation attempt per table and
+	// a MustCompile here recompiled the same literal thousands of times
+	// per chunk parse; PR81 review #2).
+	aaNanRe = regexp.MustCompile(`\bnan\b`)
 	// aaIIFEHeadRe anchors the IIFE body for a call site.
 	aaIIFEHeadRe = regexp.MustCompile(`\(function\(\w+,\w+\)\{`)
 	// aaChecksumHeadRe anchors the checksum expression inside the IIFE.
@@ -673,7 +678,7 @@ func (ct *aaChunkTables) aaEvalChecksum(expr string, constCall *regexp.Regexp, l
 		}
 		return "nan"
 	})
-	filled = regexp.MustCompile(`\bnan\b`).ReplaceAllString(filled, "nan")
+	filled = aaNanRe.ReplaceAllString(filled, "nan")
 	return aaArithEval(filled)
 }
 

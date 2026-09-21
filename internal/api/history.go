@@ -35,21 +35,23 @@ func queryInt(r *http.Request, name string, def, min, max int) (int, *apiError) 
 }
 
 // handleHistoryList renders every history record (python GET
-// /api/v1/history).
+// /api/v1/history). Sources batch-load in ONE grouped query — the
+// per-row ListByAnime here was an N+1 (PR81 review: 1000 history rows
+// made the call cost 1001 queries; 200-VU load could not complete).
 func (a *App) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 	records, err := a.store.Progress.ListHistory(r.Context(), "", 0, 0)
 	if err != nil {
 		writeAPIError(w, r, errInternal("Failed to load history"))
 		return
 	}
+	sourcesByAnime, err := a.store.Sources.ListAll(r.Context())
+	if err != nil {
+		writeAPIError(w, r, errInternal("Failed to load history sources"))
+		return
+	}
 	items := make([]map[string]any, 0, len(records))
 	for i := range records {
-		sources, err := a.store.Sources.ListByAnime(r.Context(), records[i].ID)
-		if err != nil {
-			writeAPIError(w, r, errInternal("Failed to load history sources"))
-			return
-		}
-		items = append(items, serializeHistoryRecord(&records[i], sources))
+		items = append(items, serializeHistoryRecord(&records[i], sourcesByAnime[records[i].ID]))
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }

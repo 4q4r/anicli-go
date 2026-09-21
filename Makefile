@@ -34,11 +34,11 @@ docker-build:
 
 # Load/stress suite. Runs WITHOUT -race: the SLOs are wall-clock
 # honest. For race-safety of the same paths run manually
-#   go test -race -tags=load -run '^TestLoad' -count=1 ./internal/{api,storage,download,loadtest}/
+#   go test -race -tags=load -run '^TestLoad' -count=1 ./internal/{api,storage,download,loadtest,buffered,torrent}/
 # (latency SLOs will exceed under instrumentation — expected; only the
 # absence of DATA RACE reports matters there).
 load:
-	go test -tags=load -run '^TestLoad' -count=1 -v ./internal/api/ ./internal/storage/ ./internal/download/ ./internal/loadtest/
+	go test -tags=load -run '^TestLoad' -count=1 -v ./internal/api/ ./internal/storage/ ./internal/download/ ./internal/loadtest/ ./internal/buffered/ ./internal/torrent/
 
 # Live G1 gate: probes all 17 providers against real sites.
 parity:

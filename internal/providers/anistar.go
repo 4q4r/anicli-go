@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 	"golang.org/x/text/encoding/charmap"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -356,7 +357,11 @@ func (p *AniStar) GetEpisodes(ctx context.Context, animeURL string) ([]contracts
 				fmt.Errorf("%w: empty playlist for %s", contracts.ErrNotFound, animeURL))
 		}
 		for _, span := range spans {
-			pairs = append(pairs, titleRef{title: strings.TrimSpace(span[2]), ref: span[1]})
+			// Legacy pages entity-encode the URL query (&amp;); the
+			// ref must be unescaped before it rides into RawEmbeds,
+			// or the extractor factory resolves a mangled query
+			// (PR82 review nit #9 — behavior change is the fix).
+			pairs = append(pairs, titleRef{title: strings.TrimSpace(span[2]), ref: html.UnescapeString(span[1])})
 		}
 	} else {
 		player, err := p.http.Get(ctx, playerURL, map[string]string{"Referer": animeURL})
@@ -455,7 +460,7 @@ func (p *AniStar) ResolveStream(ctx context.Context, episode contracts.Episode, 
 			}
 			if len(sources) == 0 {
 				if firstErr == nil {
-					firstErr = anistarUnsupportedEmbed(ref)
+					firstErr = p.anistarUnsupportedEmbed(ref)
 				}
 				continue
 			}
@@ -519,12 +524,12 @@ func (p *AniStar) ResolveStream(ctx context.Context, episode contracts.Episode, 
 // shared extractor factory does not cover (the legacy playlists ride
 // myvi.ru and vk.com re-hosts): the host is named so the failure is
 // actionable, never a silent zero-link answer.
-func anistarUnsupportedEmbed(ref string) error {
+func (p *AniStar) anistarUnsupportedEmbed(ref string) error {
 	host := ref
 	if parsed, err := url.Parse(ref); err == nil && parsed.Host != "" {
 		host = parsed.Host
 	}
-	return contracts.WrapProvider("anistar", contracts.OpResolveStream, 0,
+	return contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
 		fmt.Errorf("%w: no extractor for embed host %s", contracts.ErrExtractFailed, host))
 }
 

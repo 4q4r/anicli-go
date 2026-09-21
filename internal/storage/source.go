@@ -35,6 +35,30 @@ func (r *SourceRepo) ListByAnime(ctx context.Context, animeProgressID int64) ([]
 	return out, rows.Err()
 }
 
+// ListAll returns every provider source, in insertion order. The
+// history-list endpoint batches with it instead of issuing one
+// ListByAnime per row (the PR81-review P0 N+1: 1000 history rows made
+// one /history call cost 1001 queries).
+func (r *SourceRepo) ListAll(ctx context.Context) (map[int64][]AnimeSource, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, anime_progress_id, source_id, source_url, video_dub, audio_dub, quality, last_resolved_at, created_at
+		 FROM anime_source ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list all sources: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	grouped := make(map[int64][]AnimeSource)
+	for rows.Next() {
+		s, err := scanAnimeSource(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan source row: %w", err)
+		}
+		grouped[s.AnimeProgressID] = append(grouped[s.AnimeProgressID], *s)
+	}
+	return grouped, rows.Err()
+}
+
 // ReplaceForAnime atomically swaps the source list of one anime: existing
 // rows are deleted and the given list inserted in a single transaction.
 // AnimeProgressID of every inserted row is forced to animeProgressID; an

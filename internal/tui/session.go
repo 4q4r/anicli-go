@@ -25,20 +25,25 @@ import (
 type sessionState string
 
 const (
-	sessionStateLoading       sessionState = "loading"
-	sessionStateMenu          sessionState = "menu"
-	sessionStateEpisodeList   sessionState = "episodes"
-	sessionStateDubAudio      sessionState = "dub_audio"
-	sessionStateQuality       sessionState = "quality"
-	sessionStateFormat        sessionState = "format"
-	sessionStateBuffering     sessionState = "buffering"
-	sessionStatePlaying       sessionState = "playing"
-	sessionStateInfoMenu      sessionState = "info_menu"
-	sessionStateInfoStatus    sessionState = "info_status"
-	sessionStateInfoScore     sessionState = "info_score"
-	sessionStateInfoRewatches sessionState = "info_rewatches"
-	sessionStateDownloadRange sessionState = "download_range"
-	sessionStateDownloadMode  sessionState = "download_mode"
+	sessionStateLoading     sessionState = "loading"
+	sessionStateMenu        sessionState = "menu"
+	sessionStateEpisodeList sessionState = "episodes"
+	sessionStateDubAudio    sessionState = "dub_audio"
+	sessionStateQuality     sessionState = "quality"
+	// sessionStateResolveLoading is the PR84 distinct loading surface
+	// for the remembered-dub auto-launch: «Загрузка потоков…» with the
+	// ep/dub context — never the picker's title, so a resolve never
+	// reads as «pick again».
+	sessionStateResolveLoading sessionState = "resolve-loading"
+	sessionStateFormat         sessionState = "format"
+	sessionStateBuffering      sessionState = "buffering"
+	sessionStatePlaying        sessionState = "playing"
+	sessionStateInfoMenu       sessionState = "info_menu"
+	sessionStateInfoStatus     sessionState = "info_status"
+	sessionStateInfoScore      sessionState = "info_score"
+	sessionStateInfoRewatches  sessionState = "info_rewatches"
+	sessionStateDownloadRange  sessionState = "download_range"
+	sessionStateDownloadMode   sessionState = "download_mode"
 )
 
 // sessionScreenID is the session screen identity.
@@ -312,8 +317,13 @@ type sessionScreen struct {
 	// resolveGen tags the in-flight stream-resolve round: a cancel
 	// bumps it so the late settle drops its own chapters file instead
 	// of leaking it into the pending slot (PR61 review R1c).
-	resolveGen  int
-	localCounts map[string]int
+	resolveGen int
+	// resolveReturn is the state the auto-launch came from (PR84):
+	// the loading surface's Esc returns there.
+	resolveReturn sessionState
+	// resolveEp/resolveDub feed the loading surface's context line.
+	resolveEp, resolveDub string
+	localCounts           map[string]int
 
 	// status scopes the transient verdict line to the substate
 	// surface that set it (PR64 #1) — see surfaceStatus.
@@ -703,6 +713,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	switch s.state {
 	case sessionStateLoading:
 		return s, nil
+	case sessionStateResolveLoading:
+		return s, nil
 	case sessionStateMenu:
 		return s.handleMenuKey(key)
 	case sessionStateEpisodeList:
@@ -745,6 +757,13 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	// cleans up after itself (PR61 review R1c).
 	s.resolveGen++
 	switch s.state {
+	case sessionStateResolveLoading:
+		// PR84: cancel the auto-launch resolve — the round was already
+		// superseded by the shared resolveGen++ above (the late settle
+		// cleans up after itself) and the screen the launch came from
+		// is restored.
+		s.setState(s.resolveReturn)
+		return s, nil
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
 	case sessionStateLoading:
@@ -979,13 +998,9 @@ func (s *sessionScreen) openAudioSelect() (Screen, tea.Cmd) {
 	keys := sortedEmbedKeys(ep.RawEmbeds)
 	choices := make([]Choice, 0, len(keys)+1)
 	if s.videoDub != "" {
-		name := stripProviderTag(s.videoDub)
-		if tag := s.dubLangTag(s.videoDub); tag != "" {
-			name = tag + " " + name
-		}
 		choices = append(choices, Choice{
 			ID:    s.videoDub,
-			Label: "⭐ Как видео (" + name + ")",
+			Label: "⭐ Как видео (" + s.dubLabel(s.videoDub) + ")",
 			Value: s.videoDub,
 		})
 	}
@@ -1014,6 +1029,16 @@ func (s *sessionScreen) openAudioSelect() (Screen, tea.Cmd) {
 // dubLangTag returns the display language tag ("[RU]", "[JA]") of a
 // dub key, looking the key's provider content language up via the
 // episode service; "" when the language is unknown (plain name).
+// dubLabel renders the dub's user-facing name: the language tag
+// prefix when known, then the plain dub name.
+func (s *sessionScreen) dubLabel(key string) string {
+	name := stripProviderTag(key)
+	if tag := s.dubLangTag(key); tag != "" {
+		return tag + " " + name
+	}
+	return name
+}
+
 func (s *sessionScreen) dubLangTag(key string) string {
 	lang := s.deps.Episode.ContentLanguage(providerOfTrackKey(key))
 	if lang == "" {
@@ -1057,9 +1082,27 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // list (PR61); a dub key scopes the resolve to the remembered dub
 // (the fast path auto-plays its result).
 func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
-	s.setState(sessionStateQuality)
+	// PR84 review fix: CLEAR the previous round's entries BEFORE any
+	// surface is built — otherwise round 2's picker frame renders the
+	// OLD episode's rows and Enter launches a stale URL.
 	s.streamEntries = nil
-	s.buildStreamList()
+	if scope != "" {
+		// PR84: the remembered-dub auto-launch renders the DISTINCT
+		// loading surface — the picker (its title, its «Ищу потоки…»
+		// row) must not flash while the streams resolve; it opens
+		// only if the settle proves a choice is needed.
+		if s.state != sessionStateResolveLoading {
+			s.resolveReturn = s.state
+		}
+		s.resolveEp, s.resolveDub = s.currentEpisode(), s.dubLabel(scope)
+		s.setState(sessionStateResolveLoading)
+	} else {
+		// The unscoped resolve ends at the real picker — its own
+		// surface with the «Ищу потоки…» row is the honest loading
+		// state for it.
+		s.setState(sessionStateQuality)
+		s.buildStreamList()
+	}
 	s.resolveGen++
 	gen := s.resolveGen
 	ep := *s.currentEpisodeData()
@@ -2303,6 +2346,9 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateLoading:
 		body = theme.Title.Render("Сбор ссылок со всех провайдеров…") + "\n\n" +
 			theme.Dim.Render("ожидание провайдеров")
+	case sessionStateResolveLoading:
+		body = theme.Title.Render("Загрузка потоков…") + "\n\n" +
+			theme.Dim.Render("Эп. "+s.resolveEp+" · "+s.resolveDub)
 	case sessionStateMenu:
 		body = theme.Title.Render(s.renderHeader()) + "\n\n" + s.list.Render()
 	case sessionStateEpisodeList:

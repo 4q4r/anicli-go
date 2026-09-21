@@ -152,7 +152,9 @@ func (r *ProgressRepo) ListHistory(ctx context.Context, status string, limit, of
 		args = append(args, status)
 	}
 	q += ` ORDER BY updated_at DESC, id DESC`
-	if limit > 0 {
+	// A lone positive offset (limit 0) still pages: LIMIT -1 is
+	// SQLite's unlimited form (PR82 P1#3 — offset-only API windows).
+	if limit > 0 || offset > 0 {
 		if offset < 0 {
 			offset = 0
 		}

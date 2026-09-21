@@ -175,11 +175,25 @@ func allanimeSimilarity(a, b string) float64 {
 
 // sortAllAnimeBySimilarity reorders results by descending similarity of
 // the lowercased query and title, stable on ties (Python list.sort with
-// reverse=True preserves the original order of equal keys).
+// reverse=True preserves the original order of equal keys). The ratio
+// is computed ONCE per item (decorate-sort-undecorate): the comparator
+// semantics (descending ratio, stable ties) are unchanged — the naive
+// form re-evaluated both ratios per comparison, O(n log n) SequenceMatcher
+// runs instead of n (PR82 P1#1).
 func sortAllAnimeBySimilarity(query string, results []contracts.SearchResult) {
 	q := strings.ToLower(query)
-	sort.SliceStable(results, func(i, j int) bool {
-		return allanimeSimilarity(q, strings.ToLower(results[i].Title)) >
-			allanimeSimilarity(q, strings.ToLower(results[j].Title))
+	type scored struct {
+		ratio float64
+		item  contracts.SearchResult
+	}
+	scoredItems := make([]scored, len(results))
+	for i, r := range results {
+		scoredItems[i] = scored{ratio: allanimeSimilarity(q, strings.ToLower(r.Title)), item: r}
+	}
+	sort.SliceStable(scoredItems, func(i, j int) bool {
+		return scoredItems[i].ratio > scoredItems[j].ratio
 	})
+	for i, s := range scoredItems {
+		results[i] = s.item
+	}
 }

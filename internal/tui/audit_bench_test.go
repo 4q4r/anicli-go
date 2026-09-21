@@ -47,6 +47,26 @@ func BenchmarkGroupByTitle100(b *testing.B) {
 	}
 }
 
+// BenchmarkGroupByTitleDuplicates100 — the REALISTIC rebind shape: the
+// same title re-emitted by 4 providers. The exact-match fast path (PR82
+// P1#2) collapses these pairs before SimilarityRatio runs.
+func BenchmarkGroupByTitleDuplicates100(b *testing.B) {
+	b.ReportAllocs()
+	results := make([]contracts.SearchResult, 0, 100)
+	for i := range 25 {
+		for _, prov := range []string{"animego", "anilib", "shiza", "kodik"} {
+			results = append(results, contracts.SearchResult{
+				Title:    fmt.Sprintf("One Piece Wan Pisu %d", i),
+				SourceID: prov,
+				URL:      fmt.Sprintf("%s/%d", prov, i),
+			})
+		}
+	}
+	for b.Loop() {
+		benchSinkGrouped = GroupByTitle(results, 0.6)
+	}
+}
+
 // BenchmarkDownloadRangeJoin1178 mirrors handleDownloadRangeKey's
 // nested loop VERBATIM (session.go:1917-1925 — no break: the inner
 // scan runs to the end of the order slice on every num, faithful to

@@ -117,6 +117,22 @@ func filterChoices(items []Choice, query string) []Choice {
 	return out
 }
 
+// filterChoicesLowered is filterChoices over pre-lowered labels (the
+// CheckList cache); the matching semantics are identical.
+func filterChoicesLowered(items []Choice, lowered []string, query string) []Choice {
+	if strings.TrimSpace(query) == "" {
+		return items
+	}
+	q := strings.ToLower(query)
+	out := make([]Choice, 0, len(items))
+	for i, item := range items {
+		if strings.Contains(lowered[i], q) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // cursorID returns the ID of the row under the cursor of a rebuilt
 // list ("" for the pinned Back row, empty menus and nil lists — the
 // first build runs before the list exists).

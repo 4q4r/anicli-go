@@ -38,8 +38,23 @@ func queryInt(r *http.Request, name string, def, min, max int) (int, *apiError) 
 // /api/v1/history). Sources batch-load in ONE grouped query — the
 // per-row ListByAnime here was an N+1 (PR81 review: 1000 history rows
 // made the call cost 1001 queries; 200-VU load could not complete).
+//
+// Optional limit/offset page the scan storage-side (PR82 P1#3):
+// omitted parameters keep the default FULL listing — existing clients
+// (and the TUI, whose screen needs the whole roster to render
+// identically) see byte-identical responses.
 func (a *App) handleHistoryList(w http.ResponseWriter, r *http.Request) {
-	records, err := a.store.Progress.ListHistory(r.Context(), "", 0, 0)
+	limit, e := queryInt(r, "limit", 0, 0, 10000)
+	if e != nil {
+		writeAPIError(w, r, e)
+		return
+	}
+	offset, e := queryInt(r, "offset", 0, 0, 100000)
+	if e != nil {
+		writeAPIError(w, r, e)
+		return
+	}
+	records, err := a.store.Progress.ListHistory(r.Context(), "", limit, offset)
 	if err != nil {
 		writeAPIError(w, r, errInternal("Failed to load history"))
 		return

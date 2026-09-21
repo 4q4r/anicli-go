@@ -3,13 +3,16 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
@@ -263,6 +266,43 @@ func BenchmarkSimilarityRatio(b *testing.B) {
 }
 
 var benchSinkRatio float64
+
+// benchResultTitles builds n distinct realistic allanime-style result
+// titles (the sort's input scale).
+func benchResultTitles(n int) []contracts.SearchResult {
+	out := make([]contracts.SearchResult, 0, n)
+	for i := range n {
+		out = append(out, contracts.SearchResult{
+			Title:    fmt.Sprintf("Naruto %s %d", []string{"Shippuuden", "the Movie", "SD", "Shinden"}[i%4], i),
+			URL:      "https://allanime.example/" + strconv.Itoa(i),
+			SourceID: "allanime",
+		})
+	}
+	return out
+}
+
+var benchSinkSorted int
+
+// BenchmarkAllanimeSimilaritySort30 — the fan-out-scale result sort
+// (each op: n ratio evaluations + the sort).
+func BenchmarkAllanimeSimilaritySort30(b *testing.B) {
+	b.ReportAllocs()
+	results := benchResultTitles(30)
+	for b.Loop() {
+		sortAllAnimeBySimilarity("naruto", results)
+		benchSinkSorted = len(results)
+	}
+}
+
+// BenchmarkAllanimeSimilaritySort100 — the 10x-scale sort.
+func BenchmarkAllanimeSimilaritySort100(b *testing.B) {
+	b.ReportAllocs()
+	results := benchResultTitles(100)
+	for b.Loop() {
+		sortAllAnimeBySimilarity("naruto", results)
+		benchSinkSorted = len(results)
+	}
+}
 
 // --- loopback Search benches (full provider parse path, no TLS/site) ---
 

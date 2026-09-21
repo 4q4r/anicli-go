@@ -430,6 +430,55 @@ func TestAniStarGetEpisodesLegacyPlayer(t *testing.T) {
 	}
 }
 
+// TestAniStarLegacySpanRefsUnescaped is the PR82 review-nit #9 proof:
+// legacy playlist spans carry HTML-entity-encoded URLs (&amp; for & in
+// vk query strings). The ref must be unescaped BEFORE it rides into
+// RawEmbeds — the entity-encoded form mis-resolves at the extractor
+// factory (mangled query keys). Plain-& URLs are untouched.
+func TestAniStarLegacySpanRefsUnescaped(t *testing.T) {
+	t.Parallel()
+
+	// «Серия» in cp1251 (D1 E5 F0 E8 FF) — the fixture bodies ride the
+	// production cp1251 decoder, ASCII passes through untouched.
+	serija := string([]byte{0xD1, 0xE5, 0xF0, 0xE8, 0xFF})
+
+	animePage := `<html><body><div id="movie_video"><iframe src="/playlist_anistar2.php?link=testslug.html"></iframe></div></body></html>`
+	playlistPage := `<html><body><div id="PlayList">` +
+		`<span id="link" onclick="playvk('https://vk.com/video_ext.php?oid=119777155&amp;id=159189162&amp;hash=34f8071c' , this)">` + serija + ` 1</span>` +
+		`<span id="link" onclick="playvk('https://vk.com/video_ext.php?oid=119777155&id=159189163&hash=abc' , this)">` + serija + ` 2</span>` +
+		`</div></body></html>`
+
+	routes := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".html"):
+			_, _ = w.Write([]byte(animePage))
+		case strings.Contains(r.URL.Path, "playlist_anistar2.php"):
+			_, _ = w.Write([]byte(playlistPage))
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+	p, _ := testAniStar(t, routes)
+
+	episodes, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/testslug.html")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("episodes = %d, want 2", len(episodes))
+	}
+	want := "https://vk.com/video_ext.php?oid=119777155&id=159189162&hash=34f8071c"
+	if got := episodes[0].RawEmbeds["AniStar"][0]; got != want {
+		t.Fatalf("episode 1 embed = %q, want the &-decoded %q", got, want)
+	}
+	// Plain-& URLs pass through unchanged (idempotent unescape).
+	want2 := "https://vk.com/video_ext.php?oid=119777155&id=159189163&hash=abc"
+	if got := episodes[1].RawEmbeds["AniStar"][0]; got != want2 {
+		t.Fatalf("episode 2 embed = %q, want %q", got, want2)
+	}
+}
+
 // TestAniStarResolveStreamLegacyDirect pins the legacy resolve path:
 // embed URLs ride the shared extractor factory, whose direct fallback
 // answers bare media URLs (here: a synthetic .mp4 embed on episode 3's

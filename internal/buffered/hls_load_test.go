@@ -49,7 +49,7 @@ func loadGoroutineDelta(t *testing.T, baseline int, window time.Duration, allowe
 // checks the orchestration overhead stays inside the budget.
 func TestLoadHLSPipeline500Segments(t *testing.T) {
 	playlist := benchMediaPlaylist(hlsLoadSegments)
-	segment := strings.Repeat("b", hlsLoadSegmentBytes)
+	segment := []byte(strings.Repeat("b", hlsLoadSegmentBytes)) // one copy, reused per response
 	served := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".m3u8") {
@@ -59,7 +59,7 @@ func TestLoadHLSPipeline500Segments(t *testing.T) {
 		}
 		served++
 		w.Header().Set("Content-Type", "video/mp2t")
-		_, _ = w.Write([]byte(segment))
+		_, _ = w.Write(segment)
 	}))
 	t.Cleanup(srv.Close)
 

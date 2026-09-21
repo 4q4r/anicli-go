@@ -53,13 +53,27 @@ func MergeEpisodeLists(sources []SourceEpisodes) (map[string]contracts.Episode, 
 	for num := range merged {
 		order = append(order, num)
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		ki, kj := EpisodeSortKey(order[i]), EpisodeSortKey(order[j])
-		if ki != kj {
-			return ki < kj
+	// Decorate-sort-undecorate (PR82 P1#4): the sort key is parsed ONCE
+	// per entry instead of twice per comparison (~22K ParseFloat calls
+	// at the 1178-episode scale). Same key function, same stable sort,
+	// same (key, label) tie-break — ordering is identical.
+	type keyedNum struct {
+		num string
+		key float64
+	}
+	keyed := make([]keyedNum, 0, len(order))
+	for _, num := range order {
+		keyed = append(keyed, keyedNum{num: num, key: EpisodeSortKey(num)})
+	}
+	sort.SliceStable(keyed, func(i, j int) bool {
+		if keyed[i].key != keyed[j].key {
+			return keyed[i].key < keyed[j].key
 		}
-		return order[i] < order[j]
+		return keyed[i].num < keyed[j].num
 	})
+	for i, k := range keyed {
+		order[i] = k.num
+	}
 	return merged, order
 }
 

@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"fmt"
+	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // TestMergeEpisodeLists: the session episode merge across providers
@@ -218,4 +222,113 @@ func TestGroupByTitle(t *testing.T) {
 			t.Fatalf("threshold 0.99 must isolate each result, got %d groups", len(groups))
 		}
 	})
+}
+
+// TestMergeEpisodeListsOrdering1178 is the P1#4 ordering assertion at
+// the One Piece scale: after the decorate-sort-undecorate change the
+// merged order must be strictly ascending by EpisodeSortKey with the
+// lexical tie-break, across ALL 1178 entries (the unit tests pin small
+// cases; this pins the scale the benchmark measures).
+func TestMergeEpisodeListsOrdering1178(t *testing.T) {
+	sources := benchEpisodeSources(1178)
+	merged, order := MergeEpisodeLists(sources)
+	if len(order) != 1178 {
+		t.Fatalf("order = %d entries, want 1178", len(order))
+	}
+	if len(merged) != 1178 {
+		t.Fatalf("merged = %d entries, want 1178", len(merged))
+	}
+	prevKey, prevNum := -1.0, ""
+	for _, num := range order {
+		key := EpisodeSortKey(num)
+		if key < prevKey {
+			t.Fatalf("order not ascending: %q (key %v) after %q (key %v)", num, key, prevNum, prevKey)
+		}
+		if key == prevKey && num <= prevNum {
+			t.Fatalf("tie-break not lexical: %q after %q at key %v", num, prevNum, key)
+		}
+		if _, ok := merged[num]; !ok {
+			t.Fatalf("order entry %q missing from merged map", num)
+		}
+		prevKey, prevNum = key, num
+	}
+}
+
+// TestGroupByTitleMatchesReference is the PR82 P1#2 behavior-identity
+// proof: the optimized grouper must produce byte-identical grouping
+// (membership + intra-group order) with the ORIGINAL pairwise
+// implementation, over a deterministic multi-source corpus that
+// includes normalization collisions (case pairs, shared prefixes,
+// noise-word variants) at several thresholds.
+func TestGroupByTitleMatchesReference(t *testing.T) {
+	reference := func(results []contracts.SearchResult, threshold float64) [][]contracts.SearchResult {
+		var groups [][]contracts.SearchResult
+		for _, res := range results {
+			placed := false
+			for gi, g := range groups {
+				if providers.SimilarityRatio(
+					strings.ToLower(res.Title),
+					strings.ToLower(g[0].Title)) > threshold {
+					groups[gi] = append(groups[gi], res)
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				groups = append(groups, []contracts.SearchResult{res})
+			}
+		}
+		return groups
+	}
+
+	corpus := []contracts.SearchResult{
+		{Title: "Ванпанчмен", SourceID: "animego", URL: "u0"},
+		{Title: "ванпанчмен", SourceID: "anilib", URL: "u1"},     // case collision
+		{Title: "ВАНПАНЧМЕН 2", SourceID: "shiza", URL: "u2"},    // case + sequel
+		{Title: "Ванпанчмен (TV)", SourceID: "yummy", URL: "u3"}, // variant
+		{Title: "One Piece Wan Pisu", SourceID: "animego", URL: "u4"},
+		{Title: "one piece wan pisu tv", SourceID: "anilib", URL: "u5"},
+		{Title: "One Piece — Wan Pisu 1178", SourceID: "kodik", URL: "u6"},
+		{Title: "Bleach Sennen Kessen-hen", SourceID: "animego", URL: "u7"},
+		{Title: "bleach sennen kessen hen", SourceID: "anidub", URL: "u8"},
+		{Title: "Naruto", SourceID: "animego", URL: "u9"},
+		{Title: "Naruto: Shippuuden", SourceID: "anilib", URL: "u10"},
+		{Title: "", SourceID: "animego", URL: "u11"}, // empty-title edge
+		{Title: "", SourceID: "anilib", URL: "u12"},  // empty-empty collision
+	}
+	// A longer tail so the quadratic path is exercised with real
+	// near-duplicates: titles share a long prefix with varying seasons.
+	for i := range 40 {
+		corpus = append(corpus, contracts.SearchResult{
+			Title:    fmt.Sprintf("Boku no Hero Academia Season %d", i%7),
+			SourceID: []string{"animego", "anilib", "shiza"}[i%3],
+			URL:      fmt.Sprintf("u%d", 13+i),
+		})
+	}
+
+	for _, threshold := range []float64{0.3, 0.5, 0.6, 0.8, 0.99, 1.0, 1.5} {
+		got := GroupByTitle(append([]contracts.SearchResult(nil), corpus...), threshold)
+		want := reference(append([]contracts.SearchResult(nil), corpus...), threshold)
+		if len(got) != len(want) {
+			t.Fatalf("threshold %v: %d groups, want %d", threshold, len(got), len(want))
+		}
+		for gi := range want {
+			if len(got[gi]) != len(want[gi]) {
+				t.Fatalf("threshold %v group %d: %d items, want %d", threshold, gi, len(got[gi]), len(want[gi]))
+			}
+			for ii := range want[gi] {
+				if got[gi][ii].URL != want[gi][ii].URL {
+					t.Fatalf("threshold %v group %d item %d: %s, want %s (membership/order changed)",
+						threshold, gi, ii, got[gi][ii].URL, want[gi][ii].URL)
+				}
+			}
+		}
+	}
+
+	// NaN threshold: everything isolates (the hardening contract —
+	// exact matches must not group under NaN either).
+	nanGroups := GroupByTitle(corpus, math.NaN())
+	if len(nanGroups) != len(corpus) {
+		t.Fatalf("NaN threshold: %d groups, want %d (one per result)", len(nanGroups), len(corpus))
+	}
 }

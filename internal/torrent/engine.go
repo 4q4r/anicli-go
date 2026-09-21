@@ -425,14 +425,18 @@ func (e *Engine) Resolve(ctx context.Context, ih InfoHash, fileIndex int) (Strea
 	if !ok {
 		return StreamHandle{}, fmt.Errorf("%w: %s", ErrUnknownRelease, ih.HexString())
 	}
-	if t.Info() == nil {
-		select {
-		case <-t.GotInfo():
-		case <-ctx.Done():
-			return StreamHandle{}, fmt.Errorf("torrent: metadata for %s: %w", ih.HexString(), ctx.Err())
-		case <-e.closed:
-			return StreamHandle{}, ErrClosed
-		}
+	// Unconditional metadata wait (PR82 final-round race fix): the
+	// previous `if t.Info() == nil` guard raced the library's lazy
+	// initFiles — metadata can land between the check and Files(),
+	// whose slice initFiles writes. GotInfo() is an already-closed
+	// channel once info is set (instant), and otherwise waits bounded
+	// by ctx/closed exactly as before.
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		return StreamHandle{}, fmt.Errorf("torrent: metadata for %s: %w", ih.HexString(), ctx.Err())
+	case <-e.closed:
+		return StreamHandle{}, ErrClosed
 	}
 	files := t.Files()
 	if fileIndex < 0 || fileIndex >= len(files) {

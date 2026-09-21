@@ -66,6 +66,15 @@ func TestHistoryListPagination(t *testing.T) {
 		t.Fatalf("offset window starts at id %v, want the full listing's 6th row %v", first["id"], fifth["id"])
 	}
 
+	// MID-TABLE offset (the discriminating case): offset=5 alone on 12
+	// rows must return the remaining 7 — LIMIT 0 would return 0 (this
+	// assertion pins the LIMIT -1 conversion; the past-end probe below
+	// passes vacuously without it).
+	_, payload = doJSON(t, h, http.MethodGet, "/api/v1/history?offset=5", "", auth)
+	if got := countItems(payload); got != total-5 {
+		t.Fatalf("offset=5 -> %d items, want %d (the mid-table remainder)", got, total-5)
+	}
+
 	// offset past the end: empty, not an error.
 	_, payload = doJSON(t, h, http.MethodGet, "/api/v1/history?offset=99", "", auth)
 	if got := countItems(payload); got != 0 {

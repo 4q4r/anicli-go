@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -223,6 +224,36 @@ func TestGroupByTitle(t *testing.T) {
 	})
 }
 
+// TestMergeEpisodeListsOrdering1178 is the P1#4 ordering assertion at
+// the One Piece scale: after the decorate-sort-undecorate change the
+// merged order must be strictly ascending by EpisodeSortKey with the
+// lexical tie-break, across ALL 1178 entries (the unit tests pin small
+// cases; this pins the scale the benchmark measures).
+func TestMergeEpisodeListsOrdering1178(t *testing.T) {
+	sources := benchEpisodeSources(1178)
+	merged, order := MergeEpisodeLists(sources)
+	if len(order) != 1178 {
+		t.Fatalf("order = %d entries, want 1178", len(order))
+	}
+	if len(merged) != 1178 {
+		t.Fatalf("merged = %d entries, want 1178", len(merged))
+	}
+	prevKey, prevNum := -1.0, ""
+	for _, num := range order {
+		key := EpisodeSortKey(num)
+		if key < prevKey {
+			t.Fatalf("order not ascending: %q (key %v) after %q (key %v)", num, key, prevNum, prevKey)
+		}
+		if key == prevKey && num <= prevNum {
+			t.Fatalf("tie-break not lexical: %q after %q at key %v", num, prevNum, key)
+		}
+		if _, ok := merged[num]; !ok {
+			t.Fatalf("order entry %q missing from merged map", num)
+		}
+		prevKey, prevNum = key, num
+	}
+}
+
 // TestGroupByTitleMatchesReference is the PR82 P1#2 behavior-identity
 // proof: the optimized grouper must produce byte-identical grouping
 // (membership + intra-group order) with the ORIGINAL pairwise
@@ -292,5 +323,12 @@ func TestGroupByTitleMatchesReference(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	// NaN threshold: everything isolates (the hardening contract —
+	// exact matches must not group under NaN either).
+	nanGroups := GroupByTitle(corpus, math.NaN())
+	if len(nanGroups) != len(corpus) {
+		t.Fatalf("NaN threshold: %d groups, want %d (one per result)", len(nanGroups), len(corpus))
 	}
 }

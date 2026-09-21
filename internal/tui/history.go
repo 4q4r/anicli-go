@@ -419,7 +419,10 @@ func RehydrateGroup(groups [][]contracts.SearchResult, rec storage.AnimeProgress
 func GroupByTitle(results []contracts.SearchResult, threshold float64) [][]contracts.SearchResult {
 	// Threshold ≥ 1 can never be exceeded (ratio ≤ 1.0): everything
 	// isolates. (The original loop proved the same by never matching.)
-	if threshold >= 1.0 {
+	// !(t < 1.0) — not t >= 1.0 — so a NaN threshold isolates too
+	// instead of falling into the pairwise path where only exact
+	// matches would group (PR82 final round, hardening).
+	if !(threshold < 1.0) {
 		groups := make([][]contracts.SearchResult, 0, len(results))
 		for _, res := range results {
 			groups = append(groups, []contracts.SearchResult{res})

@@ -63,21 +63,20 @@ func (p *pidsafePlayer) ResolveSkips(context.Context, int64, float64) (string, f
 
 // Play launches the real mpv, registers the child's handle and blocks
 // until mpv exits or the bounded lifetime expires — then terminates
-// the child strictly through that handle.
+// the child strictly through that handle. Counters move AFTER a
+// successful Start: a failed spawn is neither a launch nor a child.
 func (p *pidsafePlayer) Play(_ context.Context, req PlayRequest) error {
-	p.mu.Lock()
-	p.plays++
-	p.active++
-	p.mu.Unlock()
-
 	cmd := exec.Command(p.bin, "--force-media-title="+req.Title, "--no-ytdl", req.URL) //nolint:gosec // bin is the fixed player, the URL is the pipeline's own output
 	if err := cmd.Start(); err != nil {
-		p.mu.Lock()
-		p.active--
-		p.mu.Unlock()
 		return fmt.Errorf("pidsafe: start %s: %w", p.bin, err)
 	}
 	handle := cmd.Process // the ONLY control channel to this child
+
+	p.mu.Lock()
+	p.plays++
+	p.active++
+	p.procs = append(p.procs, handle)
+	p.mu.Unlock()
 
 	playCtx, cancel := context.WithTimeout(context.Background(), playLifetime)
 	defer cancel()

@@ -758,10 +758,10 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	s.resolveGen++
 	switch s.state {
 	case sessionStateResolveLoading:
-		// PR84: cancel the auto-launch resolve — the round is
-		// superseded (its late settle cleans up after itself) and the
-		// screen the launch came from is restored.
-		s.resolveGen++
+		// PR84: cancel the auto-launch resolve — the round was already
+		// superseded by the shared resolveGen++ above (the late settle
+		// cleans up after itself) and the screen the launch came from
+		// is restored.
 		s.setState(s.resolveReturn)
 		return s, nil
 	case sessionStateMenu, sessionStatePlaying:
@@ -1082,12 +1082,18 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // list (PR61); a dub key scopes the resolve to the remembered dub
 // (the fast path auto-plays its result).
 func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
+	// PR84 review fix: CLEAR the previous round's entries BEFORE any
+	// surface is built — otherwise round 2's picker frame renders the
+	// OLD episode's rows and Enter launches a stale URL.
+	s.streamEntries = nil
 	if scope != "" {
 		// PR84: the remembered-dub auto-launch renders the DISTINCT
 		// loading surface — the picker (its title, its «Ищу потоки…»
 		// row) must not flash while the streams resolve; it opens
 		// only if the settle proves a choice is needed.
-		s.resolveReturn = s.state
+		if s.state != sessionStateResolveLoading {
+			s.resolveReturn = s.state
+		}
 		s.resolveEp, s.resolveDub = s.currentEpisode(), s.dubLabel(scope)
 		s.setState(sessionStateResolveLoading)
 	} else {
@@ -1097,7 +1103,6 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 		s.setState(sessionStateQuality)
 		s.buildStreamList()
 	}
-	s.streamEntries = nil
 	s.resolveGen++
 	gen := s.resolveGen
 	ep := *s.currentEpisodeData()

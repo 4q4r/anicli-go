@@ -291,3 +291,55 @@ func TestResolveLoadingBufferedComposition(t *testing.T) {
 		t.Errorf("the loading surface must be gone at buffering:\n%s", view)
 	}
 }
+
+// TestSecondUnscopedResolveClearsStaleRows (PR84 review blocker): the
+// unscoped resolve must CLEAR the previous round's entries BEFORE
+// building the picker — a stale-rows frame during round 2 lets
+// handleQualityKey launch the OLD episode's URL.
+func TestSecondUnscopedResolveClearsStaleRows(t *testing.T) {
+	pb := &fakePlayback{}
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {DubName: "d1", Links: map[string]contracts.VideoSource{
+					"1080": {URL: "v1080"},
+				}},
+			},
+		},
+		Playback: pb,
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+
+	// Round 1: the unscoped resolve settles and fills the picker.
+	scr, cmd := s.beginStreamResolve("")
+	ss := scr.(*sessionScreen)
+	sr, ok := cmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("round-1 cmd = %T", cmd())
+	}
+	if _, play := ss.Update(sr); play != nil {
+		t.Fatal("round 1 is the picker path — no playback")
+	}
+	if len(ss.streamEntries) == 0 {
+		t.Fatal("precondition: round-1 entries must be in the picker")
+	}
+
+	// Round 2 on the next episode: the stale rows must be gone from
+	// the resolve frame — only the «Ищу потоки…» loading row renders.
+	s.currentIdx = 1
+	scr2, cmd2 := ss.beginStreamResolve("")
+	ss2 := scr2.(*sessionScreen)
+	view := ss2.View().Content
+	if strings.Contains(view, "1080p") {
+		t.Errorf("the previous round's rows render during round 2:\n%s", view)
+	}
+	if !strings.Contains(view, "Ищу потоки…") {
+		t.Errorf("the resolve frame must show the loading row:\n%s", view)
+	}
+	if cmd2 == nil {
+		t.Fatal("round-2 resolve command missing")
+	}
+}

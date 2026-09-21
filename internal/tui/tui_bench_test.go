@@ -1,6 +1,7 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"strconv"
 	"testing"
@@ -168,6 +169,20 @@ func BenchmarkPinListRender1178(b *testing.B) {
 func benchCheckList(b *testing.B, n int) *CheckList {
 	b.Helper()
 	return NewCheckList("Выберите провайдеры:", benchChoices(n))
+}
+
+// BenchmarkCheckListApplyFilter1178 — one filter keystroke over a
+// 1178-item checklist (the PR78 type-to-search rebuild path).
+func BenchmarkCheckListApplyFilter1178(b *testing.B) {
+	b.ReportAllocs()
+	items := benchChoices(1178)
+	key := tea.KeyPressMsg{Code: 'o'}
+	for b.Loop() {
+		fresh := NewCheckList("Выберите провайдеры:", items)
+		fresh.filter.consume(key, checklistBoundRunes)
+		fresh.applyFilter()
+		benchSinkCheckList = fresh
+	}
 }
 
 // BenchmarkCheckListRender64 renders the multi-select checklist over

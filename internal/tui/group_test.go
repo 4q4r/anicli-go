@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/providers"
 )
 
 // TestMergeEpisodeLists: the session episode merge across providers
@@ -218,4 +221,76 @@ func TestGroupByTitle(t *testing.T) {
 			t.Fatalf("threshold 0.99 must isolate each result, got %d groups", len(groups))
 		}
 	})
+}
+
+// TestGroupByTitleMatchesReference is the PR82 P1#2 behavior-identity
+// proof: the optimized grouper must produce byte-identical grouping
+// (membership + intra-group order) with the ORIGINAL pairwise
+// implementation, over a deterministic multi-source corpus that
+// includes normalization collisions (case pairs, shared prefixes,
+// noise-word variants) at several thresholds.
+func TestGroupByTitleMatchesReference(t *testing.T) {
+	reference := func(results []contracts.SearchResult, threshold float64) [][]contracts.SearchResult {
+		var groups [][]contracts.SearchResult
+		for _, res := range results {
+			placed := false
+			for gi, g := range groups {
+				if providers.SimilarityRatio(
+					strings.ToLower(res.Title),
+					strings.ToLower(g[0].Title)) > threshold {
+					groups[gi] = append(groups[gi], res)
+					placed = true
+					break
+				}
+			}
+			if !placed {
+				groups = append(groups, []contracts.SearchResult{res})
+			}
+		}
+		return groups
+	}
+
+	corpus := []contracts.SearchResult{
+		{Title: "Ванпанчмен", SourceID: "animego", URL: "u0"},
+		{Title: "ванпанчмен", SourceID: "anilib", URL: "u1"},     // case collision
+		{Title: "ВАНПАНЧМЕН 2", SourceID: "shiza", URL: "u2"},    // case + sequel
+		{Title: "Ванпанчмен (TV)", SourceID: "yummy", URL: "u3"}, // variant
+		{Title: "One Piece Wan Pisu", SourceID: "animego", URL: "u4"},
+		{Title: "one piece wan pisu tv", SourceID: "anilib", URL: "u5"},
+		{Title: "One Piece — Wan Pisu 1178", SourceID: "kodik", URL: "u6"},
+		{Title: "Bleach Sennen Kessen-hen", SourceID: "animego", URL: "u7"},
+		{Title: "bleach sennen kessen hen", SourceID: "anidub", URL: "u8"},
+		{Title: "Naruto", SourceID: "animego", URL: "u9"},
+		{Title: "Naruto: Shippuuden", SourceID: "anilib", URL: "u10"},
+		{Title: "", SourceID: "animego", URL: "u11"}, // empty-title edge
+		{Title: "", SourceID: "anilib", URL: "u12"},  // empty-empty collision
+	}
+	// A longer tail so the quadratic path is exercised with real
+	// near-duplicates: titles share a long prefix with varying seasons.
+	for i := range 40 {
+		corpus = append(corpus, contracts.SearchResult{
+			Title:    fmt.Sprintf("Boku no Hero Academia Season %d", i%7),
+			SourceID: []string{"animego", "anilib", "shiza"}[i%3],
+			URL:      fmt.Sprintf("u%d", 13+i),
+		})
+	}
+
+	for _, threshold := range []float64{0.3, 0.5, 0.6, 0.8, 0.99, 1.0, 1.5} {
+		got := GroupByTitle(append([]contracts.SearchResult(nil), corpus...), threshold)
+		want := reference(append([]contracts.SearchResult(nil), corpus...), threshold)
+		if len(got) != len(want) {
+			t.Fatalf("threshold %v: %d groups, want %d", threshold, len(got), len(want))
+		}
+		for gi := range want {
+			if len(got[gi]) != len(want[gi]) {
+				t.Fatalf("threshold %v group %d: %d items, want %d", threshold, gi, len(got[gi]), len(want[gi]))
+			}
+			for ii := range want[gi] {
+				if got[gi][ii].URL != want[gi][ii].URL {
+					t.Fatalf("threshold %v group %d item %d: %s, want %s (membership/order changed)",
+						threshold, gi, ii, got[gi][ii].URL, want[gi][ii].URL)
+				}
+			}
+		}
+	}
 }

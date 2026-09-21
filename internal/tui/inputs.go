@@ -107,10 +107,14 @@ func (t *TextPrompt) resolve(key tea.KeyPressMsg) (any, tea.Cmd) {
 // items only — the trailing Back row is appended by the Menu but never
 // parked on.
 type CheckList struct {
-	title   string
-	items   []Choice
-	checked map[string]bool
-	list    *PinList
+	title string
+	items []Choice
+	// itemsLower mirrors items' labels lowercased once at build time —
+	// the per-keystroke filter compares against the cache instead of
+	// re-lowering all labels on every keystroke (PR82 P2#7).
+	itemsLower []string
+	checked    map[string]bool
+	list       *PinList
 	// filter is the type-to-search state (PR78); visible holds the
 	// real-item indices of the filtered view (nil = unfiltered —
 	// every item shows).
@@ -123,11 +127,16 @@ type CheckList struct {
 // cursor never parks on it).
 func NewCheckList(title string, items []Choice) *CheckList {
 	menu := NewMenu(title, "Нет элементов", items...)
+	lowered := make([]string, len(items))
+	for i, item := range items {
+		lowered[i] = strings.ToLower(item.Label)
+	}
 	return &CheckList{
-		title:   title,
-		items:   items,
-		checked: make(map[string]bool),
-		list:    NewPinList(menu, defaultListHeight),
+		title:      title,
+		items:      items,
+		itemsLower: lowered,
+		checked:    make(map[string]bool),
+		list:       NewPinList(menu, defaultListHeight),
 	}
 }
 
@@ -157,7 +166,7 @@ func (c *CheckList) realIndex(viewIdx int) int {
 // (viewport follows through the normal PinList windowing).
 func (c *CheckList) applyFilter() {
 	prev := cursorID(c.list)
-	shown := filterChoices(c.items, c.filter.value())
+	shown := filterChoicesLowered(c.items, c.itemsLower, c.filter.value())
 	if !c.filter.active() {
 		c.visible = nil
 		c.list = NewPinList(NewMenu(c.title, "Нет элементов", c.items...), defaultListHeight)

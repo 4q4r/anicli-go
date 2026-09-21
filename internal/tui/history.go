@@ -417,21 +417,69 @@ func RehydrateGroup(groups [][]contracts.SearchResult, rec storage.AnimeProgress
 // SemanticGrouper in the rebind flow; the primary search flow uses
 // the manual checkbox grouping per the TUI spec).
 func GroupByTitle(results []contracts.SearchResult, threshold float64) [][]contracts.SearchResult {
-	var groups [][]contracts.SearchResult
+	// Threshold ≥ 1 can never be exceeded (ratio ≤ 1.0): everything
+	// isolates. (The original loop proved the same by never matching.)
+	if threshold >= 1.0 {
+		groups := make([][]contracts.SearchResult, 0, len(results))
+		for _, res := range results {
+			groups = append(groups, []contracts.SearchResult{res})
+		}
+		return groups
+	}
+
+	// Constant-factor cuts over the original pairwise loop, semantics
+	// identical (PR82 P1#2): the head's lowered title is computed once
+	// per group (was: once per comparison); each result's lowered title
+	// once per result; an exact lowered match short-circuits (ratio is
+	// exactly 1.0); and the SequenceMatcher length bound
+	// ratio ≤ 2·min(|a|,|b|)/(|a|+|b|) skips pairs that mathematically
+	// cannot exceed the threshold. Group membership and intra-group
+	// ordering are unchanged — the first-grouped-head-wins scan order
+	// and the append order are the original ones.
+	type group struct {
+		headLower string
+		items     []contracts.SearchResult
+	}
+	var groups []group
 	for _, res := range results {
+		resLower := strings.ToLower(res.Title)
 		placed := false
-		for gi, g := range groups {
-			if providers.SimilarityRatio(
-				strings.ToLower(res.Title),
-				strings.ToLower(g[0].Title)) > threshold {
-				groups[gi] = append(groups[gi], res)
+		for gi := range groups {
+			// Exact lowered match: the ratio is exactly 1.0, and the
+			// threshold < 1.0 early return guarantees it groups — no
+			// SequenceMatcher run needed.
+			if groups[gi].headLower == resLower {
+				groups[gi].items = append(groups[gi].items, res)
+				placed = true
+				break
+			}
+			// Length bound: ratio ≤ 2·min/(|a|+|b|); pairs under the
+			// bound mathematically cannot exceed the threshold.
+			if lowerBoundAllows(groups[gi].headLower, resLower, threshold) &&
+				providers.SimilarityRatio(resLower, groups[gi].headLower) > threshold {
+				groups[gi].items = append(groups[gi].items, res)
 				placed = true
 				break
 			}
 		}
 		if !placed {
-			groups = append(groups, []contracts.SearchResult{res})
+			groups = append(groups, group{headLower: resLower, items: []contracts.SearchResult{res}})
 		}
 	}
-	return groups
+	out := make([][]contracts.SearchResult, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, g.items)
+	}
+	return out
+}
+
+// lowerBoundAllows reports whether the SequenceMatcher ratio of a and b
+// CAN exceed threshold: ratio = 2M/(|a|+|b|) with M ≤ min(|a|,|b|) gives
+// the tight length bound. Exact-match pairs are handled by the caller.
+func lowerBoundAllows(a, b string, threshold float64) bool {
+	la, lb := len([]rune(a)), len([]rune(b))
+	if la == 0 && lb == 0 {
+		return true // ratio 1.0
+	}
+	return 2*float64(min(la, lb))/float64(la+lb) > threshold
 }

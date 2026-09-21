@@ -1739,6 +1739,10 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 		return s, nil
 	}
 	num, _ := resolved.(string)
+	// PR61 review nit: a pick leaves the list — the armed type-to-search
+	// query must not pre-narrow the next visit (the same rule as the
+	// Esc leave at handleCancel).
+	s.episodeFilter.clear()
 	for i, n := range s.order {
 		if n == num {
 			s.currentIdx = i

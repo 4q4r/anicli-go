@@ -93,7 +93,7 @@ func BenchmarkPickHLSVariant(b *testing.B) {
 func benchHLSFixtureServer(b *testing.B, segments int, segmentBytes int) *httptest.Server {
 	b.Helper()
 	playlist := benchMediaPlaylist(segments)
-	segment := strings.Repeat("a", segmentBytes)
+	segment := []byte(strings.Repeat("a", segmentBytes)) // one copy, reused per response
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".m3u8") {
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
@@ -101,7 +101,7 @@ func benchHLSFixtureServer(b *testing.B, segments int, segmentBytes int) *httpte
 			return
 		}
 		w.Header().Set("Content-Type", "video/mp2t")
-		_, _ = w.Write([]byte(segment))
+		_, _ = w.Write(segment)
 	}))
 	b.Cleanup(srv.Close)
 	return srv

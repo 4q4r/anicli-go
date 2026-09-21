@@ -27,11 +27,42 @@ type kodikExtractor struct {
 	http *netclient.Client
 }
 
-// kodik param keys scraped off the player page (extractors.py:165-169).
+// kodikParamKeys scraped off the player page (extractors.py:165-169).
 var kodikParamKeys = []string{
 	"domain", "d_sign", "pd", "pd_sign", "ref", "ref_sign",
 	"type", "hash", "id", "player_js_path",
 }
+
+// kodikParamPatterns precompiles every (key, template) pair at package
+// init (PR82 P2#5 — the scrape loop used to MustCompile the same 10×4
+// static set on every resolve). Order matters: per key the templates
+// are tried in this order and the first match wins, exactly like the
+// previous in-loop compilation.
+var kodikParamPatterns = func() []struct {
+	key string
+	re  *regexp.Regexp
+} {
+	templates := []string{
+		`var\s+%s\s*=\s*["']([^"']+)["']`,
+		`videoInfo\.%s\s*=\s*["']([^"']+)["']`,
+		`vInfo\.%s\s*=\s*["']([^"']+)["']`,
+		`["']%s["']\s*:\s*["']([^"']+)["']`,
+	}
+	out := make([]struct {
+		key string
+		re  *regexp.Regexp
+	}, 0, len(kodikParamKeys)*len(templates))
+	for _, key := range kodikParamKeys {
+		q := regexp.QuoteMeta(key)
+		for _, tpl := range templates {
+			out = append(out, struct {
+				key string
+				re  *regexp.Regexp
+			}{key: key, re: regexp.MustCompile(fmt.Sprintf(tpl, q))})
+		}
+	}
+	return out
+}()
 
 // kodikPlayerJSRe scrapes the app JS path when no var declares it
 // (extractors.py:88).
@@ -162,18 +193,12 @@ func (e *kodikExtractor) Extract(ctx context.Context, rawURL string) (map[string
 // matched here additively.
 func (e *kodikExtractor) scrapeParams(html string) map[string]string {
 	params := map[string]string{}
-	for _, key := range kodikParamKeys {
-		q := regexp.QuoteMeta(key)
-		for _, pattern := range []string{
-			`var\s+` + q + `\s*=\s*["']([^"']+)["']`,
-			`videoInfo\.` + q + `\s*=\s*["']([^"']+)["']`,
-			`vInfo\.` + q + `\s*=\s*["']([^"']+)["']`,
-			`["']` + q + `["']\s*:\s*["']([^"']+)["']`,
-		} {
-			if m := regexp.MustCompile(pattern).FindStringSubmatch(html); m != nil {
-				params[key] = m[1]
-				break
-			}
+	for _, pat := range kodikParamPatterns {
+		if _, done := params[pat.key]; done {
+			continue // first matching template per key wins
+		}
+		if m := pat.re.FindStringSubmatch(html); m != nil {
+			params[pat.key] = m[1]
 		}
 	}
 	return params

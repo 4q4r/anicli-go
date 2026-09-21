@@ -130,7 +130,7 @@ func TestHistoryDisplayReadsSavedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load history: %v", err)
 	}
-	view := NewHistoryList(s.deps, "", items).View().Content
+	view := newHistoryListFromFiltered(s.deps, "", items).View().Content
 	if !contains(view, "Серия 1/13") {
 		t.Fatalf("the library row must show the saved progress:\n%s", view)
 	}

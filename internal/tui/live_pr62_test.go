@@ -137,7 +137,7 @@ func TestLivePR62BindPersistSkipSearchRebind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload history: %v", err)
 	}
-	list := NewHistoryList(deps, "", items)
+	list := newHistoryListFromFiltered(deps, "", items)
 	for i := range len(items) {
 		list.list.Jump(i)
 		_, cmd := list.Update(enter())

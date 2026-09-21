@@ -54,9 +54,9 @@ func FilterHistory(items []storage.AnimeProgress, status string) []storage.Anime
 
 // historyFilterHint is the static key hint on the library screen (the
 // binding itself stays silent — see historyFilter.Update).
-const historyFilterHint = "s — проверить обновления списков"
+const historyFilterHint = "ctrl+r — проверить обновления списков"
 
-// historyRefreshMsg settles one background library refresh (key «s»
+// historyRefreshMsg settles one background library refresh (Ctrl+R
 // on the history filter screen): the reloaded snapshot, or the error
 // that must surface on the status line.
 type historyRefreshMsg struct {
@@ -74,11 +74,14 @@ type historyFilter struct {
 	*MenuScreen
 	deps  *Deps
 	items []storage.AnimeProgress
+	// filter is the PR83 type-to-search over the status choices (the
+	// sync hotkey moved to Ctrl+R, freeing the letter for typing).
+	filter listFilter
 	// status mirrors the wrapped screen's bottom line (the hint, or a
 	// refresh error): applyRefresh needs it to notice that a fresh
 	// success must supersede a prior failure.
 	status string
-	// refreshing dedups «s» while a check is in flight. It is cleared
+	// refreshing dedups Ctrl+R while a check is in flight. It is cleared
 	// by the refresh COMMAND itself — not by the message handler — so
 	// a settled result dropped while the user navigated elsewhere
 	// cannot wedge the key; the atomic keeps the flag race-clean
@@ -88,8 +91,8 @@ type historyFilter struct {
 
 // NewHistoryFilter builds the status filter screen — always the FIRST
 // step of «📜 Списки» (python history_menu), with Back (I1), the
-// empty state when history is empty (I3) and the «s» silent
-// background list refresh (PR39).
+// empty state when history is empty (I3) and the Ctrl+R silent
+// background list refresh (PR39, re-keyed in PR83).
 func NewHistoryFilter(deps *Deps) Screen { return newHistoryFilter(deps) }
 
 // newHistoryFilter builds the wrapper; the exported constructor hides
@@ -100,9 +103,27 @@ func newHistoryFilter(deps *Deps) *historyFilter {
 		items = nil
 	}
 	h := &historyFilter{deps: deps, items: items, status: historyFilterHint}
-	h.MenuScreen = NewMenuScreen(h.config(historyFilterHint))
+	h.render(historyFilterHint)
 	return h
 }
+
+// render rebuilds the wrapped menu for the current snapshot, query
+// and status line. Cursor preservation is ID-based (cursorID/
+// restoreCursor — the buildEpisodeList precedent): the cursor stays
+// parked on the same choice when a narrowing keeps it.
+func (h *historyFilter) render(status string) {
+	var prev string
+	if h.MenuScreen != nil {
+		prev = cursorID(h.list)
+	}
+	cfg := h.config(status)
+	cfg.Choices = filterChoices(cfg.Choices, h.filter.value())
+	h.MenuScreen = NewMenuScreen(cfg)
+	restoreCursor(h.list, prev)
+}
+
+// rebuild re-renders for a changed type-to-search query.
+func (h *historyFilter) rebuild() { h.render(h.status) }
 
 // config renders the wrapped menu config for the current snapshot;
 // status is the bottom hint (or error) line.
@@ -127,7 +148,7 @@ func (h *historyFilter) config(status string) MenuScreenConfig {
 	}
 }
 
-// Update implements Screen: «s» dispatches the silent background
+// Update implements Screen: Ctrl+R dispatches the silent background
 // refresh (a check already running makes it a no-op — no second
 // fetch, no UI hint); the settled message applies the verdict;
 // everything else is the wrapped menu.
@@ -137,11 +158,22 @@ func (h *historyFilter) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		h.applyRefresh(m)
 		return h, nil
 	case tea.KeyPressMsg:
-		if m.Code == 's' && m.Mod == 0 {
+		// PR83: the refresh combo is Ctrl+R («s» is freed for typing).
+		// Modifier combos never enter the type-to-search query, so the
+		// refresh works with a filter armed.
+		if m.Code == 'r' && m.Mod == tea.ModCtrl {
 			if !h.refreshing.CompareAndSwap(false, true) {
 				return h, nil // a check is already running: silent no-op
 			}
 			return h, safeCmd(historyFilterID, h.refreshCmd())
+		}
+		// PR83 type-to-search: printable keys narrow the choices live;
+		// the first Esc clears, the second falls through to Back.
+		if consumed, changed := h.filter.consume(m, pinListBoundRunes); consumed {
+			if changed {
+				h.rebuild()
+			}
+			return h, nil
 		}
 	}
 	next, cmd := h.MenuScreen.Update(msg)
@@ -205,11 +237,9 @@ func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
 // swap rebuilds the wrapped menu screen for a new snapshot + status
 // line, preserving the cursor position.
 func (h *historyFilter) swap(items []storage.AnimeProgress, status string) {
-	cursor := h.list.Cursor()
 	h.items = items
 	h.status = status
-	h.MenuScreen = NewMenuScreen(h.config(status))
-	h.list.Jump(cursor)
+	h.render(status)
 }
 
 // loadHistory loads the full history once for the whole flow.
@@ -247,14 +277,44 @@ func statusLabelRU(key string) string {
 	return key
 }
 
-// newHistoryList builds the filtered history list (constructor is
-// unexported: the filter screen owns the items snapshot).
-func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *MenuScreen {
-	filtered := FilterHistory(all, status)
-	emptyMsg := ""
-	if len(filtered) == 0 {
-		emptyMsg = "Список пуст"
+// View composes the «Поиск: …» line above the list (the PR78 shape)
+// and keeps the status line (the refresh hint/verdict) below.
+func (h *historyFilter) View() tea.View {
+	body := theme.Title.Render(h.title) + "\n\n" +
+		filterLineAbove(h.filter, h.list.Render())
+	if h.status != "" {
+		body += "\n" + theme.StatusLine.Render(h.status)
 	}
+	return tea.NewView(body)
+}
+
+// historyListScreen is the library titles list with the PR83
+// type-to-search (the rebindProgress embedding pattern: the wrapper
+// owns the query state and rebuild, the embedded MenuScreen keeps the
+// rendering and pick routing).
+type historyListScreen struct {
+	*MenuScreen
+	deps   *Deps
+	status string
+	items  []storage.AnimeProgress
+	filter listFilter
+}
+
+// rebuild re-renders the list for the current status snapshot and
+// type-to-search query. Cursor preservation is ID-based (cursorID/
+// restoreCursor — the buildEpisodeList precedent): the cursor stays
+// parked on the same record when a narrowing keeps it.
+func (l *historyListScreen) rebuild() {
+	prev := cursorID(l.list)
+	l.MenuScreen = l.build()
+	restoreCursor(l.list, prev)
+}
+
+// build assembles the wrapped menu for the current state. The rows
+// are the FilterHistory(status) subset narrowed by the live query;
+// Value keeps the REAL record pointer.
+func (l *historyListScreen) build() *MenuScreen {
+	filtered := FilterHistory(l.items, l.status)
 	choices := make([]Choice, 0, len(filtered))
 	for i := range filtered {
 		it := filtered[i]
@@ -269,45 +329,86 @@ func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *Men
 			Value: &filtered[i],
 		})
 	}
+	choices = filterChoices(choices, l.filter.value())
+	emptyMsg := ""
+	if len(choices) == 0 {
+		emptyMsg = "Список пуст"
+	}
 	return NewMenuScreen(MenuScreenConfig{
 		ID:       historyListID,
-		Title:    "Список — " + statusLabelRU(status),
+		Title:    "Список — " + statusLabelRU(l.status),
 		EmptyMsg: emptyMsg,
 		Choices:  choices,
-		OnPick: func(pick any) tea.Cmd {
-			if pick == Back {
-				return pop()
-			}
-			rec, ok := pick.(*storage.AnimeProgress)
-			if !ok {
-				return pop()
-			}
-			if rec.NeedsCorrection || rec.SourceID == "" || rec.SourceURL == "" {
-				// Placeholder (PR30): the record carries no usable
-				// source — the provider fan-out binds it (PR62 #2
-				// persists the pick).
-				return push(newRebindProgress(deps, rec))
-			}
-			// PR62 #3: bound records skip the search — the fan-out ran
-			// ONCE when the binding was made; re-entry resumes the
-			// stored source directly (python's saved-single-source
-			// resume), «🔗 Перепривязать» re-runs the fan-out.
-			primary := contracts.SearchResult{
-				Title:    derefStr(rec.BoundTitle, rec.Title),
-				URL:      rec.SourceURL,
-				SourceID: rec.SourceID,
-			}
-			if rec.Poster != nil {
-				primary.Poster = *rec.Poster
-			}
-			return push(newResumedSession(deps, primary, []contracts.SearchResult{primary}, *rec))
-		},
+		OnPick:   l.onPick,
 	})
 }
 
-// NewHistoryList is the exported constructor used by tests and by
-// flows holding their own items snapshot.
-func NewHistoryList(deps *Deps, status string, filtered []storage.AnimeProgress) *MenuScreen {
+// onPick routes the picked record (unchanged PR62 semantics).
+func (l *historyListScreen) onPick(pick any) tea.Cmd {
+	if pick == Back {
+		return pop()
+	}
+	rec, ok := pick.(*storage.AnimeProgress)
+	if !ok {
+		return pop()
+	}
+	if rec.NeedsCorrection || rec.SourceID == "" || rec.SourceURL == "" {
+		// Placeholder (PR30): the record carries no usable
+		// source — the provider fan-out binds it (PR62 #2
+		// persists the pick).
+		return push(newRebindProgress(l.deps, rec))
+	}
+	// PR62 #3: bound records skip the search — the fan-out ran
+	// ONCE when the binding was made; re-entry resumes the
+	// stored source directly (python's saved-single-source
+	// resume), «🔗 Перепривязать» re-runs the fan-out.
+	primary := contracts.SearchResult{
+		Title:    derefStr(rec.BoundTitle, rec.Title),
+		URL:      rec.SourceURL,
+		SourceID: rec.SourceID,
+	}
+	if rec.Poster != nil {
+		primary.Poster = *rec.Poster
+	}
+	return push(newResumedSession(l.deps, primary, []contracts.SearchResult{primary}, *rec))
+}
+
+// Update: PR83 type-to-search (the first Esc clears, the second pops)
+// over the embedded menu.
+func (l *historyListScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	if key, isKey := msg.(tea.KeyPressMsg); isKey {
+		if consumed, changed := l.filter.consume(key, pinListBoundRunes); consumed {
+			if changed {
+				l.rebuild()
+			}
+			return l, nil
+		}
+	}
+	next, cmd := l.MenuScreen.Update(msg)
+	if next == Screen(l.MenuScreen) {
+		return l, cmd
+	}
+	return next, cmd
+}
+
+// View composes the «Поиск: …» line above the list (the PR78 shape).
+func (l *historyListScreen) View() tea.View {
+	return tea.NewView(theme.Title.Render(l.title) + "\n\n" +
+		filterLineAbove(l.filter, l.list.Render()))
+}
+
+// newHistoryList builds the filtered history list (constructor is
+// unexported: the filter screen owns the items snapshot).
+func newHistoryList(deps *Deps, status string, all []storage.AnimeProgress) *historyListScreen {
+	l := &historyListScreen{deps: deps, status: status, items: all}
+	l.MenuScreen = l.build()
+	return l
+}
+
+// newHistoryListFromFiltered builds the titles list from PRE-FILTERED
+// rows (the tests' shape); the wrapper's rebuild keeps the status
+// pass-through (FilterHistory on already-matching rows is a no-op).
+func newHistoryListFromFiltered(deps *Deps, status string, filtered []storage.AnimeProgress) *historyListScreen {
 	return newHistoryList(deps, status, filtered)
 }
 

@@ -162,7 +162,7 @@ func libraryView(t *testing.T, s *sessionScreen) string {
 	if err != nil {
 		t.Fatalf("load history: %v", err)
 	}
-	return NewHistoryList(s.deps, "", items).View().Content
+	return newHistoryListFromFiltered(s.deps, "", items).View().Content
 }
 
 // TestLivePR63LaunchSaveAndNextAutoLaunch: watching an episode records

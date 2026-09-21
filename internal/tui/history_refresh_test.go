@@ -15,14 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
-
-// keyS presses the library refresh key.
-func keyS() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 's'} }
 
 // fakeSyncFull records SyncFull invocations (the Deps.SyncFull seam).
 type fakeSyncFull struct {
@@ -55,14 +50,14 @@ func TestHistoryFilterKeySStartsBackgroundRefresh(t *testing.T) {
 		t.Fatalf("library screen must keep its identity, got %q", filter.ID())
 	}
 	before := filter.View().Content
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	after := filter.View().Content
 
 	if cmd == nil {
-		t.Fatal("pressing s must start the background refresh command")
+		t.Fatal("pressing Ctrl+R must start the background refresh command")
 	}
 	if before != after {
-		t.Fatalf("pressing s must not touch the UI at press time\nbefore:\n%s\nafter:\n%s", before, after)
+		t.Fatalf("pressing Ctrl+R must not touch the UI at press time\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 	if sync.calls != 0 {
 		t.Fatalf("the sync must not run at press time, ran %d times", sync.calls)
@@ -83,7 +78,7 @@ func TestHistoryFilterKeySStartsBackgroundRefresh(t *testing.T) {
 	}
 }
 
-// TestHistoryFilterRefreshDedupWhileInFlight: a second «s» while a
+// TestHistoryFilterRefreshDedupWhileInFlight: a second Ctrl+R while a
 // check is running is a silent no-op; after the check completes the
 // key starts a new check.
 func TestHistoryFilterRefreshDedupWhileInFlight(t *testing.T) {
@@ -91,15 +86,15 @@ func TestHistoryFilterRefreshDedupWhileInFlight(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}, SyncFull: sync.sync}
 	filter := newHistoryFilter(deps)
 
-	_, first := filter.Update(keyS())
+	_, first := filter.Update(ctrlR())
 	if first == nil {
-		t.Fatal("first s must dispatch the refresh")
+		t.Fatal("first Ctrl+R must dispatch the refresh")
 	}
-	if _, second := filter.Update(keyS()); second != nil {
+	if _, second := filter.Update(ctrlR()); second != nil {
 		t.Fatal("second s while a check is in flight must be a no-op")
 	}
 	first() // the check completes; its goroutine re-arms the flag
-	_, third := filter.Update(keyS())
+	_, third := filter.Update(ctrlR())
 	if third == nil {
 		t.Fatal("s must start a new check once the previous one completed")
 	}
@@ -126,7 +121,7 @@ func TestHistoryFilterRefreshAppliesChangedCounts(t *testing.T) {
 	filter := newHistoryFilter(deps)
 	filter.list.Jump(1) // cursor on the second row
 
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	settled, ok := cmd().(historyRefreshMsg)
 	if !ok {
 		t.Fatal("command must settle with historyRefreshMsg")
@@ -152,7 +147,7 @@ func TestHistoryFilterRefreshUnchangedStaysSilent(t *testing.T) {
 	filter := newHistoryFilter(deps)
 
 	before := filter.View().Content
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	settled := cmd()
 	filter.Update(settled) // the program loop delivers the message
 	if got := filter.View().Content; got != before {
@@ -174,7 +169,7 @@ func TestHistoryFilterRefreshErrorShowsStatusLine(t *testing.T) {
 	}
 	filter := newHistoryFilter(deps)
 
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	settled := cmd()
 	filter.Update(settled) // the program loop delivers the message
 	v := filter.View().Content
@@ -196,7 +191,7 @@ func TestHistoryFilterRefreshNilSeamFailsLoud(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	filter := newHistoryFilter(deps)
 
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	if cmd == nil {
 		t.Fatal("s must still dispatch when the sync seam is absent")
 	}
@@ -221,7 +216,7 @@ func TestHistoryFilterRefreshSuccessSupersedesStaleError(t *testing.T) {
 
 	// First check fails: the error lands on the status line.
 	sync.err = errors.New("shikimori недоступен")
-	_, failCmd := filter.Update(keyS())
+	_, failCmd := filter.Update(ctrlR())
 	failMsg := failCmd()
 	filter.Update(failMsg)
 	if v := filter.View().Content; !strings.Contains(v, "Не удалось обновить списки") {
@@ -230,7 +225,7 @@ func TestHistoryFilterRefreshSuccessSupersedesStaleError(t *testing.T) {
 
 	// Second check succeeds, data unchanged: the stale error must go.
 	sync.err = nil
-	_, okCmd := filter.Update(keyS())
+	_, okCmd := filter.Update(ctrlR())
 	okMsg := okCmd()
 	filter.Update(okMsg)
 	v := filter.View().Content
@@ -250,9 +245,9 @@ func TestHistoryFilterRefreshRearmsAfterDroppedResult(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}, SyncFull: sync.sync}
 	filter := newHistoryFilter(deps)
 
-	_, cmd := filter.Update(keyS())
+	_, cmd := filter.Update(ctrlR())
 	cmd() // completes; the settled message is NEVER delivered to the filter
-	if _, next := filter.Update(keyS()); next == nil {
+	if _, next := filter.Update(ctrlR()); next == nil {
 		t.Fatal("s must re-arm even when the settled result was delivered elsewhere")
 	}
 }

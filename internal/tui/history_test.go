@@ -212,7 +212,7 @@ func TestHistoryFilterLogic(t *testing.T) {
 // TestHistoryListRendering: badges and episode info render per item.
 func TestHistoryListRendering(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
-	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
+	list := newHistoryListFromFiltered(deps, "watching", FilterHistory(historyItems(), "watching"))
 	v := list.View().Content
 	if !strings.Contains(v, "[С] Ванпанчмен") {
 		t.Fatalf("status badge [С] missing:\n%s", v)
@@ -231,7 +231,7 @@ func TestHistoryListRendering(t *testing.T) {
 // every entry.
 func TestHistoryPickBoundRecordSkipsSearch(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
-	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
+	list := newHistoryListFromFiltered(deps, "watching", FilterHistory(historyItems(), "watching"))
 	list.list.Jump(0) // Ванпанчмен — bound
 	_, cmd := list.Update(enter())
 	if cmd == nil {
@@ -264,7 +264,7 @@ func TestHistoryPickBoundRecordSkipsSearch(t *testing.T) {
 // see TestHistoryPickBoundRecordSkipsSearch.
 func TestHistoryPickStartsFanOut(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
-	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
+	list := newHistoryListFromFiltered(deps, "watching", FilterHistory(historyItems(), "watching"))
 	list.list.Jump(1) // Bleach (needs_correction placeholder, watching filter)
 	_, cmd := list.Update(enter())
 	if cmd == nil {
@@ -288,7 +288,7 @@ func TestHistoryPickStartsFanOut(t *testing.T) {
 // old rebind prompt for every record alike.
 func TestHistoryNeedsCorrection(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
-	list := NewHistoryList(deps, "watching", FilterHistory(historyItems(), "watching"))
+	list := newHistoryListFromFiltered(deps, "watching", FilterHistory(historyItems(), "watching"))
 	list.list.Jump(1) // Bleach (needs_correction)
 	_, cmd := list.Update(enter())
 	msg := cmd()

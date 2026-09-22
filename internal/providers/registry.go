@@ -12,6 +12,8 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/storage"
 	"github.com/an0nx/anicli-go/internal/torrent"
+
+	"github.com/an0nx/anicli-go/internal/cfbrowser"
 )
 
 // statWriteTimeout bounds a single search-stat database write so a stuck
@@ -30,6 +32,9 @@ type Registry struct {
 	// cfClose releases the shared CF-bypass stack (browser session +
 	// updater ticker) — always built (CF is always on, PR80).
 	cfClose func()
+	// cfMgr is the shared CF-bypass stack (PR85: kept for the logger
+	// wiring assertion and future diagnostics surfaces).
+	cfMgr *cfbrowser.Manager
 	// engine is the ONE shared lazy torrent engine (PR36): built when
 	// [torrent].enabled, injected into every torrent provider and
 	// torn down by Close. Nil when the subsystem is disabled.

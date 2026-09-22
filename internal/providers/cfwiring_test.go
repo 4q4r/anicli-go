@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,5 +131,28 @@ func TestCFSolverAdapterConvertsClearance(t *testing.T) {
 	adapter.InvalidateHost("animego.one")
 	if _, ok := mgr.Store.Get("animego.one"); ok {
 		t.Error("InvalidateHost must drop the cached clearance")
+	}
+}
+
+// TestRegistryWiresCFBrowserLogger (PR85): WithCFBrowserLogger must
+// reach the cfbrowser manager built inside NewRegistry — the updater
+// cycle and verdict re-probe then log to the file sink, never stderr.
+func TestRegistryWiresCFBrowserLogger(t *testing.T) {
+	probe := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := config.Default()
+	s.Providers.Kodik.Token = "test-token"
+	t.Setenv("CLOAKBROWSER_CACHE_DIR", t.TempDir())
+	t.Setenv("ANICLI_DATA", t.TempDir())
+
+	reg, err := NewRegistry(s, nil, WithCFBrowserLogger(probe))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	if reg.cfMgr == nil {
+		t.Fatal("the registry must keep the cfbrowser manager")
+	}
+	if reg.cfMgr.Logger() != probe {
+		t.Fatal("the wired logger did not reach the cfbrowser manager")
 	}
 }

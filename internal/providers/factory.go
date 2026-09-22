@@ -186,6 +186,9 @@ type registryOptions struct {
 	// preflight drops, …); nil degrades to discard inside the
 	// provider — never stderr (PR62 #4).
 	providerLogger *slog.Logger
+	// cfBrowserLogger is the cfbrowser diagnostics sink (PR85); nil
+	// degrades to discard inside cfbrowser — never stderr.
+	cfBrowserLogger *slog.Logger
 }
 
 // RegistryOption customizes NewRegistry.
@@ -196,6 +199,12 @@ type RegistryOption func(*registryOptions)
 // alt-screen); a nil logger keeps the engine default.
 func WithTorrentLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.torrentLogger = log }
+}
+
+// WithCFBrowserLogger routes the CF-bypass stack's diagnostics (the
+// solver, updater, verdict store and install ladder) to log (PR85).
+func WithCFBrowserLogger(log *slog.Logger) RegistryOption {
+	return func(o *registryOptions) { o.cfBrowserLogger = log }
 }
 
 // WithProviderLogger routes provider-level diagnostics (search
@@ -313,7 +322,7 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 		return nil, err
 	}
 
-	cfMgr, err := cfbrowser.NewManager(cfg)
+	cfMgr, err := cfbrowser.NewManager(cfg, cfbrowser.WithManagerLogger(o.cfBrowserLogger))
 	if err != nil {
 		return nil, err
 	}
@@ -354,5 +363,6 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 	}
 	reg.disabled = disabled
 	reg.cfClose = cfClose
+	reg.cfMgr = cfMgr
 	return reg, nil
 }

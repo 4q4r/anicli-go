@@ -436,7 +436,7 @@ func TestEnableResourceDietIssuesFetchEnableOnSessionContext(t *testing.T) {
 	exec := &recordingExecutor{}
 	tctx := cdp.WithExecutor(base, exec)
 
-	if err := enableResourceDiet(tctx); err != nil {
+	if err := enableResourceDiet(nil, tctx); err != nil {
 		t.Fatalf("resource diet must arm on a session context: %v", err)
 	}
 	rec := exec.recorded()
@@ -473,7 +473,7 @@ func TestArmCacheDisabledIssuesCommandsOnSessionContext(t *testing.T) {
 func TestEnableResourceDietFailsWarnOnlyOnBareContext(t *testing.T) {
 	base, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
-	if err := enableResourceDiet(base); !errors.Is(err, cdp.ErrInvalidContext) {
+	if err := enableResourceDiet(nil, base); !errors.Is(err, cdp.ErrInvalidContext) {
 		t.Fatalf("bare context enable must fail with ErrInvalidContext (warn-only at the factory), got %v", err)
 	}
 }
@@ -575,7 +575,7 @@ func TestPauseHandlerNeverIssuesCommandsOnListenerGoroutine(t *testing.T) {
 	exec := &recordingExecutor{}
 	ctx := cdp.WithExecutor(base, exec)
 
-	handler, stopped := newPausePump(ctx)
+	handler, stopped := newPausePump(nil, ctx)
 	t.Cleanup(func() { <-stopped })
 
 	syncProbe := make(chan struct{})
@@ -616,7 +616,7 @@ func TestPauseHandlerOverflowDropsWithoutBlocking(t *testing.T) {
 	exec := &recordingExecutor{}
 	ctx := cdp.WithExecutor(base, exec)
 
-	handler, stopped := newPausePump(ctx)
+	handler, stopped := newPausePump(nil, ctx)
 	t.Cleanup(func() { <-stopped })
 
 	var seq atomic.Int64

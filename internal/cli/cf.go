@@ -68,7 +68,10 @@ func runCFInstall(ctx context.Context, out io.Writer) error {
 	}
 	channel := settings.CF.Channel
 	if channel != cfbrowser.ChannelFree {
-		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{ProxyURL: settings.CF.Proxy})
+		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{
+			ProxyURL: settings.CF.Proxy,
+			Logger:   logger,
+		})
 		if repErr == nil && rep != nil && rep.Status.Valid {
 			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
 				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
@@ -210,7 +213,9 @@ func runCFSolve(ctx context.Context, out io.Writer, providerID string) error {
 	}
 	// PR80: CF is always on — no enabled override needed.
 
-	mgr, err := cfbrowser.NewManager(*settings)
+	// PR85: the CLI face runs pre-alt-screen — the explicit default
+	// handler is allowed here (the TUI wires the file logger instead).
+	mgr, err := cfbrowser.NewManager(*settings, cfbrowser.WithManagerLogger(slog.Default()))
 	if err != nil {
 		return fmt.Errorf("cf solve: %w", err)
 	}

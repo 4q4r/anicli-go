@@ -77,6 +77,9 @@ type LaunchOptions struct {
 	Timezone, Locale string
 	// UserDataDir is the persistent profile directory.
 	UserDataDir string
+	// Logger receives driver diagnostics (PR85: nil = discard — never
+	// slog.Default; the TUI wires the file logger).
+	Logger *slog.Logger
 }
 
 // DriverFactory builds a Naviger for one browser session.
@@ -134,7 +137,7 @@ func (c SolverConfig) logger() *slog.Logger {
 	if c.Logger != nil {
 		return c.Logger
 	}
-	return slog.Default()
+	return discardLogger()
 }
 
 // Solver harvests Cloudflare clearances: store-first, then a

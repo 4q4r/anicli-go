@@ -2,6 +2,7 @@ package cfbrowser
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -15,6 +16,8 @@ import (
 type Manager struct {
 	// Solver harvests clearances (lazy browser launch).
 	Solver *Solver
+	// logger is the wired diagnostics sink (PR85).
+	logger *slog.Logger
 	// Store persists clearances under the data dir.
 	Store *ClearanceStore
 	// Updater keeps the cached stealth Chromium current.
@@ -28,7 +31,40 @@ type Manager struct {
 // before the TUI; when that install failed, the app still boots and
 // CF consumers surface typed errors at use while the background
 // updater self-heals the install.
-func NewManager(cfg config.Settings) (*Manager, error) {
+
+// ManagerOption customizes the CF-bypass stack construction.
+type ManagerOption func(*managerOptions)
+
+// managerOptions carries the NewManager customizations.
+type managerOptions struct {
+	// logger is the diagnostics sink for the whole cfbrowser stack
+	// (solver, updater, verdict store, install ladder). Nil degrades
+	// to the discard logger — never stderr (PR85).
+	logger *slog.Logger
+}
+
+// WithManagerLogger installs the cfbrowser diagnostics sink (the TUI
+// passes its file logger — stderr corrupts alt-screen).
+func WithManagerLogger(log *slog.Logger) ManagerOption {
+	return func(o *managerOptions) { o.logger = log }
+}
+
+// NewManager builds the stack from settings. PR80: CF is always on —
+// the enabled knob is gone. The stealth-Chromium binary resolves
+// LAZILY (at the first solve or bridge use): a missing binary no
+// longer fails the construction — the CLI startup auto-downloads it
+// before the TUI; when that install failed, the app still boots and
+// CF consumers surface typed errors at use while the background
+// updater self-heals the install.
+func NewManager(cfg config.Settings, opts ...ManagerOption) (*Manager, error) {
+	var mo managerOptions
+	for _, opt := range opts {
+		opt(&mo)
+	}
+	logger := mo.logger
+	if logger == nil {
+		logger = discardLogger()
+	}
 	base := cfg.General.DataDir
 	if base == "" {
 		var err error
@@ -48,17 +84,19 @@ func NewManager(cfg config.Settings) (*Manager, error) {
 		// cache build at first use, so installs landing mid-session
 		// are picked up without a restart.
 		Channel: cfg.CF.Channel,
+		Logger:  logger,
 	})
 	updater := NewUpdater(UpdaterConfig{
 		Enabled:  AutoUpdateFromConfig(cfg.CF.AutoUpdate),
 		Interval: cfg.CF.UpdateInterval,
 		Channel:  cfg.CF.Channel,
 		ProxyURL: cfg.CF.Proxy,
+		Logger:   logger,
 	})
 	solver.SetUpdater(updater)
 	updater.Start()
 
-	return &Manager{Solver: solver, Store: store, Updater: updater}, nil
+	return &Manager{Solver: solver, Store: store, Updater: updater, logger: logger}, nil
 }
 
 // Close tears the stack down: the solver first — its Close CANCELS
@@ -78,4 +116,10 @@ func (m *Manager) Close() error {
 		m.Updater.Close()
 	}
 	return firstErr
+}
+
+// Logger returns the wired cfbrowser diagnostics sink (the
+// construction always installs a non-nil logger).
+func (m *Manager) Logger() *slog.Logger {
+	return m.logger
 }

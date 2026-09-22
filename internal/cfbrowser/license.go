@@ -89,6 +89,9 @@ type LicenseOptions struct {
 	// ProxyURL is the [cf] proxy for license check traffic (PR80;
 	// empty = direct). Ignored when HTTPClient is set.
 	ProxyURL string
+	// Logger receives the transport fallback diagnostics (PR85; nil =
+	// discard — never slog.Default).
+	Logger *slog.Logger
 }
 
 // licenseCacheEntry is the .license_cache JSON shape.
@@ -118,6 +121,15 @@ func (o LicenseOptions) apiBase() string {
 	return defaultLicenseAPIBase
 }
 
+// logger resolves the diagnostics sink: nil degrades to discard —
+// never slog.Default (PR85).
+func (o LicenseOptions) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return discardLogger()
+}
+
 func (o LicenseOptions) httpClient() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
@@ -126,7 +138,7 @@ func (o LicenseOptions) httpClient() *http.Client {
 	// failure here is a loud-warned fallback to direct, never silent.
 	hc, err := DownloadHTTPClient(o.ProxyURL, licenseRequestTimeout)
 	if err != nil {
-		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		o.logger().Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
 		return &http.Client{Timeout: licenseRequestTimeout}
 	}
 	return hc

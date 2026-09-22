@@ -257,6 +257,7 @@ func (p *sessionPool) launchLocked() error {
 		Timezone:    timezone,
 		Locale:      locale,
 		UserDataDir: userDataDir,
+		Logger:      p.cfg.Logger,
 	})
 	if err != nil {
 		return fmt.Errorf("cfbrowser: launch stealth chromium %s: %w", info.Path, err)

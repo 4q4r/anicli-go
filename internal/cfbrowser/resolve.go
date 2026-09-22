@@ -54,12 +54,13 @@ type ResolveOptions struct {
 	Logger *slog.Logger
 }
 
-// logger resolves the effective slog logger.
+// logger resolves the effective slog logger: an explicit Logger wins;
+// nil degrades to the package discard logger — never stderr (PR85).
 func (o ResolveOptions) logger() *slog.Logger {
 	if o.Logger != nil {
 		return o.Logger
 	}
-	return slog.Default()
+	return discardLogger()
 }
 
 // ResolveCurrentBinary resolves the browser binary for the solve

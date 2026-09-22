@@ -67,7 +67,7 @@ type UpdaterConfig struct {
 	// pro version/download calls and manifest verification. It never
 	// touches the stealth browser's page traffic.
 	ProxyURL string
-	// Logger receives outcome lines (nil = slog.Default()).
+	// Logger receives outcome lines (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// HTTPClient overrides transport (tests).
 	HTTPClient *http.Client

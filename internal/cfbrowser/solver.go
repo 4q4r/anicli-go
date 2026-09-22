@@ -104,7 +104,7 @@ type SolverConfig struct {
 	BrowserIdleTimeout time.Duration
 	// Store persists clearances; required.
 	Store *ClearanceStore
-	// Logger receives solve diagnostics (nil = slog.Default()).
+	// Logger receives solve diagnostics (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// GeoEndpoint overrides the geoip lookup URL (tests).
 	GeoEndpoint string

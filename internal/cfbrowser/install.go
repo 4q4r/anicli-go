@@ -130,7 +130,7 @@ type InstallOptions struct {
 	// ([cf] channel) validates the value at load time; an unknown
 	// value here fails loud as well.
 	Channel string
-	// Logger receives progress lines (nil = slog.Default()).
+	// Logger receives progress lines (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// OnProgress, when set, receives integer download percents (0-100,
 	// monotone, ~5% granularity) plus the version being downloaded —

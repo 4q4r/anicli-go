@@ -50,7 +50,7 @@ type ResolveOptions struct {
 	// where a browser launch would be disproportionate; the solve
 	// path always probes.
 	NoProbe bool
-	// Logger receives the pinned-bypass warning (nil = slog.Default()).
+	// Logger receives the pinned-bypass warning (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 }
 

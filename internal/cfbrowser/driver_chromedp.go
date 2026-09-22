@@ -241,6 +241,12 @@ const pauseQueueCap = 256
 // would reintroduce the deadlock and an in-listener command is the
 // deadlock itself.
 func newPausePump(logger *slog.Logger, ctx context.Context) (handler func(any), stopped <-chan struct{}) {
+	// PR85 review: nil logger normalization is THIS seam's invariant —
+	// the overflow branch logs through the passed sink, so a nil here
+	// would SIGSEGV inside the race suite (reviewer-reproduced).
+	if logger == nil {
+		logger = discardLogger()
+	}
 	pauses := make(chan *fetch.EventRequestPaused, pauseQueueCap)
 	stoppedC := make(chan struct{})
 	go func() {

@@ -23,6 +23,11 @@ import (
 // lines); without the option everything degrades to discard.
 func TestNewManagerWiresLoggerIntoSolverAndUpdater(t *testing.T) {
 	cfg := config.Default()
+	// Hermetic: no real cache, no background updater cycle — the test
+	// pins the wiring, not the update policy.
+	cfg.CF.AutoUpdate = false
+	cfg.General.DataDir = t.TempDir()
+	t.Setenv(EnvCacheDir, t.TempDir())
 	probe := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 
 	mgr, err := NewManager(cfg, WithManagerLogger(probe))

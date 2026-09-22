@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -436,7 +437,7 @@ func TestEnableResourceDietIssuesFetchEnableOnSessionContext(t *testing.T) {
 	exec := &recordingExecutor{}
 	tctx := cdp.WithExecutor(base, exec)
 
-	if err := enableResourceDiet(tctx); err != nil {
+	if err := enableResourceDiet(nil, tctx); err != nil {
 		t.Fatalf("resource diet must arm on a session context: %v", err)
 	}
 	rec := exec.recorded()
@@ -473,7 +474,7 @@ func TestArmCacheDisabledIssuesCommandsOnSessionContext(t *testing.T) {
 func TestEnableResourceDietFailsWarnOnlyOnBareContext(t *testing.T) {
 	base, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
-	if err := enableResourceDiet(base); !errors.Is(err, cdp.ErrInvalidContext) {
+	if err := enableResourceDiet(nil, base); !errors.Is(err, cdp.ErrInvalidContext) {
 		t.Fatalf("bare context enable must fail with ErrInvalidContext (warn-only at the factory), got %v", err)
 	}
 }
@@ -575,7 +576,7 @@ func TestPauseHandlerNeverIssuesCommandsOnListenerGoroutine(t *testing.T) {
 	exec := &recordingExecutor{}
 	ctx := cdp.WithExecutor(base, exec)
 
-	handler, stopped := newPausePump(ctx)
+	handler, stopped := newPausePump(nil, ctx)
 	t.Cleanup(func() { <-stopped })
 
 	syncProbe := make(chan struct{})
@@ -616,7 +617,7 @@ func TestPauseHandlerOverflowDropsWithoutBlocking(t *testing.T) {
 	exec := &recordingExecutor{}
 	ctx := cdp.WithExecutor(base, exec)
 
-	handler, stopped := newPausePump(ctx)
+	handler, stopped := newPausePump(nil, ctx)
 	t.Cleanup(func() { <-stopped })
 
 	var seq atomic.Int64
@@ -634,5 +635,26 @@ func TestPauseHandlerOverflowDropsWithoutBlocking(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler blocked on overflow")
+	}
+}
+
+// TestNewPausePumpNilLoggerNeverPanics (PR85 review blocker): a nil
+// logger must be normalized to the discard sink — the overflow branch
+// logs through the passed sink, and a raw nil would SIGSEGV.
+func TestNewPausePumpNilLoggerNeverPanics(t *testing.T) {
+	handler, stopped := newPausePump(nil, context.Background())
+	if handler == nil || stopped == nil {
+		t.Fatal("handler/stopped must be non-nil")
+	}
+	// Overflow the queue: every event must be absorbed without panic.
+	for range pauseQueueCap * 2 {
+		handler(&fetch.EventRequestPaused{RequestID: fetch.RequestID("x")})
+	}
+	// A non-paused event must be ignored silently.
+	handler(tea.KeyPressMsg{})
+	select {
+	case <-stopped:
+		t.Fatal("the pump must still be running")
+	default:
 	}
 }

@@ -130,7 +130,7 @@ type InstallOptions struct {
 	// ([cf] channel) validates the value at load time; an unknown
 	// value here fails loud as well.
 	Channel string
-	// Logger receives progress lines (nil = slog.Default()).
+	// Logger receives progress lines (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// OnProgress, when set, receives integer download percents (0-100,
 	// monotone, ~5% granularity) plus the version being downloaded —
@@ -155,7 +155,7 @@ func (o InstallOptions) downloadHTTPClient(timeout time.Duration) *http.Client {
 	}
 	hc, err := DownloadHTTPClient(o.ProxyURL, timeout)
 	if err != nil {
-		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		o.logger().Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
 		return &http.Client{Timeout: timeout}
 	}
 	return hc
@@ -166,7 +166,7 @@ func (o InstallOptions) logger() *slog.Logger {
 	if o.Logger != nil {
 		return o.Logger
 	}
-	return slog.Default()
+	return discardLogger()
 }
 
 // platform resolves the effective platform spec.
@@ -187,7 +187,7 @@ func (o InstallOptions) pinnedVersion() string {
 
 // licenseOptions maps the install options onto license resolution.
 func (o InstallOptions) licenseOptions() LicenseOptions {
-	return LicenseOptions{CacheDir: o.CacheDir, APIBase: o.LicenseAPIBase, HTTPClient: o.HTTPClient, ProxyURL: o.ProxyURL}
+	return LicenseOptions{CacheDir: o.CacheDir, APIBase: o.LicenseAPIBase, HTTPClient: o.HTTPClient, ProxyURL: o.ProxyURL, Logger: o.Logger}
 }
 
 // ResolveCacheDir resolves the CloakBrowser cache directory:
@@ -1030,16 +1030,16 @@ func cachedVersions(cacheDir string) []string {
 // pruneCacheDirs keeps the newest `keep` chromium-* directories
 // (newest = current, next = rollback) and removes the rest. It is the
 // updater's retirement policy and never touches non-chromium files.
-func pruneCacheDirs(cacheDir string, keep int) {
+func pruneCacheDirs(cacheDir string, keep int, logger *slog.Logger) {
 	if keep < 1 {
 		keep = 1
 	}
 	dirs := cachedVersions(cacheDir)
 	for _, dir := range dirs[min(keep, len(dirs)):] {
 		if err := os.RemoveAll(filepath.Join(cacheDir, dir)); err != nil {
-			slog.Warn("cfbrowser: prune old chromium dir", "dir", dir, "error", err)
+			logger.Warn("cfbrowser: prune old chromium dir", "dir", dir, "error", err)
 		} else {
-			slog.Info("cfbrowser: pruned old chromium dir", "dir", dir)
+			logger.Info("cfbrowser: pruned old chromium dir", "dir", dir)
 		}
 	}
 }

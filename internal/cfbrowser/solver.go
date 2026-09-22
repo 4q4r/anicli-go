@@ -77,6 +77,9 @@ type LaunchOptions struct {
 	Timezone, Locale string
 	// UserDataDir is the persistent profile directory.
 	UserDataDir string
+	// Logger receives driver diagnostics (PR85: nil = discard — never
+	// slog.Default; the TUI wires the file logger).
+	Logger *slog.Logger
 }
 
 // DriverFactory builds a Naviger for one browser session.
@@ -101,7 +104,7 @@ type SolverConfig struct {
 	BrowserIdleTimeout time.Duration
 	// Store persists clearances; required.
 	Store *ClearanceStore
-	// Logger receives solve diagnostics (nil = slog.Default()).
+	// Logger receives solve diagnostics (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// GeoEndpoint overrides the geoip lookup URL (tests).
 	GeoEndpoint string
@@ -134,7 +137,7 @@ func (c SolverConfig) logger() *slog.Logger {
 	if c.Logger != nil {
 		return c.Logger
 	}
-	return slog.Default()
+	return discardLogger()
 }
 
 // Solver harvests Cloudflare clearances: store-first, then a

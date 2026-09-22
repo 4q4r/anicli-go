@@ -63,6 +63,9 @@ type ProVersionOptions struct {
 	// ProxyURL is the [cf] proxy for pro version traffic (PR80;
 	// empty = direct). Ignored when HTTPClient is set.
 	ProxyURL string
+	// Logger receives the transport/persist diagnostics (PR85; nil =
+	// discard — never slog.Default).
+	Logger *slog.Logger
 }
 
 func (o ProVersionOptions) downloadBase() string {
@@ -85,14 +88,21 @@ func (o ProVersionOptions) httpClient() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	// [cf] proxy (PR80): config load validated the scheme; a build
-	// failure here loud-warns and falls back to direct.
 	hc, err := DownloadHTTPClient(o.ProxyURL, 10*time.Second)
 	if err != nil {
-		slog.Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
+		o.logger().Warn("cfbrowser: [cf] proxy transport unavailable; falling back to direct", "error", err)
 		return &http.Client{Timeout: 10 * time.Second}
 	}
 	return hc
+}
+
+// logger resolves the diagnostics sink: nil degrades to discard —
+// never slog.Default (PR85).
+func (o ProVersionOptions) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return discardLogger()
 }
 
 // ResolveProVersion resolves the newest pro-channel version for the
@@ -154,7 +164,7 @@ func ResolveProVersion(ctx context.Context, tag string, opts ProVersionOptions) 
 			return payload.Version, nil
 		}
 		if werr := os.WriteFile(markerPath, raw, 0o644); werr != nil { //nolint:gosec // non-secret bookkeeping
-			slog.Warn("cfbrowser: persist pro version marker", "error", werr)
+			opts.logger().Warn("cfbrowser: persist pro version marker", "error", werr)
 		}
 	}
 	return payload.Version, nil

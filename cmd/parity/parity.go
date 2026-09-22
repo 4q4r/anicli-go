@@ -82,7 +82,8 @@ func realDeps() deps {
 			// (preflight drops) stay on the console sink (PR62 #4 —
 			// the never-stderr rule is a TUI rule).
 			return providers.NewRegistry(cfg, nil,
-				providers.WithProviderLogger(slog.Default()))
+				providers.WithProviderLogger(slog.Default()),
+				providers.WithCFBrowserLogger(slog.Default()))
 		},
 		now:     time.Now,
 		saveDir: filepath.Join("testdata", "parity"),

@@ -68,7 +68,10 @@ func runCFInstall(ctx context.Context, out io.Writer) error {
 	}
 	channel := settings.CF.Channel
 	if channel != cfbrowser.ChannelFree {
-		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{ProxyURL: settings.CF.Proxy})
+		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{
+			ProxyURL: settings.CF.Proxy,
+			Logger:   logger,
+		})
 		if repErr == nil && rep != nil && rep.Status.Valid {
 			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
 				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
@@ -124,7 +127,8 @@ func runCFStatus(out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "вердикты:       %s\n", vs)
 	}
 
-	tier, plan, expires, note := cfbrowser.StatusLicenseReport(context.Background(), cfbrowser.LicenseOptions{})
+	tier, plan, expires, note := cfbrowser.StatusLicenseReport(context.Background(),
+		cfbrowser.LicenseOptions{Logger: slog.Default()})
 	line := "лицензия:       " + tier
 	if tier == "pro" {
 		line += fmt.Sprintf(" (план %s, до %s)", orDash(plan), orDash(expires))
@@ -210,7 +214,9 @@ func runCFSolve(ctx context.Context, out io.Writer, providerID string) error {
 	}
 	// PR80: CF is always on — no enabled override needed.
 
-	mgr, err := cfbrowser.NewManager(*settings)
+	// PR85: the CLI face runs pre-alt-screen — the explicit default
+	// handler is allowed here (the TUI wires the file logger instead).
+	mgr, err := cfbrowser.NewManager(*settings, cfbrowser.WithManagerLogger(slog.Default()))
 	if err != nil {
 		return fmt.Errorf("cf solve: %w", err)
 	}
@@ -298,7 +304,7 @@ func printCFLoginInstructions(out io.Writer) {
 
 // runCFLogin validates and saves the license key.
 func runCFLogin(ctx context.Context, out io.Writer, key string) error {
-	st, err := cfbrowser.Login(ctx, key, cfbrowser.LicenseOptions{})
+	st, err := cfbrowser.Login(ctx, key, cfbrowser.LicenseOptions{Logger: slog.Default()})
 	if err != nil {
 		return fmt.Errorf("cf login: %w", err)
 	}
@@ -323,7 +329,7 @@ func newCFLogoutCommand() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			if err := cfbrowser.Logout(cfbrowser.LicenseOptions{}); err != nil {
+			if err := cfbrowser.Logout(cfbrowser.LicenseOptions{Logger: slog.Default()}); err != nil {
 				return fmt.Errorf("cf logout: %w", err)
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "лицензионный ключ и кэш проверки удалены — канал free")

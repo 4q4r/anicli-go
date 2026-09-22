@@ -67,7 +67,7 @@ type UpdaterConfig struct {
 	// pro version/download calls and manifest verification. It never
 	// touches the stealth browser's page traffic.
 	ProxyURL string
-	// Logger receives outcome lines (nil = slog.Default()).
+	// Logger receives outcome lines (nil = discard — never slog.Default, PR85).
 	Logger *slog.Logger
 	// HTTPClient overrides transport (tests).
 	HTTPClient *http.Client
@@ -84,7 +84,7 @@ func (c UpdaterConfig) logger() *slog.Logger {
 	if c.Logger != nil {
 		return c.Logger
 	}
-	return slog.Default()
+	return discardLogger()
 }
 
 // UpdateStatus is the persisted outcome of the last check
@@ -464,7 +464,7 @@ func (u *Updater) freeFlow(ctx context.Context, cacheDir string, spec PlatformSp
 			"version", rel.Version, "reason", out.reason)
 		return &CompatError{Newest: rel.Version, Reason: out.reason}
 	}
-	pruneCacheDirs(cacheDir, 2) // newest + rollback
+	pruneCacheDirs(cacheDir, 2, logger) // newest + rollback
 	u.record(cacheDir, UpdateStatus{
 		LatestVersion: rel.Version, InstalledVersion: info.Version,
 		UpdatedTo: info.Version,
@@ -487,6 +487,7 @@ func (u *Updater) tryProUpgradeCycle(ctx context.Context, cacheDir string, spec 
 		CacheDir:     u.cfg.CacheDir,
 		DownloadBase: u.cfg.DownloadBase,
 		HTTPClient:   u.cfg.HTTPClient,
+		Logger:       u.cfg.Logger,
 	})
 	if err != nil {
 		logger.Warn("cfbrowser: pro upgrade skipped — работаем на free", "error", err)
@@ -571,6 +572,7 @@ func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSp
 		CacheDir:     u.cfg.CacheDir,
 		DownloadBase: u.cfg.DownloadBase,
 		HTTPClient:   u.cfg.HTTPClient,
+		Logger:       u.cfg.Logger,
 	})
 	if err != nil {
 		// Mirrors the free channel's listing-failure posture: record
@@ -614,7 +616,7 @@ func (u *Updater) checkPro(ctx context.Context, cacheDir string, spec PlatformSp
 			"version", version, "reason", out.reason)
 		return &CompatError{Newest: version, Reason: out.reason}
 	}
-	pruneCacheDirs(cacheDir, 2) // newest + rollback
+	pruneCacheDirs(cacheDir, 2, logger) // newest + rollback
 	u.record(cacheDir, UpdateStatus{
 		LatestVersion: version, InstalledVersion: info.Version,
 		UpdatedTo: info.Version,

@@ -240,7 +240,13 @@ const pauseQueueCap = 256
 // and media never gate page scripts), because blocking the listener
 // would reintroduce the deadlock and an in-listener command is the
 // deadlock itself.
-func newPausePump(ctx context.Context) (handler func(any), stopped <-chan struct{}) {
+func newPausePump(logger *slog.Logger, ctx context.Context) (handler func(any), stopped <-chan struct{}) {
+	// PR85 review: nil logger normalization is THIS seam's invariant —
+	// the overflow branch logs through the passed sink, so a nil here
+	// would SIGSEGV inside the race suite (reviewer-reproduced).
+	if logger == nil {
+		logger = discardLogger()
+	}
 	pauses := make(chan *fetch.EventRequestPaused, pauseQueueCap)
 	stoppedC := make(chan struct{})
 	go func() {
@@ -262,7 +268,7 @@ func newPausePump(ctx context.Context) (handler func(any), stopped <-chan struct
 		select {
 		case pauses <- paused:
 		default:
-			slog.Warn("cfbrowser: pause backlog full; dropping pause",
+			logger.Warn("cfbrowser: pause backlog full; dropping pause",
 				"request_id", paused.RequestID)
 		}
 	}, stoppedC
@@ -275,8 +281,8 @@ func newPausePump(ctx context.Context) (handler func(any), stopped <-chan struct
 // ctx must be a session-executor context — on a bare chromedp context
 // Fetch.enable fails with "invalid context" and the factory degrades
 // warn-only.
-func enableResourceDiet(ctx context.Context) error {
-	handler, _ := newPausePump(ctx)
+func enableResourceDiet(logger *slog.Logger, ctx context.Context) error {
+	handler, _ := newPausePump(logger, ctx)
 	chromedp.ListenTarget(ctx, handler)
 	return fetch.Enable().WithPatterns(fetchBlockPatterns()).Do(ctx)
 }
@@ -342,13 +348,17 @@ func chromedpDriver(opts LaunchOptions) (Naviger, error) {
 	// the same session-scoped arming: a cached render must never
 	// stand in for a live navigation state (see armCacheDisabled).
 	sessionCtx := withSessionExecutor(ctx)
-	if err := enableResourceDiet(sessionCtx); err != nil {
+	dlog := opts.Logger
+	if dlog == nil {
+		dlog = discardLogger()
+	}
+	if err := enableResourceDiet(dlog, sessionCtx); err != nil {
 		// Best-effort diet: a full-resource solve still works, just
 		// fatter. Warn, do not fail the session over it.
-		slog.Warn("cfbrowser: resource blocking unavailable", "error", err)
+		dlog.Warn("cfbrowser: resource blocking unavailable", "error", err)
 	}
 	if err := armCacheDisabled(sessionCtx); err != nil {
-		slog.Warn("cfbrowser: cache disable unavailable", "error", err)
+		dlog.Warn("cfbrowser: cache disable unavailable", "error", err)
 	}
 
 	return &chromedpNav{

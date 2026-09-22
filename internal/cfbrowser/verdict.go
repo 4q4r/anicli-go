@@ -101,6 +101,9 @@ type verdictStore struct {
 	path     string
 	chromedp string
 	buckets  map[string]*verdictBucket
+	// logger receives the persist diagnostics (PR85: nil = discard —
+	// never slog.Default inside the TUI).
+	logger *slog.Logger
 }
 
 // chromedpModuleVersion resolves the chromedp module version from the
@@ -132,6 +135,7 @@ func loadVerdictStore(cacheDir string) *verdictStore {
 		path:     filepath.Join(cacheDir, verdictStoreFile),
 		chromedp: chromedpModuleVersion(),
 		buckets:  map[string]*verdictBucket{},
+		logger:   discardLogger(),
 	}
 	raw, err := os.ReadFile(s.path) //nolint:gosec // app-owned cache path
 	if err != nil {
@@ -214,20 +218,20 @@ func (s *verdictStore) lastKnownGoodFor() *lastKnownGood {
 func (s *verdictStore) save() {
 	raw, err := json.MarshalIndent(s.buckets, "", "  ")
 	if err != nil {
-		slog.Warn("cfbrowser: marshal compat verdicts", "error", err)
+		s.logger.Warn("cfbrowser: marshal compat verdicts", "error", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
-		slog.Warn("cfbrowser: persist compat verdicts", "error", err)
+		s.logger.Warn("cfbrowser: persist compat verdicts", "error", err)
 		return
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		slog.Warn("cfbrowser: persist compat verdicts", "error", err)
+		s.logger.Warn("cfbrowser: persist compat verdicts", "error", err)
 		return
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		slog.Warn("cfbrowser: persist compat verdicts", "error", err)
+		s.logger.Warn("cfbrowser: persist compat verdicts", "error", err)
 	}
 }
 
@@ -331,7 +335,10 @@ func probeAndRecord(ctx context.Context, cacheDir string, bin *BinaryInfo, logge
 		logger.Warn("cfbrowser: probe FAILED — вердикт bad", "version", bin.Version, "reason", out.reason)
 	}
 
+	// PR85: this path SAVES — wire the ladder's logger so the persist
+	// diagnostics land on the file sink, never stderr.
 	s := loadVerdictStore(cacheDir)
+	s.logger = logger
 	major, _ := versionMajor(bin.Version)
 	if out.ok {
 		s.recordGood(major, lastKnownGood{Version: bin.Version, Channel: bin.Channel, Path: bin.Path})

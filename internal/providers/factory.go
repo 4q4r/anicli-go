@@ -165,6 +165,15 @@ var allFactories = []struct {
 	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
 	}},
+	// anirena (PR88): the anirena.com search RSS on the same
+	// TorrentBase plumbing — the <enclosure> is the direct
+	// .torrent URL on the site itself, the Anime category scope is
+	// enforced client-side (the documented ?category= filter is
+	// ignored server-side, live-verified 2026-09-23); no credentials,
+	// engine injected by NewRegistry when [torrent] is enabled.
+	{"anirena", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniRena(AniRenaBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge (CF is always on —

@@ -134,6 +134,9 @@ func TestCFCommandTreeRUHelp(t *testing.T) {
 			t.Errorf("cf help must list %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "install") {
+		t.Errorf("cf help must not list the removed install command:\n%s", out)
+	}
 }
 
 // licenseAPIServer serves the validate endpoint for login/logout
@@ -299,4 +302,17 @@ func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
 func sha256HexRaw(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// TestCFInstallCommandRejected (PR86): the removed `cf install`
+// subcommand must fail loud (unknown command), not print the parent
+// help with exit 0.
+func TestCFInstallCommandRejected(t *testing.T) {
+	out, err := executeCF(t, "install")
+	if err == nil {
+		t.Fatalf("cf install must fail loud (unknown command), out:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "install") {
+		t.Errorf("err = %v, want it to name the unknown command", err)
+	}
 }

@@ -22,9 +22,20 @@ func newCFCommand() *cobra.Command {
 	cf := &cobra.Command{
 		Use:   "cf",
 		Short: "Обход Cloudflare (стелс-браузер CloakBrowser)",
-		Long: "Управление встроенным обходом Cloudflare: установка и обновление стелс-" +
-			"Chromium, статус кэша и лицензии, ручное решение challenge для источника, " +
-			"очистка сохранённых clearance-куки.",
+		Long: "Управление встроенным обходом Cloudflare: статус кэша и лицензии, " +
+			"ручное решение challenge для источника, очистка сохранённых " +
+			"clearance-куки. Установка stealth-Chromium выполняется автоматически " +
+			"при запуске приложения (PR80).",
+		// PR86: `cf install` removed — an unknown cf subcommand must
+		// fail loud instead of silently printing the parent help
+		// (cobra skips Args validation for non-runnable commands).
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return fmt.Errorf("неизвестная команда %q для %q (доступны: status, solve, clear, login, logout) — установка stealth-Chromium выполняется автоматически при запуске приложения",
+				args[0], cmd.CommandPath())
+		},
 	}
 	cf.AddCommand(
 		newCFStatusCommand(),

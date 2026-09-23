@@ -373,19 +373,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 25)
+	d := newToolDeps(t, 26)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("25/25 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("26/26 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "25/25") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "26/26") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 25 {
+	for i := range 26 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -395,32 +395,32 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 // TestParityAllGateToleratesOneDead pins the tolerance semantics: the
 // floor is the roster minus one (16 of 17 since animedia joined in
 // PR56; 21 of 22 since hdrezka joined in PR69; 22 of 23 since
-// anistar joined in PR77; 24 of 25 with rutor (PR87) and anirena
-// (PR88) merged in the 6-provider wave — interim, finalized in
+// anistar joined in PR77; 25 of 26 with rutor (PR87), anirena
+// (PR88) and subsplease (PR89) merged in the 6-provider wave — interim, finalized in
 // fix/93).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 25, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 26, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("24/25 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("25/26 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "24/25") {
-		t.Fatalf("summary must show 24/25:\n%s", out.String())
+	if !strings.Contains(out.String(), "25/26") {
+		t.Fatalf("summary must show 25/26:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 25, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 26, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("23/25 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("24/26 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "23/25") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 23/25 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "24/26") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 24/26 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())
@@ -452,12 +452,12 @@ func TestParityAllHonorsDeclaredSmokeQuery(t *testing.T) {
 		buildRegistry: func(config.Settings) (*providers.Registry, error) {
 			reg := providers.NewEmptyRegistry()
 			// p00 declares its own probe; the rest of the roster uses
-			// the shared queries (the real 24-provider shape —
+			// the shared queries (the real 25-provider shape —
 			// interim wave state).
 			if err := reg.Register(declared00); err != nil {
 				return nil, err
 			}
-			for i := 1; i < 24; i++ {
+			for i := 1; i < 25; i++ {
 				p := newParityProvider(t, fmt.Sprintf("p%02d", i), false)
 				if err := reg.Register(p); err != nil {
 					return nil, err

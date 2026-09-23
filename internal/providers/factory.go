@@ -183,6 +183,15 @@ var allFactories = []struct {
 	{"anirena", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniRena(AniRenaBase, http, nil)
 	}},
+	// subsplease (PR89): the subsplease.org JSON API on the same
+	// TorrentBase plumbing — the EN seasonal group's f=search catalog
+	// (the RSS feeds are latest-only and queryless, the site search
+	// endpoint is the API) with tracker-rich magnet links and the
+	// show-page sid hop for batch back-catalog; no credentials, engine
+	// injected by NewRegistry when [torrent] is enabled.
+	{"subsplease", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newSubsPlease(SubsPleaseBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge (CF is always on —

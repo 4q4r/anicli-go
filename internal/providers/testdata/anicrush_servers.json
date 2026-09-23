@@ -1,0 +1,12 @@
+{
+  "status": true,
+  "result": {
+    "sub": [
+      {"server": 4, "type": 0, "hard_sub": 0, "multiple_audio": 0, "streamServer": {"name": "Megacloud", "url": "https://megacloud.tv/embed-2/e-1/1hnXq7VzX0Ex", "type": "iframe"}},
+      {"server": 1, "type": 0, "hard_sub": 0, "multiple_audio": 0, "streamServer": {"name": "Southcloud", "url": "", "type": "iframe"}}
+    ],
+    "dub": [
+      {"server": 4, "type": 1, "hard_sub": 0, "multiple_audio": 1, "streamServer": {"name": "Megacloud", "url": "https://megacloud.tv/embed-2/e-1/JSwUe6aP7TxJ", "type": "iframe"}}
+    ]
+  }
+}

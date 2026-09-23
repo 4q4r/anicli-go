@@ -136,6 +136,18 @@ var allFactories = []struct {
 	{"anistar", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniStar(AniStarBase, http)
 	}},
+	// anicrush (PR90): the EN streaming catalog anicrush.to — written
+	// from three independent wrapper implementations of its anonymous
+	// JSON API (DrBrainlessLol/anicrush-api, shimizudev/anicrush-api,
+	// gojo). NOT live-verified: the whole anicrush.to family has been
+	// origin-dead behind Cloudflare (edge-served 521 for every vantage)
+	// since ~2026-08-07, so the wire shapes are pinned by the reference
+	// sources and the embed→HLS hop (a rabbit/megacloud WASM player)
+	// stays with the shared extractor factory, failing typed until an
+	// extractor lands. No credentials.
+	{"anicrush", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniCrush(AniCrushAPIBase, http)
+	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
 	// injected by NewRegistry when [torrent] is enabled (All() leaves

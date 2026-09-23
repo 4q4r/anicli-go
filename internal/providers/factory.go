@@ -158,6 +158,15 @@ var allFactories = []struct {
 	{"anifilm", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniFilm(AniFilmBase, http)
 	}},
+	// animemobi (PR92): the animemobi.com RU mobile catalog (DLE, UTF-8,
+	// anonymous) — search POST form in, per-episode kodik-family embeds
+	// out (kodikplayer.com and aniqit.com, both covered by the shared
+	// kodik extractor); the release pages additionally carry per-release
+	// .torrent downloads (documented in animemobi.go, out of the stream
+	// contract). No frozen Python original; written from the live site.
+	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnimeMobi(AnimeMobiBase, http)
+	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
 	// injected by NewRegistry when [torrent] is enabled (All() leaves

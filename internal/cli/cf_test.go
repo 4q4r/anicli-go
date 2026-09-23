@@ -129,7 +129,7 @@ func TestCFCommandTreeRUHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help: %v", err)
 	}
-	for _, want := range []string{"install", "status", "solve", "clear", "login", "logout"} {
+	for _, want := range []string{"status", "solve", "clear", "login", "logout"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("cf help must list %q:\n%s", want, out)
 		}
@@ -288,8 +288,10 @@ func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
 	if !strings.Contains(out, "не установлен") {
 		t.Errorf("a pro license over a free-only cache must show the pro-not-installed gap:\n%s", out)
 	}
-	if !strings.Contains(out, "anicli cf install") {
-		t.Errorf("the gap note must carry the install hint:\n%s", out)
+	// PR86: cf install is removed — the gap note carries the
+	// auto-install wording instead of the removed command.
+	if strings.Contains(out, "anicli cf install") {
+		t.Errorf("the gap note must not reference the removed command:\n%s", out)
 	}
 }
 

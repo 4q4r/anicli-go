@@ -44,7 +44,7 @@ func cfWiredSettings(t *testing.T) (config.Settings, string) {
 // stealth-Chromium binary no longer fails the registry construction —
 // the app boots and CF consumers surface typed errors at use, while
 // the startup auto-download and the background updater self-heal the
-// install (the old loud `anicli cf install` abort is retired).
+// install (retired with the manual command in PR86).
 func TestRegistryMissingBinaryStillBoots(t *testing.T) {
 	s := config.Default()
 	s.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)

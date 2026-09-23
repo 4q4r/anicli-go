@@ -53,7 +53,7 @@ type aaCFBrowserBridge struct {
 // errAABridgeDisabled reports a bridge invocation without a solver
 // (PR80: CF is always on — reachable only through anomalous wiring;
 // the stealth browser self-installs at startup).
-var errAABridgeDisabled = errors.New("allanime bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; при повторении выполните `anicli cf install`")
+var errAABridgeDisabled = errors.New("allanime bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; установка повторится при следующем запуске с интернетом")
 
 // ExtractCrypto navigates the root page and runs the extraction script.
 func (b *aaCFBrowserBridge) ExtractCrypto(ctx context.Context) (aaBridgeMaterial, error) {

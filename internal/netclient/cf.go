@@ -39,7 +39,7 @@ func (e *CFChallengeError) Error() string {
 	// PR80: CF is always on — the solver is wired at startup and the
 	// browser self-installs. This branch survives only for anomalous
 	// wiring; the text names the remedy instead of the removed knob.
-	return fmt.Sprintf("cloudflare challenge on %s (CF-solver недоступен — браузер скачивается автоматически при запуске; при повторении выполните `anicli cf install`, при блокировках настройте [cf] proxy)", e.URL)
+	return fmt.Sprintf("cloudflare challenge on %s (CF-solver недоступен — браузер скачивается автоматически при запуске; установка повторится при следующем запуске с интернетом, при блокировках настройте [cf] proxy)", e.URL)
 }
 
 // Unwrap exposes the solve failure.
@@ -77,7 +77,7 @@ type CFSolver interface {
 // deliberate delta from the pre-CF code, where such responses
 // surfaced as the generic ErrProvider403/StatusError mapping: an
 // unsolved challenge is a distinct, actionable failure (the stealth
-// browser self-installs at startup; `anicli cf install` forces it),
+// browser self-installs at startup),
 // not a plain status.
 func WithCFSolver(solver CFSolver) Option {
 	return func(c *Client) { c.cfSolver = solver }

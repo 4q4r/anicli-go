@@ -9,8 +9,10 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 )
 
-// InstallHint is the action line every missing-binary error carries.
-const InstallHint = "anicli cf install"
+// InstallHint is the action line every missing-binary error carries
+// (PR86: the manual `anicli cf install` command is removed — the
+// startup auto-download covers the install when online).
+const InstallHint = "установка выполнится автоматически при следующем запуске с интернетом"
 
 // BinaryMissingError reports that no stealth-Chromium binary resolves
 // locally and none can be fetched right now (offline or not asked
@@ -23,10 +25,10 @@ type BinaryMissingError struct {
 // Error implements error with the install hint.
 func (e *BinaryMissingError) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("cfbrowser: stealth chromium not installed (%v) — выполните: %s",
+		return fmt.Sprintf("cfbrowser: stealth chromium not installed (%v) — %s",
 			e.Cause, InstallHint)
 	}
-	return fmt.Sprintf("cfbrowser: stealth chromium not installed — выполните: %s", InstallHint)
+	return fmt.Sprintf("cfbrowser: stealth chromium not installed — %s", InstallHint)
 }
 
 // Unwrap exposes the resolution failure.
@@ -86,7 +88,7 @@ func (o ResolveOptions) logger() *slog.Logger {
 // install/update lands pro). It is the registry-build-time check and
 // the solver's lazy-launch resolution, so auto-updated binaries are
 // picked up on the next solve. A missing binary fails with
-// BinaryMissingError (carrying the `anicli cf install` hint).
+// BinaryMissingError (carrying the auto-install hint).
 func ResolveCurrentBinary(opts ResolveOptions) (*BinaryInfo, error) {
 	channel, err := normalizeChannel(opts.Channel)
 	if err != nil {

@@ -86,8 +86,13 @@ func TestEnsureBrowserFailureWarnsAndDegrades(t *testing.T) {
 	if !strings.Contains(got, "connection refused") {
 		t.Errorf("warning must name the reason, got %q", got)
 	}
-	if !strings.Contains(got, "anicli cf install") {
-		t.Errorf("warning must name the manual fallback, got %q", got)
+	// PR86: the manual cf install fallback is gone — the startup
+	// auto-download retries at the next launch.
+	if strings.Contains(got, "anicli cf install") {
+		t.Errorf("warning must not reference the removed command, got %q", got)
+	}
+	if !strings.Contains(got, "следующем запуске") {
+		t.Errorf("warning must promise the next-launch retry, got %q", got)
 	}
 }
 
@@ -118,7 +123,7 @@ func TestCountdownLinesExact(t *testing.T) {
 
 // TestBrowserInstallOptionsCarriesConfig (PR80 review): the channel
 // and the download proxy from [cf] must reach the startup install —
-// auto/free/pro honored at boot, not just `anicli cf install`.
+// auto/free/pro honored at boot.
 func TestBrowserInstallOptionsCarriesConfig(t *testing.T) {
 	progress := func(int, string) {}
 	opts := browserInstallOptions("socks5://p:1080", "pro", progress)

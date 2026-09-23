@@ -10,9 +10,11 @@ import (
 // routing: the foreign torrent feeds (nyaa, animetosho, tokyotosho)
 // index romaji/english release names only — a Cyrillic query there is
 // guaranteed-zero — so they declare NamePrefLatin and the search
-// fan-out routes them the latin variants. anilibria-torrent stays in
-// the RU group (a RU site whose API indexes RU names) — it must NOT
-// declare the latin preference.
+// fan-out routes them the latin variants. anilibria-torrent (PR37)
+// and rutor (PR87) stay in the RU group (RU sites whose indexes match
+// RU names — rutor verified live 2026-09-23: RU queries are
+// first-class, е/ё treated alike) — they must NOT declare the latin
+// preference.
 func TestTorrentProvidersNamePreference(t *testing.T) {
 	t.Parallel()
 
@@ -32,9 +34,17 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 		}
 	}
 
-	ru := newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, "anilibria-torrent"), nil)
-	if _, declares := any(ru).(contracts.NamePreferenceProvider); declares {
-		t.Error("anilibria-torrent must stay in the RU group (no latin preference declaration)")
+	for _, id := range []string{"anilibria-torrent", "rutor"} {
+		var p contracts.Provider
+		switch id {
+		case "anilibria-torrent":
+			p = newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, id), nil)
+		case "rutor":
+			p = newRutor(RutorBase, testClient(t, id), nil)
+		}
+		if _, declares := p.(contracts.NamePreferenceProvider); declares {
+			t.Errorf("%s must stay in the RU group (no latin preference declaration)", id)
+		}
 	}
 }
 

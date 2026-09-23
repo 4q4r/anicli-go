@@ -75,7 +75,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 // cannot resolve without the [torrent] subsystem, so
 // torrent.enabled=false must exclude every one of them via the same
 // unconfigured convention as kodik's missing token (rutor since
-// PR87, anirena since PR88).
+// PR87, anirena since PR88, subsplease since PR89 — the rule restored
+// in fix/93).
 func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()
 
@@ -86,7 +87,7 @@ func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 	for _, d := range disabled {
 		byID[d.ID] = d.Reason
 	}
-	for _, id := range []string{"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena"} {
+	for _, id := range []string{"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease"} {
 		reason, ok := byID[id]
 		if !ok {
 			t.Errorf("%s must be in the unconfigured set when [torrent] is disabled", id)

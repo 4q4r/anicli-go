@@ -33,19 +33,20 @@ import (
 // catalog behind an Anubis PoW gate) joined after yummy, closing
 // the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
 // its self-hosted an-media player stack) joined after hdrezka.
+// The 6-provider wave (fix/93) froze the roster into grouped blocks:
 // anicrush (PR90, the EN streaming anicrush.to JSON API, rebuilt from
-// wrapper sources while the family is origin-dead) joined after
-// anistar, and anifilm (PR91, the anifilm.pro RU Yii/Vue catalog with
-// its kodik-embed player stack) joined after anistar; animemobi
+// wrapper sources while the family is origin-dead) joined the foreign
+// stream block after sameband; anifilm (PR91, the anifilm.pro RU
+// Yii/Vue catalog with its kodik-embed player stack) and animemobi
 // (PR92, the animemobi.com RU mobile DLE catalog with its kodik-family
-// players and per-release torrent downloads) joined after anifilm.
-// rutor (PR87, the rutor.info public tracker — the first RU-indexed
-// torrent provider), anirena (PR88, the anirena.com search RSS with
-// direct .torrent enclosures) and subsplease (PR89, the subsplease.org
-// JSON API torrent provider — the EN seasonal group's f=search
-// catalog, tracker-rich magnets, batch back-catalog via the show-page
-// sid hop) close the roster after tokyotosho. The roster is frozen at
-// 29.
+// players and per-release torrent downloads) closed the RU-dub block
+// after anistar; the torrents close the roster — rutor (PR87, the
+// rutor.info public tracker — the first RU-indexed torrent provider),
+// anirena (PR88, the anirena.com search RSS with direct .torrent
+// enclosures) and subsplease (PR89, the subsplease.org JSON API
+// torrent provider — the EN seasonal group's f=search catalog,
+// tracker-rich magnets, batch back-catalog via the show-page sid hop)
+// after tokyotosho. The roster is frozen at 29.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -57,6 +58,7 @@ var expectedProviderOrder = []string{
 	"anizone",
 	"dreamcast",
 	"sameband",
+	"anicrush",
 	"kodik",
 	"allanime",
 	"anidub",
@@ -66,7 +68,6 @@ var expectedProviderOrder = []string{
 	"yummy",
 	"hdrezka",
 	"anistar",
-	"anicrush",
 	"anifilm",
 	"animemobi",
 	"nyaa",

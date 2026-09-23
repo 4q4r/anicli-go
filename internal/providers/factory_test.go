@@ -31,9 +31,9 @@ func TestAllRosterComplete(t *testing.T) {
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
-		"dreamcast", "sameband", "kodik",
+		"dreamcast", "sameband", "anicrush", "kodik",
 		"allanime", "anidub", "animedia", "shiza", "anime365", "yummy", "hdrezka", "anistar",
-		"anicrush", "anifilm", "animemobi",
+		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
 	seen := map[string]bool{}
@@ -99,17 +99,18 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// next to their peers: kickassanime (PR58) and anizone (PR59)
 	// after animepahe in the latin block; animedia (PR56), shiza
 	// (PR57) and anime365 (PR55) in the RU-dub block; yummy (PR68)
-	// and hdrezka (PR69) after anime365; anicrush (PR90) closes the
-	// stream roster ahead of the torrent block; the torrent
+	// and hdrezka (PR69) after anime365. fix/93 froze the 6-provider
+	// wave into grouped blocks: anicrush (PR90) joined the foreign
+	// stream block after sameband; anifilm (PR91) and animemobi
+	// (PR92) closed the RU-dub block after anistar; the torrent
 	// providers close the roster (rutor, PR87, then anirena, PR88,
-	// then subsplease, PR89); animemobi (PR92) joins the RU-dub
-	// block after anistar.
+	// then subsplease, PR89).
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
-		"dreamcast", "sameband", "kodik",
+		"dreamcast", "sameband", "anicrush", "kodik",
 		"allanime", "anidub", "animedia", "shiza", "anime365", "yummy", "hdrezka", "anistar",
-		"anicrush", "anifilm", "animemobi",
+		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
 	for i, p := range list {
@@ -214,20 +215,20 @@ func TestContentLanguageRoster(t *testing.T) {
 		"gogoanime":         "ja",
 		"animepahe":         "ja",
 		"kickassanime":      "ja",
-		"anizone":           "ja", // sub-only: the HLS default audio group is Japanese
+		"anizone":           "ja",
 		"dreamcast":         "ru",
 		"sameband":          "ru",
+		"anicrush":          "ja", // EN site, but the primary sub audio is Japanese (kickassanime/anizone precedent)
 		"kodik":             "ru",
-		"allanime":          "ja", // primary sub track is Japanese; dub→"en"
+		"allanime":          "ja",
 		"anidub":            "ru",
 		"animedia":          "ru",
 		"shiza":             "ru",
 		"anime365":          "ru",
 		"yummy":             "ru",
 		"hdrezka":           "ru",
-		"anifilm":           "ru",
 		"anistar":           "ru",
-		"anicrush":          "ja", // EN site, but the primary sub audio is Japanese (kickassanime/anizone precedent)
+		"anifilm":           "ru",
 		"animemobi":         "ru",
 		"nyaa":              "ja",
 		"anilibria-torrent": "ru",

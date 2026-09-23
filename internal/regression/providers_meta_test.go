@@ -54,6 +54,7 @@ var expectedProviderOrder = []string{
 	"yummy",
 	"hdrezka",
 	"anistar",
+	"anifilm",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

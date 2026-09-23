@@ -136,6 +136,16 @@ var allFactories = []struct {
 	{"anistar", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniStar(AniStarBase, http)
 	}},
+	// anifilm (PR91): the anifilm.pro RU stream+torrent catalog — a
+	// custom Yii/Vue engine, NOT DLE. Written from the live site
+	// (2026-09-23); no credentials: GET-form search, Vue
+	// player-component props → api:online playlists → api:video pages
+	// wrapping kodik embeds (shared extractor). The per-release
+	// .torrent downloads are a TorrentBase extension candidate,
+	// deliberately out of scope here.
+	{"anifilm", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniFilm(AniFilmBase, http)
+	}},
 	// nyaa (PR36): the first torrent search provider. No credentials
 	// and no per-provider settings; the shared torrent engine is
 	// injected by NewRegistry when [torrent] is enabled (All() leaves

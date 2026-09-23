@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 24 провайдера"]
+    subgraph sources["Источники — 25 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -131,6 +131,7 @@ graph TD
         P16[animetosho]
         P17[tokyotosho]
         P26[rutor]
+        P27[anirena]
     end
 
     EXT["Извлекатели плееров (11)<br/>internal/extractors"]
@@ -138,7 +139,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P23 & P24 & P25 & P14 & P15 & P16 & P17 & P26
+    REG --> P1 & P2 & P3 & P4 & P6 & P7 & P21 & P22 & P8 & P9 & P10 & P11 & P12 & P19 & P20 & P18 & P23 & P24 & P25 & P14 & P15 & P16 & P17 & P26 & P27
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -311,6 +312,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
 | rutor | rutor.info (зеркала: rutor.is, rutor.org) | торрент-поиск (RU-каталог: аниме/кино/ТВ, до 4K) | ✅ живой (PR87); не порт — написан по живому сайту по зрелому рецепту Jackett (rutor.yml), перепроверен 2026-09-23: HTML-поиск (`/search/0/0/100/0/<запрос>/`), RU-запросы основные (е/ё равнозначны), анонимный — поиск и .torrent (`d.rutor.info/download/{id}`) без регистрации, сиды/пиры на странице; стрим через подсистему [torrent]; семейство зеркал ротируется — при блокировке основного меняется маршрут сети |
+| anirena | www.anirena.com | торрент-поиск (JA/мультиязычные релизы) | ✅ живой (PR88), анонимный RSS-поиск (`/rss?q=…`); в `<enclosure>` — прямой .torrent с сайта; задокументированный `?category=` сервер игнорирует — Anime-скоуп фильтруется на клиенте по полю Category; сидов в фиде нет — мёртвые отсекает только предфлайт байт; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
 
 Не портированы / удалены (мёртвые):
 
@@ -331,7 +333,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 23/24 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 24/25 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -343,7 +345,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 24, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 25, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

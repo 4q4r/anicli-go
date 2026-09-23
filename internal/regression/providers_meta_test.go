@@ -34,8 +34,9 @@ import (
 // the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
 // its self-hosted an-media player stack) joined after hdrezka. rutor
 // (PR87, the rutor.info public tracker — the first RU-indexed torrent
-// provider) closes the roster after tokyotosho. The roster is frozen
-// at 24.
+// provider) and anirena (PR88, the anirena.com search RSS with direct
+// .torrent enclosures) close the roster after tokyotosho. The roster
+// is frozen at 25.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -61,6 +62,7 @@ var expectedProviderOrder = []string{
 	"animetosho",
 	"tokyotosho",
 	"rutor",
+	"anirena",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

@@ -97,6 +97,19 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
+		// anirena (PR88) is nyaa's sibling too: no credentials, but its
+		// results resolve through the torrent core — without the
+		// [torrent] subsystem it cannot play anything (kodik-parity:
+		// never register a provider that cannot run).
+		id: "anirena",
+		disabled: func(cfg config.Settings) (string, bool) {
+			if !cfg.Torrent.Enabled {
+				return "выключена подсистема [torrent] (torrent.enabled)", true
+			}
+			return "", false
+		},
+	},
+	{
 		// anime365 (PR55): the catalog/episodes/translations endpoints
 		// are open, but the playable links (embed data) require an
 		// access token from an account with an active subscription —

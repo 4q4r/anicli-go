@@ -70,27 +70,31 @@ func TestUnconfiguredProviders(t *testing.T) {
 // TestAllSkipsUnconfiguredProviders: the factory excludes
 // unconfigured providers from the built set entirely (PR24): kodik
 // without a token never gets a client or a registry slot.
-// TestNyaaDisabledWhenTorrentOff pins the disabled-table rule: nyaa
-// has no credentials of its own but cannot resolve without the
-// [torrent] subsystem, so torrent.enabled=false must exclude it via
-// the same unconfigured convention as kodik's missing token.
-func TestNyaaDisabledWhenTorrentOff(t *testing.T) {
+// TestTorrentProvidersDisabledWhenTorrentOff pins the disabled-table
+// rule: the torrent providers have no credentials of their own but
+// cannot resolve without the [torrent] subsystem, so
+// torrent.enabled=false must exclude every one of them via the same
+// unconfigured convention as kodik's missing token (rutor since
+// PR87, anirena since PR88).
+func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
 	cfg.Torrent.Enabled = false
 	disabled := UnconfiguredProviders(cfg)
-	found := false
+	byID := map[string]string{}
 	for _, d := range disabled {
-		if d.ID == "nyaa" {
-			found = true
-			if d.Reason == "" {
-				t.Error("disabled reason must be user-facing (RU), got empty")
-			}
-		}
+		byID[d.ID] = d.Reason
 	}
-	if !found {
-		t.Fatal("nyaa must be in the unconfigured set when [torrent] is disabled")
+	for _, id := range []string{"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena"} {
+		reason, ok := byID[id]
+		if !ok {
+			t.Errorf("%s must be in the unconfigured set when [torrent] is disabled", id)
+			continue
+		}
+		if reason == "" {
+			t.Errorf("%s: disabled reason must be user-facing (RU), got empty", id)
+		}
 	}
 }
 
@@ -109,8 +113,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 23 {
-		t.Fatalf("want the remaining 23 providers, got %d", len(bare))
+	if len(bare) != 24 {
+		t.Fatalf("want the remaining 24 providers, got %d", len(bare))
 	}
 }
 

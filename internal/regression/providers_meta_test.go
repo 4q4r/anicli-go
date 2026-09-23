@@ -35,13 +35,14 @@ import (
 // its self-hosted an-media player stack) joined after hdrezka.
 // anicrush (PR90, the EN streaming anicrush.to JSON API, rebuilt from
 // wrapper sources while the family is origin-dead) joined after
-// anistar, closing the stream roster. rutor (PR87, the rutor.info
-// public tracker — the first RU-indexed torrent provider), anirena
-// (PR88, the anirena.com search RSS with direct .torrent enclosures)
-// and subsplease (PR89, the subsplease.org JSON API torrent provider —
-// the EN seasonal group's f=search catalog, tracker-rich magnets,
-// batch back-catalog via the show-page sid hop) close the roster
-// after tokyotosho. The roster is frozen at 27.
+// anistar, and anifilm (PR91, the anifilm.pro RU Yii/Vue catalog with
+// its kodik-embed player stack) joined after anifilm. rutor (PR87,
+// the rutor.info public tracker — the first RU-indexed torrent
+// provider), anirena (PR88, the anirena.com search RSS with direct
+// .torrent enclosures) and subsplease (PR89, the subsplease.org JSON
+// API torrent provider — the EN seasonal group's f=search catalog,
+// tracker-rich magnets, batch back-catalog via the show-page sid hop)
+// close the roster after tokyotosho. The roster is frozen at 28.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -63,6 +64,7 @@ var expectedProviderOrder = []string{
 	"hdrezka",
 	"anistar",
 	"anicrush",
+	"anifilm",
 	"nyaa",
 	"anilibria-torrent",
 	"animetosho",

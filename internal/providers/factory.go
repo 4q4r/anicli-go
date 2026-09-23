@@ -165,6 +165,15 @@ var allFactories = []struct {
 	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
 	}},
+	// rutor (PR87): the rutor.info public tracker's HTML search on the
+	// same TorrentBase plumbing — the fifth torrent provider and the
+	// first RU-indexed one (the Jackett rutor.yml recipe, re-verified
+	// live 2026-09-23). Fully anonymous (search and .torrent
+	// downloads); the engine is injected by NewRegistry when
+	// [torrent] is enabled.
+	{"rutor", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newRutor(RutorBase, http, nil)
+	}},
 }
 
 // buildAABridge wires the AllAnime crypto bridge (CF is always on —

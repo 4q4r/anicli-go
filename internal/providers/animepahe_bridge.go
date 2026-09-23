@@ -179,7 +179,7 @@ type paheBrowser interface {
 // errPaheBridgeDisabled reports a bridge invocation without a solver
 // (PR80: CF is always on — reachable only through anomalous wiring;
 // the stealth browser self-installs at startup).
-var errPaheBridgeDisabled = errors.New("animepahe bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; при повторении выполните `anicli cf install`")
+var errPaheBridgeDisabled = errors.New("animepahe bridge: stealth-браузер недоступен — он скачивается автоматически при запуске; установка повторится при следующем запуске с интернетом")
 
 // paheCFBrowserBridge is the production paheBrowser: a thin cfbrowser
 // adapter. Session lifecycle is owned by the solver's pool

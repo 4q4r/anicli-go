@@ -153,7 +153,7 @@ func TestChallengeWithoutSolverTypedError(t *testing.T) {
 	// Deliberate delta from the pre-solver code: a genuine challenge
 	// page must NOT surface as the old generic ErrProvider403 mapping —
 	// it is an actionable failure (the stealth browser self-installs
-	// at startup; `anicli cf install` forces it).
+	// at startup).
 	if errors.Is(err, contracts.ErrProvider403) {
 		t.Errorf("challenge with no solver must be CFChallengeError, not ErrProvider403: %v", err)
 	}

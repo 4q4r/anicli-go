@@ -129,10 +129,13 @@ func TestCFCommandTreeRUHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help: %v", err)
 	}
-	for _, want := range []string{"install", "status", "solve", "clear", "login", "logout"} {
+	for _, want := range []string{"status", "solve", "clear", "login", "logout"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("cf help must list %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "install") {
+		t.Errorf("cf help must not list the removed install command:\n%s", out)
 	}
 }
 
@@ -288,8 +291,10 @@ func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
 	if !strings.Contains(out, "не установлен") {
 		t.Errorf("a pro license over a free-only cache must show the pro-not-installed gap:\n%s", out)
 	}
-	if !strings.Contains(out, "anicli cf install") {
-		t.Errorf("the gap note must carry the install hint:\n%s", out)
+	// PR86: cf install is removed — the gap note carries the
+	// auto-install wording instead of the removed command.
+	if strings.Contains(out, "anicli cf install") {
+		t.Errorf("the gap note must not reference the removed command:\n%s", out)
 	}
 }
 
@@ -297,4 +302,17 @@ func TestCFStatusProLicenseFreeBinaryShowsGapNote(t *testing.T) {
 func sha256HexRaw(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// TestCFInstallCommandRejected (PR86): the removed `cf install`
+// subcommand must fail loud (unknown command), not print the parent
+// help with exit 0.
+func TestCFInstallCommandRejected(t *testing.T) {
+	out, err := executeCF(t, "install")
+	if err == nil {
+		t.Fatalf("cf install must fail loud (unknown command), out:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "install") {
+		t.Errorf("err = %v, want it to name the unknown command", err)
+	}
 }

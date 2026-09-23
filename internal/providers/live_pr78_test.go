@@ -83,7 +83,7 @@ func TestLivePR78AnimePaheBridgeSearch(t *testing.T) {
 	}
 	mgr, err := cfbrowser.NewManager(cfg)
 	if err != nil {
-		t.Fatalf("cf manager (is the stealth binary installed? `anicli cf install`): %v", err)
+		t.Fatalf("cf manager (is the stealth binary installed? it self-installs at startup): %v", err)
 	}
 	defer func() { _ = mgr.Close() }()
 	http, err := netclient.New(cfg.Network, netclient.WithProvider("animepahe"))

@@ -41,7 +41,7 @@ func TestLiveProbeInstalledBinary(t *testing.T) {
 
 	cands := scanCacheOrdered(cacheDir, spec)
 	if len(cands) == 0 {
-		t.Skipf("no chromium dirs in %s — run anicli cf install first", cacheDir)
+		t.Skipf("no chromium dirs in %s — the browser self-installs at startup", cacheDir)
 	}
 	for _, c := range cands {
 		t.Logf("candidate: %s (%s, channel %s)", c.Path, c.Version, c.Channel)

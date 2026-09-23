@@ -65,7 +65,7 @@ type browserEnsure struct {
 // (missing binary, incomplete cache dir) routes into Install, which
 // re-resolves overrides and the cache itself. proxyURL is the [cf]
 // download/update proxy (empty = direct); channel is the [cf] channel
-// (auto/free/pro) honored at boot, not just `anicli cf install`.
+// (auto/free/pro) honored at boot.
 func newBrowserEnsure(proxyURL, channel string) browserEnsure {
 	return browserEnsure{
 		resolve: func() error {
@@ -93,7 +93,7 @@ func browserInstallOptions(proxyURL, channel string, onProgress func(int, string
 // warnText is the degradation warning: loud, colored red by the
 // caller, names the reason and the manual fallback.
 func warnText(err error) string {
-	return fmt.Sprintf("Не удалось скачать stealth-браузер: %v — CF-источники могут не работать; позже выполните: anicli cf install", err)
+	return fmt.Sprintf("Не удалось скачать stealth-браузер: %v — CF-источники могут не работать; установка повторится при следующем запуске с интернетом", err)
 }
 
 // run executes the flow against out (the pre-TUI stdout). It returns

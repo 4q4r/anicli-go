@@ -37,7 +37,7 @@ func apPr71Provider(t *testing.T) (*AnimePahe, *cfbrowser.Manager) {
 	}
 	mgr, err := cfbrowser.NewManager(cfg)
 	if err != nil {
-		t.Fatalf("cf manager (is the stealth binary installed? `anicli cf install`): %v", err)
+		t.Fatalf("cf manager (is the stealth binary installed? it self-installs at startup): %v", err)
 	}
 	http, err := netclient.New(cfg.Network)
 	if err != nil {

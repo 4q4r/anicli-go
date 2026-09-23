@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,12 +22,22 @@ func newCFCommand() *cobra.Command {
 	cf := &cobra.Command{
 		Use:   "cf",
 		Short: "Обход Cloudflare (стелс-браузер CloakBrowser)",
-		Long: "Управление встроенным обходом Cloudflare: установка и обновление стелс-" +
-			"Chromium, статус кэша и лицензии, ручное решение challenge для источника, " +
-			"очистка сохранённых clearance-куки.",
+		Long: "Управление встроенным обходом Cloudflare: статус кэша и лицензии, " +
+			"ручное решение challenge для источника, очистка сохранённых " +
+			"clearance-куки. Установка stealth-Chromium выполняется автоматически " +
+			"при запуске приложения (PR80).",
+		// PR86: `cf install` removed — an unknown cf subcommand must
+		// fail loud instead of silently printing the parent help
+		// (cobra skips Args validation for non-runnable commands).
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return fmt.Errorf("неизвестная команда %q для %q (доступны: status, solve, clear, login, logout) — установка stealth-Chromium выполняется автоматически при запуске приложения",
+				args[0], cmd.CommandPath())
+		},
 	}
 	cf.AddCommand(
-		newCFInstallCommand(),
 		newCFStatusCommand(),
 		newCFSolveCommand(),
 		newCFClearCommand(),
@@ -36,57 +45,6 @@ func newCFCommand() *cobra.Command {
 		newCFLogoutCommand(),
 	)
 	return cf
-}
-
-// newCFInstallCommand builds `anicli cf install`.
-func newCFInstallCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "install",
-		Short: "Скачать стелс-Chromium в кэш (проверка SHA-256)",
-		Long: "Скачивает стелс-Chromium по каналу [cf] channel: auto (по умолчанию) — " +
-			"free-база с GitHub Releases и pro-апгрейд при действующем ключе, free — только " +
-			"free-релизы, pro — лицензионный канал (~/.cloakbrowser, переиспользует уже " +
-			"установленные версии без повторной загрузки), проверяет SHA-256/подписанные " +
-			"манифесты и распаковывает архив.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			return runCFInstall(cmd.Context(), cmd.OutOrStdout())
-		},
-	}
-}
-
-// runCFInstall resolves-or-downloads the stealth binary with progress
-// logged to stderr. The [cf] channel selects the line: auto (default)
-// prints the key's plan and pulls pro while it stays compatible;
-// free never touches pro; pro is the license-keyed ladder.
-func runCFInstall(ctx context.Context, out io.Writer) error {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	settings, err := loadSettingsOrFail(config.ResolveConfigPath(""))
-	if err != nil {
-		return err
-	}
-	channel := settings.CF.Channel
-	if channel != cfbrowser.ChannelFree {
-		rep, repErr := cfbrowser.CheckLicense(ctx, cfbrowser.LicenseOptions{
-			ProxyURL: settings.CF.Proxy,
-			Logger:   logger,
-		})
-		if repErr == nil && rep != nil && rep.Status.Valid {
-			_, _ = fmt.Fprintf(out, "лицензия:        действительна (план %s, до %s) — канал pro\n",
-				orDash(rep.Status.Plan), orDash(rep.Status.Expires))
-		}
-	}
-	info, err := cfbrowser.Install(ctx, cfbrowser.InstallOptions{
-		Logger:   logger,
-		Channel:  channel,
-		ProxyURL: settings.CF.Proxy,
-	})
-	if err != nil {
-		return fmt.Errorf("cf install: %w", err)
-	}
-	printCFBinary(out, info)
-	return nil
 }
 
 // newCFStatusCommand builds `anicli cf status`.
@@ -119,7 +77,7 @@ func runCFStatus(out io.Writer) error {
 	bin, binErr := cfbrowser.ResolveCurrentBinary(cfbrowser.ResolveOptions{Channel: channel, NoProbe: true})
 	_, _ = fmt.Fprintf(out, "кэш:            %s\n", cacheDir)
 	if binErr != nil {
-		_, _ = fmt.Fprintf(out, "бинарник:       не установлен — выполните: %s\n", cfbrowser.InstallHint)
+		_, _ = fmt.Fprintf(out, "бинарник:       не установлен — %s\n", cfbrowser.InstallHint)
 	} else {
 		printCFBinary(out, bin)
 	}
@@ -141,7 +99,7 @@ func runCFStatus(out io.Writer) error {
 	// hint stays truthful for both sub-states (no pro dir, or the
 	// newest pro being compat-blocked): install retries the pull.
 	if tier == "pro" && channel != cfbrowser.ChannelFree && binErr == nil && bin != nil && bin.Channel == cfbrowser.ChannelFree {
-		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен или новейший pro не прошёл проверку запуска — anicli cf install повторит попытку pro\n")
+		_, _ = fmt.Fprintf(out, "                pro-бинарник не установлен или новейший pro не прошёл проверку запуска — повтор попытки pro при следующем запуске\n")
 	}
 	if note != "" {
 		_, _ = fmt.Fprintf(out, "                %s\n", note)

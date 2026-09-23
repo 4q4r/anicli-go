@@ -59,8 +59,8 @@ func TestRegistryMissingBinaryStillBoots(t *testing.T) {
 	defer func() { _ = reg.Close() }()
 	// The full roster still registers — CF degradation is per-use, not
 	// a registry-level exclusion.
-	if len(reg.List()) != 22 {
-		t.Errorf("roster = %d, want 22", len(reg.List()))
+	if len(reg.List()) != 23 {
+		t.Errorf("roster = %d, want 23 (the tokenless anime365 sits out)", len(reg.List()))
 	}
 }
 
@@ -74,8 +74,8 @@ func TestRegistryEnabledWiresSolverAndCloses(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Errorf("Close: %v", err)
 	}
-	if len(reg.List()) != 22 {
-		t.Fatalf("all providers must be registered, got %d", len(reg.List()))
+	if len(reg.List()) != 23 {
+		t.Fatalf("all configured providers must be registered, got %d (the tokenless anime365 sits out)", len(reg.List()))
 	}
 }
 
@@ -90,7 +90,7 @@ func TestRegistryDisabledKeepsPlainClients(t *testing.T) {
 	if err := reg.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.List()) != 22 {
+	if len(reg.List()) != 23 {
 		t.Fatalf("providers = %d", len(reg.List()))
 	}
 }

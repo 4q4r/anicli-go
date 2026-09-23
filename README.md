@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 23 провайдера"]
+    subgraph sources["Источники — 24 провайдера"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -130,6 +130,7 @@ graph TD
         P15[anilibria-torrent]
         P16[animetosho]
         P17[tokyotosho]
+        P26[subsplease]
     end
 
     EXT["Извлекатели плееров (11)<br/>internal/extractors"]
@@ -309,6 +310,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
+| subsplease | subsplease.org | торрент-поиск (EN-сезонка, батчи всего тайтла) | ✅ живой (PR89), анонимный JSON API (`/api/?f=search`, `/api/?f=show&sid=…`); трекер-богатые магниты (base32 btih — движок принимает), батчи back-каталога через sid-хоп страницы тайтла; RSS-фиды сайта существуют, но только «последние релизы» без параметра запроса — не используются; стрим через подсистему [torrent] |
 
 Не портированы / удалены (мёртвые):
 
@@ -329,7 +331,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 22/23 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 23/24 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -341,7 +343,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 23, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 24, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

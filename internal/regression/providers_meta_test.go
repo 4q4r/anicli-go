@@ -32,8 +32,11 @@ import (
 // after anime365 and hdrezka (PR69, the hdrezka-home.tv rezka
 // catalog behind an Anubis PoW gate) joined after yummy, closing
 // the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
-// its self-hosted an-media player stack) joined after hdrezka. The
-// roster is frozen at 23.
+// its self-hosted an-media player stack) joined after hdrezka.
+// subsplease (PR89, the subsplease.org JSON API torrent provider —
+// the EN seasonal group's f=search catalog, tracker-rich magnets,
+// batch back-catalog via the show-page sid hop) joined after
+// tokyotosho. The roster is frozen at 24.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -58,6 +61,7 @@ var expectedProviderOrder = []string{
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",
+	"subsplease",
 }
 
 // TestProviderRosterComplete asserts the registry enumerates exactly

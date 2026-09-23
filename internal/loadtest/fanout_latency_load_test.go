@@ -23,7 +23,7 @@ import (
 // allocations per fan-out at the slowest round.
 
 const (
-	rosterProviders   = 23
+	rosterProviders   = 24
 	fanoutLatencyEps  = 100 * time.Millisecond // scheduling jitter allowance
 	fanoutSettleLimit = 25
 )
@@ -109,7 +109,7 @@ func TestLoadSearchFanout23Latencies(t *testing.T) {
 
 	goroutinesBefore := runtime.NumGoroutine()
 
-	fmt.Fprintf(os.Stdout, "\n=== 23-provider fan-out latency results ===\n")
+	fmt.Fprintf(os.Stdout, "\n=== 24-provider fan-out latency results ===\n")
 	fmt.Fprintln(os.Stdout, "latency\twall\toverhead\tresults\talloc_B/op")
 
 	for _, round := range rounds {

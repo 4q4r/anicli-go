@@ -35,7 +35,7 @@ func TestLivePR84NextEpisodeLoadingSurface(t *testing.T) {
 	}
 
 	// Probe preference: the sources that resolve reliably through the
-	// proxy first (animepahe's CF window fluctuates; a closed window
+	// proxy first (a CF-gated origin's window fluctuates; a closed window
 	// would burn every attempt). Anything else remains a fallback.
 	preferred := []string{"anilibria", "gogoanime", "anilib"}
 	var primaries []contracts.SearchResult

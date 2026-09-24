@@ -99,7 +99,7 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The per-provider budget override (--smoke-timeout): the
 			// 90s default predates browser-transport providers — a
-			// CF-bridge provider's chain is a dozen navigations, and a
+			// browser-heavy chain is a dozen navigations, and a
 			// budget meant for plain HTTP starves it mid-leg (PR71).
 			if cmd.Flags().Changed("smoke-timeout") {
 				v, _ := cmd.Flags().GetDuration("smoke-timeout")
@@ -170,7 +170,7 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 		},
 	}
 	cmd.Flags().Duration("smoke-timeout", 0,
-		"per-provider smoke budget override (default: 90s; a CF-bridge provider's browser chain needs more)")
+		"per-provider smoke budget override (default: 90s; a browser-heavy chain needs more)")
 	return cmd
 }
 

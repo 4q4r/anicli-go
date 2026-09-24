@@ -23,7 +23,7 @@ import (
 // animetosho.
 // Wave-2 integration (fix/60) seated the five parallel providers
 // next to their peers instead of the tail: kickassanime (PR58)
-// and anizone (PR59, sub-only) joined after animepahe in the
+// and anizone (PR59, sub-only) joined in the
 // latin block; animedia (PR56, the amd.online DLE site), shiza
 // (PR57, the shizaproject.com GraphQL catalog) and a tokened
 // JSON-API source joined the RU-dub block; yanima left it in PR65
@@ -44,14 +44,13 @@ import (
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
-// after tokyotosho. The roster is frozen at 25.
+// after tokyotosho. The roster is frozen at 24.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
 	"anilib",
 	"animego",
 	"gogoanime",
-	"animepahe",
 	"kickassanime",
 	"anizone",
 	"sameband",

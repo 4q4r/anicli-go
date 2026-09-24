@@ -51,7 +51,7 @@ func (e *env) close() {
 // PR24's roster; 12 of 13 since nyaa joined in PR36; 13 of 14 since
 // anilibria-torrent joined in PR37; 16 of 17 since animedia joined in
 // PR56; integration re-pin: 17 of 18 with animedia in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59; 19 of 20 after the PR65 provider removal; 20 of 21 since yummy joined in PR68; 21 of 22 since hdrezka joined in PR69; 22 of 23 since anistar joined in PR77; 24 of 25 — the fix/93 wave (rutor PR87, anirena PR88, subsplease PR89, anifilm PR91, animemobi PR92) finalized, then the fix/93 provider removals.
-const gateProviders = 24
+const gateProviders = 23
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.

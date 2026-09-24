@@ -151,7 +151,7 @@ type WebUser struct {
 // credentials appear here; the rest run credential-free).
 type Providers struct {
 	// Exclude drops providers from the search fan-out by id (e.g.
-	// ["animepahe", "kodik"]). Default: nothing excluded.
+	// ["gogoanime", "kodik"]). Default: nothing excluded.
 	Exclude []string `toml:"exclude"`
 	// ExcludeStreams drops dub streams whose name matches any of
 	// these regular expressions (e.g. ["трейлер", "реклама"] discards

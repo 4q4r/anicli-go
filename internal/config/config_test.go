@@ -534,7 +534,7 @@ func TestProvidersExclusionSettings(t *testing.T) {
 
 	path := writeTOML(t, `
 [providers]
-exclude = ["animepahe", "kodik"]
+exclude = ["gogoanime", "kodik"]
 exclude_streams = ["трейлер", "реклама"]
 
 [providers.kodik]
@@ -545,8 +545,8 @@ token = "file-kodik-token"
 		t.Fatalf("Load: %v", err)
 	}
 	if len(got.Providers.Exclude) != 2 ||
-		got.Providers.Exclude[0] != "animepahe" || got.Providers.Exclude[1] != "kodik" {
-		t.Errorf("Providers.Exclude = %v, want [animepahe kodik]", got.Providers.Exclude)
+		got.Providers.Exclude[0] != "gogoanime" || got.Providers.Exclude[1] != "kodik" {
+		t.Errorf("Providers.Exclude = %v, want [gogoanime kodik]", got.Providers.Exclude)
 	}
 	if len(got.Providers.ExcludeStreams) != 2 ||
 		got.Providers.ExcludeStreams[0] != "трейлер" || got.Providers.ExcludeStreams[1] != "реклама" {

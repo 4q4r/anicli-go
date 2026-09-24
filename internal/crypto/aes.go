@@ -1,4 +1,4 @@
-// Package crypto ports the AES and Kwik helpers of the frozen Python
+// Package crypto ports the AES helpers of the frozen Python
 // original (anicli-py anicli/core/crypto.py) onto the Go standard library.
 //
 // Divergences from the Python original are deliberate and documented on

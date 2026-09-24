@@ -47,7 +47,7 @@ func liveSmokeArgs(t *testing.T, target string) []string {
 // the desired visibility: their FAIL is reported honestly, never
 // special-cased.
 func TestSmokeAllProvidersLive(t *testing.T) {
-	// Browser-transport providers (animepahe) serialize a dozen
+	// Browser-transport chains serialize a dozen
 	// navigations per surfaced result — the 90s plain-HTTP default
 	// starves them mid-surface. The live suite is the acceptance
 	// harness: it gets the same 6m budget the CLI flag exposes.

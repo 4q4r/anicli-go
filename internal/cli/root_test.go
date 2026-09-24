@@ -44,8 +44,8 @@ func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if got := len(reg.List()); got != 25 {
-		t.Fatalf("registry has %d providers, want 25", got)
+	if got := len(reg.List()); got != 24 {
+		t.Fatalf("registry has %d providers, want 24", got)
 	}
 
 	var buf bytes.Buffer
@@ -122,7 +122,7 @@ func TestStubOutputs(t *testing.T) {
 			contains: []string{
 				"doctor", "providers",
 				"anilibria", "animevost", "anilib", "animego",
-				"gogoanime", "animepahe", "sameband", "kodik",
+				"gogoanime", "sameband", "kodik", "anifilm",
 				"anidub",
 			},
 		},
@@ -269,7 +269,7 @@ func TestDoctorMarksExcludedProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.toml")
 	if err := os.WriteFile(path, []byte(`
 [providers]
-exclude = ["animepahe", "kodik"]
+exclude = ["gogoanime", "kodik"]
 `), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
@@ -283,16 +283,16 @@ exclude = ["animepahe", "kodik"]
 		t.Fatalf("Execute doctor: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"animepahe", "kodik", "ОТКЛЮЧЁН", "providers.exclude"} {
+	for _, want := range []string{"gogoanime", "kodik", "ОТКЛЮЧЁН", "providers.exclude"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output %q must contain %q", out, want)
 		}
 	}
-	if strings.Contains(out, "animepahe OK") {
-		t.Errorf("excluded animepahe must not render OK: %q", out)
+	if strings.Contains(out, "gogoanime OK") {
+		t.Errorf("excluded gogoanime must not render OK: %q", out)
 	}
 	for _, id := range stub.seen {
-		if id == "animepahe" || id == "kodik" {
+		if id == "gogoanime" || id == "kodik" {
 			t.Errorf("excluded providers must not be probed, saw %v", stub.seen)
 		}
 	}

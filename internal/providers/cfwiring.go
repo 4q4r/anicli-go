@@ -57,7 +57,6 @@ var baseURLs = map[string]string{
 	"anilib":    AnilibAPIBase,
 	"animego":   AnimeGoBase,
 	"gogoanime": GogoAnimeBase,
-	"animepahe": AnimePaheBase,
 	"sameband":  SameBandBase,
 	"kodik":     KodikAPIBase,
 	"anidub":    AnidubBase,

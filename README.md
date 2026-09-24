@@ -106,13 +106,12 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 25 провайдеров"]
+    subgraph sources["Источники — 24 провайдера"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
         P4[animego]
         P5[gogoanime]
-        P6[animepahe]
         P7[kickassanime]
         P8[anizone]
         P10[sameband]
@@ -134,13 +133,13 @@ graph TD
         P29[subsplease]
     end
 
-    EXT["Извлекатели плееров (11)<br/>internal/extractors"]
+    EXT["Извлекатели плееров (10)<br/>internal/extractors"]
 
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P10 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
-    P6 & P7 & P11 --> EXT
+    REG --> P1 & P2 & P3 & P4 & P5 & P7 & P8 & P10 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
+    P3 & P4 & P5 & P12 & P14 & P15 & P16 & P18 & P20 & P21 & P22 --> EXT
     SKIP --> ST
     DL --> SKIP
 ```
@@ -293,7 +292,6 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |
 | gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
-| animepahe | animepahe.pw | видео (англ. субтитры) | ✅ через стелс-браузерный мост CloakBrowser (всегда включён, PR80): сайт пере-челленджит небраузерные отпечатки даже с повторенными clearance-куками (досье PR71), поэтому поиск и resolve ходят через мост. Не сайт-зеркало: `animepahe.ru` мёртв, `.si` умер в 04.2026 |
 | kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | sameband | sameband.studio | видео | ⚠️ нестабильный |
@@ -333,7 +331,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 24/25 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 23/24 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -345,7 +343,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 25, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 24, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

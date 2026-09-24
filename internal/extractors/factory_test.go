@@ -47,12 +47,12 @@ func TestGetSourcesSurfacesErrorWhenNothingResolves(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	sources, err := NewFactory(testHTTPClient(t)).GetSources(context.Background(), srv.URL+"/kwik/1")
+	sources, err := NewFactory(testHTTPClient(t)).GetSources(context.Background(), srv.URL+"/sibnet/1")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("err = %v, want the first extractor's typed error", err)
 	}
-	if !strings.Contains(err.Error(), "extractor:kwik") {
-		t.Errorf("err = %v, want extractor:kwik context", err)
+	if !strings.Contains(err.Error(), "extractor:sibnet") {
+		t.Errorf("err = %v, want extractor:sibnet context", err)
 	}
 	if len(sources) != 0 {
 		t.Errorf("sources = %v, want none", sources)
@@ -69,8 +69,7 @@ func newTestFactory(t *testing.T) *Factory {
 
 // TestFactoryOrder pins the Python ExtractorFactory registration order
 // (anicli-py anicli/core/extractors.py:658-671) with the task-mandated
-// kwik extractor appended where the Python original disabled it, and
-// the PR53 blogger extractor appended after it (the only live anitaku
+// PR53 blogger extractor appended after it (the only live anitaku
 // mirror family; no Python extractor covered that host).
 func TestFactoryOrder(t *testing.T) {
 	t.Parallel()
@@ -79,7 +78,7 @@ func TestFactoryOrder(t *testing.T) {
 	want := []string{
 		"kodik", "aniboom", "cdnvideohub", "alloha", "sibnet",
 		"aksor", "csst", "sovetromantica_embed",
-		"gogoplay", "streamtape", "dood", "kwik", "blogger",
+		"gogoplay", "streamtape", "dood", "blogger",
 	}
 	if len(f.extractors) != len(want) {
 		t.Fatalf("factory has %d extractors, want %d", len(f.extractors), len(want))

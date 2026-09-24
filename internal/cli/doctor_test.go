@@ -197,17 +197,17 @@ func TestDoctorExcludedRendersDisabled(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := runDoctorWithConfig(t, &buf, func(cfg *config.Settings) {
-		cfg.Providers.Exclude = []string{"animepahe"}
+		cfg.Providers.Exclude = []string{"gogoanime"}
 		cfg.Providers.Kodik.Token = "set"
 	}); err != nil {
 		t.Fatalf("runDoctor: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "animepahe") || !strings.Contains(out, "ОТКЛЮЧЁН") {
+	if !strings.Contains(out, "gogoanime") || !strings.Contains(out, "ОТКЛЮЧЁН") {
 		t.Errorf("excluded provider must render ОТКЛЮЧЁН, got:\n%s", out)
 	}
 	for _, id := range stub.seen {
-		if id == "animepahe" {
+		if id == "gogoanime" {
 			t.Errorf("excluded provider must not be probed")
 		}
 	}

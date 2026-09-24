@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/an0nx/anicli-go/internal/cfbrowser"
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
@@ -69,45 +68,6 @@ func TestLivePR78AniZoneNoResults(t *testing.T) {
 		t.Fatal("latin query returned 0 results, want the Witch-Hat row")
 	}
 	t.Logf("[lat] %q → %d results, first: %q (slug %s)", latin, len(results), results[0].Title, results[0].URL)
-}
-
-// TestLivePR78AnimePaheBridgeSearch is the PR78 search-leg proof: the
-// multi-provider-style latin query through the REAL [cf] browser bridge
-// (the configuration the owner's [cf]-disabled TUI run lacked). The
-// full-chain variant (episodes + resolve) is TestLivePR71Chain; resolve
-// rides the kwik WAF wall class and is not part of this proof.
-func TestLivePR78AnimePaheBridgeSearch(t *testing.T) {
-	cfg := config.Default()
-	if proxy := os.Getenv("ANICLI_LIVE_PROXY"); proxy != "" {
-		cfg.Network.ProxyURL = proxy
-	}
-	mgr, err := cfbrowser.NewManager(cfg)
-	if err != nil {
-		t.Fatalf("cf manager (is the stealth binary installed? it self-installs at startup): %v", err)
-	}
-	defer func() { _ = mgr.Close() }()
-	http, err := netclient.New(cfg.Network, netclient.WithProvider("animepahe"))
-	if err != nil {
-		t.Fatalf("netclient: %v", err)
-	}
-	p := newAnimePahe(AnimePaheBase, http, buildPaheBridge(mgr))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	query := os.Getenv("AP_QUERY")
-	if query == "" {
-		query = "Tongari Boushi no Atelier"
-	}
-	results, err := p.Search(ctx, query)
-	if err != nil {
-		t.Fatalf("search through the bridge: %v", err)
-	}
-	if len(results) == 0 {
-		t.Fatal("search through the bridge: 0 results")
-	}
-	t.Logf("[bridge-search] %q → %d results, first: %q (session %s)",
-		query, len(results), results[0].Title, results[0].URL)
 }
 
 // TestLivePR78NyaaSearch runs one nyaa search through the production

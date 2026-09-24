@@ -142,7 +142,7 @@ func TestBloggerExtractorNoFormatsTypedError(t *testing.T) {
 }
 
 // TestBloggerExtractorRegisteredInFactory: the extractor joins the
-// factory walk (after kwik, the second task-mandated addition) so
+// factory walk (the second task-mandated addition) so
 // gogoanime's blogger mirrors resolve through the standard path.
 func TestBloggerExtractorRegisteredInFactory(t *testing.T) {
 	t.Parallel()

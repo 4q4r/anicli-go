@@ -206,6 +206,12 @@ func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 			}
 		}
 		canonical = card.Name
+	} else if err != nil {
+		// The card fetch failed: the two autocomplete names already
+		// in hand keep seeding the pool (fail-soft, PR97 fast-follow).
+		// Degrade visibly — never silently.
+		deps.logger().Warn("shikimori: card fetch failed, falling back to autocomplete names",
+			"shikimori_id", top.ShikimoriID, "error", err)
 	}
 	if canonical == "" {
 		canonical = query

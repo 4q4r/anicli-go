@@ -253,6 +253,43 @@ func TestHybridSearchBindsTopCardOnAnyQuery(t *testing.T) {
 	}
 }
 
+// TestHybridSearchGetAnimeFailureFallsBackToAutocompleteNames pins the
+// documented fail-soft fallback (PR97 fast-follow): a card-fetch error
+// must NOT collapse the variant pool — the autocomplete record's own
+// two names (russian + english) still seed it, and the metadata
+// manager keys on the english fallback name.
+func TestHybridSearchGetAnimeFailureFallsBackToAutocompleteNames(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	shiki := &fakeShiki{
+		enabled:  true,
+		items:    autocompleteItems([2]string{"Наруто", "Naruto"}),
+		animeErr: errors.New("card fetch exploded"),
+	}
+	md := &fakeMetadata{aliases: map[string][]string{
+		"Naruto": {"Naruto: Shippuuden"},
+	}}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	joined := strings.Join(progress.variants, "|")
+	if !strings.Contains(joined, "Наруто") || !strings.Contains(joined, "Naruto") {
+		t.Fatalf("the autocomplete names must seed the pool on a card-fetch failure, got %v", progress.variants)
+	}
+	if !strings.Contains(joined, "Naruto: Shippuuden") {
+		t.Fatalf("metadata must still enrich via the english fallback name, got %v", progress.variants)
+	}
+	// The metadata manager keyed on the english fallback name (the
+	// card's original name is unavailable).
+	if len(md.queries) != 1 || md.queries[0] != "Naruto" {
+		t.Fatalf("metadata must key on the english fallback, got %v", md.queries)
+	}
+}
+
 // TestHybridSearchMergesAllVariants pins the PR97 fan-out redesign:
 // EVERY language-routed variant runs (no early exit on the first
 // non-empty), the per-variant result lists merge in first-seen

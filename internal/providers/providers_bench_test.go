@@ -3,16 +3,13 @@ package providers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
@@ -66,74 +63,6 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 // benchSinkResults keeps Search/GetEpisodes results alive.
 var benchSinkResults []any
 
-// --- allanime crypto material/chunk parser (build IDs 173/174) ---
-
-var (
-	benchAllanimeChunk173 = benchStringData("testdata/allanime/crypto_chunk_173_DhCxOiZl.js")
-	benchAllanimeChunk174 = benchStringData("testdata/allanime/crypto_chunk_174_BYlv1dKC.js")
-	benchAllanimeSinkMat  *aaCryptoProfile
-	benchAllanimeSinkTbl  *aaChunkTables
-)
-
-// benchStringData loads a fixture as a string at package init.
-func benchStringData(rel string) string {
-	data, err := os.ReadFile(rel) //nolint:gosec // trusted testdata path
-	if err != nil {
-		panic("bench fixture " + rel + ": " + err.Error())
-	}
-	return string(data)
-}
-
-// BenchmarkAllanimeChunkMaterial173 parses the build-173 crypto chunk
-// (the material tables the API query masking rides on).
-func BenchmarkAllanimeChunkMaterial173(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		mat, err := aaParseChunkMaterial(benchAllanimeChunk173)
-		if err != nil {
-			b.Fatalf("chunk 173 material: %v", err)
-		}
-		benchAllanimeSinkMat = mat
-	}
-}
-
-// BenchmarkAllanimeChunkMaterial174 — same parser, build-174 chunk.
-func BenchmarkAllanimeChunkMaterial174(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		mat, err := aaParseChunkMaterial(benchAllanimeChunk174)
-		if err != nil {
-			b.Fatalf("chunk 174 material: %v", err)
-		}
-		benchAllanimeSinkMat = mat
-	}
-}
-
-// BenchmarkAllanimeChunkTables173 parses the build-173 chunk tables
-// (the per-build arithmetic fragment tables).
-func BenchmarkAllanimeChunkTables173(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		tbl, err := aaParseChunkTables(benchAllanimeChunk173)
-		if err != nil {
-			b.Fatalf("chunk 173 tables: %v", err)
-		}
-		benchAllanimeSinkTbl = tbl
-	}
-}
-
-// BenchmarkAllanimeChunkTables174 — same parser, build-174 chunk.
-func BenchmarkAllanimeChunkTables174(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		tbl, err := aaParseChunkTables(benchAllanimeChunk174)
-		if err != nil {
-			b.Fatalf("chunk 174 tables: %v", err)
-		}
-		benchAllanimeSinkTbl = tbl
-	}
-}
-
 // --- anizone Livewire payload decode ---
 
 // BenchmarkAnizoneJSONArgDecode decodes a Livewire JSON.parse argument
@@ -149,10 +78,10 @@ func BenchmarkAnizoneJSONArgDecode(b *testing.B) {
 		}
 		sink = out
 	}
-	benchAllanimeSinkStr = string(sink)
+	benchSinkStr = string(sink)
 }
 
-var benchAllanimeSinkStr string
+var benchSinkStr string
 
 // --- hdrezka page + anubis PoW ---
 
@@ -250,11 +179,11 @@ func BenchmarkKaaPageEpisodes(b *testing.B) {
 	benchSinkResults = sink
 }
 
-// --- SequenceMatcher similarity (allanime sort + rehydrate matching) ---
+// --- SequenceMatcher similarity (rehydrate matching) ---
 
 // BenchmarkSimilarityRatio benchmarks the CPython SequenceMatcher
-// ratio port on a realistic title pair — the hot comparator of
-// allanime result ranking and history rehydration.
+// ratio port on a realistic title pair — the hot comparator of the
+// TUI's history rehydration matching.
 func BenchmarkSimilarityRatio(b *testing.B) {
 	b.ReportAllocs()
 	a, c := "ван пис", "one piece wan pisu tv"
@@ -266,43 +195,6 @@ func BenchmarkSimilarityRatio(b *testing.B) {
 }
 
 var benchSinkRatio float64
-
-// benchResultTitles builds n distinct realistic allanime-style result
-// titles (the sort's input scale).
-func benchResultTitles(n int) []contracts.SearchResult {
-	out := make([]contracts.SearchResult, 0, n)
-	for i := range n {
-		out = append(out, contracts.SearchResult{
-			Title:    fmt.Sprintf("Naruto %s %d", []string{"Shippuuden", "the Movie", "SD", "Shinden"}[i%4], i),
-			URL:      "https://allanime.example/" + strconv.Itoa(i),
-			SourceID: "allanime",
-		})
-	}
-	return out
-}
-
-var benchSinkSorted int
-
-// BenchmarkAllanimeSimilaritySort30 — the fan-out-scale result sort
-// (each op: n ratio evaluations + the sort).
-func BenchmarkAllanimeSimilaritySort30(b *testing.B) {
-	b.ReportAllocs()
-	results := benchResultTitles(30)
-	for b.Loop() {
-		sortAllAnimeBySimilarity("naruto", results)
-		benchSinkSorted = len(results)
-	}
-}
-
-// BenchmarkAllanimeSimilaritySort100 — the 10x-scale sort.
-func BenchmarkAllanimeSimilaritySort100(b *testing.B) {
-	b.ReportAllocs()
-	results := benchResultTitles(100)
-	for b.Loop() {
-		sortAllAnimeBySimilarity("naruto", results)
-		benchSinkSorted = len(results)
-	}
-}
 
 // --- loopback Search benches (full provider parse path, no TLS/site) ---
 

@@ -1,0 +1,89 @@
+{
+  "ratios": [
+    {
+      "a": "naruto",
+      "b": "naruto",
+      "ratio": 1.0
+    },
+    {
+      "a": "naruto",
+      "b": "naruto shippuden",
+      "ratio": 0.5454545454545454
+    },
+    {
+      "a": "attack on titan",
+      "b": "shingeki no kyojin",
+      "ratio": 0.24242424242424243
+    },
+    {
+      "a": "one piece",
+      "b": "one piece: film z",
+      "ratio": 0.6923076923076923
+    },
+    {
+      "a": "",
+      "b": "abc",
+      "ratio": 0.0
+    },
+    {
+      "a": "",
+      "b": "",
+      "ratio": 1.0
+    },
+    {
+      "a": "abc",
+      "b": "",
+      "ratio": 0.0
+    },
+    {
+      "a": "a",
+      "b": "b",
+      "ratio": 0.0
+    },
+    {
+      "a": "aaaa",
+      "b": "aa",
+      "ratio": 0.6666666666666666
+    },
+    {
+      "a": "abcd",
+      "b": "bd",
+      "ratio": 0.6666666666666666
+    },
+    {
+      "a": " Bleach",
+      "b": "bleach",
+      "ratio": 0.7692307692307693
+    },
+    {
+      "a": "bleach: thousand-year blood war",
+      "b": "bleach",
+      "ratio": 0.32432432432432434
+    },
+    {
+      "a": "sword art online",
+      "b": "sword art online progressive - aria of a starless night",
+      "ratio": 0.4507042253521127
+    },
+    {
+      "a": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "b": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababcd",
+      "ratio": 0.9621993127147767
+    },
+    {
+      "a": "xyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyz",
+      "b": "yxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxzz",
+      "ratio": 0.0041753653444676405
+    },
+    {
+      "a": "наруто",
+      "b": "наруто: ураганные хроники",
+      "ratio": 0.3870967741935484
+    },
+    {
+      "a": "кино",
+      "b": "kino",
+      "ratio": 0.0
+    }
+  ]
+}

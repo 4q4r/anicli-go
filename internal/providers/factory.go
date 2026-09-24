@@ -16,8 +16,7 @@ import (
 // jars, and errors are tagged with the provider id. The build function
 // receives the full settings plus the shared CF manager (always built
 // since PR80; nil only for callers that skip NewManager): wave-2
-// providers consume per-provider configuration (kodik's API token),
-// allanime consumes the browser bridge.
+// providers consume per-provider configuration (kodik's API token).
 var allFactories = []struct {
 	id    string
 	build func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
@@ -66,9 +65,6 @@ var allFactories = []struct {
 	}},
 	{"kodik", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
-	}},
-	{"allanime", func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider {
-		return newAllAnime(AllAnimeAPIBase, AllAnimeReferer, AllAnimeInternalBase, http, buildAABridge(cf), cacheDirFor(cfg))
 	}},
 	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
@@ -202,16 +198,6 @@ var allFactories = []struct {
 	}},
 }
 
-// buildAABridge wires the AllAnime crypto bridge (CF is always on —
-// the manager always supplies a stealth browser; a nil-manager call
-// remains guarded for API users who skip NewManager).
-func buildAABridge(cf *cfbrowser.Manager) aaBridgeSource {
-	if cf == nil || cf.Solver == nil {
-		return nil
-	}
-	return &aaCFBrowserBridge{Solver: cf.Solver, RootURL: AllAnimeReferer + "/", Lane: aaContentLane}
-}
-
 // registryOptions carries the NewRegistry customizations.
 type registryOptions struct {
 	// torrentLogger routes the shared torrent engine's diagnostics;
@@ -250,19 +236,6 @@ func WithProviderLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.providerLogger = log }
 }
 
-// cacheDirFor resolves the persistent cache directory for provider
-// state ("" when unset — in-memory).
-func cacheDirFor(cfg config.Settings) string {
-	if cfg.General.DataDir != "" {
-		return cfg.General.DataDir
-	}
-	dir, err := config.DataDir()
-	if err != nil {
-		return ""
-	}
-	return dir
-}
-
 // All builds the provider set from cfg: one netclient client each
 // (browser-fingerprint profile, own cookie jar, provider-tagged errors)
 // constructed from cfg.Network, plus per-provider settings where a
@@ -280,7 +253,8 @@ func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, e
 }
 
 // allWithCF is all with the shared CF manager handed to providers that
-// need browser capabilities (the AllAnime crypto bridge). Providers
+// need browser-backed challenge solving (the netclient CF ladder).
+// Providers
 // whose id is listed in [providers].exclude are skipped entirely — no
 // client, no registry slot — and the exclusion is logged at startup
 // (PR23). Providers that cannot run without user configuration (kodik

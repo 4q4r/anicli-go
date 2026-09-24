@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 26 провайдеров"]
+    subgraph sources["Источники — 25 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -117,7 +117,6 @@ graph TD
         P8[anizone]
         P10[sameband]
         P12[kodik]
-        P13[allanime]
         P14[anidub]
         P15[animedia]
         P16[shiza]
@@ -299,7 +298,6 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | sameband | sameband.studio | видео | ⚠️ нестабильный |
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
-| allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
 | anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
 | animedia | amd.online | видео (рус. озвучки) | ✅ живой (PR56); не порт — старый JSON API animedia.online мёртв, написан по живому DLE-сайту: поиск формой сайта, серии/озвучки из kodik-блоков страницы; стримы через общий kodik-экстрактор; ru-индекс (латиница не ищется), часть тайтлов отдана через rutube — типизированная ошибка |
 | shiza | shizaproject.com | видео (рус. озвучки, субтитры) | ✅ живой (PR57); не порт — Nuxt-SPA, написан по живому GraphQL API (публичный, анонимный): поиск по RU-названию и ромадзи, серии из kodik/sibnet-эмбедов через общие экстракторы; torrent-раздел мёртв (0 сидов) и не регистрируется |
@@ -335,7 +333,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 25/26 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 24/25 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -347,7 +345,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 26, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 25, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

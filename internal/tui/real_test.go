@@ -49,7 +49,7 @@ func TestRealDepsConstruction(t *testing.T) {
 	for _, p := range providers {
 		ids = append(ids, p.ID)
 	}
-	for _, want := range []string{"anilibria", "animego", "kodik", "allanime"} {
+	for _, want := range []string{"anilibria", "animego", "kodik", "hdrezka"} {
 		if !strings.Contains(strings.Join(ids, ","), want) {
 			t.Fatalf("provider %s missing from %v", want, ids)
 		}

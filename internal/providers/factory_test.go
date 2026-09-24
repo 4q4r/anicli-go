@@ -23,15 +23,15 @@ func TestAllRosterComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 26 {
-		t.Fatalf("All() = %d providers, want 26", len(bare))
+	if len(bare) != 25 {
+		t.Fatalf("All() = %d providers, want 25", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
 		"sameband", "kodik",
-		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
+		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
@@ -89,8 +89,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 26 {
-		t.Fatalf("List() = %d providers, want 26", len(list))
+	if len(list) != 25 {
+		t.Fatalf("List() = %d providers, want 25", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
 	// Wave-2 integration (fix/60) seated the five parallel providers
@@ -105,7 +105,7 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
 		"sameband", "kodik",
-		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
+		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
@@ -184,8 +184,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 26 {
-		t.Fatalf("All() = %d providers, want 26", len(bare))
+	if len(bare) != 25 {
+		t.Fatalf("All() = %d providers, want 25", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -213,7 +213,6 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anizone":           "ja",
 		"sameband":          "ru",
 		"kodik":             "ru",
-		"allanime":          "ja",
 		"anidub":            "ru",
 		"animedia":          "ru",
 		"shiza":             "ru",
@@ -265,8 +264,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 24 {
-		t.Fatalf("All() = %d providers, want 24", len(bare))
+	if len(bare) != 23 {
+		t.Fatalf("All() = %d providers, want 23", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

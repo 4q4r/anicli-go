@@ -60,7 +60,6 @@ var baseURLs = map[string]string{
 	"animepahe": AnimePaheBase,
 	"sameband":  SameBandBase,
 	"kodik":     KodikAPIBase,
-	"allanime":  AllAnimeAPIBase,
 	"anidub":    AnidubBase,
 	"anizone":   AniZoneBase,
 }
@@ -73,8 +72,8 @@ func BaseURLFor(id string) (string, bool) {
 }
 
 // buildCFOptions wires the CF ladder into provider clients (always
-// on, PR80): receives the already-built manager (shared with the
-// AllAnime bridge — NewRegistry builds it once) and returns the solver
+// on, PR80): receives the already-built manager (shared across the
+// registry — NewRegistry builds it once) and returns the solver
 // option plus its closer. mgr may be nil only for callers that skip
 // NewManager; buildCFOptions then builds a fresh manager.
 func buildCFOptions(cfg config.Settings, mgr *cfbrowser.Manager) (opts []netclient.Option, closer func(), err error) {

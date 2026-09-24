@@ -1,2 +1,0 @@
-
-query( $showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String! ) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls show { _id } } }

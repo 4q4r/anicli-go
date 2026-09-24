@@ -2,7 +2,6 @@ package crypto
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"testing"
 )
@@ -196,87 +195,6 @@ func TestAESDecryptNotBlockAligned(t *testing.T) {
 	ct := encodeB64(t, []byte("13-byte ciphertext")) // not % 16
 	if _, err := AESDecrypt(ct, key, aesIV); err == nil {
 		t.Fatal("ciphertext not block aligned must fail loud")
-	}
-}
-
-// GCM goldens generated with the Python cryptography library:
-//
-//	from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-//	ct = AESGCM(key256).encrypt(nonce12, pt, None)
-//
-// key256 = 00..1f, nonce12 = 00..0b.
-var gcmKey256, _ = hex.DecodeString("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-var gcmNonce12, _ = hex.DecodeString("000102030405060708090a0b")
-
-var gcmGoldens = []struct {
-	name      string
-	plainHex  string
-	cipherHex string
-}{
-	{
-		name:      "empty plaintext",
-		plainHex:  "",
-		cipherHex: "f4c2db1dc38805a37b92171c5d0a81cc",
-	},
-	{
-		name:      "url payload",
-		plainHex:  "68747470733a2f2f6170692e6d6b697373612e6e65742f6170693f71756572793d74657374",
-		cipherHex: "2f76a26bb6dfed34ec31fea5dc82111ef0b7a95a950f701d480edaf4680c72cb3c64cb8fdb99b16757bcf3e0ec12f51993a4687335",
-	},
-	{
-		name:      "binary payload",
-		plainHex:  "000102fdfeff",
-		cipherHex: "4703d4e63b1ae62bf10ae9ac3c81005d2b74655682bd",
-	},
-}
-
-func TestGCMDecryptMatchesOracle(t *testing.T) {
-	t.Parallel()
-
-	for _, tt := range gcmGoldens {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			ct, _ := hex.DecodeString(tt.cipherHex)
-			want, _ := hex.DecodeString(tt.plainHex)
-			got, err := GCMDecrypt(ct, gcmNonce12, gcmKey256)
-			if err != nil {
-				t.Fatalf("GCMDecrypt: %v", err)
-			}
-			if !bytes.Equal(got, want) {
-				t.Errorf("GCMDecrypt = %x, want %x", got, want)
-			}
-		})
-	}
-}
-
-func TestGCMDecryptTamperFails(t *testing.T) {
-	t.Parallel()
-
-	ct, _ := hex.DecodeString(gcmGoldens[1].cipherHex)
-	ct[3] ^= 0x01
-	if _, err := GCMDecrypt(ct, gcmNonce12, gcmKey256); err == nil {
-		t.Fatal("tampered GCM ciphertext must fail authentication")
-	}
-}
-
-func TestGCMDecryptWrongKeyFails(t *testing.T) {
-	t.Parallel()
-
-	ct, _ := hex.DecodeString(gcmGoldens[1].cipherHex)
-	wrong := append([]byte(nil), gcmKey256...)
-	wrong[0] ^= 0xFF
-	if _, err := GCMDecrypt(ct, gcmNonce12, wrong); err == nil {
-		t.Fatal("wrong key must fail authentication")
-	}
-}
-
-func TestGCMDecryptBadKeyLength(t *testing.T) {
-	t.Parallel()
-
-	ct, _ := hex.DecodeString(gcmGoldens[1].cipherHex)
-	if _, err := GCMDecrypt(ct, gcmNonce12, make([]byte, 15)); !errors.Is(err, ErrBadKeyLength) {
-		t.Errorf("GCMDecrypt err = %v, want ErrBadKeyLength", err)
 	}
 }
 

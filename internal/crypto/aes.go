@@ -106,57 +106,6 @@ func AESDecrypt(data string, key, iv []byte) (string, error) {
 	return strings.ToValidUTF8(strings.TrimFunc(string(unpadded), isControlByte), ""), nil
 }
 
-// GCMDecrypt decrypts AES-GCM ciphertext (allanime future use; python had
-// no counterpart — the dynamic-AES provider uses GCM tokens). nonce is the
-// explicit GCM nonce (12 bytes for the standard construction); the 16-byte
-// authentication tag must be the ciphertext tail.
-func GCMDecrypt(ciphertext, nonce, key []byte) ([]byte, error) {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, ErrBadKeyLength
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes: new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("aes: new gcm: %w", err)
-	}
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("aes: gcm open: %w", err)
-	}
-	return plaintext, nil
-}
-
-// GCMSealFrame encrypts plaintext with AES-256-GCM and returns the
-// allanime wire framing as standard base64:
-//
-//	base64( 0x01 || nonce || ciphertext || tag )
-//
-// The nonce must be 12 bytes (the standard GCM construction); Seal
-// appends the 16-byte tag to the ciphertext, which is exactly the wire
-// layout GCMDecrypt expects after the version byte.
-func GCMSealFrame(key, nonce, plaintext []byte) (string, error) {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return "", ErrBadKeyLength
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("aes: new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("aes: new gcm: %w", err)
-	}
-	sealed := gcm.Seal(nil, nonce, plaintext, nil)
-	out := make([]byte, 0, 1+len(nonce)+len(sealed))
-	out = append(out, 0x01)
-	out = append(out, nonce...)
-	out = append(out, sealed...)
-	return base64.StdEncoding.EncodeToString(out), nil
-}
-
 // ConstantTimeEqual compares two byte slices in constant time; use it
 // wherever secret-derived values are compared.
 func ConstantTimeEqual(a, b []byte) bool {

@@ -29,6 +29,7 @@ const (
 	sessionStateMenu        sessionState = "menu"
 	sessionStateEpisodeList sessionState = "episodes"
 	sessionStateDubAudio    sessionState = "dub_audio"
+	sessionStateRedub       sessionState = "redub"
 	sessionStateQuality     sessionState = "quality"
 	// sessionStateResolveLoading is the PR84 distinct loading surface
 	// for the remembered-dub auto-launch: «Загрузка потоков…» with the
@@ -306,6 +307,16 @@ type sessionScreen struct {
 	// resolve settle and the pick (Back from the audio prompt returns
 	// to the list without re-resolving).
 	streamEntries []streamEntry
+	// streamEntriesEp is the episode the cached entries belong to (""
+	// when stale); the redub menu only reuses entries of the current
+	// episode (PR95).
+	streamEntriesEp string
+	// redubPending marks an in-flight unscoped resolve started by
+	// «Сменить озвучку»: its settle opens the dub menu instead of the
+	// quality picker (PR95).
+	redubPending bool
+	// redubList is the dub-selection menu (PR95).
+	redubList *PinList
 	// pickedVideo is the entry chosen from the merged list; doPlay
 	// and the buffered pipeline consume it directly.
 	pickedVideo contracts.VideoSource
@@ -654,6 +665,19 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return s.launchPlayback()
 		}
 		s.streamEntries = msg.entries
+		s.streamEntriesEp = msg.skipEpisode
+		if s.redubPending {
+			// PR95: «Сменить озвучку» — the settle opens the dub menu
+			// instead of the quality picker (no auto-launch). The
+			// per-provider skip summary composes into the menu's
+			// status line (visible, honest, never blocking).
+			s.redubPending = false
+			s.openRedubMenu()
+			if line := skippedSummary(msg.skipped); line != "" {
+				s.setStatus(composeStatusNote(s.status, line))
+			}
+			return s, nil
+		}
 		s.buildStreamList()
 		// PR94: per-provider failures surface as a compact
 		// non-blocking summary in the merged-list status, composed
@@ -740,6 +764,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleEpisodeListKey(key)
 	case sessionStateDubAudio:
 		return s.handleDubKey(key)
+	case sessionStateRedub:
+		return s.handleRedubKey(key)
 	case sessionStateQuality:
 		return s.handleQualityKey(key)
 	case sessionStateFormat:
@@ -782,6 +808,11 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		// cleans up after itself) and the screen the launch came from
 		// is restored.
 		s.setState(s.resolveReturn)
+		return s, nil
+	case sessionStateRedub:
+		// PR95: Esc from the dub menu — back to the action menu
+		// unchanged (no reset, no relaunch).
+		s.setState(sessionStateMenu)
 		return s, nil
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
@@ -853,9 +884,15 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return s, replace(newRebindProgress(s.deps, s.resume))
 	case "redub":
-		s.videoDub, s.audioDub = "", ""
-		s.setStatus("Озвучка сброшена — выберите заново при просмотре")
-		return s, nil
+		// PR95: open the dub-selection menu over the episode's merged
+		// entries (cached ones when fresh, a fresh unscoped resolve
+		// otherwise). The dubs are NOT reset.
+		if s.streamEntriesEp == s.currentEpisode() && len(s.streamEntries) > 0 {
+			s.openRedubMenu()
+			return s, nil
+		}
+		s.redubPending = true
+		return s.beginStreamResolve("")
 	case "info":
 		s.setState(sessionStateInfoMenu)
 		s.buildInfoList()
@@ -1548,6 +1585,73 @@ func humanBytes(n int64) string {
 // buildStreamList renders the merged stream picker (PR61): one
 // quality-sorted list over every consulted provider dub, entries
 // labeled quality · dub [provider] · episode coverage.
+// openRedubMenu builds the PR95 dub-selection menu from the episode's
+// merged entries: one row per distinct dub, labeled dub · provider ·
+// qualities (highest first). Cursor is preserved across rebuilds.
+func (s *sessionScreen) openRedubMenu() {
+	prev := cursorID(s.redubList)
+	quals := map[string][]string{}
+	order := []string{}
+	for _, e := range s.streamEntries {
+		if _, seen := quals[e.DubKey]; !seen {
+			order = append(order, e.DubKey)
+		}
+		quals[e.DubKey] = append(quals[e.DubKey], e.Quality+"p")
+	}
+	choices := make([]Choice, 0, len(order))
+	for _, key := range order {
+		qs := quals[key]
+		sort.Sort(sort.Reverse(sort.StringSlice(qs)))
+		label := s.dubLabel(key) + " · " + providerOfTrackKey(key) + " · " + strings.Join(qs, "/")
+		choices = append(choices, Choice{ID: key, Label: label, Value: key})
+	}
+	s.redubList = NewPinList(NewMenu("Выберите озвучку:", "Нет доступных озвучек", choices...), defaultListHeight)
+	restoreCursor(s.redubList, prev)
+	s.setState(sessionStateRedub)
+}
+
+// handleRedubKey drives the dub-selection menu.
+func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.redubList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.redubList.Menu(), s.redubList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.setState(sessionStateMenu)
+		return s, nil
+	}
+	dub, _ := resolved.(string)
+	return s.pickRedub(dub)
+}
+
+// pickRedub re-targets playback to the chosen dub: the remembered
+// pair updates (so «След.» keeps the new dub) and the dub's already
+// resolved stream launches immediately; a dub without resolved
+// streams falls back to the scoped resolve.
+func (s *sessionScreen) pickRedub(dub string) (Screen, tea.Cmd) {
+	s.videoDub, s.audioDub = dub, dub
+	if s.streamEntriesEp == s.currentEpisode() {
+		var candidates []streamEntry
+		for _, e := range s.streamEntries {
+			if e.DubKey == dub && e.Source.URL != "" {
+				candidates = append(candidates, e)
+			}
+		}
+		if len(candidates) > 0 {
+			e := autoStreamEntry(candidates, s.lastQuality)
+			s.pickedVideo = e.Source
+			s.lastQuality = e.Quality
+			return s.launchPlayback()
+		}
+	}
+	// The dub's streams are not resolved for the current episode —
+	// the scoped resolve settles into the remembered-dub fast path.
+	return s.beginStreamResolve(dub)
+}
+
 func (s *sessionScreen) buildStreamList() {
 	choices := make([]Choice, 0, len(s.streamEntries)+1)
 	if len(s.streamEntries) == 0 {
@@ -2485,6 +2589,8 @@ func (s *sessionScreen) View() tea.View {
 			filterLineAbove(s.episodeFilter, s.episodeList.Render())
 	case sessionStateDubAudio:
 		body = themedList(s.dubList)
+	case sessionStateRedub:
+		body = themedList(s.redubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)
 	case sessionStateFormat:

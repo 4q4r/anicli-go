@@ -545,7 +545,10 @@ func TestSessionDubSelectLanguageTags(t *testing.T) {
 	}
 }
 
-// TestSessionChangeDub: «Сменить озвучку» resets dub preferences.
+// TestSessionChangeDub (PR95): «Сменить озвучку» opens the dub
+// selection flow — it must NOT reset the remembered dubs. Without
+// cached entries the flow starts the unscoped resolve (the menu
+// opens on its settle).
 func TestSessionChangeDub(t *testing.T) {
 	s := newSessionForTests(t)
 	s.videoDub, s.audioDub = "[animego] Дубль 1", "[animego] Дубль 1"
@@ -553,8 +556,11 @@ func TestSessionChangeDub(t *testing.T) {
 	s.list.Jump(idx)
 	next, _ := s.Update(enter())
 	ss := next.(*sessionScreen)
-	if ss.videoDub != "" || ss.audioDub != "" {
-		t.Fatalf("сменить озвучку must reset dubs, got %q/%q", ss.videoDub, ss.audioDub)
+	if ss.videoDub != "[animego] Дубль 1" || ss.audioDub != "[animego] Дубль 1" {
+		t.Fatalf("сменить озвучку must not reset dubs, got %q/%q", ss.videoDub, ss.audioDub)
+	}
+	if !ss.redubPending {
+		t.Fatal("the redub resolve must be pending (no cached entries)")
 	}
 }
 
@@ -1623,9 +1629,10 @@ func leakProbeLeftovers(t *testing.T, dir string) int {
 	return len(entries)
 }
 
-// TestSessionRedubRewatchCleansChaptersFile (PR61 review R1b): a
-// same-episode re-resolve («Сменить озвучку» → re-watch) must retire
-// the previous chapters file — no unique temp file may survive.
+// TestSessionRedubRewatchCleansChaptersFile (PR61 review R1b, PR95
+// flow): a same-episode re-resolve («Сменить озвучку» opens the dub
+// menu via a fresh unscoped resolve) must retire the previous
+// chapters file — no unique temp file may survive.
 func TestSessionRedubRewatchCleansChaptersFile(t *testing.T) {
 	s, _, dir := leakProbeSession(t)
 
@@ -1644,26 +1651,28 @@ func TestSessionRedubRewatchCleansChaptersFile(t *testing.T) {
 		t.Fatalf("one pending chapters file expected, got %d", leakProbeLeftovers(t, dir))
 	}
 
-	// Back to the menu, «Сменить озвучку», re-watch same episode: the
-	// second resolve supersedes the first — file A must go, file B
-	// pending.
+	// Back to the menu, «Сменить озвучку»: the menu's own unscoped
+	// re-resolve of the same episode supersedes the first — file A
+	// must go, file B pending (the dub menu opens on the settle).
 	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if ss.state != sessionStateMenu {
 		t.Fatalf("Esc must return to the menu, got %v", ss.state)
 	}
 	ss.list.Jump(sessionActionIndex(ss, "redub"))
-	ss.Update(enter())
-	ss.list.Jump(sessionActionIndex(ss, "watch"))
-	ss.Update(enter())
-	ss.formatList.Jump(indexOfDayFormatList(ss, "stream"))
-	_, cmd = ss.Update(enter())
-	sr2 := cmd().(streamResolvedMsg)
-	ss.Update(sr2)
-	if n := leakProbeLeftovers(t, dir); n != 1 {
-		t.Fatalf("supersede must keep exactly the newest chapters file, got %d", n)
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateRedub {
+		t.Fatalf("the redub menu must open, got %v", ss.state)
+	}
+	// The menu opened from the CACHED entries — no new resolve, so no
+	// NEW chapters file is spawned (the old one was already retired by
+	// the Esc-cancel above — PR61 semantics).
+	if n := leakProbeLeftovers(t, dir); n != 0 {
+		t.Fatalf("the redub menu must not spawn chapters files, got %d", n)
 	}
 
-	// Backing out of the session retires the last pending file.
+	// Esc from the dub menu: back to the menu, the pending file
+	// retired by the cancel.
 	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if n := leakProbeLeftovers(t, dir); n != 0 {
 		t.Fatalf("cancel must remove the pending chapters file, got %d survivors", n)

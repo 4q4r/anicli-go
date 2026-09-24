@@ -97,15 +97,18 @@ type streamEntry struct {
 // (PR61): entries from every consulted provider dub of the episode,
 // quality-sorted. scope mirrors the resolve request ("" = all dubs —
 // the interactive merged list; a dub key = the remembered-dub fast
-// path that auto-plays its best/remembered quality). The skip verdict
-// rides along (PR61): it is stream-independent, so it fetches once
-// during the resolve and the note composes into the launch line. gen
-// tags the resolve round — a cancelled or superseded round's late
-// settle cleans up after itself.
+// path that auto-plays its best/remembered quality). skipped names
+// the providers whose streams are absent from a SUCCESSFUL merged
+// resolve — the compact non-blocking summary the picker stamps into
+// its status (PR94). The skip verdict rides along (PR61): it is
+// stream-independent, so it fetches once during the resolve and the
+// note composes into the launch line. gen tags the resolve round — a
+// cancelled or superseded round's late settle cleans up after itself.
 type streamResolvedMsg struct {
 	gen          int
 	scope        string
 	entries      []streamEntry
+	skipped      []resolveFailure
 	skipEpisode  string
 	skipNote     string
 	skipChapters string
@@ -618,6 +621,15 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			if msg.skipCleanup != nil {
 				msg.skipCleanup()
 			}
+			if msg.scope != "" {
+				// PR94 fail-soft (python resolve_dubs_smart
+				// spirit): the remembered dub's provider failed —
+				// the flow must not die on it. Fall through to the
+				// full merged resolve of the REST; its own fail-soft
+				// verdict (picker with the skip summary, or the
+				// typed all-failed error) is the honest outcome.
+				return s.beginStreamResolve("")
+			}
 			s.setState(sessionStateMenu)
 			s.setStatus("Ошибка: " + msg.err.Error())
 			return s, nil
@@ -643,6 +655,13 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		s.streamEntries = msg.entries
 		s.buildStreamList()
+		// PR94: per-provider failures surface as a compact
+		// non-blocking summary in the merged-list status, composed
+		// with whatever the flow already stamped (the vanished-dub
+		// note rides along) — visible, honest, never blocking.
+		if line := skippedSummary(msg.skipped); line != "" {
+			s.setStatus(composeStatusNote(s.status, line))
+		}
 		return s, nil
 	case playedMsg:
 		s.setState(sessionStateMenu)
@@ -1111,7 +1130,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	return s, safeCmd(sessionScreenID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
-		entries, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
 		// The skip verdict is stream-independent — it fetches here so
 		// the note is ready at launch (PR61). Best-effort: a failure
 		// degrades the note, never the resolve.
@@ -1127,6 +1146,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 			gen:          gen,
 			scope:        scope,
 			entries:      entries,
+			skipped:      skipped,
 			skipEpisode:  ep.Num,
 			skipNote:     note,
 			skipChapters: chapters,
@@ -1141,13 +1161,101 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 // fan-out consts (anilibProbeConcurrency, ttPreflightConcurrency).
 const streamResolveFanout = 8
 
+// resolveFailure is one provider's honest skip record of a merged
+// resolve (PR94): the provider id and the compact reason its streams
+// are absent from the list. A provider owning several dub keys
+// collapses into one record — its first failure in the consulted
+// (sorted-key) order.
+type resolveFailure struct {
+	Provider string
+	Reason   string
+}
+
+// errResolveFailed is the typed blocking verdict of a merged resolve
+// where ZERO entries resolved across all consulted providers (PR94):
+// it names EVERY failed provider and its reason — honest attribution,
+// never one arbitrary completion-order culprit. Unwrap exposes the
+// original per-target errors, so errors.Is / errors.As routing on the
+// provider causes keeps working.
+type errResolveFailed struct {
+	failures []resolveFailure
+	causes   []error
+}
+
+func (e *errResolveFailed) Error() string {
+	return "потоки не получены: " + failureList(e.failures)
+}
+
+// Unwrap implements the errors.Join multi-error shape.
+func (e *errResolveFailed) Unwrap() []error { return e.causes }
+
+// compactResolveReason renders a resolve error as the short reason
+// for the summary line: the HTTP status when the provider reported
+// one — including a status wrapped deep inside a textual extract
+// chain — else the wrapped cause, else the error itself.
+func compactResolveReason(err error) string {
+	var pe *contracts.ProviderError
+	if errors.As(err, &pe) {
+		if pe.StatusCode > 0 {
+			return "HTTP " + strconv.Itoa(pe.StatusCode)
+		}
+		// «extract failed: … HTTP 400 …» summarizes as «HTTP 400»:
+		// a status deeper in the wrap chain beats the textual cause.
+		var deep *contracts.ProviderError
+		if errors.As(pe.Err, &deep) && deep.StatusCode > 0 {
+			return "HTTP " + strconv.Itoa(deep.StatusCode)
+		}
+		if pe.Err != nil {
+			return pe.Err.Error()
+		}
+	}
+	return err.Error()
+}
+
+// failureList renders skip records as «prov (reason), prov (reason)».
+func failureList(failures []resolveFailure) string {
+	parts := make([]string, 0, len(failures))
+	for _, f := range failures {
+		parts = append(parts, f.Provider+" ("+f.Reason+")")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// skippedSummary renders the compact non-blocking picker note; ""
+// when nothing was skipped.
+func skippedSummary(failures []resolveFailure) string {
+	if len(failures) == 0 {
+		return ""
+	}
+	return "пропущены: " + failureList(failures)
+}
+
+// composeStatusNote appends a note to the status the surface already
+// carries (the vanished-dub note rides along the skip summary).
+func composeStatusNote(existing, note string) string {
+	if existing == "" {
+		return note
+	}
+	return existing + " · " + note
+}
+
 // resolveAllStreams resolves every dub of the episode that carries
 // embed links (one dub when scope is set) concurrently and merges the
 // results into one quality-sorted entry list (python merge parity —
-// the streams of all providers live in ONE list). A provider that
-// fails degrades: its entries drop, the rest still surface; only a
-// fully empty merge is an error.
-func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string) ([]streamEntry, error) {
+// the streams of all providers live in ONE list). PR94 fail-soft
+// semantics: the worker never fails, so one provider's error cannot
+// cancel its siblings (golang/go#72101 records why first-error
+// errgroup semantics would cancel into unreliable cascade errors);
+// every outcome is collected, and the verdict is decided AFTER the
+// fan-out —
+//
+//   - a failed provider's entries are absent from the list and its
+//     error is collected into the returned skip records (deduped per
+//     provider, attributed in the deterministic consulted order);
+//   - zero entries across ALL providers → the typed
+//     *errResolveFailed naming every failed provider + reason;
+//   - zero entries with zero failures → «потоки не найдены».
+func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string) ([]streamEntry, []resolveFailure, error) {
 	targets := make([]string, 0, len(ep.RawEmbeds))
 	for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
 		if scope != "" && k != scope {
@@ -1159,7 +1267,7 @@ func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Epi
 		targets = append(targets, k)
 	}
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("нет источников с потоками")
+		return nil, nil, fmt.Errorf("нет источников с потоками")
 	}
 
 	type resolveResult struct {
@@ -1182,12 +1290,10 @@ func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Epi
 	})
 
 	entries := make([]streamEntry, 0, len(results))
-	var firstErr error
+	errByKey := make(map[string]error, len(results))
 	for _, r := range results {
 		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
+			errByKey[r.key] = r.err
 			continue
 		}
 		for q, src := range r.stream.Links {
@@ -1195,13 +1301,36 @@ func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Epi
 		}
 	}
 	sortStreamEntries(entries)
-	if len(entries) == 0 {
-		if firstErr != nil {
-			return nil, fmt.Errorf("потоки не получены: %w", firstErr)
+
+	// PR94 honest bookkeeping: failures attribute per provider in the
+	// deterministic consulted (sorted-key) order — never completion
+	// order — and collapse to one record per provider.
+	failures := make([]resolveFailure, 0)
+	causes := make([]error, 0)
+	seen := make(map[string]bool, len(errByKey))
+	for _, k := range targets {
+		err, ok := errByKey[k]
+		if !ok {
+			continue
 		}
-		return nil, fmt.Errorf("потоки не найдены")
+		prov := providerOfTrackKey(k)
+		if prov == "" {
+			prov = k // an untagged key still gets honest attribution
+		}
+		if !seen[prov] {
+			seen[prov] = true
+			failures = append(failures, resolveFailure{Provider: prov, Reason: compactResolveReason(err)})
+		}
+		causes = append(causes, err)
 	}
-	return entries, nil
+
+	if len(entries) == 0 {
+		if len(failures) > 0 {
+			return nil, failures, &errResolveFailed{failures: failures, causes: causes}
+		}
+		return nil, nil, fmt.Errorf("потоки не найдены")
+	}
+	return entries, failures, nil
 }
 
 // sortStreamEntries orders the merged list: quality numerically

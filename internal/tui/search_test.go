@@ -133,11 +133,12 @@ func TestSearchFanOutProgress(t *testing.T) {
 
 	// The panicking provider degraded to a row error (python
 	// try/except semantics): the app continues, no modal, no crash.
+	// PR98: the row renders the short error-class label, not the
+	// panic text.
 	if progress.ID() == errorScreenID {
 		t.Fatalf("a provider panic must not replace the fan-out screen")
 	}
-	if !strings.Contains(progress.View().Content, "recovered panic") &&
-		!strings.Contains(progress.View().Content, "Ошибка") {
+	if !strings.Contains(progress.View().Content, "✗ ошибка") {
 		t.Fatalf("the panicking provider must show a row error")
 	}
 	// The app-level net still routes injected errMsg to the modal.

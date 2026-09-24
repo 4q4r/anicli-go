@@ -254,7 +254,13 @@ type searchProgress struct {
 	// (0 results still counts as answered).
 	counts    map[string]int
 	responded map[string]bool
-	results   []contracts.SearchResult
+	// errs keeps each row's raw settled error (PR98): the view derives
+	// the ⏱/✗ class from it while the cell shows only the short label.
+	errs    map[string]error
+	results []contracts.SearchResult
+	// width is the tracked terminal width (tea.WindowSizeMsg forwarded
+	// by the App); zero means natural sizing.
+	width int
 	// variants is the active query-variant set (bare query until the
 	// enrichment settles); enriching marks the Shikimori phase.
 	variants  []string
@@ -294,6 +300,7 @@ func NewSearchProgress(deps *Deps, query string) *searchProgress {
 		pending:   make(map[string]bool, len(rows)),
 		counts:    make(map[string]int, len(rows)),
 		responded: make(map[string]bool, len(rows)),
+		errs:      make(map[string]error, len(rows)),
 		variants:  []string{query},
 		logTag:    "search",
 	}
@@ -390,6 +397,11 @@ func latinOnlyQueries(queries []string) []string {
 // Update implements Screen.
 func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// PR98: the App forwards the tracked terminal size; the table
+		// re-renders against the new budget on the next frame.
+		m.width = msg.Width
+		return m, nil
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -411,7 +423,11 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		delete(m.pending, msg.provider.ID)
 		switch {
 		case msg.err != nil:
-			m.status[msg.provider.ID] = searchErrText(msg.err)
+			// PR98: the cell carries the short error-class label only;
+			// the full error stays in the file log line above and in
+			// m.errs (kept for tests/introspection).
+			m.errs[msg.provider.ID] = msg.err
+			m.status[msg.provider.ID] = searchErrLabel(msg.err)
 		default:
 			m.responded[msg.provider.ID] = true
 			m.counts[msg.provider.ID] = len(msg.results)
@@ -568,18 +584,58 @@ func (m *searchProgress) settleResults() {
 	m.resultCheck = NewCheckList("Выберите провайдеры:", items)
 }
 
-// searchErrText renders one settled error: timeouts get the dedicated
-// ⏱ verdict; everything else keeps the error text.
-func searchErrText(err error) string {
-	if errors.Is(err, errSearchTimeout) || errors.Is(err, context.DeadlineExceeded) {
-		return "Таймаут"
+// fanoutRows builds the render rows for the bordered table (PR98):
+// raw cell text plus the per-row style, derived from the settled
+// state — pending rows carry the spinner, ok rows ✓, timeouts ⏱,
+// every other error ✗ with its short class label.
+func (m *searchProgress) fanoutRows() []fanoutRowData {
+	rows := make([]fanoutRowData, 0, len(m.rows))
+	for _, row := range m.rows {
+		data := fanoutRowData{name: row.Name, count: "—"}
+		if data.name == "" {
+			data.name = row.ID
+		}
+		switch {
+		case m.pending[row.ID] && m.enriching:
+			// Waiting for the Shikimori variant phase, not the
+			// provider itself yet.
+			data.status = m.status[row.ID]
+			data.style = theme.Dim
+		case m.pending[row.ID]:
+			data.status = m.spin.View() + " Поиск…"
+			data.style = theme.Accent
+		case m.responded[row.ID]:
+			data.status = "✓ Завершено"
+			data.count = strconv.Itoa(m.counts[row.ID])
+			data.style = theme.Success
+		default:
+			label := m.status[row.ID]
+			if label == "" {
+				label = labelError
+			}
+			if label == labelTimeout {
+				data.status = "⏱ " + label
+				data.style = theme.Warning
+			} else {
+				data.status = "✗ " + label
+				data.style = theme.Error
+			}
+		}
+		rows = append(rows, data)
 	}
-	return err.Error()
+	return rows
 }
 
-// tableWidth is the fixed width the centered counter is placed into
-// (the table's own visual width; screens have no terminal width).
-const tableWidth = 60
+// indentBlock prefixes every line with the two-space screen gutter.
+func indentBlock(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		b.WriteString("  ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
 
 // View implements Screen: the live three-column status table with the
 // centered overall counter (PR24); once every row settled, the
@@ -596,37 +652,11 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString(theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "  %s %s %s\n",
-		padDisplay(theme.Dim.Render("Провайдер"), 16),
-		padDisplay(theme.Dim.Render("Статус"), 36),
-		theme.Dim.Render("Результатов"))
-	for _, row := range m.rows {
-		state := m.status[row.ID]
-		count := "—"
-		var style lipgloss.Style
-		switch {
-		case m.pending[row.ID] && m.enriching:
-			// Waiting for the Shikimori variant phase, not the
-			// provider itself yet.
-			style = theme.Dim
-		case m.pending[row.ID]:
-			state = m.spin.View() + " Поиск…"
-			style = theme.Accent
-		case state == "Завершено":
-			state = "✓ " + state
-			count = strconv.Itoa(m.counts[row.ID])
-			style = theme.Success
-		case state == "Таймаут":
-			state = "⏱ " + state
-			style = theme.Warning
-		default:
-			state = "✗ " + state
-			style = theme.Error
-		}
-		fmt.Fprintf(&b, "  %s %s %s\n",
-			padDisplay(row.Name, 16), padDisplay(style.Render(state), 36), padDisplay(count, 4))
-	}
-	if len(m.rows) == 0 {
+	if len(m.rows) > 0 {
+		// PR98: a real bordered table — even fixed columns with box
+		// lines, per-cell truncation, no text ever leaves its cell.
+		b.WriteString(indentBlock(renderFanoutTable(m.fanoutRows(), m.width)))
+	} else {
 		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
 		b.WriteString("\n")
 	}
@@ -635,7 +665,8 @@ func (m *searchProgress) View() tea.View {
 	if len(m.rows) > 0 && (responded > 0 || len(m.pending) == 0) {
 		counter := fmt.Sprintf("Ответившие: %d/%d провайдеров · Всего результатов: %d",
 			responded, len(m.rows), len(m.results))
-		b.WriteString(lipgloss.PlaceHorizontal(tableWidth, lipgloss.Center, theme.StatusLine.Render(counter)))
+		b.WriteString("  " + lipgloss.PlaceHorizontal(fanoutBoxWidth(m.fanoutRows(), m.width),
+			lipgloss.Center, theme.StatusLine.Render(counter)))
 		b.WriteString("\n")
 	}
 	if m.resultCheck != nil {
@@ -749,16 +780,4 @@ func stablePrimary(group []contracts.SearchResult) contracts.SearchResult {
 		return contracts.SearchResult{}
 	}
 	return stable[0]
-}
-
-// padDisplay right-pads s with spaces to the given display width,
-// accounting for ANSI escape codes (zero visual width) and multi-byte
-// Unicode (Cyrillic = 1 column, CJK = 2 columns). This replaces
-// fmt's %-Ns which pads by byte count and misaligns Cyrillic rows.
-func padDisplay(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-w)
 }

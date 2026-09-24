@@ -389,8 +389,13 @@ func TestHybridSearchAllVariantsFailingFailsTheRow(t *testing.T) {
 	model = drainCmds(model)
 	progress := topOf(model).(*searchProgress)
 
-	if progress.status["animego"] != "provider down" {
-		t.Fatalf("an all-error row must carry the first error, got %q", progress.status["animego"])
+	// PR98: the row keeps the raw first error (errs) for introspection
+	// while the cell carries the short class label.
+	if progress.errs["animego"] == nil || progress.errs["animego"].Error() != "provider down" {
+		t.Fatalf("an all-error row must carry the first error, got %v", progress.errs["animego"])
+	}
+	if progress.status["animego"] != labelError {
+		t.Fatalf("an all-error row must classify onto the short label, got %q", progress.status["animego"])
 	}
 }
 
@@ -409,7 +414,7 @@ func TestHybridSearchTimeoutStatus(t *testing.T) {
 	model = drainCmds(model)
 
 	v := topOf(model).View().Content
-	if !strings.Contains(v, "Таймаут") {
+	if !strings.Contains(v, "⏱ таймаут") {
 		t.Fatalf("a blown budget must render a timeout status, got:\n%s", v)
 	}
 }

@@ -2369,16 +2369,26 @@ func (s *sessionScreen) buildActionMenu() {
 	if ep := s.currentEpisodeData(); ep != nil && s.hydrated[ep.Num] && len(ep.RawEmbeds) == 0 {
 		watchDisabled = true
 	}
+	// PR99: the boundary actions are offered only when a target
+	// episode exists — the first episode hides «Пред.», the last
+	// hides «След.», a single-episode title hides both (owner intent:
+	// PR63's silent no-op on a boundary pick becomes absence).
 	choices := []Choice{
 		{ID: "watch", Label: "▶ Смотреть", Disabled: watchDisabled},
-		{ID: "next", Label: "⏭ След."},
-		{ID: "prev", Label: "⏮ Пред."},
-		{ID: "jump", Label: "🔢 Перейти к серии"},
-		{ID: "redub", Label: "🎨 Сменить озвучку"},
-		{ID: "info", Label: "📝 Изменить инфо"},
-		{ID: "download", Label: "⬇ Скачать серии"},
-		{ID: "refresh", Label: "🔄 Обновить источники"},
 	}
+	if s.currentIdx < len(s.order)-1 {
+		choices = append(choices, Choice{ID: "next", Label: "⏭ След."})
+	}
+	if s.currentIdx > 0 {
+		choices = append(choices, Choice{ID: "prev", Label: "⏮ Пред."})
+	}
+	choices = append(choices,
+		Choice{ID: "jump", Label: "🔢 Перейти к серии"},
+		Choice{ID: "redub", Label: "🎨 Сменить озвучку"},
+		Choice{ID: "info", Label: "📝 Изменить инфо"},
+		Choice{ID: "download", Label: "⬇ Скачать серии"},
+		Choice{ID: "refresh", Label: "🔄 Обновить источники"},
+	)
 	if s.resume != nil {
 		choices = append(choices, Choice{ID: "rebind", Label: "🔗 Перепривязать"})
 	}

@@ -23,14 +23,14 @@ func TestAllRosterComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 27 {
-		t.Fatalf("All() = %d providers, want 27", len(bare))
+	if len(bare) != 26 {
+		t.Fatalf("All() = %d providers, want 26", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
-		"sameband", "anicrush", "kodik",
+		"sameband", "kodik",
 		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
@@ -89,8 +89,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 27 {
-		t.Fatalf("List() = %d providers, want 27", len(list))
+	if len(list) != 26 {
+		t.Fatalf("List() = %d providers, want 26", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
 	// Wave-2 integration (fix/60) seated the five parallel providers
@@ -98,14 +98,13 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// after animepahe in the latin block; animedia (PR56) and shiza
 	// (PR57) in the RU-dub block; yummy (PR68) and hdrezka (PR69)
 	// closing it. fix/93 froze the 6-provider wave into grouped
-	// blocks: anicrush (PR90) joined the foreign stream block after
-	// sameband; anifilm (PR91) and animemobi (PR92) closed the RU-dub
+	// blocks; anifilm (PR91) and animemobi (PR92) closed the RU-dub
 	// block after anistar; the torrent providers close the roster
 	// (rutor, PR87, then anirena, PR88, then subsplease, PR89).
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
-		"sameband", "anicrush", "kodik",
+		"sameband", "kodik",
 		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
@@ -185,8 +184,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 27 {
-		t.Fatalf("All() = %d providers, want 27", len(bare))
+	if len(bare) != 26 {
+		t.Fatalf("All() = %d providers, want 26", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -213,7 +212,6 @@ func TestContentLanguageRoster(t *testing.T) {
 		"kickassanime":      "ja",
 		"anizone":           "ja",
 		"sameband":          "ru",
-		"anicrush":          "ja", // EN site, but the primary sub audio is Japanese (kickassanime/anizone precedent)
 		"kodik":             "ru",
 		"allanime":          "ja",
 		"anidub":            "ru",
@@ -267,8 +265,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 25 {
-		t.Fatalf("All() = %d providers, want 25", len(bare))
+	if len(bare) != 24 {
+		t.Fatalf("All() = %d providers, want 24", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

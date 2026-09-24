@@ -34,9 +34,7 @@ import (
 // the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
 // its self-hosted an-media player stack) joined after hdrezka.
 // The 6-provider wave (fix/93) froze the roster into grouped blocks:
-// anicrush (PR90, the EN streaming anicrush.to JSON API, rebuilt from
-// wrapper sources while the family is origin-dead) joined the foreign
-// stream block after sameband; anifilm (PR91, the anifilm.pro RU
+// anifilm (PR91, the anifilm.pro RU
 // Yii/Vue catalog with its kodik-embed player stack) and animemobi
 // (PR92, the animemobi.com RU mobile DLE catalog with its kodik-family
 // players and per-release torrent downloads) closed the RU-dub block
@@ -46,7 +44,7 @@ import (
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
-// after tokyotosho. The roster is frozen at 27.
+// after tokyotosho. The roster is frozen at 26.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -57,7 +55,6 @@ var expectedProviderOrder = []string{
 	"kickassanime",
 	"anizone",
 	"sameband",
-	"anicrush",
 	"kodik",
 	"allanime",
 	"anidub",

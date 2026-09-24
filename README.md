@@ -106,7 +106,7 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 27 провайдеров"]
+    subgraph sources["Источники — 26 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
@@ -116,7 +116,6 @@ graph TD
         P7[kickassanime]
         P8[anizone]
         P10[sameband]
-        P11[anicrush]
         P12[kodik]
         P13[allanime]
         P14[anidub]
@@ -141,7 +140,7 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
+    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P10 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
     P6 & P7 & P11 --> EXT
     SKIP --> ST
     DL --> SKIP
@@ -299,7 +298,6 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | sameband | sameband.studio | видео | ⚠️ нестабильный |
-| anicrush | anicrush.to (API: api.anicrush.to) | видео (англ. субтитры и дабы) | ⛔️ сайт мёртв (PR90); не порт — восстановлен по трём независимым обёрткам анонимного JSON API (DrBrainlessLol/anicrush-api, shimizudev/anicrush-api, gojo): movie/list → episode/list (result — запись групп массивов) → episode/servers (sub/dub-ряды) → episode/sources (embed-ссылка). Вся семья .to лежит за Cloudflare с ошибкой 521 на стороне edge для всех сетей с ~2026-08-07 (на 2026-09-23 не поднялся) — фикстуры реконструированы по исходникам обёрток; финальный embed→HLS-прыжок (WASM-плеер megacloud/rabbit с canvas-ключами) не портирован — фабрика экстракторов отвечает типовой ошибкой, пока экстрактор не появится; анонимный |
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
 | allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
 | anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
@@ -337,7 +335,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 26/27 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 25/26 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -349,7 +347,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 27, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 26, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

@@ -126,13 +126,15 @@ func TestSessionEpisodesMerged(t *testing.T) {
 // session_loop entries PLUS the PR43 «🔄 Обновить источники» recovery
 // action (the PR44 «Формат» toggle moved into the pre-play selector),
 // in order, with the pinned exit row last; exit pops to root.
+// PR99: the session loads onto the FIRST episode, where «⏮ Пред.» has
+// no target and is excluded (the boundary test lives in
+// pr99_boundary_test.go).
 func TestSessionMenuActions(t *testing.T) {
 	s := newSessionForTests(t)
 	v := s.View().Content
 	for _, want := range []string{
 		"▶ Смотреть",
 		"⏭ След.",
-		"⏮ Пред.",
 		"🔢 Перейти к серии",
 		"🎨 Сменить озвучку",
 		"📝 Изменить инфо",
@@ -144,14 +146,17 @@ func TestSessionMenuActions(t *testing.T) {
 			t.Fatalf("session menu must contain %q:\n%s", want, v)
 		}
 	}
+	if strings.Contains(v, "⏮ Пред.") {
+		t.Fatalf("«Пред.» must be hidden on the first episode (PR99):\n%s", v)
+	}
 	if strings.Contains(v, "Формат:") {
 		t.Fatalf("session menu must NOT carry the format toggle:\n%s", v)
 	}
-	// 9 actions + the pinned Back row (I1).
-	if got := len(s.list.Menu().Items); got != 10 {
-		t.Fatalf("session menu rows = %d, want 10 (9 actions + Back)", got)
+	// 8 actions (no «Пред.» on ep 1, PR99) + the pinned Back row (I1).
+	if got := len(s.list.Menu().Items); got != 9 {
+		t.Fatalf("session menu rows = %d, want 9 (8 actions + Back)", got)
 	}
-	last := s.list.Menu().Items[9]
+	last := s.list.Menu().Items[8]
 	if last.ID != BackID {
 		t.Fatalf("last menu row = %q, want the pinned Back entry", last.ID)
 	}
@@ -175,27 +180,29 @@ func TestSessionMenuActions(t *testing.T) {
 	})
 }
 
-// TestSessionEpisodeNavigation: next/prev clamp and jump works.
+// TestSessionEpisodeNavigation: next/prev step, the boundary actions
+// hide where no target episode exists (PR99 superseded the old
+// silent-clamp picks), and jump works.
 func TestSessionEpisodeNavigation(t *testing.T) {
 	s := newSessionForTests(t)
 
-	t.Run("next clamps at last", func(t *testing.T) {
+	t.Run("next hides at last", func(t *testing.T) {
 		s.jumpTo("3")
-		idx := sessionActionIndex(s, "next")
-		s.list.Jump(idx)
-		next, _ := s.Update(enter())
-		if next.(*sessionScreen).currentEpisode() != "3" {
-			t.Fatalf("next at last must clamp, got %q", next.(*sessionScreen).currentEpisode())
+		if sessionActionIndex(s, "next") != -1 {
+			t.Fatalf("«След.» must be absent on the last episode (PR99)")
+		}
+		if s.currentEpisode() != "3" {
+			t.Fatalf("the session must stay on the last episode, got %q", s.currentEpisode())
 		}
 	})
 
-	t.Run("prev clamps at first", func(t *testing.T) {
+	t.Run("prev hides at first", func(t *testing.T) {
 		s.jumpTo("1")
-		idx := sessionActionIndex(s, "prev")
-		s.list.Jump(idx)
-		next, _ := s.Update(enter())
-		if next.(*sessionScreen).currentEpisode() != "1" {
-			t.Fatalf("prev at first must clamp, got %q", next.(*sessionScreen).currentEpisode())
+		if sessionActionIndex(s, "prev") != -1 {
+			t.Fatalf("«Пред.» must be absent on the first episode (PR99)")
+		}
+		if s.currentEpisode() != "1" {
+			t.Fatalf("the session must stay on the first episode, got %q", s.currentEpisode())
 		}
 	})
 

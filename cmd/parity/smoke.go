@@ -56,11 +56,10 @@ const (
 )
 
 // smokeSkipped is the directive's exclusion roster: credential-gated
-// or unimplemented providers render as SKIP rows (visible, exit-code
-// neutral) whether or not the config managed to register them.
+// providers render as SKIP rows (visible, exit-code neutral) whether or
+// not the config managed to register them.
 var smokeSkipped = map[string]string{
-	"kodik":     "credential-gated (API token)",
-	"rutracker": "not implemented",
+	"kodik": "credential-gated (API token)",
 }
 
 // smokeResult is one provider's row of the damage table.
@@ -93,8 +92,8 @@ func paritySmokeCommand(d deps, setup func(*cobra.Command) (*env, error)) *cobra
 			"the failure column a sample reason); TORRENT providers still need EVERY\n" +
 			"surfaced result resolved. PASS needs search>0 either way; a budget\n" +
 			"exhaustion is an honest FAIL naming the resolved/surfaced progress.\n" +
-			"Credential-gated providers (kodik) and the unimplemented rutracker\n" +
-			"are skipped with a visible reason. Exits non-zero when any provider FAILs.",
+			"Credential-gated providers (kodik) are skipped with a visible\n" +
+			"reason. Exits non-zero when any provider FAILs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The per-provider budget override (--smoke-timeout): the

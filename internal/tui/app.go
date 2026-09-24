@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -48,10 +49,16 @@ type (
 	replaceMsg struct{ screen Screen }
 	// quitMsg terminates the program.
 	quitMsg struct{}
-	// errMsg reports an asynchronous failure from a command.
+	// errMsg reports an asynchronous failure from a command. For
+	// recovered panics (PR96) it additionally carries the brief
+	// one-liner shown on the error screen and the debug.Stack captured
+	// at the recover — the file logger prints the stack, the user
+	// never does.
 	errMsg struct {
 		screen string
 		err    error
+		brief  string
+		stack  string
 	}
 )
 
@@ -83,6 +90,9 @@ func quit() tea.Cmd {
 // safeCmd wraps a tea.Cmd so a panic inside its goroutine is
 // converted into an errMsg instead of crashing the process (§5
 // exception rule). The origin tags the failing screen in logs.
+// PR96: the recover captures debug.Stack (go-chi Recoverer pattern) —
+// the file logger gets the full stack when the errMsg is processed,
+// the user sees only the brief one-liner.
 func safeCmd(origin string, cmd tea.Cmd) tea.Cmd {
 	return func() (msg tea.Msg) {
 		defer func() {
@@ -90,6 +100,8 @@ func safeCmd(origin string, cmd tea.Cmd) tea.Cmd {
 				msg = errMsg{
 					screen: origin,
 					err:    fmt.Errorf("%w: %v", errPanic, r),
+					brief:  panicBrief(r),
+					stack:  string(debug.Stack()),
 				}
 			}
 		}()
@@ -97,15 +109,24 @@ func safeCmd(origin string, cmd tea.Cmd) tea.Cmd {
 	}
 }
 
+// panicBrief renders the one-line user-facing panic form: the message
+// travels to the screen, the full debug.Stack travels to the file log.
+func panicBrief(r any) string {
+	return fmt.Sprintf("panic: %v — детали в логе", r)
+}
+
 // errorScreenID is the identity of the recovery screen.
 const errorScreenID = "__error__"
 
 // errorScreen is the §5 recovery surface: a panic or async failure
 // swaps it in; dismissing it (any key) returns one level up — the
-// exception never propagates to process exit.
+// exception never propagates to process exit. Recovered panics (PR96)
+// render only the brief one-liner; the full stack lives in the file
+// log.
 type errorScreen struct {
 	origin string
 	err    error
+	brief  string
 }
 
 // ID implements Screen.
@@ -124,8 +145,14 @@ func (e *errorScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 
 // View implements Screen.
 func (e *errorScreen) View() tea.View {
+	// PR96: recovered panics show the brief one-liner (the full stack
+	// went to the file log); regular failures keep the full cause.
+	cause := e.err.Error()
+	if e.brief != "" {
+		cause = e.brief
+	}
 	body := theme.Title.Render("⚠ Произошла ошибка") + "\n\n" +
-		theme.Error.Render(e.err.Error()) + "\n" +
+		theme.Error.Render(cause) + "\n" +
 		theme.Dim.Render("источник: "+e.origin) + "\n\n" +
 		theme.StatusLine.Render("Нажмите любую клавишу, чтобы вернуться")
 	return tea.NewView(body)
@@ -180,20 +207,28 @@ func (a App) Init() tea.Cmd {
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd, recovered := a.updateGuarded(msg)
 	if recovered != nil {
+		// PR96: the file logger carries the full debug.Stack so the
+		// next panic is fully diagnosable from the log alone.
 		a.log.Error("tui: screen panic recovered",
-			"screen", recovered.screen, "panic", recovered.err)
+			"screen", recovered.screen, "panic", recovered.err,
+			"stack", recovered.stack)
 	}
 	return model, cmd
 }
 
 // updateGuarded runs one update cycle. The named return recovered is
-// non-nil when a panic was caught (so Update can log it).
+// non-nil when a panic was caught (so Update can log it). PR96: the
+// recover captures debug.Stack while the panic is still active (the
+// go-chi Recoverer pattern) — after the deferred function returns the
+// stack is gone.
 func (a App) updateGuarded(msg tea.Msg) (model tea.Model, cmd tea.Cmd, recovered *errMsg) {
 	defer func() {
 		if r := recover(); r != nil {
 			recovered = &errMsg{
 				screen: a.topID(),
 				err:    fmt.Errorf("%w: %v", errPanic, r),
+				brief:  panicBrief(r),
+				stack:  string(debug.Stack()),
 			}
 			model, cmd = a.surfaceError(*recovered)
 		}
@@ -227,7 +262,14 @@ func (a App) updateGuarded(msg tea.Msg) (model tea.Model, cmd tea.Cmd, recovered
 	case quitMsg:
 		return a, tea.Quit, nil
 	case errMsg:
-		a.log.Error("tui: async failure", "screen", m.screen, "error", m.err)
+		if errors.Is(m.err, errPanic) {
+			// PR96: a safeCmd goroutine panic — its captured
+			// debug.Stack reaches the file log here.
+			a.log.Error("tui: command panic recovered",
+				"screen", m.screen, "panic", m.err, "stack", m.stack)
+		} else {
+			a.log.Error("tui: async failure", "screen", m.screen, "error", m.err)
+		}
 		model, cmd = a.surfaceError(m)
 		return model, cmd, nil
 	case tea.WindowSizeMsg:
@@ -251,7 +293,7 @@ func (a App) updateGuarded(msg tea.Msg) (model tea.Model, cmd tea.Cmd, recovered
 // surfaceError pushes the error screen (replacing nothing) with the
 // Back-dismiss semantics.
 func (a App) surfaceError(m errMsg) (tea.Model, tea.Cmd) {
-	next := append(cloneStack(a.stack), &errorScreen{origin: m.screen, err: m.err})
+	next := append(cloneStack(a.stack), &errorScreen{origin: m.screen, err: m.err, brief: m.brief})
 	return App{stack: next, deps: a.deps, log: a.log, width: a.width, height: a.height,
 		ctx: a.ctx, cancel: a.cancel}, nil
 }

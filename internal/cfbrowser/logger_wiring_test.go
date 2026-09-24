@@ -106,3 +106,42 @@ func TestUpdaterOfflineCycleNeverOnStderr(t *testing.T) {
 			probeBuf.String())
 	}
 }
+
+// TestUpdaterNilLoggerCycleNeverOnStderr (PR96 pin): the updater cycle
+// with an UNWIRED Logger degrades to the discard sink (UpdaterConfig
+// logger() seam, PR85) — the deferred-update warn never reaches
+// slog.Default/stderr and never panics on the nil logger.
+func TestUpdaterNilLoggerCycleNeverOnStderr(t *testing.T) {
+	defaultBuf := captureDefault(t)
+
+	dead := httptest.NewServer(http.NewServeMux())
+	deadURL := dead.URL
+	dead.Close()
+
+	cfg := config.Default()
+	cfg.CF.SolveTimeout = 30 * time.Second
+	cfg.CF.UpdateInterval = time.Hour
+	cfg.CF.Proxy = ""
+	cfg.CF.Channel = "free"
+	cfg.General.DataDir = t.TempDir()
+
+	u := NewUpdater(UpdaterConfig{
+		Enabled:      true,
+		Interval:     time.Hour,
+		APIBase:      deadURL,
+		ProbeURL:     deadURL,
+		DownloadBase: deadURL,
+		CacheDir:     t.TempDir(),
+		Channel:      "free",
+		Logger:       nil, // the pre-PR85 stderr-leak shape
+	})
+
+	if err := u.CheckAndMaybeInstall(context.Background()); err != nil {
+		t.Fatalf("deferred update is not a caller error: %v", err)
+	}
+
+	if defaultBuf.Len() != 0 {
+		t.Fatalf("nil updater logger leaked to slog.Default — stderr leak:\n%s",
+			defaultBuf.String())
+	}
+}

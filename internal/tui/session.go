@@ -657,6 +657,14 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.skipChapters = msg.skipChapters
 		s.skipCleanup = msg.skipCleanup
 		if msg.scope != "" {
+			if len(msg.entries) == 0 {
+				// PR96 defensive (PR94 spirit): the scoped
+				// verdict is EMPTY — auto-playing the zero
+				// entry would launch a dead URL. Fall through
+				// to the full merged resolve of the REST,
+				// exactly like the scoped-error case above.
+				return s.beginStreamResolve("")
+			}
 			// Remembered-dub fast path (python resolve_dubs_smart):
 			// auto-pick the remembered quality (or the best) and play
 			// straight away — no extra prompts.
@@ -673,6 +681,14 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			// status line (visible, honest, never blocking).
 			s.redubPending = false
 			s.openRedubMenu()
+			if len(msg.entries) == 0 {
+				// PR96 defensive: an empty carrier is a clean
+				// no-op — the I3 empty menu (Back alone plus the
+				// empty-state message) plus an honest status
+				// note, never an auto-launch.
+				s.setStatus("Озвучки для этой серии не найдены")
+				return s, nil
+			}
 			if line := skippedSummary(msg.skipped); line != "" {
 				s.setStatus(composeStatusNote(s.status, line))
 			}
@@ -1612,6 +1628,16 @@ func (s *sessionScreen) openRedubMenu() {
 
 // handleRedubKey drives the dub-selection menu.
 func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.redubList == nil {
+		// PR96 defensive: a nil list in the Redub state (a
+		// clear-then-build interleaving) must rebuild the menu from
+		// the current entries, never nil-deref PinList. An empty
+		// entries set yields the I3 Back-alone menu. The triggering
+		// key is swallowed — one lost keypress, zero accidental
+		// picks on a surface that was never rendered.
+		s.openRedubMenu()
+		return s, nil
+	}
 	if s.redubList.HandleKey(key) {
 		return s, nil
 	}

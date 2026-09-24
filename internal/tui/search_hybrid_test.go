@@ -253,20 +253,69 @@ func TestHybridSearchBindsTopCardOnAnyQuery(t *testing.T) {
 	}
 }
 
-// TestHybridSearchEarlyStop: a provider is searched with its variants
-// in order and stops at the first one that yields results.
-func TestHybridSearchEarlyStop(t *testing.T) {
+// TestHybridSearchMergesAllVariants pins the PR97 fan-out redesign:
+// EVERY language-routed variant runs (no early exit on the first
+// non-empty), the per-variant result lists merge in first-seen
+// order, and duplicates dedupe by exact title within the provider.
+// The per-provider budget still bounds the whole loop.
+func TestHybridSearchMergesAllVariants(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = fs.providers[:1]
-	fs.errs["animego"] = nil
 
-	// Variant behavior: "наруто" → empty, "Наруто" → hit.
+	// Variants: "наруто" hits, "Наруто" hits with one duplicate of
+	// the first hit plus a new row, "Naruto" adds a latin row,
+	// "naruto" comes back empty — the empty tail must still run.
 	fs.variantResults = map[string][]contracts.SearchResult{
-		"Наруто": {{Title: "Наруто", URL: "u1", SourceID: "animego"}},
+		"наруто": {{Title: "Наруто", URL: "u1", SourceID: "animego"}},
+		"Наруто": {
+			{Title: "Наруто", URL: "u1-dup", SourceID: "animego"},
+			{Title: "Наруто: Ураганные хроники", URL: "u2", SourceID: "animego"},
+		},
+		"Naruto": {{Title: "Naruto", URL: "u3", SourceID: "animego"}},
 	}
 
-	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", ""})}
-	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Наруто"}}}
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	got := fs.queries["animego"]
+	// QueryVariants("наруто", [Наруто, Naruto]) = [наруто, Наруто,
+	// Naruto, naruto] — ALL four must have been queried.
+	if strings.Join(got, "|") != "наруто|Наруто|Naruto|naruto" {
+		t.Fatalf("every variant must run without early exit, got %v", got)
+	}
+	// Merge: first-seen order, exact-title dedup drops the variant-2
+	// duplicate of the variant-1 hit.
+	wantTitles := "Наруто|Наруто: Ураганные хроники|Naruto"
+	titles := make([]string, 0, len(progress.results))
+	for _, r := range progress.results {
+		titles = append(titles, r.Title)
+	}
+	if strings.Join(titles, "|") != wantTitles {
+		t.Fatalf("merged results must keep first-seen order with exact-title dedup, got %v", titles)
+	}
+}
+
+// TestHybridSearchContinuesPastVariantErrors pins the PR97 error
+// semantics: one variant's failure does not abort the remaining
+// variants — as long as SOME variant yields results, the row settles
+// with the merged set (recall over fail-fast; the owner wants all
+// results from all names).
+func TestHybridSearchContinuesPastVariantErrors(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	fs.variantErrs["наруто"] = errors.New("first variant exploded")
+	// The second variant answers; the first one's error must not
+	// abort the loop before it runs.
+	fs.variantResults["Наруто"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
+
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
 	deps := hybridDeps(fs, shiki, md, nil)
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
@@ -276,13 +325,35 @@ func TestHybridSearchEarlyStop(t *testing.T) {
 
 	got := fs.queries["animego"]
 	if len(got) < 2 {
-		t.Fatalf("the empty first variant must be followed by the second, got %v", got)
+		t.Fatalf("a failed variant must not abort the loop, got %v", got)
 	}
-	if got[0] != "наруто" || got[1] != "Наруто" {
-		t.Fatalf("variants must run in order, got %v", got)
+	if len(progress.results) == 0 {
+		t.Fatalf("results from later variants must still surface, got none")
 	}
-	if len(progress.results) != 1 {
-		t.Fatalf("the hit variant's results must be assembled once, got %d", len(progress.results))
+	if progress.status["animego"] != "Завершено" {
+		t.Fatalf("a row with results must settle as Завершено, got %q", progress.status["animego"])
+	}
+}
+
+// TestHybridSearchAllVariantsFailingFailsTheRow: when EVERY variant
+// errors and nothing resolved, the row carries the first error (the
+// honest failure state).
+func TestHybridSearchAllVariantsFailingFailsTheRow(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	fs.errs["animego"] = errors.New("provider down")
+
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	if progress.status["animego"] != "provider down" {
+		t.Fatalf("an all-error row must carry the first error, got %q", progress.status["animego"])
 	}
 }
 

@@ -46,10 +46,15 @@ func withProvider(msg providerResultMsg, prov ProviderMeta) providerResultMsg {
 var errSearchTimeout = errors.New("таймаут")
 
 // searchProviderVariants runs ONE provider's share of the hybrid
-// fan-out (PR24): the language-routed query variants in order, within
-// the caller's per-provider budget. The loop stops at the first
-// variant yielding results (bounded load); an erroring variant fails
-// the row. Panics degrade to row errors like the python try/except.
+// fan-out (PR24, redesigned in PR97): EVERY language-routed query
+// variant runs within the caller's per-provider budget — no early
+// exit on the first non-empty — and the per-variant result lists
+// merge at this point: first-seen order preserved, duplicates dedupe
+// by exact title within the provider (the keep-first merge pattern).
+// A failed variant no longer aborts the loop; the first error is
+// remembered and fails the row only when NOTHING resolved. Budget
+// expiry (ctx) still fails the row immediately. Panics degrade to
+// row errors like the python try/except.
 func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, queries []string) (msg providerResultMsg) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -59,7 +64,11 @@ func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, 
 			}
 		}
 	}()
-	var results []contracts.SearchResult
+	var (
+		results  []contracts.SearchResult
+		seen     = make(map[string]bool, len(queries))
+		firstErr error
+	)
 	for _, q := range queries {
 		if ctx.Err() != nil {
 			return providerResultMsg{
@@ -77,12 +86,21 @@ func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, 
 					err:      fmt.Errorf("%w: %w", errSearchTimeout, ctx.Err()),
 				}
 			}
-			return providerResultMsg{provider: ProviderMeta{ID: providerID}, err: err}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		if len(res) > 0 {
-			return providerResultMsg{provider: ProviderMeta{ID: providerID}, results: res}
+		for _, r := range res {
+			if seen[r.Title] {
+				continue
+			}
+			seen[r.Title] = true
+			results = append(results, r)
 		}
-		results = res
+	}
+	if len(results) == 0 && firstErr != nil {
+		return providerResultMsg{provider: ProviderMeta{ID: providerID}, err: firstErr}
 	}
 	return providerResultMsg{provider: ProviderMeta{ID: providerID}, results: results}
 }

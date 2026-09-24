@@ -169,17 +169,18 @@ func TestRebindProgressEnrichesFromRecord(t *testing.T) {
 	if len(md.queries) != 1 || md.queries[0] != "Наруто" {
 		t.Fatalf("metadata must enrich the record canonical title, got %v", md.queries)
 	}
-	// The ru provider reached its Cyrillic variant hit, the ja one its
-	// Latin alias hit — both only exist as variants, not as the bare
-	// query.
+	// PR97 merge fan-out: each provider runs ALL its language-routed
+	// variants and merges — animego (ru) now also surfaces the latin
+	// alias hit and gogoanime (ja) the Cyrillic canonical hit, so the
+	// two-provider total is 4 rows (each unique within its provider).
 	if got := fs.queries["animego"]; len(got) == 0 || !containsQuery(got, "Наруто") {
 		t.Fatalf("animego must be queried with the canonical variant, got %v", got)
 	}
 	if got := fs.queries["gogoanime"]; len(got) == 0 || !containsQuery(got, "Naruto") {
 		t.Fatalf("gogoanime must be queried with the alias variant, got %v", got)
 	}
-	if len(progress.results) != 2 {
-		t.Fatalf("variant hits must assemble, got %d results", len(progress.results))
+	if len(progress.results) != 4 {
+		t.Fatalf("each provider must merge its variant hits, got %d results", len(progress.results))
 	}
 }
 

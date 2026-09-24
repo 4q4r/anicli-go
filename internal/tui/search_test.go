@@ -30,6 +30,10 @@ type fakeSearch struct {
 	block          map[string]time.Duration
 	// namePrefs carries the NamePreferenceProvider pins (PR42).
 	namePrefs map[string]contracts.NamePreference
+	// variantErrs fails one specific query variant (PR97 merge
+	// fan-out: per-variant errors continue, per-provider errs fail
+	// the whole row).
+	variantErrs map[string]error
 }
 
 func newFakeSearch() *fakeSearch {
@@ -47,6 +51,7 @@ func newFakeSearch() *fakeSearch {
 		disabled:       nil,
 		block:          map[string]time.Duration{},
 		namePrefs:      map[string]contracts.NamePreference{},
+		variantErrs:    map[string]error{},
 	}
 }
 
@@ -72,6 +77,9 @@ func (f *fakeSearch) Search(ctx context.Context, providerID, query string) ([]co
 	}
 	if f.panics[providerID] {
 		panic("provider exploded mid-search")
+	}
+	if err, ok := f.variantErrs[query]; ok {
+		return nil, err
 	}
 	if err := f.errs[providerID]; err != nil {
 		return nil, err

@@ -273,8 +273,17 @@ func (a App) updateGuarded(msg tea.Msg) (model tea.Model, cmd tea.Cmd, recovered
 		model, cmd = a.surfaceError(m)
 		return model, cmd, nil
 	case tea.WindowSizeMsg:
-		return App{stack: a.stack, deps: a.deps, log: a.log, width: m.Width, height: m.Height,
-			ctx: a.ctx, cancel: a.cancel}, nil, nil
+		// PR98: the tracked size also reaches the top screen so it can
+		// re-render against the new width (the search fan-out table).
+		next, cmd := a.stack, tea.Cmd(nil)
+		if len(a.stack) > 0 {
+			top, c := a.stack[len(a.stack)-1].Update(msg)
+			next = cloneStack(a.stack)
+			next[len(next)-1] = top
+			cmd = c
+		}
+		return App{stack: next, deps: a.deps, log: a.log, width: m.Width, height: m.Height,
+			ctx: a.ctx, cancel: a.cancel}, cmd, nil
 	case tea.QuitMsg:
 		return a, nil, nil
 	default:

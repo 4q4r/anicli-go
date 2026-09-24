@@ -16,7 +16,6 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/providers"
-	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -47,10 +46,15 @@ func withProvider(msg providerResultMsg, prov ProviderMeta) providerResultMsg {
 var errSearchTimeout = errors.New("таймаут")
 
 // searchProviderVariants runs ONE provider's share of the hybrid
-// fan-out (PR24): the language-routed query variants in order, within
-// the caller's per-provider budget. The loop stops at the first
-// variant yielding results (bounded load); an erroring variant fails
-// the row. Panics degrade to row errors like the python try/except.
+// fan-out (PR24, redesigned in PR97): EVERY language-routed query
+// variant runs within the caller's per-provider budget — no early
+// exit on the first non-empty — and the per-variant result lists
+// merge at this point: first-seen order preserved, duplicates dedupe
+// by exact title within the provider (the keep-first merge pattern).
+// A failed variant no longer aborts the loop; the first error is
+// remembered and fails the row only when NOTHING resolved. Budget
+// expiry (ctx) still fails the row immediately. Panics degrade to
+// row errors like the python try/except.
 func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, queries []string) (msg providerResultMsg) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -60,7 +64,11 @@ func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, 
 			}
 		}
 	}()
-	var results []contracts.SearchResult
+	var (
+		results  []contracts.SearchResult
+		seen     = make(map[string]bool, len(queries))
+		firstErr error
+	)
 	for _, q := range queries {
 		if ctx.Err() != nil {
 			return providerResultMsg{
@@ -78,12 +86,21 @@ func searchProviderVariants(ctx context.Context, deps *Deps, providerID string, 
 					err:      fmt.Errorf("%w: %w", errSearchTimeout, ctx.Err()),
 				}
 			}
-			return providerResultMsg{provider: ProviderMeta{ID: providerID}, err: err}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		if len(res) > 0 {
-			return providerResultMsg{provider: ProviderMeta{ID: providerID}, results: res}
+		for _, r := range res {
+			if seen[r.Title] {
+				continue
+			}
+			seen[r.Title] = true
+			results = append(results, r)
 		}
-		results = res
+	}
+	if len(results) == 0 && firstErr != nil {
+		return providerResultMsg{provider: ProviderMeta{ID: providerID}, err: firstErr}
 	}
 	return providerResultMsg{provider: ProviderMeta{ID: providerID}, results: results}
 }
@@ -128,18 +145,22 @@ func shikiEnrichmentActive(deps *Deps) bool {
 	return deps.Shiki.Mode() != "disabled"
 }
 
-// resolveSearchVariants runs the hybrid enrichment (PR24): Shikimori
-// autocomplete over the original query → best-ratio match above the
-// binding threshold → BOTH names of the matched title plus metadata
-// aliases of the winning name → the capped variant set (original
-// query first, max 8). Any failure — or a nil/disabled Shikimori —
-// quietly degrades to the bare query (python parity; PR25 A:
-// enrichment is optional).
+// resolveSearchVariants runs the hybrid enrichment (PR24, redesigned
+// in PR97): Shikimori autocomplete over the original query → the TOP
+// card binds (Shikimori's own relevance rank — the local
+// SequenceMatcher and its threshold are GONE per the owner ruling) →
+// GetAnime(id) → EVERY name of the card (russian, original, english[],
+// japanese[], synonyms[]) plus metadata aliases of the card's
+// original name → the capped variant set (original query first, max
+// 16). Empty name fields are skipped; the card binds regardless of
+// name completeness. Any failure — or a nil/disabled Shikimori —
+// quietly degrades: a GetAnime error falls back to the autocomplete
+// record's own two names (already in hand), a total autocomplete miss
+// to the bare query.
 //
-// PR42: the binding ratios the query against BOTH names of a record
-// (romaji/english AND russian — a Cyrillic query binds through the
-// russian one), and both names seed the variant pool so the
-// latin-only torrent providers can be routed the latin title.
+// Documented trade-off (the owner's explicit choice): a nonsense
+// query binds to whatever Shikimori ranked first and fans its names
+// out — recall over precision.
 func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 	if !shikiEnrichmentActive(deps) {
 		return searchVariantsMsg{}
@@ -150,18 +171,53 @@ func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 	if err != nil || len(items) == 0 {
 		return searchVariantsMsg{}
 	}
-	best, bestName := bestShikiItem(query, items)
-	if best == nil {
-		return searchVariantsMsg{}
+	top := items[0]
+
+	// Fallback names: the autocomplete record's own two (ru/en), so a
+	// card-fetch failure still seeds the pool instead of collapsing
+	// to the bare query.
+	aliases := make([]string, 0, 6)
+	canonical := ""
+	if top.TitleRu != nil && strings.TrimSpace(*top.TitleRu) != "" {
+		aliases = append(aliases, *top.TitleRu)
 	}
-	aliases := make([]string, 0, 2)
-	for _, name := range []*string{best.TitleRu, best.TitleEn} {
-		if name != nil && strings.TrimSpace(*name) != "" {
-			aliases = append(aliases, *name)
+	if top.TitleEn != nil && strings.TrimSpace(*top.TitleEn) != "" {
+		aliases = append(aliases, *top.TitleEn)
+		if canonical == "" {
+			canonical = *top.TitleEn
 		}
 	}
+
+	// The full card inventory (PR97): russian, original, english[],
+	// japanese[], synonyms[] — collected in wire order, empties
+	// skipped. The card's original name is the metadata-alias key.
+	if card, err := deps.Shiki.GetAnime(ctx, top.ShikimoriID); err == nil && card != nil {
+		aliases = aliases[:0]
+		for _, name := range []string{card.Russian, card.Name} {
+			if strings.TrimSpace(name) != "" {
+				aliases = append(aliases, name)
+			}
+		}
+		for _, group := range [][]string{card.English, card.Japanese, card.Synonyms} {
+			for _, name := range group {
+				if strings.TrimSpace(name) != "" {
+					aliases = append(aliases, name)
+				}
+			}
+		}
+		canonical = card.Name
+	} else if err != nil {
+		// The card fetch failed: the two autocomplete names already
+		// in hand keep seeding the pool (fail-soft, PR97 fast-follow).
+		// Degrade visibly — never silently.
+		deps.logger().Warn("shikimori: card fetch failed, falling back to autocomplete names",
+			"shikimori_id", top.ShikimoriID, "error", err)
+	}
+	if canonical == "" {
+		canonical = query
+	}
 	if deps.Metadata != nil {
-		if more, err := deps.Metadata.SearchAlternativeTitles(ctx, bestName); err == nil {
+		if more, err := deps.Metadata.SearchAlternativeTitles(ctx, canonical); err == nil {
 			aliases = append(aliases, more...)
 		}
 	}
@@ -172,34 +228,6 @@ func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 // enrichment binding (the endpoint returns a fixed handful per query;
 // the same wire request the SearchIDs path makes).
 const shikiAutocompleteLimit = 16
-
-// bestShikiItem picks the autocomplete record whose name best matches
-// the query above the binding threshold. Both names of a record
-// compete — the romaji/english one and the russian one — so a Cyrillic
-// query binds via its russian name (PR42 root cause: the latin-only
-// match left every provider the bare Cyrillic query). Deterministic:
-// record order wins ties, english before russian within a record.
-// Returns the record and the winning name; nil under the threshold.
-func bestShikiItem(query string, items []shikimori.AutocompleteItem) (*shikimori.AutocompleteItem, string) {
-	bestItem, bestName := (*shikimori.AutocompleteItem)(nil), ""
-	bestRatio := 0.0
-	for i := range items {
-		item := &items[i]
-		for _, name := range []*string{item.TitleEn, item.TitleRu} {
-			if name == nil || *name == "" {
-				continue
-			}
-			ratio := providers.SimilarityRatio(strings.ToLower(query), strings.ToLower(*name))
-			if ratio > bestRatio {
-				bestRatio, bestItem, bestName = ratio, item, *name
-			}
-		}
-	}
-	if bestItem == nil || bestRatio <= shikiBindMinRatio {
-		return nil, ""
-	}
-	return bestItem, bestName
-}
 
 // searchProgress is the live fan-out table (python
 // search_provider_task + generate_search_table port, PR24 hybrid

@@ -28,7 +28,10 @@ const (
 
 // maxQueryVariants caps query expansion (FEATURE_INVENTORY B:
 // MAX_QUERY_VARIANTS=8).
-const maxQueryVariants = 8
+// PR97: 16 — a Shikimori card carries 5+ distinct names (original,
+// russian, english[], japanese[], synonyms[]); the larger cap keeps
+// the whole inventory as query variants.
+const maxQueryVariants = 16
 
 // Provider is one metadata source the manager can consult.
 type Provider interface {
@@ -185,12 +188,12 @@ func (m *Manager) SearchAlternativeTitles(ctx context.Context, query string) ([]
 // QueryVariants expands a title with its metadata aliases for search
 // fan-out: the original title first, then the aliases, then the
 // lowercase variants of both, deduplicated in order and capped at
-// maxQueryVariants (8).
+// maxQueryVariants (16).
 //
 // Divergence note: the frozen Python tree lost build_query_variants
 // (FEATURE_INVENTORY B regression list); the original MAX_QUERY_VARIANTS
 // semantics are reconstructed here in the minimal documented form per
-// the PR8 spec — original + aliases + lowercase variants, cap 8.
+// the PR8 spec — original + aliases + lowercase variants, cap 16.
 func QueryVariants(title string, aliases []string) []string {
 	candidates := make([]string, 0, 1+2*len(aliases))
 	candidates = append(candidates, title)

@@ -99,22 +99,36 @@ func TestProviderQueryLanguageRouting(t *testing.T) {
 }
 
 // TestHybridSearchEnrichesViaShikimori: enabled Shikimori seeds the
-// variant set — the autocomplete record binds the matched title, the
-// metadata manager contributes aliases, and the fan-out routes
-// Cyrillic to ru providers and Latin to non-ru ones (PR24 hybrid
-// flow).
+// variant set — the TOP autocomplete card (Shikimori's own relevance
+// rank, no local matcher) is fetched by ID and EVERY name of the card
+// (russian, original, english[], japanese[], synonyms[]) joins the
+// variant pool with the metadata aliases (PR97 all-names binding;
+// fixture = the verbatim 51553 capture shape).
 func TestHybridSearchEnrichesViaShikimori(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
 		{ID: "animego", Name: "AnimeGO"},
 		{ID: "gogoanime", Name: "GogoAnime"},
 	}
-	fs.results["animego"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
-	fs.results["gogoanime"] = []contracts.SearchResult{{Title: "Naruto", URL: "u2", SourceID: "gogoanime"}}
+	fs.results["animego"] = []contracts.SearchResult{{Title: "Ателье колдовских колпаков", URL: "u1", SourceID: "animego"}}
+	fs.results["gogoanime"] = []contracts.SearchResult{{Title: "Witch Hat Atelier", URL: "u2", SourceID: "gogoanime"}}
 
-	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	// The verbatim 51553 capture shape: 5 distinct names on one card.
+	card := &shikimori.Anime{
+		ID:       100,
+		Name:     "Tongari Boushi no Atelier",
+		Russian:  "Ателье колдовских колпаков",
+		English:  []string{"Witch Hat Atelier"},
+		Japanese: []string{"とんがり帽子のアトリエ"},
+		Synonyms: []string{"Atelier of Witch Hat"},
+	}
+	shiki := &fakeShiki{
+		enabled: true,
+		items:   autocompleteItems([2]string{"Ателье колдовских колпаков", "Witch Hat Atelier"}),
+		animes:  map[int64]*shikimori.Anime{100: card},
+	}
 	md := &fakeMetadata{aliases: map[string][]string{
-		"Наруто": {"Naruto", "NARUTO"},
+		"Tongari Boushi no Atelier": {"Atelier no Witch Hat"},
 	}}
 	deps := hybridDeps(fs, shiki, md, map[string]string{
 		"animego":   "ru",
@@ -122,17 +136,48 @@ func TestHybridSearchEnrichesViaShikimori(t *testing.T) {
 	})
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
-		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+		pushMsg{screen: NewSearchProgress(deps, "Witch Hat")})
 	model = drainCmds(model)
 	progress := topOf(model).(*searchProgress)
 
 	// Shikimori was consulted with the original query.
-	if len(shiki.queries) != 1 || shiki.queries[0] != "наруто" {
+	if len(shiki.queries) != 1 || shiki.queries[0] != "Witch Hat" {
 		t.Fatalf("shikimori must resolve the original query, got %v", shiki.queries)
 	}
-	// The metadata manager was consulted with the MATCHED title.
-	if len(md.queries) != 1 || md.queries[0] != "Наруто" {
-		t.Fatalf("metadata must enrich the matched title, got %v", md.queries)
+	// The top card was fetched by its Shikimori ID.
+	if len(shiki.animeCalls) != 1 || shiki.animeCalls[0] != 100 {
+		t.Fatalf("GetAnime must fetch the top card by ID, got %v", shiki.animeCalls)
+	}
+	// The metadata manager was consulted with the card's original name.
+	if len(md.queries) != 1 || md.queries[0] != "Tongari Boushi no Atelier" {
+		t.Fatalf("metadata must enrich the card's original name, got %v", md.queries)
+	}
+	// Every name of the card surfaced as a variant, in collection
+	// order: original query, russian, original, english, japanese,
+	// synonyms, metadata alias — then the lowercase mirrors (capped
+	// at 16).
+	want := []string{
+		"Witch Hat",
+		"Ателье колдовских колпаков",
+		"Tongari Boushi no Atelier",
+		"Witch Hat Atelier",
+		"とんがり帽子のアトリエ",
+		"Atelier of Witch Hat",
+		"Atelier no Witch Hat",
+		"witch hat",
+		"ателье колдовских колпаков",
+		"tongari boushi no atelier",
+		"witch hat atelier",
+		// NOTE: the Japanese name has no letter case — its lowercase
+		// mirror is identical and deduped away (QueryVariants contract).
+		"atelier of witch hat",
+		"atelier no witch hat",
+	}
+	if strings.Join(progress.variants, "|") != strings.Join(want, "|") {
+		t.Fatalf("variants must carry every card name in order, got:\n%v\nwant:\n%v", progress.variants, want)
+	}
+	if len(progress.variants) > 16 {
+		t.Fatalf("variants must cap at 16, got %v", progress.variants)
 	}
 	// ru provider saw a Cyrillic query first.
 	if got := fs.queries["animego"]; len(got) == 0 || !hasCyrillic.MatchString(got[0]) {
@@ -141,10 +186,6 @@ func TestHybridSearchEnrichesViaShikimori(t *testing.T) {
 	// ja provider saw a Latin query first.
 	if got := fs.queries["gogoanime"]; len(got) == 0 || hasCyrillic.MatchString(got[0]) {
 		t.Fatalf("gogoanime (ja) must be queried with Latin first, got %v", got)
-	}
-	// Variants cap at 8 (metadata.QueryVariants contract).
-	if len(progress.variants) > 8 {
-		t.Fatalf("variants must cap at 8, got %v", progress.variants)
 	}
 }
 
@@ -175,13 +216,59 @@ func TestHybridSearchShikimoriDisabledFallsBack(t *testing.T) {
 	}
 }
 
-// TestHybridSearchNoConfidentMatchFallsBack: a Shikimori answer whose
-// best ratio misses the threshold yields the bare query.
-func TestHybridSearchNoConfidentMatchFallsBack(t *testing.T) {
+// TestHybridSearchBindsTopCardOnAnyQuery pins the PR97 owner ruling —
+// the local matcher is GONE: the TOP autocomplete record (Shikimori's
+// own relevance rank) binds whatever the query is. Documented
+// honestly: a nonsense query binds to whatever Shikimori ranked first
+// and surfaces its full name inventory as variants — that is the
+// owner's explicit choice (recall over precision).
+func TestHybridSearchBindsTopCardOnAnyQuery(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = fs.providers[:1]
-	shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Совсем Другое Аниме": 99}}
+	card := &shikimori.Anime{
+		ID:      99,
+		Name:    "Totally Unrelated Anime",
+		Russian: "Совсем Другое Аниме",
+	}
+	shiki := &fakeShiki{
+		enabled: true,
+		items:   autocompleteItems([2]string{"Совсем Другое Аниме", "Totally Unrelated Anime"}),
+		animes:  map[int64]*shikimori.Anime{100: card},
+	}
 	md := &fakeMetadata{}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "абракадабра")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	// The top card still binds: its names join the variant pool.
+	joined := strings.Join(progress.variants, "|")
+	if !strings.Contains(joined, "Совсем Другое Аниме") || !strings.Contains(joined, "Totally Unrelated Anime") {
+		t.Fatalf("the top card must bind regardless of query similarity, got %v", progress.variants)
+	}
+	if len(progress.variants) <= 1 {
+		t.Fatalf("the bound card must expand the variant pool, got %v", progress.variants)
+	}
+}
+
+// TestHybridSearchGetAnimeFailureFallsBackToAutocompleteNames pins the
+// documented fail-soft fallback (PR97 fast-follow): a card-fetch error
+// must NOT collapse the variant pool — the autocomplete record's own
+// two names (russian + english) still seed it, and the metadata
+// manager keys on the english fallback name.
+func TestHybridSearchGetAnimeFailureFallsBackToAutocompleteNames(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	shiki := &fakeShiki{
+		enabled:  true,
+		items:    autocompleteItems([2]string{"Наруто", "Naruto"}),
+		animeErr: errors.New("card fetch exploded"),
+	}
+	md := &fakeMetadata{aliases: map[string][]string{
+		"Naruto": {"Naruto: Shippuuden"},
+	}}
 	deps := hybridDeps(fs, shiki, md, nil)
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
@@ -189,28 +276,83 @@ func TestHybridSearchNoConfidentMatchFallsBack(t *testing.T) {
 	model = drainCmds(model)
 	progress := topOf(model).(*searchProgress)
 
-	if got := fs.queries["animego"]; len(got) != 1 || got[0] != "наруто" {
-		t.Fatalf("a low-ratio match must fall back to the bare query, got %v", got)
+	joined := strings.Join(progress.variants, "|")
+	if !strings.Contains(joined, "Наруто") || !strings.Contains(joined, "Naruto") {
+		t.Fatalf("the autocomplete names must seed the pool on a card-fetch failure, got %v", progress.variants)
 	}
-	if len(progress.variants) != 1 {
-		t.Fatalf("variants must stay the bare query, got %v", progress.variants)
+	if !strings.Contains(joined, "Naruto: Shippuuden") {
+		t.Fatalf("metadata must still enrich via the english fallback name, got %v", progress.variants)
+	}
+	// The metadata manager keyed on the english fallback name (the
+	// card's original name is unavailable).
+	if len(md.queries) != 1 || md.queries[0] != "Naruto" {
+		t.Fatalf("metadata must key on the english fallback, got %v", md.queries)
 	}
 }
 
-// TestHybridSearchEarlyStop: a provider is searched with its variants
-// in order and stops at the first one that yields results.
-func TestHybridSearchEarlyStop(t *testing.T) {
+// TestHybridSearchMergesAllVariants pins the PR97 fan-out redesign:
+// EVERY language-routed variant runs (no early exit on the first
+// non-empty), the per-variant result lists merge in first-seen
+// order, and duplicates dedupe by exact title within the provider.
+// The per-provider budget still bounds the whole loop.
+func TestHybridSearchMergesAllVariants(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = fs.providers[:1]
-	fs.errs["animego"] = nil
 
-	// Variant behavior: "наруто" → empty, "Наруто" → hit.
+	// Variants: "наруто" hits, "Наруто" hits with one duplicate of
+	// the first hit plus a new row, "Naruto" adds a latin row,
+	// "naruto" comes back empty — the empty tail must still run.
 	fs.variantResults = map[string][]contracts.SearchResult{
-		"Наруто": {{Title: "Наруто", URL: "u1", SourceID: "animego"}},
+		"наруто": {{Title: "Наруто", URL: "u1", SourceID: "animego"}},
+		"Наруто": {
+			{Title: "Наруто", URL: "u1-dup", SourceID: "animego"},
+			{Title: "Наруто: Ураганные хроники", URL: "u2", SourceID: "animego"},
+		},
+		"Naruto": {{Title: "Naruto", URL: "u3", SourceID: "animego"}},
 	}
 
-	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", ""})}
-	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Наруто"}}}
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	got := fs.queries["animego"]
+	// QueryVariants("наруто", [Наруто, Naruto]) = [наруто, Наруто,
+	// Naruto, naruto] — ALL four must have been queried.
+	if strings.Join(got, "|") != "наруто|Наруто|Naruto|naruto" {
+		t.Fatalf("every variant must run without early exit, got %v", got)
+	}
+	// Merge: first-seen order, exact-title dedup drops the variant-2
+	// duplicate of the variant-1 hit.
+	wantTitles := "Наруто|Наруто: Ураганные хроники|Naruto"
+	titles := make([]string, 0, len(progress.results))
+	for _, r := range progress.results {
+		titles = append(titles, r.Title)
+	}
+	if strings.Join(titles, "|") != wantTitles {
+		t.Fatalf("merged results must keep first-seen order with exact-title dedup, got %v", titles)
+	}
+}
+
+// TestHybridSearchContinuesPastVariantErrors pins the PR97 error
+// semantics: one variant's failure does not abort the remaining
+// variants — as long as SOME variant yields results, the row settles
+// with the merged set (recall over fail-fast; the owner wants all
+// results from all names).
+func TestHybridSearchContinuesPastVariantErrors(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	fs.variantErrs["наруто"] = errors.New("first variant exploded")
+	// The second variant answers; the first one's error must not
+	// abort the loop before it runs.
+	fs.variantResults["Наруто"] = []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}
+
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
 	deps := hybridDeps(fs, shiki, md, nil)
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
@@ -220,13 +362,35 @@ func TestHybridSearchEarlyStop(t *testing.T) {
 
 	got := fs.queries["animego"]
 	if len(got) < 2 {
-		t.Fatalf("the empty first variant must be followed by the second, got %v", got)
+		t.Fatalf("a failed variant must not abort the loop, got %v", got)
 	}
-	if got[0] != "наруто" || got[1] != "Наруто" {
-		t.Fatalf("variants must run in order, got %v", got)
+	if len(progress.results) == 0 {
+		t.Fatalf("results from later variants must still surface, got none")
 	}
-	if len(progress.results) != 1 {
-		t.Fatalf("the hit variant's results must be assembled once, got %d", len(progress.results))
+	if progress.status["animego"] != "Завершено" {
+		t.Fatalf("a row with results must settle as Завершено, got %q", progress.status["animego"])
+	}
+}
+
+// TestHybridSearchAllVariantsFailingFailsTheRow: when EVERY variant
+// errors and nothing resolved, the row carries the first error (the
+// honest failure state).
+func TestHybridSearchAllVariantsFailingFailsTheRow(t *testing.T) {
+	fs := newFakeSearch()
+	fs.providers = fs.providers[:1]
+	fs.errs["animego"] = errors.New("provider down")
+
+	shiki := &fakeShiki{enabled: true, items: autocompleteItems([2]string{"Наруто", "Naruto"})}
+	md := &fakeMetadata{aliases: map[string][]string{"Наруто": {"Naruto"}}}
+	deps := hybridDeps(fs, shiki, md, nil)
+
+	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
+		pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+	progress := topOf(model).(*searchProgress)
+
+	if progress.status["animego"] != "provider down" {
+		t.Fatalf("an all-error row must carry the first error, got %q", progress.status["animego"])
 	}
 }
 
@@ -304,46 +468,6 @@ func TestSearchProgressScreenNotPinnedByEnrichment(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("enter on the settled progress must advance")
 	}
-}
-
-// TestBestShikiItemNameSelection pins the PR42 binding selection: the
-// query ratios against BOTH names of an autocomplete record — the
-// romaji/english one and the russian one — so a Cyrillic query binds
-// via its russian name (the latin-only data-text match was the PR42
-// root cause). Deterministic: record order wins ties, russian only /
-// english only / both / neither.
-func TestBestShikiItemNameSelection(t *testing.T) {
-	t.Run("russian only binds a Cyrillic query", func(t *testing.T) {
-		item, name := bestShikiItem("пираты «чёрной лагуны»",
-			autocompleteItems([2]string{"Пираты «Чёрной лагуны»", ""}))
-		if item == nil || name != "Пираты «Чёрной лагуны»" {
-			t.Fatalf("want a binding via the russian name, got item=%v name=%q", item, name)
-		}
-	})
-	t.Run("english only binds a latin query", func(t *testing.T) {
-		item, name := bestShikiItem("black lagoon", autocompleteItems([2]string{"", "Black Lagoon"}))
-		if item == nil || name != "Black Lagoon" {
-			t.Fatalf("want a binding via the english name, got item=%v name=%q", item, name)
-		}
-	})
-	t.Run("both names: the query picks the matching one", func(t *testing.T) {
-		items := autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"})
-		_, ruName := bestShikiItem("пираты «чёрной лагуны»", items)
-		if ruName != "Пираты «Чёрной лагуны»" {
-			t.Errorf("a Cyrillic query must win via the russian name, got %q", ruName)
-		}
-		_, enName := bestShikiItem("black lagoon", items)
-		if enName != "Black Lagoon" {
-			t.Errorf("a latin query must win via the english name, got %q", enName)
-		}
-	})
-	t.Run("neither name matches under the threshold", func(t *testing.T) {
-		item, name := bestShikiItem("совсем другое аниме",
-			autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"}))
-		if item != nil || name != "" {
-			t.Fatalf("a low-ratio match must not bind, got item=%v name=%q", item, name)
-		}
-	})
 }
 
 // TestProviderQueryLatinPreference pins the fan-out routing for the

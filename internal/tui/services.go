@@ -172,6 +172,10 @@ type ShikimoriService interface {
 	// names per entry (PR42): the hybrid enrichment binds the query
 	// through both names and seeds the variant pool with both.
 	Autocomplete(ctx context.Context, query string, limit int) ([]shikimori.AutocompleteItem, error)
+	// GetAnime fetches the full anime card by Shikimori ID (PR97):
+	// the all-names binding reads the complete name inventory
+	// (english/japanese/synonyms) off it.
+	GetAnime(ctx context.Context, shikimoriID int64) (*shikimori.Anime, error)
 }
 
 // DownloadTask is one episode download submitted by «Скачать серии».

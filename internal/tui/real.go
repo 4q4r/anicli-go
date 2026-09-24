@@ -660,6 +660,11 @@ func (s *realShiki) Autocomplete(ctx context.Context, query string, limit int) (
 	return s.client.Autocomplete(ctx, query, limit)
 }
 
+// GetAnime fetches the full anime card (PR97 all-names binding).
+func (s *realShiki) GetAnime(ctx context.Context, shikimoriID int64) (*shikimori.Anime, error) {
+	return s.client.GetAnime(ctx, shikimoriID)
+}
+
 // --- DownloadService ---
 
 // realDownload bridges the TUI tasks onto the background manager.

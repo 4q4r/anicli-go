@@ -51,6 +51,13 @@ type Anime struct {
 	Genres      []Genre     `json:"genres,omitempty"`
 	AiredOn     string      `json:"aired_on,omitempty"`
 	ReleasedOn  string      `json:"released_on,omitempty"`
+	// English/Japanese/Synonyms carry the full name inventory of the
+	// /api/animes/{id} payload (PR97): the all-names search binding
+	// collects every name of the card as a query variant. Empty when
+	// the payload omits them.
+	English  []string `json:"english,omitempty"`
+	Japanese []string `json:"japanese,omitempty"`
+	Synonyms []string `json:"synonyms,omitempty"`
 	// NextEpisode and NextEpisodeAt feed the home feed and release
 	// calendar projections (python anime rows carry them on /api/animes
 	// list responses).

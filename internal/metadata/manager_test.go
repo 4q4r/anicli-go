@@ -224,7 +224,7 @@ func TestManagerEmptyQuery(t *testing.T) {
 
 // TestQueryVariants pins the minimal build_query_variants port: original
 // title first, then aliases, then lowercase variants, deduplicated and
-// capped at MAX_QUERY_VARIANTS=8.
+// capped at MAX_QUERY_VARIANTS=16.
 func TestQueryVariants(t *testing.T) {
 	t.Parallel()
 
@@ -246,10 +246,10 @@ func TestQueryVariants(t *testing.T) {
 			want:    []string{"Naruto", "NARUTO", "naruto"},
 		},
 		{
-			name:    "cap at 8",
+			name:    "cap at 16",
 			title:   "T",
-			aliases: []string{"A", "B", "C", "D", "E", "F", "G", "H"},
-			want:    []string{"T", "A", "B", "C", "D", "E", "F", "G"},
+			aliases: []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"},
+			want:    []string{"T", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"},
 		},
 	}
 	for _, tt := range tests {

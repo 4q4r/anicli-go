@@ -72,6 +72,11 @@ type fakeShiki struct {
 	ids     map[string]int64
 	// items is the Autocomplete fixture (PR42 enrichment binding).
 	items []shikimori.AutocompleteItem
+	// animes is the GetAnime fixture keyed by Shikimori ID (PR97
+	// all-names binding); animeErr fails every fetch.
+	animes     map[int64]*shikimori.Anime
+	animeErr   error
+	animeCalls []int64
 	// next is the rate id returned for the next create (PATCH echoes
 	// the incoming id).
 	next int64
@@ -141,6 +146,36 @@ func (f *fakeShiki) Autocomplete(_ context.Context, query string, _ int) ([]shik
 	f.queries = append(f.queries, query)
 	return f.items, nil
 }
+
+// GetAnime serves the PR97 all-names binding fixture: animes keyed by
+// Shikimori ID; animeErr fails every fetch.
+func (f *fakeShiki) GetAnime(_ context.Context, shikimoriID int64) (*shikimori.Anime, error) {
+	f.animeCalls = append(f.animeCalls, shikimoriID)
+	if f.animeErr != nil {
+		return nil, f.animeErr
+	}
+	if card, ok := f.animes[shikimoriID]; ok {
+		return card, nil
+	}
+	// Default card: the autocomplete item's own names (the two-name
+	// fallback shape).
+	for _, item := range f.items {
+		if item.ShikimoriID != shikimoriID {
+			continue
+		}
+		card := &shikimori.Anime{ID: shikimoriID}
+		if item.TitleRu != nil {
+			card.Russian = *item.TitleRu
+		}
+		if item.TitleEn != nil {
+			card.Name = *item.TitleEn
+		}
+		return card, nil
+	}
+	return nil, errShikiAnimeNotFound
+}
+
+var errShikiAnimeNotFound = errors.New("fakeShiki: anime not found")
 
 var _ ShikimoriService = (*fakeShiki)(nil)
 

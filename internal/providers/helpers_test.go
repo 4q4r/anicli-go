@@ -4,8 +4,19 @@ import (
 	crand "crypto/rand"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 )
+
+// containsAll reports whether s contains every substring.
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
 
 // newDeadListener returns a listener whose port is already closed: every
 // dial is refused instantly. Used to exercise the timeout/transport error

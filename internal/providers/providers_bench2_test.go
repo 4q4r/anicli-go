@@ -239,41 +239,6 @@ func BenchmarkAniMediaSearchHTML(b *testing.B) {
 	}
 }
 
-// --- anime365 ---
-
-// BenchmarkAnime365SearchJSON — anime365 /api/series search decode.
-func BenchmarkAnime365SearchJSON(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "anime365_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnime365([]string{srv.URL}, "bench-token", benchClient(b, "anime365"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "дандадан")
-		if err != nil {
-			b.Fatalf("anime365 search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkAnime365GetEpisodes — the episodes-list decode (the
-// per-title loader path): the catalog URL form carries the series id.
-func BenchmarkAnime365GetEpisodes(b *testing.B) {
-	b.ReportAllocs()
-	episodes := benchFixture(b, "anime365_episodes.json")
-	srv := benchFixtureServer(b, episodes, "application/json")
-	p := newAnime365([]string{srv.URL}, "bench-token", benchClient(b, "anime365"))
-	ctx := context.Background()
-	for b.Loop() {
-		eps, err := p.GetEpisodes(ctx, srv.URL+"/catalog/dandadan-35439")
-		if err != nil {
-			b.Fatalf("anime365 episodes: %v", err)
-		}
-		benchSinkN = len(eps)
-	}
-}
-
 // --- anistar ---
 
 // BenchmarkAniStarSearchHTML — the 53K DLE full-search page (the

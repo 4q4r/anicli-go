@@ -38,7 +38,7 @@ func yummyJSON(w http.ResponseWriter, body []byte) {
 // BOTH content semantics (RU voice-overs over present video), the RU
 // content language and the declared smoke query. The provider
 // deliberately does NOT declare NamePreference — the RU index is the
-// default query routing (anime365 precedent).
+// default query routing.
 func TestYummyMeta(t *testing.T) {
 	t.Parallel()
 

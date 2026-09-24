@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -14,7 +13,6 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik without token is reported with the token reason", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = ""
-		cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable
 		got := UnconfiguredProviders(cfg)
 		if len(got) != 1 {
 			t.Fatalf("want exactly kodik, got %+v", got)
@@ -30,39 +28,8 @@ func TestUnconfiguredProviders(t *testing.T) {
 	t.Run("kodik with a token is not reported", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.Providers.Kodik.Token = "secret"
-		cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable
 		if got := UnconfiguredProviders(cfg); len(got) != 0 {
 			t.Fatalf("configured kodik must not be disabled, got %+v", got)
-		}
-	})
-
-	// anime365 (PR55) joins the table with kodik's exact shape: the
-	// embed data (playable links) is the ONE credential-gated resource
-	// of the API, so a tokenless anime365 is useless and disabled.
-	t.Run("anime365 without a token is reported with the token reason", func(t *testing.T) {
-		cfg := config.Default()
-		cfg.Providers.Kodik.Token = "secret" // isolate the anime365 variable
-		got := UnconfiguredProviders(cfg)
-		if len(got) != 1 {
-			t.Fatalf("want exactly anime365, got %+v", got)
-		}
-		if got[0].ID != "anime365" {
-			t.Fatalf("want anime365, got %q", got[0].ID)
-		}
-		if got[0].Reason == "" {
-			t.Fatalf("reason must not be empty")
-		}
-		if !strings.Contains(got[0].Reason, "providers.anime365.token") {
-			t.Errorf("reason must name the settings key, got %q", got[0].Reason)
-		}
-	})
-
-	t.Run("anime365 with a token is not reported", func(t *testing.T) {
-		cfg := config.Default()
-		cfg.Providers.Kodik.Token = "secret"
-		cfg.Providers.Anime365.Token = "secret"
-		if got := UnconfiguredProviders(cfg); len(got) != 0 {
-			t.Fatalf("configured anime365 must not be disabled, got %+v", got)
 		}
 	})
 }
@@ -103,7 +70,6 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
-	cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable (PR33/PR55)
 
 	bare, err := All(cfg)
 	if err != nil {
@@ -114,8 +80,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 28 {
-		t.Fatalf("want the remaining 28 providers, got %d", len(bare))
+	if len(bare) != 27 {
+		t.Fatalf("want the remaining 27 providers, got %d", len(bare))
 	}
 }
 
@@ -125,7 +91,6 @@ func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
-	cfg.Providers.Anime365.Token = "secret" // isolate the kodik variable (PR33/PR55)
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {

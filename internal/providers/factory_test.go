@@ -17,22 +17,21 @@ func TestAllRosterComplete(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
-	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 29 {
-		t.Fatalf("All() = %d providers, want 29", len(bare))
+	if len(bare) != 28 {
+		t.Fatalf("All() = %d providers, want 28", len(bare))
 	}
 
 	wantIDs := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
 		"dreamcast", "sameband", "anicrush", "kodik",
-		"allanime", "anidub", "animedia", "shiza", "anime365", "yummy", "hdrezka", "anistar",
+		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
@@ -82,8 +81,7 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
-	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {
@@ -91,25 +89,24 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 29 {
-		t.Fatalf("List() = %d providers, want 29", len(list))
+	if len(list) != 28 {
+		t.Fatalf("List() = %d providers, want 28", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
 	// Wave-2 integration (fix/60) seated the five parallel providers
 	// next to their peers: kickassanime (PR58) and anizone (PR59)
-	// after animepahe in the latin block; animedia (PR56), shiza
-	// (PR57) and anime365 (PR55) in the RU-dub block; yummy (PR68)
-	// and hdrezka (PR69) after anime365. fix/93 froze the 6-provider
-	// wave into grouped blocks: anicrush (PR90) joined the foreign
-	// stream block after sameband; anifilm (PR91) and animemobi
-	// (PR92) closed the RU-dub block after anistar; the torrent
-	// providers close the roster (rutor, PR87, then anirena, PR88,
-	// then subsplease, PR89).
+	// after animepahe in the latin block; animedia (PR56) and shiza
+	// (PR57) in the RU-dub block; yummy (PR68) and hdrezka (PR69)
+	// closing it. fix/93 froze the 6-provider wave into grouped
+	// blocks: anicrush (PR90) joined the foreign stream block after
+	// sameband; anifilm (PR91) and animemobi (PR92) closed the RU-dub
+	// block after anistar; the torrent providers close the roster
+	// (rutor, PR87, then anirena, PR88, then subsplease, PR89).
 	wantOrder := []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "animepahe", "kickassanime", "anizone",
 		"dreamcast", "sameband", "anicrush", "kodik",
-		"allanime", "anidub", "animedia", "shiza", "anime365", "yummy", "hdrezka", "anistar",
+		"allanime", "anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi",
 		"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
@@ -182,15 +179,14 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = "test-token"    // keep kodik in the roster (PR24)
-	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
+	cfg.Providers.Kodik.Token = "test-token" // keep kodik in the roster (PR24)
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 29 {
-		t.Fatalf("All() = %d providers, want 29", len(bare))
+	if len(bare) != 28 {
+		t.Fatalf("All() = %d providers, want 28", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -224,7 +220,6 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anidub":            "ru",
 		"animedia":          "ru",
 		"shiza":             "ru",
-		"anime365":          "ru",
 		"yummy":             "ru",
 		"hdrezka":           "ru",
 		"anistar":           "ru",
@@ -242,9 +237,6 @@ func TestContentLanguageRoster(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	// kodik stays tokenless here per this test's history.
-	// anime365 (PR55) joins with its token so the ru declaration is
-	// pinned like the rest of the RU-translations roster.
-	cfg.Providers.Anime365.Token = "test-token"
 
 	bare, err := All(cfg)
 	if err != nil {
@@ -271,14 +263,13 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Exclude = []string{"animepahe", "kodik"}
-	cfg.Providers.Anime365.Token = "test-token" // isolate the exclusion variable (PR55)
 
 	bare, err := All(cfg)
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 27 {
-		t.Fatalf("All() = %d providers, want 27", len(bare))
+	if len(bare) != 26 {
+		t.Fatalf("All() = %d providers, want 26", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "animepahe" || p.ID() == "kodik" {

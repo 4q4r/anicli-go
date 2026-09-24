@@ -25,12 +25,12 @@ import (
 // next to their peers instead of the tail: kickassanime (PR58)
 // and anizone (PR59, sub-only) joined after animepahe in the
 // latin block; animedia (PR56, the amd.online DLE site), shiza
-// (PR57, the shizaproject.com GraphQL catalog) and anime365
-// (PR55, the tokened smotret-anime JSON API) joined the RU-dub
-// block; yanima left it in PR65 (dead Mitelis wall, roster pinned
+// (PR57, the shizaproject.com GraphQL catalog) and a tokened
+// JSON-API source joined the RU-dub block; yanima left it in PR65
+// (dead Mitelis wall, roster pinned
 // 21→20); yummy (PR68, the YummyAnime api.yani.tv JSON API) joined
-// after anime365 and hdrezka (PR69, the hdrezka-home.tv rezka
-// catalog behind an Anubis PoW gate) joined after yummy, closing
+// before hdrezka (PR69, the hdrezka-home.tv rezka
+// catalog behind an Anubis PoW gate), which joined after yummy, closing
 // the RU-dub block. anistar (PR77, the anistar.org DLE catalog with
 // its self-hosted an-media player stack) joined after hdrezka.
 // The 6-provider wave (fix/93) froze the roster into grouped blocks:
@@ -46,7 +46,7 @@ import (
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
-// after tokyotosho. The roster is frozen at 29.
+// after tokyotosho. The roster is frozen at 28.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -64,7 +64,6 @@ var expectedProviderOrder = []string{
 	"anidub",
 	"animedia",
 	"shiza",
-	"anime365",
 	"yummy",
 	"hdrezka",
 	"anistar",
@@ -85,11 +84,10 @@ var expectedProviderOrder = []string{
 // roster size).
 func TestProviderRosterComplete(t *testing.T) {
 	// The full roster needs every credentialled provider configured
-	// (PR24/PR55: a tokenless kodik or anime365 is disabled at
-	// startup and dropped from the registry).
+	// (PR24: a tokenless kodik is disabled at startup and dropped
+	// from the registry).
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
-	cfg.Providers.Anime365.Token = "test-token" // keep anime365 in the roster (PR55)
 	built, err := providers.All(cfg)
 	if err != nil {
 		t.Fatalf("providers.All: %v", err)

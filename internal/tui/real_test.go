@@ -74,10 +74,8 @@ func TestRealDepsDisabledProviders(t *testing.T) {
 
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()
-	// anime365 stays configured: this test pins the kodik specimen of
-	// the disabled-set mechanism (PR55 added another credentialled
-	// provider).
-	settings.Providers.Anime365.Token = "test-token"
+	// No provider credentials: this test pins the kodik specimen of
+	// the disabled-set mechanism.
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)

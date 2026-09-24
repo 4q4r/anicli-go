@@ -484,12 +484,24 @@ func (e *Engine) ListenPort() (int, bool) {
 	if e.client == nil {
 		return 0, false
 	}
-	for _, addr := range e.client.ListenAddrs() {
-		if ta, ok := addr.(*net.TCPAddr); ok && ta.Port != 0 {
-			return ta.Port, true
-		}
+	if port := tcpListenPort(e.client); port != 0 {
+		return port, true
 	}
 	return 0, false
+}
+
+// tcpListenPort reports the client's actual TCP listen port (0 when
+// unknown): the ground truth after the busy-port fallback, where the
+// configured port no longer describes the socket. The library announces
+// this same port to trackers — client.LocalPort derives from the same
+// listeners.
+func tcpListenPort(cl *torrent.Client) int {
+	for _, addr := range cl.ListenAddrs() {
+		if ta, ok := addr.(*net.TCPAddr); ok && ta.Port != 0 {
+			return ta.Port
+		}
+	}
+	return 0
 }
 
 // Close tears down the stream server and the client; safe to call
@@ -575,9 +587,9 @@ func (e *Engine) startClientLocked() error {
 		cfg.DisableWebtorrent = true
 		cfg.UpnpID = ""
 	}
-	cl, err := torrent.NewClient(cfg)
+	cl, err := e.newClientWithPortFallback(cfg)
 	if err != nil {
-		return fmt.Errorf("torrent: start client: %w", err)
+		return err
 	}
 	if err := e.startStreamServerLocked(); err != nil {
 		_ = cl.Close()
@@ -593,8 +605,48 @@ func (e *Engine) startClientLocked() error {
 	} else if len(e.cfg.Trackers) > 0 {
 		e.kickTrackerCheck()
 	}
-	e.log.Info("torrent: client started", "dir", dir, "port", e.cfg.Port)
+	// The started line logs the ACTUAL bound port: after the busy-port
+	// fallback it is an OS-assigned ephemeral, not e.cfg.Port.
+	e.log.Info("torrent: client started", "dir", dir, "port", tcpListenPort(cl))
 	return nil
+}
+
+// maxClientBindAttempts bounds the busy-port fallback: the configured
+// port once, then OS-assigned ephemeral retries (an ephemeral bind
+// failing twice in a row is systemic — surface the error, don't loop).
+const maxClientBindAttempts = 3
+
+// newClientWithPortFallback starts the library client on the configured
+// [torrent] port; when that bind fails (the owner's second anicli
+// instance or any other app squatting the port) it retries on an
+// OS-assigned ephemeral port with a LOUD WARN. Outgoing DHT/peer
+// traffic works from any port — only inbound peer capacity is lost —
+// so a degraded listen beats a hard failure of every torrent provider.
+func (e *Engine) newClientWithPortFallback(cfg *torrent.ClientConfig) (*torrent.Client, error) {
+	configured := cfg.ListenPort
+	var lastErr error
+	for attempt := range maxClientBindAttempts {
+		if attempt > 0 {
+			cfg.ListenPort = 0
+		}
+		cl, err := torrent.NewClient(cfg)
+		if err == nil {
+			if configured != 0 && cfg.ListenPort == 0 {
+				// The actually bound port is what trackers see in
+				// announces from now on — log it next to the WARN.
+				e.log.Warn(fmt.Sprintf(
+					"BT-порт %d занят — слушаем на случайном; входящие пиры ограничены (исходящие DHT/пиры работают с любого порта)",
+					configured), "ephemeral_port", tcpListenPort(cl))
+			}
+			return cl, nil
+		}
+		lastErr = err
+		e.log.Warn("torrent: client listen failed",
+			"port", cfg.ListenPort,
+			"attempt", fmt.Sprintf("%d/%d", attempt+1, maxClientBindAttempts),
+			"err", err)
+	}
+	return nil, fmt.Errorf("torrent: start client: %w", lastErr)
 }
 
 // kickTrackerCheck runs one CheckTrackers pass on a context derived

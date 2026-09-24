@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -98,54 +97,6 @@ func BenchmarkGogoanimeGetEpisodesHTML(b *testing.B) {
 		eps, err := p.GetEpisodes(ctx, srv.URL+"/series/one-piece/")
 		if err != nil {
 			b.Fatalf("gogoanime episodes: %v", err)
-		}
-		benchSinkN = len(eps)
-	}
-}
-
-// --- dreamcast ---
-
-// BenchmarkDreamcastSearchJSON — dreamcast search decode.
-func BenchmarkDreamcastSearchJSON(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "dreamcast_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newDreamCast(srv.URL, benchClient(b, "dreamcast"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "yomi no tsugai")
-		if err != nil {
-			b.Fatalf("dreamcast search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkDreamcastGetEpisodesHTML — the full crypto-chain episode
-// decode: release page → playerjs crypt keys → 23-episode playlist
-// (the heaviest HTML episode roster of the roster providers).
-func BenchmarkDreamcastGetEpisodesHTML(b *testing.B) {
-	b.ReportAllocs()
-	release := benchFixture(b, "dreamcast_release.html")
-	playerjs := benchFixture(b, "dreamcast_playerjs.js")
-	search := benchFixture(b, "dreamcast_search.json")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/js/playerjs"):
-			_, _ = w.Write(playerjs)
-		case strings.HasPrefix(r.URL.Path, "/home/release/"):
-			_, _ = w.Write(release)
-		default:
-			_, _ = w.Write(search)
-		}
-	}))
-	b.Cleanup(srv.Close)
-	p := newDreamCast(srv.URL, benchClient(b, "dreamcast"))
-	ctx := context.Background()
-	for b.Loop() {
-		eps, err := p.GetEpisodes(ctx, srv.URL+"/home/release/541-yomi-no-tsugai")
-		if err != nil {
-			b.Fatalf("dreamcast episodes: %v", err)
 		}
 		benchSinkN = len(eps)
 	}

@@ -61,9 +61,6 @@ var allFactories = []struct {
 	{"anizone", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniZone(AniZoneBase, http)
 	}},
-	{"dreamcast", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newDreamCast(DreamCastBase, http)
-	}},
 	{"sameband", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSameBand(SameBandBase, http)
 	}},

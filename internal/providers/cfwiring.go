@@ -58,7 +58,6 @@ var baseURLs = map[string]string{
 	"animego":   AnimeGoBase,
 	"gogoanime": GogoAnimeBase,
 	"animepahe": AnimePaheBase,
-	"dreamcast": DreamCastBase,
 	"sameband":  SameBandBase,
 	"kodik":     KodikAPIBase,
 	"allanime":  AllAnimeAPIBase,

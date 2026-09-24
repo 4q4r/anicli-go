@@ -263,8 +263,8 @@ func TestProviderErrorMessage(t *testing.T) {
 		},
 		{
 			name: "nil inner",
-			err:  &ProviderError{Provider: "dreamcast", Op: "get_episodes"},
-			want: []string{"dreamcast", "get_episodes"},
+			err:  &ProviderError{Provider: "anizone", Op: "get_episodes"},
+			want: []string{"anizone", "get_episodes"},
 		},
 	}
 	for _, tt := range tests {
@@ -287,8 +287,8 @@ func TestProviderErrorMessage(t *testing.T) {
 func TestWrapProvider(t *testing.T) {
 	t.Parallel()
 
-	pe := WrapProvider("animepahe", "search", 429, ErrGeoBlocked)
-	if pe.Provider != "animepahe" || pe.Op != "search" || pe.StatusCode != 429 {
+	pe := WrapProvider("kickassanime", "search", 429, ErrGeoBlocked)
+	if pe.Provider != "kickassanime" || pe.Op != "search" || pe.StatusCode != 429 {
 		t.Fatalf("WrapProvider fields mismatch: %+v", pe)
 	}
 	if !errors.Is(pe, ErrGeoBlocked) {

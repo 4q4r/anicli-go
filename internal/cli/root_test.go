@@ -44,8 +44,8 @@ func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if got := len(reg.List()); got != 28 {
-		t.Fatalf("registry has %d providers, want 28", got)
+	if got := len(reg.List()); got != 27 {
+		t.Fatalf("registry has %d providers, want 27", got)
 	}
 
 	var buf bytes.Buffer
@@ -122,7 +122,7 @@ func TestStubOutputs(t *testing.T) {
 			contains: []string{
 				"doctor", "providers",
 				"anilibria", "animevost", "anilib", "animego",
-				"gogoanime", "animepahe", "dreamcast", "sameband", "kodik",
+				"gogoanime", "animepahe", "sameband", "kodik",
 				"anidub",
 			},
 		},

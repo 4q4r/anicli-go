@@ -105,7 +105,7 @@ func newYummy(siteBase, apiBase, cvhBase, ua string, http *netclient.Client) *Yu
 // лагуны»» — the index matches single tokens and returns 20 unrelated
 // «чёрная*» titles for it (live-verified 2026-09-19), while the
 // substring «лагуна» surfaces the target at rank 1. The declared query
-// gets no RU/latin fallback (dreamcast PR51 precedent).
+// gets no RU/latin fallback (the PR51 declared-probe precedent).
 func (p *Yummy) SmokeQuery() string { return "лагуна" }
 
 // yummyEnvelope is the shared API envelope: {"response": ...} on

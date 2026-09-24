@@ -46,7 +46,7 @@ import (
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
-// after tokyotosho. The roster is frozen at 28.
+// after tokyotosho. The roster is frozen at 27.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -56,7 +56,6 @@ var expectedProviderOrder = []string{
 	"animepahe",
 	"kickassanime",
 	"anizone",
-	"dreamcast",
 	"sameband",
 	"anicrush",
 	"kodik",

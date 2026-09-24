@@ -675,7 +675,8 @@ func (p *AniZone) ResolveStream(ctx context.Context, episode contracts.Episode, 
 	}
 
 	// The master playlist is fetched with the site root as its Referer
-	// (dreamcast convention; the live CDN also answers referer-less).
+	// (the original PR51 convention; the live CDN also answers
+	// referer-less).
 	playlistHeaders := map[string]string{"Referer": p.baseURL}
 	playlist, err := p.http.Do(ctx, netclient.Request{
 		Method:  http.MethodGet,

@@ -595,7 +595,7 @@ func (n *chromedpNav) Click(ctx context.Context, x, y float64) error {
 }
 
 // Evaluator is the optional Naviger capability for page-context JS
-// evaluation (the AllAnime crypto bridge). Implemented by the
+// evaluation (browser-backed challenge solving). Implemented by the
 // chromedp adapter; test fakes implement it as needed.
 type Evaluator interface {
 	// Eval evaluates expression in the current page and unmarshals the
@@ -620,8 +620,8 @@ func (n *chromedpNav) Eval(ctx context.Context, expression string, out any) erro
 }
 
 // DownloadObserver is the optional Naviger capability for capturing the
-// target URL of a browser-initiated download (the animepahe bridge's
-// kwik token-POST flow). The post-redirect media URL is invisible to
+// target URL of a browser-initiated download (a media embed's token-
+// POST flow). The post-redirect media URL is invisible to
 // in-page JS (fetch redirect:'manual' is opaque, redirect:'follow' dies
 // on the cross-origin CORS check, a real form submit turns the
 // navigation into a download) — only the CDP download event carries it.

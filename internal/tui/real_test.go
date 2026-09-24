@@ -49,7 +49,7 @@ func TestRealDepsConstruction(t *testing.T) {
 	for _, p := range providers {
 		ids = append(ids, p.ID)
 	}
-	for _, want := range []string{"anilibria", "animego", "kodik", "allanime"} {
+	for _, want := range []string{"anilibria", "animego", "kodik", "hdrezka"} {
 		if !strings.Contains(strings.Join(ids, ","), want) {
 			t.Fatalf("provider %s missing from %v", want, ids)
 		}
@@ -74,10 +74,8 @@ func TestRealDepsDisabledProviders(t *testing.T) {
 
 	settings := config.Default()
 	settings.Download.Dir = t.TempDir()
-	// anime365 stays configured: this test pins the kodik specimen of
-	// the disabled-set mechanism (PR55 added another credentialled
-	// provider).
-	settings.Providers.Anime365.Token = "test-token"
+	// No provider credentials: this test pins the kodik specimen of
+	// the disabled-set mechanism.
 	real, err := NewRealDeps(settings, store)
 	if err != nil {
 		t.Fatalf("NewRealDeps: %v", err)

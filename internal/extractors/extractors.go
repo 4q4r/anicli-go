@@ -14,14 +14,13 @@
 //     contracts.ErrExtractFailed for page-shape mismatches; transport
 //     errors pass through with the extractor name attached) — the
 //     no-silent-failure policy of this repo;
-//   - two factory extractors unreachable from the 21 registered
+//   - two factory extractors unreachable from the registered
 //     providers stay unported and surface a typed "unreachable" error
 //     instead (see skippedExtractor).
 //
 // The animekai-style arithmetic obfuscation (n*7+3 family) is NOT ported:
 // no extractor reachable from the registered providers evaluates
-// arithmetic expressions (kwik's obfuscation is the base-conversion
-// routine already in internal/crypto), so the restricted arithmetic
+// arithmetic expressions, so the restricted arithmetic
 // evaluator the task sketched has no consumer and is intentionally
 // absent.
 package extractors
@@ -54,9 +53,8 @@ type Factory struct {
 }
 
 // NewFactory builds the extractor list in the Python registration order
-// (extractors.py:658-671) with one task-mandated addition: the kwik
-// extractor, disabled upstream, is appended in full so animepahe embeds
-// resolve.
+// (extractors.py:658-671), plus the task-mandated additions appended
+// after that order (aksor promoted in PR68, blogger in PR53).
 func NewFactory(http *netclient.Client) *Factory {
 	return &Factory{extractors: []Extractor{
 		&kodikExtractor{http: http},
@@ -75,9 +73,8 @@ func NewFactory(http *netclient.Client) *Factory {
 		&gogoPlayExtractor{http: http},
 		&streamTapeExtractor{http: http},
 		&doodExtractor{http: http},
-		&kwikExtractor{http: http},
 		// blogger (PR53): the second task-mandated addition, appended
-		// after the Python order exactly like kwik above. anitaku.io
+		// after the Python order. anitaku.io
 		// (gogoanime) mirrors are blogger.com/video.g embeds; no
 		// registered Python extractor covers that host.
 		&bloggerExtractor{http: http},

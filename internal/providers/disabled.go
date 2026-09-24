@@ -125,20 +125,6 @@ var unconfiguredRules = []struct {
 			return "", false
 		},
 	},
-	{
-		// anime365 (PR55): the catalog/episodes/translations endpoints
-		// are open, but the playable links (embed data) require an
-		// access token from an account with an active subscription —
-		// a tokenless anime365 cannot play anything (kodik-parity:
-		// never register a provider that cannot run).
-		id: "anime365",
-		disabled: func(cfg config.Settings) (string, bool) {
-			if cfg.Providers.Anime365.Token == "" {
-				return "не задан токен доступа (providers.anime365.token)", true
-			}
-			return "", false
-		},
-	},
 }
 
 // UnconfiguredProviders reports every provider that cannot run with

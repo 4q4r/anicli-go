@@ -16,8 +16,7 @@ import (
 // jars, and errors are tagged with the provider id. The build function
 // receives the full settings plus the shared CF manager (always built
 // since PR80; nil only for callers that skip NewManager): wave-2
-// providers consume per-provider configuration (kodik's API token),
-// allanime consumes the browser bridge.
+// providers consume per-provider configuration (kodik's API token).
 var allFactories = []struct {
 	id    string
 	build func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
@@ -37,18 +36,6 @@ var allFactories = []struct {
 	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},
-	// animepahe (PR71): the site ops ride the [cf] browser bridge (the
-	// serving origin re-challenges non-browser fingerprints even with a
-	// replayed clearance — PR71 dossier A/B); nil bridge keeps the
-	// netclient + CF-ladder path for [cf]-disabled configs.
-	{"animepahe", func(http *netclient.Client, _ config.Settings, cf *cfbrowser.Manager) contracts.Provider {
-		return newAnimePahe(AnimePaheBase, http, buildPaheBridge(cf))
-	}},
-	// kickassanime (PR58): the kaa.lt JSON API (fsearch → show →
-	// paginated episodes → per-episode servers on the krussdomi HLS
-	// edge). No credentials and no per-provider settings;
-	// network.proxy_url routes it from blocked networks like every
-	// foreign site.
 	{"kickassanime", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
 	}},
@@ -61,29 +48,11 @@ var allFactories = []struct {
 	{"anizone", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniZone(AniZoneBase, http)
 	}},
-	{"dreamcast", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newDreamCast(DreamCastBase, http)
-	}},
 	{"sameband", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSameBand(SameBandBase, http)
 	}},
-	// anicrush (PR90): the EN streaming catalog anicrush.to — written
-	// from three independent wrapper implementations of its anonymous
-	// JSON API (DrBrainlessLol/anicrush-api, shimizudev/anicrush-api,
-	// gojo). NOT live-verified: the whole anicrush.to family has been
-	// origin-dead behind Cloudflare (edge-served 521 for every vantage)
-	// since ~2026-08-07, so the wire shapes are pinned by the reference
-	// sources and the embed→HLS hop (a rabbit/megacloud WASM player)
-	// stays with the shared extractor factory, failing typed until an
-	// extractor lands. No credentials.
-	{"anicrush", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniCrush(AniCrushAPIBase, http)
-	}},
 	{"kodik", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
-	}},
-	{"allanime", func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider {
-		return newAllAnime(AllAnimeAPIBase, AllAnimeReferer, AllAnimeInternalBase, http, buildAABridge(cf), cacheDirFor(cfg))
 	}},
 	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
@@ -102,14 +71,6 @@ var allFactories = []struct {
 	// sibling is registered.
 	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newShiza(ShizaBase, http)
-	}},
-	// anime365 (PR55): the smotret-anime (anime365.ru) documented JSON
-	// API — open catalog/episodes/translations, tokened embed
-	// resolution (account with an active subscription). No frozen
-	// Python original (anidub precedent); written against the live
-	// API + the official OpenAPI spec (probed 2026-09-18).
-	{"anime365", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnime365(Anime365Mirrors, cfg.Providers.Anime365.Token, http)
 	}},
 	// yummy (PR68): the YummyAnime REST API (api.yani.tv behind
 	// site.yummyani.me) — the first provider ported from the vypivshiy
@@ -225,16 +186,6 @@ var allFactories = []struct {
 	}},
 }
 
-// buildAABridge wires the AllAnime crypto bridge (CF is always on —
-// the manager always supplies a stealth browser; a nil-manager call
-// remains guarded for API users who skip NewManager).
-func buildAABridge(cf *cfbrowser.Manager) aaBridgeSource {
-	if cf == nil || cf.Solver == nil {
-		return nil
-	}
-	return &aaCFBrowserBridge{Solver: cf.Solver, RootURL: AllAnimeReferer + "/", Lane: aaContentLane}
-}
-
 // registryOptions carries the NewRegistry customizations.
 type registryOptions struct {
 	// torrentLogger routes the shared torrent engine's diagnostics;
@@ -273,19 +224,6 @@ func WithProviderLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.providerLogger = log }
 }
 
-// cacheDirFor resolves the persistent cache directory for provider
-// state ("" when unset — in-memory).
-func cacheDirFor(cfg config.Settings) string {
-	if cfg.General.DataDir != "" {
-		return cfg.General.DataDir
-	}
-	dir, err := config.DataDir()
-	if err != nil {
-		return ""
-	}
-	return dir
-}
-
 // All builds the provider set from cfg: one netclient client each
 // (browser-fingerprint profile, own cookie jar, provider-tagged errors)
 // constructed from cfg.Network, plus per-provider settings where a
@@ -303,7 +241,8 @@ func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, e
 }
 
 // allWithCF is all with the shared CF manager handed to providers that
-// need browser capabilities (the AllAnime crypto bridge). Providers
+// need browser-backed challenge solving (the netclient CF ladder).
+// Providers
 // whose id is listed in [providers].exclude are skipped entirely — no
 // client, no registry slot — and the exclusion is logged at startup
 // (PR23). Providers that cannot run without user configuration (kodik

@@ -124,7 +124,7 @@ type NamePreferenceProvider interface {
 // SmokeQueryProvider is the optional capability of providers whose
 // catalog cannot surface the shared smoke probe titles: own-catalog
 // dub teams running strict prefix search over ~500 of their own
-// releases (dreamcast, PR51). A declaring provider is probed with its
+// releases (introduced in PR51). A declaring provider is probed with its
 // own query and gets no RU/latin fallback. The parity smoke peels the
 // stat delegator before the check; the dub stream filter (only
 // present when [providers].exclude_streams is configured) hides

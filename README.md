@@ -106,24 +106,19 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 29 провайдеров"]
+    subgraph sources["Источники — 24 провайдера"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
         P4[animego]
         P5[gogoanime]
-        P6[animepahe]
         P7[kickassanime]
         P8[anizone]
-        P9[dreamcast]
         P10[sameband]
-        P11[anicrush]
         P12[kodik]
-        P13[allanime]
         P14[anidub]
         P15[animedia]
         P16[shiza]
-        P17[anime365]
         P18[yummy]
         P19[hdrezka]
         P20[anistar]
@@ -138,13 +133,13 @@ graph TD
         P29[subsplease]
     end
 
-    EXT["Извлекатели плееров (11)<br/>internal/extractors"]
+    EXT["Извлекатели плееров (10)<br/>internal/extractors"]
 
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
-    P6 & P7 & P11 --> EXT
+    REG --> P1 & P2 & P3 & P4 & P5 & P7 & P8 & P10 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
+    P3 & P4 & P5 & P12 & P14 & P15 & P16 & P18 & P20 & P21 & P22 --> EXT
     SKIP --> ST
     DL --> SKIP
 ```
@@ -297,18 +292,13 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
 | animego | animego.one | видео | ✅ живой |
 | gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
-| animepahe | animepahe.pw | видео (англ. субтитры) | ✅ через стелс-браузерный мост CloakBrowser (всегда включён, PR80): сайт пере-челленджит небраузерные отпечатки даже с повторенными clearance-куками (досье PR71), поэтому поиск и resolve ходят через мост. Не сайт-зеркало: `animepahe.ru` мёртв, `.si` умер в 04.2026 |
 | kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
 | anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
-| dreamcast | dreamerscast.com | видео | ✅ живой |
 | sameband | sameband.studio | видео | ⚠️ нестабильный |
-| anicrush | anicrush.to (API: api.anicrush.to) | видео (англ. субтитры и дабы) | ⛔️ сайт мёртв (PR90); не порт — восстановлен по трём независимым обёрткам анонимного JSON API (DrBrainlessLol/anicrush-api, shimizudev/anicrush-api, gojo): movie/list → episode/list (result — запись групп массивов) → episode/servers (sub/dub-ряды) → episode/sources (embed-ссылка). Вся семья .to лежит за Cloudflare с ошибкой 521 на стороне edge для всех сетей с ~2026-08-07 (на 2026-09-23 не поднялся) — фикстуры реконструированы по исходникам обёрток; финальный embed→HLS-прыжок (WASM-плеер megacloud/rabbit с canvas-ключами) не портирован — фабрика экстракторов отвечает типовой ошибкой, пока экстрактор не появится; анонимный |
 | kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
-| allanime | api.mkissa.net | видео | ⚠️ домен ротирован 2026-07-22 (allmanga.to → mkissa.to) |
 | anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
 | animedia | amd.online | видео (рус. озвучки) | ✅ живой (PR56); не порт — старый JSON API animedia.online мёртв, написан по живому DLE-сайту: поиск формой сайта, серии/озвучки из kodik-блоков страницы; стримы через общий kodik-экстрактор; ru-индекс (латиница не ищется), часть тайтлов отдана через rutube — типизированная ошибка |
 | shiza | shizaproject.com | видео (рус. озвучки, субтитры) | ✅ живой (PR57); не порт — Nuxt-SPA, написан по живому GraphQL API (публичный, анонимный): поиск по RU-названию и ромадзи, серии из kodik/sibnet-эмбедов через общие экстракторы; torrent-раздел мёртв (0 сидов) и не регистрируется |
-| anime365 | smotret-anime.app | видео (русс. озвучки и субтитры) | ✅ живой (PR55), документированный JSON API (зеркала: smotret-anime.online, anime365.ru); без токена доступа (`providers.anime365.token`, нужна активная подписка) провайдер отключается при старте; ссылки на видео выдаёт embed-API по токену |
 | yummy | site.yummyani.me (API: api.yani.tv) | видео (рус. озвучки и субтитры, до 4K) | ✅ живой (PR68); порт референсной библиотеки anicli-api (source/yummy_anime.py), перепроверен живым 2026-09-19: документированный JSON API (каталог, серии одним вызовом со всеми озвучками), анонимный; плееры kodik/sibnet/alloha/aksor через общие экстракторы, CDNVideoHub-цепочка (iframe → JS-константы → плейлист → vkId) — в провайдере; RU-индекс ищет по одному токену («черная лагуна» не находит «Пираты «Чёрной лагуны»», smoke-запрос объявлен); SSR-зеркало yummyanime.in мертво (410) |
 | hdrezka | rezka-ua.tv (зеркало семейства, [providers.hdrezka] base_url перекрывает) | видео (рус. озвучки, до 1080) | ✅ живой (PR72); порт замороженного anicli-api + чистый Go-решатель антибота Anubis 1.25 (PoW sha256); PR72-матрица маршрутов: семейство зеркал гео-фенсит по домену — hdrezka-home.tv с датацентровых выходов держит ссылки на видео (JWT сессии честно пишет geo:"de"), rezka-ua.tv с того же выхода отдаёт полностью, поэтому маршрут по умолчанию — он; из заблокированных сетей нужен `network.proxy_url` (прямой маршрут режется по SNI) |
 | anistar | anistar.org | видео (рус. озвучки, до 720) | ✅ живой (PR77); не порт — написан по живому сайту: DLE-каталог на Windows-1251 (первый некириллически-UTF сайт в ростере — поиск POST-формой в cp1251), серии/озвучки из JS-массива p2p-плеера /test/player2/, стримы — прямые HLS/MP4 на an-media.org с обязательным Referer; анонимный; news- и manga-карточки поиска отфильтрованы |
@@ -341,7 +331,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 28/29 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 23/24 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -353,7 +343,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 29, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 24, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

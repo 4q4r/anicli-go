@@ -29,7 +29,7 @@ import (
 // `\\\/` for every slash — JSON-unescape leaves `\/`, the recipe's
 // normalizeUrl then collapses it onto `/`), so the rewrite swaps the
 // raw form for the raw form of the test URL. Everything else rides
-// along verbatim — the same clamp-and-re-encode pattern the animepahe
+// along verbatim — the same clamp-and-re-encode pattern the PR78
 // pagination test uses.
 func rewritePlayerSrc(t *testing.T, body []byte, m3u8URL string) []byte {
 	t.Helper()

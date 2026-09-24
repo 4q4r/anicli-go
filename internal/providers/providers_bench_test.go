@@ -3,16 +3,13 @@ package providers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
@@ -66,74 +63,6 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 // benchSinkResults keeps Search/GetEpisodes results alive.
 var benchSinkResults []any
 
-// --- allanime crypto material/chunk parser (build IDs 173/174) ---
-
-var (
-	benchAllanimeChunk173 = benchStringData("testdata/allanime/crypto_chunk_173_DhCxOiZl.js")
-	benchAllanimeChunk174 = benchStringData("testdata/allanime/crypto_chunk_174_BYlv1dKC.js")
-	benchAllanimeSinkMat  *aaCryptoProfile
-	benchAllanimeSinkTbl  *aaChunkTables
-)
-
-// benchStringData loads a fixture as a string at package init.
-func benchStringData(rel string) string {
-	data, err := os.ReadFile(rel) //nolint:gosec // trusted testdata path
-	if err != nil {
-		panic("bench fixture " + rel + ": " + err.Error())
-	}
-	return string(data)
-}
-
-// BenchmarkAllanimeChunkMaterial173 parses the build-173 crypto chunk
-// (the material tables the API query masking rides on).
-func BenchmarkAllanimeChunkMaterial173(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		mat, err := aaParseChunkMaterial(benchAllanimeChunk173)
-		if err != nil {
-			b.Fatalf("chunk 173 material: %v", err)
-		}
-		benchAllanimeSinkMat = mat
-	}
-}
-
-// BenchmarkAllanimeChunkMaterial174 — same parser, build-174 chunk.
-func BenchmarkAllanimeChunkMaterial174(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		mat, err := aaParseChunkMaterial(benchAllanimeChunk174)
-		if err != nil {
-			b.Fatalf("chunk 174 material: %v", err)
-		}
-		benchAllanimeSinkMat = mat
-	}
-}
-
-// BenchmarkAllanimeChunkTables173 parses the build-173 chunk tables
-// (the per-build arithmetic fragment tables).
-func BenchmarkAllanimeChunkTables173(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		tbl, err := aaParseChunkTables(benchAllanimeChunk173)
-		if err != nil {
-			b.Fatalf("chunk 173 tables: %v", err)
-		}
-		benchAllanimeSinkTbl = tbl
-	}
-}
-
-// BenchmarkAllanimeChunkTables174 — same parser, build-174 chunk.
-func BenchmarkAllanimeChunkTables174(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		tbl, err := aaParseChunkTables(benchAllanimeChunk174)
-		if err != nil {
-			b.Fatalf("chunk 174 tables: %v", err)
-		}
-		benchAllanimeSinkTbl = tbl
-	}
-}
-
 // --- anizone Livewire payload decode ---
 
 // BenchmarkAnizoneJSONArgDecode decodes a Livewire JSON.parse argument
@@ -149,10 +78,10 @@ func BenchmarkAnizoneJSONArgDecode(b *testing.B) {
 		}
 		sink = out
 	}
-	benchAllanimeSinkStr = string(sink)
+	benchSinkStr = string(sink)
 }
 
-var benchAllanimeSinkStr string
+var benchSinkStr string
 
 // --- hdrezka page + anubis PoW ---
 
@@ -209,25 +138,6 @@ func BenchmarkHDRezkaAnubisPoWD2(b *testing.B) {
 
 var benchSinkPoW int
 
-// --- animepahe play links ---
-
-// BenchmarkAnimePahePlayLinks extracts the quality→kwik map from the
-// live play-page capture.
-func BenchmarkAnimePahePlayLinks(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "animepahe_play.html")
-	var sink map[string]string
-	for b.Loop() {
-		sink = animePahePlayLinks(body)
-		if len(sink) == 0 {
-			b.Fatal("no play links extracted")
-		}
-	}
-	benchPaheSink = sink
-}
-
-var benchPaheSink map[string]string
-
 // --- kickassanime episode page conversion ---
 
 // BenchmarkKaaPageEpisodes converts one wire episodes page (live
@@ -250,11 +160,11 @@ func BenchmarkKaaPageEpisodes(b *testing.B) {
 	benchSinkResults = sink
 }
 
-// --- SequenceMatcher similarity (allanime sort + rehydrate matching) ---
+// --- SequenceMatcher similarity (rehydrate matching) ---
 
 // BenchmarkSimilarityRatio benchmarks the CPython SequenceMatcher
-// ratio port on a realistic title pair — the hot comparator of
-// allanime result ranking and history rehydration.
+// ratio port on a realistic title pair — the hot comparator of the
+// TUI's history rehydration matching.
 func BenchmarkSimilarityRatio(b *testing.B) {
 	b.ReportAllocs()
 	a, c := "ван пис", "one piece wan pisu tv"
@@ -266,43 +176,6 @@ func BenchmarkSimilarityRatio(b *testing.B) {
 }
 
 var benchSinkRatio float64
-
-// benchResultTitles builds n distinct realistic allanime-style result
-// titles (the sort's input scale).
-func benchResultTitles(n int) []contracts.SearchResult {
-	out := make([]contracts.SearchResult, 0, n)
-	for i := range n {
-		out = append(out, contracts.SearchResult{
-			Title:    fmt.Sprintf("Naruto %s %d", []string{"Shippuuden", "the Movie", "SD", "Shinden"}[i%4], i),
-			URL:      "https://allanime.example/" + strconv.Itoa(i),
-			SourceID: "allanime",
-		})
-	}
-	return out
-}
-
-var benchSinkSorted int
-
-// BenchmarkAllanimeSimilaritySort30 — the fan-out-scale result sort
-// (each op: n ratio evaluations + the sort).
-func BenchmarkAllanimeSimilaritySort30(b *testing.B) {
-	b.ReportAllocs()
-	results := benchResultTitles(30)
-	for b.Loop() {
-		sortAllAnimeBySimilarity("naruto", results)
-		benchSinkSorted = len(results)
-	}
-}
-
-// BenchmarkAllanimeSimilaritySort100 — the 10x-scale sort.
-func BenchmarkAllanimeSimilaritySort100(b *testing.B) {
-	b.ReportAllocs()
-	results := benchResultTitles(100)
-	for b.Loop() {
-		sortAllAnimeBySimilarity("naruto", results)
-		benchSinkSorted = len(results)
-	}
-}
 
 // --- loopback Search benches (full provider parse path, no TLS/site) ---
 
@@ -357,182 +230,7 @@ func BenchmarkShizaSearch(b *testing.B) {
 	}
 }
 
-// BenchmarkAnimePaheSearch — animepahe /api search decode.
-func BenchmarkAnimePaheSearch(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "animepahe_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnimePahe(srv.URL, benchClient(b, "animepahe"), nil)
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "black lagoon")
-		if err != nil {
-			b.Fatalf("animepahe search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkAnimeGoSearch — animego.org HTML search parse (goquery).
-func BenchmarkAnimeGoSearch(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "animego_search.html")
-	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAnimego(srv.URL, benchClient(b, "animego"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "black lagoon")
-		if err != nil {
-			b.Fatalf("animego search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkNyaaSearchRSS — nyaa.si RSS feed parse.
-func BenchmarkNyaaSearchRSS(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "nyaa_search_rss.xml")
-	srv := benchFixtureServer(b, body, "application/rss+xml")
-	p := newNyaa(srv.URL, benchClient(b, "nyaa"), nil)
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "one piece")
-		if err != nil {
-			b.Fatalf("nyaa search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkAnimeToshoSearchRSS — animetosho RSS/Atom feed parse.
-func BenchmarkAnimeToshoSearchRSS(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "animetosho_search.xml")
-	srv := benchFixtureServer(b, body, "application/xml")
-	p := newAnimeTosho(srv.URL, benchClient(b, "animetosho"), nil)
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "one piece")
-		if err != nil {
-			b.Fatalf("animetosho search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkTokyoToshoSearchRSS — tokyotosho RSS feed parse (incl. the
-// empty-feed footer detection on the non-empty fixture).
-func BenchmarkTokyoToshoSearchRSS(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "tokyotosho_search.xml")
-	srv := benchFixtureServer(b, body, "application/xml")
-	p := newTokyoTosho(srv.URL, benchClient(b, "tokyotosho"), nil)
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "one piece")
-		if err != nil {
-			b.Fatalf("tokyotosho search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkYummySearchJSON — yummy.anime JSON search decode over the
-// 46K live capture (the heaviest search payload).
-func BenchmarkYummySearchJSON(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "yummy_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newYummy(srv.URL, srv.URL, srv.URL, "bench-ua", benchClient(b, "yummy"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "one piece")
-		if err != nil {
-			b.Fatalf("yummy search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkHDRezkaSearchHTML — hdrezka HTML search parse.
-func BenchmarkHDRezkaSearchHTML(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "hdrezka_search.html")
-	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newHDRezka(srv.URL, benchClient(b, "hdrezka"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "black lagoon")
-		if err != nil {
-			b.Fatalf("hdrezka search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkKickassanimeSearchJSON — kickassanime JSON search decode.
-func BenchmarkKickassanimeSearchJSON(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "kickassanime_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newKickassanime(srv.URL, benchClient(b, "kickassanime"), 4)
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "one piece")
-		if err != nil {
-			b.Fatalf("kickassanime search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
-// BenchmarkAnilibriaSearchJSON — anilibria (aniliberty.top) JSON search.
-func BenchmarkAnilibriaSearchJSON(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "anilibria_search.json")
-	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnilibria(srv.URL, AniLibriaHost, benchClient(b, "anilibria"))
-	ctx := context.Background()
-	for b.Loop() {
-		results, err := p.Search(ctx, "black lagoon")
-		if err != nil {
-			b.Fatalf("anilibria search: %v", err)
-		}
-		benchSinkN = len(results)
-	}
-}
-
 // --- loopback GetEpisodes benches (the list-loader hot path) ---
-
-// BenchmarkAnimePaheGetEpisodes2Pages walks the clamped One Piece
-// pagination (2 round trips, 55 episodes) — the episode-loader shape.
-func BenchmarkAnimePaheGetEpisodes2Pages(b *testing.B) {
-	b.ReportAllocs()
-	p1, err := clampReleaseLastPage(benchFixture(b, "animepahe_episodes_p1.json"), 2)
-	if err != nil {
-		b.Fatalf("clamp p1: %v", err)
-	}
-	p2 := benchFixture(b, "animepahe_episodes_p2.json")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("page") == "1" {
-			_, _ = w.Write(p1)
-			return
-		}
-		_, _ = w.Write(p2)
-	}))
-	b.Cleanup(srv.Close)
-	p := newAnimePahe(srv.URL, benchClient(b, "animepahe"), nil)
-	ctx := context.Background()
-	for b.Loop() {
-		eps, err := p.GetEpisodes(ctx, "76d59a16-e57d-4ad1-7ec6-e88f0fe9469b")
-		if err != nil {
-			b.Fatalf("animepahe episodes: %v", err)
-		}
-		benchSinkN = len(eps)
-	}
-}
 
 // BenchmarkShizaGetEpisodes — shiza release decode (dub/embed map).
 func BenchmarkShizaGetEpisodes(b *testing.B) {

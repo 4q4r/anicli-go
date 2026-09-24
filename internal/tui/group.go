@@ -125,8 +125,8 @@ func FindExactGroup(groups [][]contracts.SearchResult, sourceID, url string) []c
 // FindBestSimilarGroup implements rehydrate strategy 2 (python
 // _find_best_similar_group): among groups, the one whose longest title
 // best matches the canonical title wins, provided the ratio clears
-// minRatio. The matcher is the CPython SequenceMatcher ratio ported
-// for allanime (bug-compatible, goldens in PR6).
+// minRatio. The matcher is the CPython SequenceMatcher ratio port
+// (bug-compatible, goldens in PR6).
 func FindBestSimilarGroup(groups [][]contracts.SearchResult, canonicalTitle string, minRatio float64) []contracts.SearchResult {
 	target := strings.ToLower(canonicalTitle)
 	var best []contracts.SearchResult

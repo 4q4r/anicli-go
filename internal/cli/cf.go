@@ -194,7 +194,7 @@ func runCFSolve(ctx context.Context, out io.Writer, providerID string) error {
 func providerBaseURLList() []string {
 	return []string{
 		"anilibria", "animevost", "anilib", "animego",
-		"gogoanime", "animepahe", "dreamcast", "sameband", "kodik", "allanime",
+		"gogoanime", "sameband", "kodik",
 		"anidub", "anizone",
 	}
 }

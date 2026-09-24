@@ -629,8 +629,8 @@ func azEpisodeTitle(item azEpisodeItem, number int) string {
 }
 
 // ResolveStream resolves the watch page's vidstackPlayer payload into
-// the HLS master playlist and splits it into its variants (the
-// allanime house pattern — aaParseMasterPlaylist; live capture
+// the HLS master playlist and splits it into its variants (the shared
+// parseMasterPlaylist helper; live capture
 // 2026-09-18: 360/720/1080 h264 variants over ja/en audio groups).
 func (p *AniZone) ResolveStream(ctx context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	stream := contracts.MediaStream{
@@ -675,7 +675,8 @@ func (p *AniZone) ResolveStream(ctx context.Context, episode contracts.Episode, 
 	}
 
 	// The master playlist is fetched with the site root as its Referer
-	// (dreamcast convention; the live CDN also answers referer-less).
+	// (the original PR51 convention; the live CDN also answers
+	// referer-less).
 	playlistHeaders := map[string]string{"Referer": p.baseURL}
 	playlist, err := p.http.Do(ctx, netclient.Request{
 		Method:  http.MethodGet,
@@ -688,8 +689,8 @@ func (p *AniZone) ResolveStream(ctx context.Context, episode contracts.Episode, 
 	}
 
 	// A master playlist splits into its variant entries; a media
-	// playlist means the src IS the stream (allanime parity).
-	if variants, isVariant := aaParseMasterPlaylist(string(playlist.Body), src); isVariant {
+	// playlist means the src IS the stream.
+	if variants, isVariant := parseMasterPlaylist(string(playlist.Body), src); isVariant {
 		for _, v := range variants {
 			stream.Links[v.height] = contracts.VideoSource{
 				URL:     v.uri,

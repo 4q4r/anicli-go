@@ -219,7 +219,6 @@ func TestRegistryContentLanguage(t *testing.T) {
 		"animego":   "ru",
 		"anidub":    "ru",
 		"gogoanime": "ja",
-		"allanime":  "ja",
 		"nope":      "",
 	} {
 		if got := reg.ContentLanguage(id); got != want {

@@ -229,6 +229,19 @@ func TestSmokeSkipsCredentialProviders(t *testing.T) {
 	}
 }
 
+// TestSmokeSkipRosterIsCredentialGatedOnly pins the SKIP roster: the
+// only SKIP row is the credential-gated provider kept pending creds
+// (kodik). Placeholders for never-implemented providers do not get
+// table rows (fix/93 ruling: the placeholder SKIP row was removed).
+func TestSmokeSkipRosterIsCredentialGatedOnly(t *testing.T) {
+	if len(smokeSkipped) != 1 {
+		t.Fatalf("smokeSkipped must hold exactly kodik, got %v", smokeSkipped)
+	}
+	if _, ok := smokeSkipped["kodik"]; !ok {
+		t.Fatalf("smokeSkipped must hold kodik, got %v", smokeSkipped)
+	}
+}
+
 // TestSmokeSingleProvider: an explicit provider id runs just that row.
 func TestSmokeSingleProvider(t *testing.T) {
 	d := smokeDeps(t, 0,

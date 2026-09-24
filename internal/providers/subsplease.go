@@ -126,7 +126,7 @@ func (p *SubsPlease) NamePreference() contracts.NamePreference {
 }
 
 // SmokeQuery implements contracts.SmokeQueryProvider (the PR51
-// dreamcast precedent): the SubsPlease catalog is EN-seasonal, the
+// precedent): the SubsPlease catalog is EN-seasonal, the
 // shared smoke probe ("black lagoon") is outside it entirely
 // (live-verified 2026-09-23: f=search answers the literal "[]"), so
 // the provider declares a catalog answer of its own. Re Zero is a

@@ -73,9 +73,6 @@ func TestDefaults(t *testing.T) {
 	if got.Providers.Kodik.Token != "" {
 		t.Errorf("Providers.Kodik.Token = %q, want empty (must be user-supplied)", got.Providers.Kodik.Token)
 	}
-	if got.Providers.Anime365.Token != "" {
-		t.Errorf("Providers.Anime365.Token = %q, want empty (must be user-supplied)", got.Providers.Anime365.Token)
-	}
 	if got.Providers.HDRezka.BaseURL != "" {
 		t.Errorf("Providers.HDRezka.BaseURL = %q, want empty (built-in default)", got.Providers.HDRezka.BaseURL)
 	}
@@ -134,9 +131,6 @@ max_concurrency = 5
 
 [providers.kodik]
 token = "file-kodik-token"
-
-[providers.anime365]
-token = "file-anime365-token"
 `)
 	got, err := Load(path)
 	if err != nil {
@@ -164,9 +158,6 @@ token = "file-anime365-token"
 	}
 	if got.Providers.Kodik.Token != "file-kodik-token" {
 		t.Errorf("Providers.Kodik.Token = %q, want file value", got.Providers.Kodik.Token)
-	}
-	if got.Providers.Anime365.Token != "file-anime365-token" {
-		t.Errorf("Providers.Anime365.Token = %q, want file value", got.Providers.Anime365.Token)
 	}
 
 	// Untouched values keep their defaults (file must not zero them).
@@ -265,7 +256,6 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("ANICLI_PROXY_URL", "http://127.0.0.1:8080")
 	t.Setenv("ANICLI_SHIKIMORI_SESSION", "env-session")
 	t.Setenv("ANICLI_KODIK_TOKEN", "env-kodik-token")
-	t.Setenv("ANICLI_ANIME365_TOKEN", "env-anime365-token")
 
 	path := writeTOML(t, `
 [network]
@@ -277,9 +267,6 @@ access_token = "file-token"
 
 [providers.kodik]
 token = "file-kodik-token"
-
-[providers.anime365]
-token = "file-anime365-token"
 `)
 	got, err := Load(path)
 	if err != nil {
@@ -295,9 +282,6 @@ token = "file-anime365-token"
 	}
 	if got.Providers.Kodik.Token != "env-kodik-token" {
 		t.Errorf("Providers.Kodik.Token = %q, want env value to win", got.Providers.Kodik.Token)
-	}
-	if got.Providers.Anime365.Token != "env-anime365-token" {
-		t.Errorf("Providers.Anime365.Token = %q, want env value to win", got.Providers.Anime365.Token)
 	}
 	// Non-secret fields stay file-driven.
 	if got.Shikimori.AccessToken != "file-token" {
@@ -550,7 +534,7 @@ func TestProvidersExclusionSettings(t *testing.T) {
 
 	path := writeTOML(t, `
 [providers]
-exclude = ["animepahe", "kodik"]
+exclude = ["gogoanime", "kodik"]
 exclude_streams = ["трейлер", "реклама"]
 
 [providers.kodik]
@@ -561,8 +545,8 @@ token = "file-kodik-token"
 		t.Fatalf("Load: %v", err)
 	}
 	if len(got.Providers.Exclude) != 2 ||
-		got.Providers.Exclude[0] != "animepahe" || got.Providers.Exclude[1] != "kodik" {
-		t.Errorf("Providers.Exclude = %v, want [animepahe kodik]", got.Providers.Exclude)
+		got.Providers.Exclude[0] != "gogoanime" || got.Providers.Exclude[1] != "kodik" {
+		t.Errorf("Providers.Exclude = %v, want [gogoanime kodik]", got.Providers.Exclude)
 	}
 	if len(got.Providers.ExcludeStreams) != 2 ||
 		got.Providers.ExcludeStreams[0] != "трейлер" || got.Providers.ExcludeStreams[1] != "реклама" {

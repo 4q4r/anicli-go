@@ -119,7 +119,7 @@ func pythonFloatKey(num string) float64 {
 // encoded uppercase, one UTF-8 byte at a time — spaces become %20, not
 // the form-style "+" of url.Values.Encode. Originally ported for
 // sovetromantica (sovetromantica.py:30); its live consumers are the
-// dreamcast base64 payload and the anidub search query.
+// anidub, anistar and hdrezka search queries.
 func pyQuote(s string) string {
 	const hex = "0123456789ABCDEF"
 	var b strings.Builder

@@ -8,8 +8,8 @@ package providers
 // single difference — the search result carries a torrent LINK, and
 // playback rides the core's loopback server. Providers never touch
 // the HTTP-embed pipeline: the capability (contracts.TorrentProvider)
-// routes them here by construction. New torrent providers (rutracker,
-// nyaa, anilibria-torrents, …) embed this base.
+// routes them here by construction. New torrent providers (nyaa
+// siblings, …) embed this base.
 
 import (
 	"bytes"

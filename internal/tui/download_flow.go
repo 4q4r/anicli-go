@@ -121,7 +121,10 @@ func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, p
 	}
 	for _, cand := range candidates {
 		pctx, pcancel := context.WithTimeout(ctx, downloadProbeBudget)
-		entries, err := resolveAllStreams(pctx, deps.Episode, ep, cand)
+		// PR94: the probe needs only the viability verdict — the
+		// per-provider skip records ride the merged resolve but the
+		// ladder's own preferred→rest walk already degrades per dub.
+		entries, _, err := resolveAllStreams(pctx, deps.Episode, ep, cand)
 		pcancel()
 		if err == nil && len(entries) > 0 {
 			return cand

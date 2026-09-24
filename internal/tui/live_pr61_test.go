@@ -176,10 +176,17 @@ func TestLivePR61MergedStreams(t *testing.T) {
 	t.Logf("episode %q embed keys: %v", ep.Num, sortedEmbedKeys(ep.RawEmbeds))
 
 	// THE PR61 PROOF: streams from ALL providers merge into ONE
-	// quality-sorted list — no provider gate.
-	entries, err := resolveAllStreams(ctx, deps.Episode, ep, "")
+	// quality-sorted list — no provider gate. PR94: broken providers
+	// degrade fail-soft — their skip records print as the honest
+	// summary instead of aborting the merge.
+	entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, "")
 	if err != nil {
 		t.Fatalf("merged resolve: %v", err)
+	}
+	if line := skippedSummary(skipped); line != "" {
+		t.Logf("SKIP SUMMARY: %s", line)
+	} else {
+		t.Logf("SKIP SUMMARY: (none — every consulted provider resolved)")
 	}
 	dubStats := DubStats([]contracts.Episode{ep})
 	s := &sessionScreen{deps: deps, dubStats: dubStats}

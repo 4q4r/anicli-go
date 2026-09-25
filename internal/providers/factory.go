@@ -128,6 +128,19 @@ var allFactories = []struct {
 	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
+	// animiku (PR101): the beta.animiku.tokyo RU catalog (DLE under a
+	// custom template, UTF-8, anonymous; live-verified 2026-09-25) —
+	// search GET form in, the mrdeath/aaparser player bridge
+	// (POST engine/ajax/controller.php?mod=anime_grabber&module=
+	// kodik_playlist_ajax) out: translator row = dubs, episode grid =
+	// per-(episode, dub) kodikplayer.com embeds through the shared
+	// extractor. The advertised 4K/FHD tiers are runtime JS resolvers
+	// (anilibria.top API by title) with no deterministic embed URLs —
+	// documented in animiku.go, out of the stream contract. No frozen
+	// Python original; written from the live site.
+	{"animiku", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnimiku(AniMikuBase, http)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

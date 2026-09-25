@@ -170,7 +170,7 @@ func TestSearchFanOutProgress(t *testing.T) {
 	// no grouping.
 	v = progress.View().Content
 	if !strings.Contains(v, "Выберите провайдеры") {
-		t.Fatalf("settled fan-out must show the provider checklist below the table, got:\n%s", v)
+		t.Fatalf("settled fan-out must show the provider checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") || !strings.Contains(v, "AniLib — Наруто") {
 		t.Fatalf("the two provider hits must stay separate rows, got:\n%s", v)
@@ -195,10 +195,10 @@ func TestSearchProgressAssembly(t *testing.T) {
 		t.Fatalf("results must be assembled, got %d", len(progress.results))
 	}
 
-	// Settled: the checklist appears below the table WITHOUT enter.
+	// Settled: the checklist appears WITHOUT enter.
 	v := progress.View().Content
 	if !strings.Contains(v, "Выберите провайдеры") {
-		t.Fatalf("settled progress must show the checklist below the table, got:\n%s", v)
+		t.Fatalf("settled progress must show the checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") {
 		t.Fatalf("the result must render as its own row, got:\n%s", v)
@@ -237,6 +237,12 @@ func TestSearchEmptyResults(t *testing.T) {
 	sp := topOf(model).(*searchProgress)
 	if !contains(sp.View().Content, "Ничего не найдено") {
 		t.Fatalf("empty fan-out must show the empty state, got:\n%s", sp.View().Content)
+	}
+	// PR110 review: the all-failed/empty settle must render zero
+	// counts on BOTH summary halves — found 0, not-found 1 (the
+	// single provider returned nothing).
+	if !contains(sp.View().Content, "Найдено: 0 · Без результатов/ошибок: 1") {
+		t.Fatalf("empty fan-out must render zero counts, got:\n%s", sp.View().Content)
 	}
 	_, cmd := sp.Update(enter())
 	if cmd == nil {

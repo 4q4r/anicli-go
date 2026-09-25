@@ -367,9 +367,6 @@ func TestHybridSearchContinuesPastVariantErrors(t *testing.T) {
 	if len(progress.results) == 0 {
 		t.Fatalf("results from later variants must still surface, got none")
 	}
-	if len(progress.results) == 0 {
-		t.Fatal("a row with results must surface them in the merged set")
-	}
 }
 
 // TestHybridSearchAllVariantsFailingFailsTheRow: when EVERY variant

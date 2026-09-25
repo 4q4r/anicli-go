@@ -228,9 +228,10 @@ func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 // the same wire request the SearchIDs path makes).
 const shikiAutocompleteLimit = 16
 
-// searchProgress is the live fan-out table (python
+// searchProgress is the live fan-out screen (python
 // search_provider_task + generate_search_table port, PR24 hybrid
-// shape): the query first resolves Shikimori variants (when enabled),
+// shape, PR110 minimal view): the query first resolves Shikimori
+// variants (when enabled),
 // then one row per provider runs its language-routed variants inside
 // a per-provider timeout budget.
 //
@@ -246,11 +247,10 @@ type searchProgress struct {
 	query   string
 	spin    spinner.Model
 	rows    []ProviderMeta
-	status  map[string]string
 	pending map[string]bool
-	// counts carries each row's result count for the Результатов
-	// column; responded marks rows that settled without an error
-	// (0 results still counts as answered).
+	// counts carries each provider's settled result count for the
+	// found/not-found summary (PR110); responded marks rows that
+	// settled without an error (0 results still counts as answered).
 	counts    map[string]int
 	responded map[string]bool
 	results   []contracts.SearchResult
@@ -265,9 +265,10 @@ type searchProgress struct {
 	// the plain search flow. The catalog rebind flow sets it (PR30)
 	// so a group pick resumes the session.
 	resume *storage.AnimeProgress
-	// resultCheck renders the per-result provider checklist BELOW the
-	// table once every row settled (PR31: every result gets its own
-	// row — no similarity grouping); nil until then.
+	// resultCheck renders the per-result provider checklist on the
+	// settled screen (PR31: every result gets its own row — no
+	// similarity grouping; PR110 removed the table it used to grow
+	// below); nil until then.
 	resultCheck *CheckList
 	// titleOverride replaces the default live header when set (the
 	// catalog flow's «Поиск по провайдерам: …», PR30/PR31).

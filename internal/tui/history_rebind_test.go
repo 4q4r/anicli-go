@@ -25,12 +25,11 @@ func rebindTestRecord() *storage.AnimeProgress {
 	return &storage.AnimeProgress{ID: 7, Title: "Наруто", NeedsCorrection: true}
 }
 
-// TestRebindProgressRendersProviderTable (PR29/PR30): the catalog
-// fan-out screen must render the same live provider table as the
-// plain search flow — header columns, one row per provider, verdicts
-// after settlement and the centered overall counter — and once every
-// row settled, the grouped results appear BELOW the table
-// automatically.
+// TestRebindProgressRendersProviderChecklist (PR29/PR30, PR110
+// shape): the catalog fan-out screen must render the same minimal
+// surface as the plain search flow — the loading line while in
+// flight, then the found/not-found summary and the merged checklist
+// once every row settles.
 func TestRebindProgressRendersProviderChecklist(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
@@ -81,7 +80,7 @@ func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 	}
 
 	// Settle the single row with a hit: the provider checklist must
-	// appear below the table WITHOUT any enter press.
+	// appear WITHOUT any enter press.
 	next, _ := r.Update(providerResultMsg{
 		provider: fs.providers[0],
 		results:  []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}},
@@ -89,7 +88,7 @@ func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 	r = next.(*rebindProgress)
 	v := r.View().Content
 	if !strings.Contains(v, "Выберите провайдеры") {
-		t.Fatalf("settled results must appear below the table without enter, got:\n%s", v)
+		t.Fatalf("settled results must appear without enter, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") {
 		t.Fatalf("the settled result must render as its own row, got:\n%s", v)

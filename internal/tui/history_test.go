@@ -486,8 +486,8 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	model := drive(app, pushMsg{screen: newRebindProgress(deps, &rec)})
 	model = drainCmds(model)
 
-	// Settled WITHOUT any enter press: the provider checklist sits
-	// below the table.
+	// Settled WITHOUT any enter press: the provider checklist renders
+	// under the summary.
 	top := topOf(model)
 	v := top.View().Content
 	for _, want := range []string{
@@ -534,8 +534,8 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 }
 
 // TestCatalogSearchNoMatchStillShowsGroups (PR30/PR31): results that
-// do not match the record still render below the table — every result
-// its own checklist row, the user picks manually (no auto-match
+// do not match the record still render on the settled screen — every
+// result its own checklist row, the user picks manually (no auto-match
 // bypass) — and esc from the results returns to the catalog.
 func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 	fs := &fakeSearch{providers: []ProviderMeta{{ID: "animego", Name: "AnimeGO"}},
@@ -553,7 +553,7 @@ func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 
 	v := topOf(model).View().Content
 	if !contains(v, "Выберите провайдеры") || !contains(v, "AnimeGO — Совсем Другое Аниме") {
-		t.Fatalf("non-matching results must still render below the table, got:\n%s", v)
+		t.Fatalf("non-matching results must still render on the settled screen, got:\n%s", v)
 	}
 
 	// Esc from the results view pops back to the catalog list.

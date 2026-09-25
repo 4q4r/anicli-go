@@ -88,10 +88,10 @@ func fanOutRosterOnce(ctx context.Context, provs []*latencyProvider, query strin
 	return all
 }
 
-// TestLoadSearchFanout29Latencies proves 29-provider fan-out wall time
+// TestLoadSearchFanout27Latencies proves 27-provider fan-out wall time
 // tracks the slowest provider, not the sum — at 50/200/1000ms
 // simulated latencies.
-func TestLoadSearchFanout29Latencies(t *testing.T) {
+func TestLoadSearchFanout27Latencies(t *testing.T) {
 	ctx := context.Background()
 
 	provs := make([]*latencyProvider, 0, rosterProviders)
@@ -109,7 +109,7 @@ func TestLoadSearchFanout29Latencies(t *testing.T) {
 
 	goroutinesBefore := runtime.NumGoroutine()
 
-	fmt.Fprintf(os.Stdout, "\n=== 29-provider fan-out latency results ===\n")
+	fmt.Fprintf(os.Stdout, "\n=== 27-provider fan-out latency results ===\n")
 	fmt.Fprintln(os.Stdout, "latency\twall\toverhead\tresults\talloc_B/op")
 
 	for _, round := range rounds {

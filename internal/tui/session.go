@@ -121,6 +121,13 @@ type streamResolvedMsg struct {
 	skipChapters string
 	skipCleanup  func()
 	err          error
+	// freshEmbeds is the episode's embed map after the always-fresh
+	// hydration round (PR111) the resolve ran first: per provider,
+	// the fresh links replaced the cache (a provider whose round
+	// failed or yielded nothing kept its cached links). The settle
+	// writes it back so every later consumer (audio pick, next
+	// resolve round) sees the rotated links too.
+	freshEmbeds map[string][]string
 }
 
 // playedMsg settles one playback; quality is the label actually used
@@ -550,11 +557,13 @@ func (s *sessionScreen) settleRefresh() tea.Cmd {
 }
 
 // hydrateEpisode issues one hydration round for the episode num (the
-// PR43 on-demand trigger behind «Смотреть» and the «🔄 Обновить
-// источники» recovery): the status line reports the work (the
-// legitimate progress display), the settle message merges the results
-// under the provider prefixes. The attempt is recorded so the header
-// cause can distinguish unopened episodes from genuinely empty ones.
+// PR43 on-demand trigger behind «Смотреть»; for «🔄 Обновить
+// источники» it is the SECOND phase of the refresh — the fetch
+// fan-out re-runs first, then this round re-hydrates the lazily-listing
+// providers of the opened episode): the status line reports the work,
+// the settle message merges the results under the provider prefixes.
+// The attempt is recorded so the header cause can distinguish
+// unopened episodes from genuinely empty ones.
 func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	if num == "" {
 		s.setStatus("Нет серий")
@@ -728,6 +737,29 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				msg.skipCleanup()
 			}
 			return s, nil
+		}
+		// PR111: the fresh hydration's verdict replaces the cached
+		// embeds (the round ran before the resolve; both the audio
+		// pick at play time and the next round read the current
+		// links). The dub stats follow the key set delta.
+		if msg.freshEmbeds != nil {
+			if ep, ok := s.episodes[msg.skipEpisode]; ok {
+				for key := range ep.RawEmbeds {
+					if _, kept := msg.freshEmbeds[key]; !kept {
+						s.dubStats[key]--
+						if s.dubStats[key] <= 0 {
+							delete(s.dubStats, key)
+						}
+					}
+				}
+				for key, links := range msg.freshEmbeds {
+					if _, had := ep.RawEmbeds[key]; !had && len(links) > 0 {
+						s.dubStats[key]++
+					}
+				}
+				ep.RawEmbeds = msg.freshEmbeds
+				s.episodes[msg.skipEpisode] = ep
+			}
 		}
 		if msg.err != nil {
 			if msg.skipCleanup != nil {
@@ -1001,13 +1033,9 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return s, replace(newRebindProgress(s.deps, s.resume))
 	case "redub":
-		// PR95: open the dub-selection menu over the episode's merged
-		// entries (cached ones when fresh, a fresh unscoped resolve
-		// otherwise). The dubs are NOT reset.
-		if s.streamEntriesEp == s.currentEpisode() && len(s.streamEntries) > 0 {
-			s.openRedubMenu()
-			return s, nil
-		}
+		// PR95/PR111: the dub menu is built from a FRESH resolve
+		// (redubPending) — the ResolveStream cache is banned, and the
+		// dub set itself rotates; cached entries never feed it.
 		s.redubPending = true
 		return s.beginStreamResolve("")
 	case "info":
@@ -1250,10 +1278,62 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s.launchPlayback()
 }
 
+// hydrateEpisodeFresh re-runs the per-provider dub hydration for the
+// episode (PR111 always-fresh): stream links rotate server-side, so
+// the cached embeds are never trusted for a resolve. Every
+// contributing provider is queried; a round that returned actual
+// links REPLACES that provider's cached keys (dubs the provider
+// dropped vanish); a failed or empty round keeps the cached links —
+// fail-soft per provider, and the eager providers (no DubsHydrator
+// capability, HydrateDubs passes the episode through unchanged) keep
+// the embeds their listing delivered. The resolve stays the
+// truth-teller: dead links it surfaces as the PR94 skip records.
+func hydrateEpisodeFresh(ctx context.Context, deps *Deps, ep contracts.Episode) contracts.Episode {
+	out := contracts.Episode{Num: ep.Num, Title: ep.Title, RawID: ep.RawID, RawEmbeds: map[string][]string{}}
+	for k, v := range ep.RawEmbeds {
+		out.RawEmbeds[k] = v
+	}
+	for _, part := range strings.Split(ep.RawID, "|") {
+		prov, id, found := strings.Cut(part, ":")
+		if !found || prov == "" || id == "" {
+			continue
+		}
+		local := contracts.Episode{Num: ep.Num, RawID: id, RawEmbeds: map[string][]string{}}
+		fresh, err := deps.Episode.HydrateDubs(ctx, prov, local)
+		if err != nil {
+			deps.logger().Warn("tui: fresh hydration failed; keeping cached embeds",
+				"provider", prov, "episode", ep.Num, "error", err)
+			continue
+		}
+		got := 0
+		for _, links := range fresh.RawEmbeds {
+			if len(links) > 0 {
+				got++
+			}
+		}
+		if got == 0 {
+			continue // nothing fresh — keep this provider's cached keys
+		}
+		for key := range out.RawEmbeds {
+			if providerOfTrackKey(key) == prov {
+				delete(out.RawEmbeds, key)
+			}
+		}
+		for dub, links := range fresh.RawEmbeds {
+			if len(links) > 0 {
+				out.RawEmbeds["["+prov+"] "+dub] = links
+			}
+		}
+	}
+	return out
+}
+
 // beginStreamResolve resolves the episode's streams for the picker.
 // An empty scope resolves EVERY dub carrying embed links — the merged
 // list (PR61); a dub key scopes the resolve to the remembered dub
-// (the fast path auto-plays its result).
+// (the fast path auto-plays its result). The round ALWAYS starts with
+// a fresh hydration (PR111): the ResolveStream cache is banned —
+// every episode open re-resolves from the provider's current links.
 func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	// PR84 review fix: CLEAR the previous round's entries BEFORE any
 	// surface is built — otherwise round 2's picker frame renders the
@@ -1284,7 +1364,8 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	return s, safeCmd(sessionScreenID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
-		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
+		fresh := hydrateEpisodeFresh(ctx, deps, ep)
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, scope)
 		// The skip verdict is stream-independent — it fetches here so
 		// the note is ready at launch (PR61). Best-effort: a failure
 		// degrades the note, never the resolve.
@@ -1306,6 +1387,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 			skipChapters: chapters,
 			skipCleanup:  cleanup,
 			err:          err,
+			freshEmbeds:  fresh.RawEmbeds,
 		}
 	})
 }
@@ -1755,27 +1837,13 @@ func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 // pickRedub re-targets playback to the chosen dub: the remembered
-// pair updates (so «След.» keeps the new dub) and the dub's already
-// resolved stream launches immediately; a dub without resolved
-// streams falls back to the scoped resolve.
+// pair updates (so «След.» keeps the new dub) and the scoped resolve
+// re-resolves the dub's streams FRESH (PR111 — the banned-cache
+// removal: the settle's fast path auto-launches the fresh result). A
+// dub the rotation dropped falls to the scoped-error fallback (the
+// merged resolve of the rest, PR94).
 func (s *sessionScreen) pickRedub(dub string) (Screen, tea.Cmd) {
 	s.videoDub, s.audioDub = dub, dub
-	if s.streamEntriesEp == s.currentEpisode() {
-		var candidates []streamEntry
-		for _, e := range s.streamEntries {
-			if e.DubKey == dub && e.Source.URL != "" {
-				candidates = append(candidates, e)
-			}
-		}
-		if len(candidates) > 0 {
-			e := autoStreamEntry(candidates, s.lastQuality)
-			s.pickedVideo = e.Source
-			s.lastQuality = e.Quality
-			return s.launchPlayback()
-		}
-	}
-	// The dub's streams are not resolved for the current episode —
-	// the scoped resolve settles into the remembered-dub fast path.
 	return s.beginStreamResolve(dub)
 }
 

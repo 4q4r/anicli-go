@@ -1658,24 +1658,32 @@ func TestSessionRedubRewatchCleansChaptersFile(t *testing.T) {
 		t.Fatalf("one pending chapters file expected, got %d", leakProbeLeftovers(t, dir))
 	}
 
-	// Back to the menu, «Сменить озвучку»: the menu's own unscoped
-	// re-resolve of the same episode supersedes the first — file A
-	// must go, file B pending (the dub menu opens on the settle).
+	// Back to the menu, «Сменить озвучку»: PR111 — the menu is built
+	// from a FRESH unscoped re-resolve of the same episode. The round
+	// spawns its own chapters verdict (file B); the settle retires the
+	// previous pending file A (the dub menu opens on the settle).
 	ss.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if ss.state != sessionStateMenu {
 		t.Fatalf("Esc must return to the menu, got %v", ss.state)
 	}
-	ss.list.Jump(sessionActionIndex(ss, "redub"))
-	next, _ = ss.Update(enter())
-	ss = next.(*sessionScreen)
-	if ss.state != sessionStateRedub {
-		t.Fatalf("the redub menu must open, got %v", ss.state)
-	}
-	// The menu opened from the CACHED entries — no new resolve, so no
-	// NEW chapters file is spawned (the old one was already retired by
-	// the Esc-cancel above — PR61 semantics).
 	if n := leakProbeLeftovers(t, dir); n != 0 {
-		t.Fatalf("the redub menu must not spawn chapters files, got %d", n)
+		t.Fatalf("Esc-cancel must remove the pending chapters file, got %d", n)
+	}
+	ss.list.Jump(sessionActionIndex(ss, "redub"))
+	next, rcmd := ss.Update(enter())
+	ss = next.(*sessionScreen)
+	sr2, ok := rcmd().(streamResolvedMsg)
+	if !ok {
+		t.Fatalf("the redub fresh resolve expected, got %T", rcmd())
+	}
+	ss.Update(sr2)
+	if ss.state != sessionStateRedub {
+		t.Fatalf("the redub menu must open on the fresh settle, got %v", ss.state)
+	}
+	// The fresh round's verdict is the one pending file (A retired by
+	// the settle — PR61 semantics).
+	if n := leakProbeLeftovers(t, dir); n != 1 {
+		t.Fatalf("the fresh round's chapters file must be pending, got %d", n)
 	}
 
 	// Esc from the dub menu: back to the menu, the pending file

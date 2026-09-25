@@ -373,19 +373,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 29)
+	d := newToolDeps(t, 30)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("29/29 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("30/30 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "29/29") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "30/30") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 29 {
+	for i := range 30 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -403,28 +403,28 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 // 27 of 28 since animeheaven joins in PR105; 28 of 29 since anikoto
 // joins in PR104).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 29, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 30, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("28/29 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("29/30 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "28/29") {
-		t.Fatalf("summary must show 28/29:\n%s", out.String())
+	if !strings.Contains(out.String(), "29/30") {
+		t.Fatalf("summary must show 29/30:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 28, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 30, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("26/28 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("28/30 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "26/28") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 26/28 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "28/30") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 28/30 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())
@@ -462,7 +462,7 @@ func TestParityAllHonorsDeclaredSmokeQuery(t *testing.T) {
 			if err := reg.Register(declared00); err != nil {
 				return nil, err
 			}
-			for i := 1; i < 28; i++ {
+			for i := 1; i < 30; i++ {
 				p := newParityProvider(t, fmt.Sprintf("p%02d", i), false)
 				if err := reg.Register(p); err != nil {
 					return nil, err

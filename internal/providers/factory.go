@@ -206,6 +206,23 @@ var allFactories = []struct {
 	{"anikoto", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniKoto(AniKotoBase, http)
 	}},
+	// anipub (PR107): the anipub.xyz EN catalog — an open Express+Mongo
+	// API (github.com/AnimePub/AniPub, the site's own source; the
+	// api. subdomain is static GitHub Pages, the real API rides the
+	// apex host). Written from the live API + backend source
+	// (2026-09-25); anonymous on every leg (the validkey middleware
+	// next()s on a missing key). /api/searchAll name search in, the
+	// /v1/api/details ep array out; each link is the site's own
+	// /video/<n>/<sub|dub> player page wrapping a megaplay.buzz stream
+	// whose same-origin getSourcesNew enc payload decrypts (static
+	// AES-256-CBC params from megaplay's newclient.min.js) to the
+	// master.m3u8 — no extractor factory hop. Sub and Dub emit per
+	// episode (the site's own changeStreamType toggle); the megaplay
+	// CDN 403s playback without the stream-origin Referer, so it rides
+	// on the source.
+	{"anipub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniPub(AniPubBase, http)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

@@ -60,7 +60,10 @@ import (
 // taking it to 27; animeheaven (PR105, the animeheaven.me EN
 // sub-only catalog with direct-MP4 gate sources) joined after
 // animevib, taking it to 28; anikoto (PR104) joined after
-// animeheaven, taking it to 29.
+// animeheaven, taking it to 29; anipub (PR107, the anipub.xyz EN
+// catalog behind its open Express+Mongo API — search/details JSON in,
+// megaplay.buzz streams resolved through the site's own player pages)
+// joined after anikoto, taking it to 30.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -85,6 +88,7 @@ var expectedProviderOrder = []string{
 	"animevib",
 	"animeheaven",
 	"anikoto",
+	"anipub",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

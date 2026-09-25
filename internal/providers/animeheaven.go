@@ -201,6 +201,16 @@ func (p *AnimeHeaven) GetEpisodes(ctx context.Context, animeURL string) ([]contr
 	// The page renders newest-first; the contract expects ascending.
 	sort.Slice(entries, func(i, j int) bool { return entries[i].num < entries[j].num })
 
+	// A parsed page with zero gate anchors is a typed wall: an empty
+	// list here would fake a healthy title with no episodes (the
+	// roster doctrine — anizone/animedia/anikado/anitokyo/animiku/
+	// animevib; this site's own space-after-paren drift shows the
+	// markup-shift case is real).
+	if len(entries) == 0 {
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("anime page carries no gate episode anchors: %w", contracts.ErrNotFound))
+	}
+
 	episodes := make([]contracts.Episode, 0, len(entries))
 	for _, e := range entries {
 		num := strconv.Itoa(e.num)
@@ -235,9 +245,13 @@ func (p *AnimeHeaven) ResolveStream(ctx context.Context, episode contracts.Episo
 		Links:   map[string]contracts.VideoSource{},
 	}
 
-	embeds := episode.RawEmbeds[dubID]
-	if len(embeds) == 0 || embeds[0] == "" {
-		return stream, nil
+	// A dub the episode does not carry is a caller bug (wave A review
+	// F2, animedia precedent, mirrored from animevib): a silent empty
+	// MediaStream would read as a healthy resolution.
+	embeds, ok := episode.RawEmbeds[dubID]
+	if !ok || len(embeds) == 0 || embeds[0] == "" {
+		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
+			fmt.Errorf("%w: episode %s carries no dub %q", contracts.ErrInvalidInput, episode.Num, dubID))
 	}
 
 	referer := p.baseURL + "/"

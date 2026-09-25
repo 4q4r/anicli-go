@@ -221,6 +221,27 @@ func TestAnimeHeavenGetEpisodesBadURL(t *testing.T) {
 	}
 }
 
+func TestAnimeHeavenGetEpisodesNoAnchors(t *testing.T) {
+	t.Parallel()
+
+	// A parsed page with no gate anchors (markup drift, removed title,
+	// substituted page) is a typed NOT-FOUND wall — an empty list here
+	// would fake a healthy title with no episodes (the roster
+	// doctrine: anizone/animedia/anikado/anitokyo/animiku/animevib).
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><div class='content'>nothing here</div></body></html>`))
+	})
+	p := newAnimeHeaven(srv.URL, testClient(t, "animeheaven"))
+
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime.php?nc7bk")
+	if err == nil {
+		t.Fatal("GetEpisodes on an anchor-less page must fail")
+	}
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAnimeHeavenResolveStream(t *testing.T) {
 	t.Parallel()
 
@@ -327,16 +348,22 @@ func TestAnimeHeavenResolveStreamNoSources(t *testing.T) {
 func TestAnimeHeavenResolveStreamEmptyEmbeds(t *testing.T) {
 	t.Parallel()
 
-	// No embeds under the requested dub: an empty stream, no error
-	// (the anizone semantics — the dub filter layer relies on it).
+	// A dub the episode does not carry is a caller bug (the wave-A
+	// review F2 / animedia precedent, mirrored from animevib): a
+	// silent empty MediaStream would look like a healthy resolution.
+	// (resolveAllStreams only passes keys present in RawEmbeds, so
+	// TUI flows never hit this — the guard is the typed contract.)
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("no request expected for empty embeds")
+		t.Error("no request expected for a missing dub")
 	})
 	p := newAnimeHeaven(srv.URL, testClient(t, "animeheaven"))
 
 	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "4"}, ahServiceDub)
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
+	if err == nil {
+		t.Fatal("ResolveStream with no dub embeds must fail")
+	}
+	if !errors.Is(err, contracts.ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 	if len(stream.Links) != 0 {
 		t.Errorf("Links = %v, want empty", stream.Links)

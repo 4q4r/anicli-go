@@ -102,7 +102,6 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	// blocks; anifilm (PR91) and animemobi (PR92) closed the RU-dub
 	// block after anistar; anitokyo (PR100) joined after animemobi;
 	// animiku (PR101) joined after anitokyo; anikado (PR102) joined
-	// after animiku; anikado (PR102) joined
 	// after animiku; animevib (PR103) joined after anikado;
 	// animeheaven (PR105, the animeheaven.me EN sub-only direct-MP4
 	// catalog) joined after animevib; the

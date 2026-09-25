@@ -362,6 +362,19 @@ func TestAniKotoResolveStream(t *testing.T) {
 	if stream.DubName != "SUB" {
 		t.Errorf("DubName = %q, want SUB", stream.DubName)
 	}
+
+	// The manifest request must carry the HMAC token: a signing
+	// regression to plain passthrough must fail the chain, not just
+	// the unit-level format pin.
+	for _, req := range srv.reqs {
+		if strings.HasPrefix(req.Path, "/anime/577bcc914f9e55d5e4e4f82f9f00e7d4/") {
+			if !strings.Contains(req.Query, "token=") {
+				t.Errorf("master.m3u8 query = %q, want the HMAC token", req.Query)
+			}
+			return
+		}
+	}
+	t.Fatal("the master.m3u8 request was never recorded")
 }
 
 func TestAniKotoResolveStreamUnknownDub(t *testing.T) {
@@ -436,6 +449,26 @@ func TestAniKotoAjaxEnvelopeError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "Bad request") {
 		t.Errorf("err = %v, want the envelope status and message quoted", err)
+	}
+}
+
+func TestAniKotoUnpackShortPayloadTypedError(t *testing.T) {
+	t.Parallel()
+
+	// A hostile/rotated bundle can match all three wrapper regexes yet
+	// carry a payload shorter than the known plaintext prefix: the
+	// unpack must fail TYPED, never index out of range (the reviewer
+	// reproduced a SIGSEGV here on a 2-byte payload).
+	script := `let o;return eval("W})(\"ab\")");`
+	_, err := akUnpackPlayerStrings(script)
+	if err == nil {
+		t.Fatal("err = nil, want the short-payload failure")
+	}
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Errorf("err = %v, want ErrExtractFailed", err)
+	}
+	if !strings.Contains(err.Error(), "too short") || !strings.Contains(err.Error(), "2") {
+		t.Errorf("err = %v, want the offending length quoted", err)
 	}
 }
 

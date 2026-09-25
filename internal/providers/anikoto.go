@@ -124,7 +124,8 @@ type akPlayerParams struct {
 //     (data-ids, base64), MAL id and timestamps.
 //   - Dubs: GET /ajax/server/list?servers={data-ids} answers the same
 //     envelope with two server groups — SUB and DUB (data-type) — each
-//     holding ~3 named servers (Vidstream-2, HD-1, HD-2) as
+//     holding four named servers (Vidstream-2, Vidstream-1 beta,
+//     HD-1, HD-2) as
 //     li[data-link-id] rows. The listing fans out lazily: episodes
 //     arrive with empty embeds and the session hydrates them through
 //     the DubsHydrator capability (the kickassanime pattern).
@@ -470,6 +471,11 @@ func (p *AniKoto) akResolveMegaplay(ctx context.Context, embedURL string) (map[s
 	}
 	file, err := akDecryptSource(payload.Enc, params.key, params.iv)
 	if err != nil {
+		// A decrypt failure means the cached parameters no longer
+		// match the bundle the site is serving (a same-URL rotation):
+		// drop the entry so the next attempt refetches and re-unpacks
+		// instead of serving the poisoned set until the TTL lapses.
+		p.akInvalidateParams(scriptURL)
 		return nil, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
 			fmt.Errorf("%w: decrypt sources: %w", contracts.ErrExtractFailed, err))
 	}
@@ -539,6 +545,20 @@ func (p *AniKoto) akParamsFor(ctx context.Context, scriptURL, referer string) (*
 	p.paramsAt = time.Now()
 	p.mu.Unlock()
 	return params, nil
+}
+
+// akInvalidateParams drops the cached parameter set when it is pinned
+// to scriptURL (the decrypt-failure path: the entry can only produce
+// more typed failures until the TTL lapses, so the next attempt
+// refetches the bundle instead).
+func (p *AniKoto) akInvalidateParams(scriptURL string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.paramsFrom == scriptURL {
+		p.params = nil
+		p.paramsFrom = ""
+		p.paramsAt = time.Time{}
+	}
 }
 
 // akAJAX performs one XMLHttpRequest against the site and unwraps the
@@ -645,16 +665,26 @@ func akUnpackPlayerStrings(script string) (string, error) {
 		return "", err
 	}
 	payload = akDecodeURI(payload)
+	// A hostile or rotated bundle can match every wrapper regex yet
+	// carry a payload shorter than the known plaintext prefix — that
+	// is a typed failure, never an index panic.
+	if len(payload) < len(akXORPrefix) {
+		return "", fmt.Errorf("%w: obfuscated player payload too short (%d bytes)", contracts.ErrExtractFailed, len(payload))
+	}
 
 	// XOR key recovery from the known prefix: the key repeats with a
-	// period that must divide the whole derived key stream.
+	// period that must divide the whole derived key stream. The search
+	// runs to the full prefix length — a long-period key yields a
+	// candidate whose trailing bytes no longer match the expected
+	// shape, so the prefix+suffix validation rejects it typed (no
+	// tighter bound is provable from the prefix alone).
 	known := make([]int, len(akXORPrefix))
 	for i := range len(akXORPrefix) {
 		known[i] = int(payload[i]) ^ int(akXORPrefix[i])
 	}
 	var decoded string
 	found := false
-	for size := 1; size <= len(known)/2; size++ {
+	for size := 1; size <= len(known); size++ {
 		periodic := true
 		for i, v := range known {
 			if v != known[i%size] {
@@ -743,7 +773,9 @@ func akUnpackPlayerStrings(script string) (string, error) {
 		if err != nil {
 			return call
 		}
-		return strings.Replace(call, m[0], string(quoted), 1)
+		// call IS the full match — the quoted table entry replaces it
+		// verbatim.
+		return string(quoted)
 	}), nil
 }
 
@@ -773,7 +805,10 @@ func akJSString(content string) (string, error) {
 	return unquoteJSBody(content), nil
 }
 
-// unquoteJSBody performs the escape decoding of akJSString.
+// unquoteJSBody performs the escape decoding of akJSString. Known
+// limitation, noted for the record: lone \uD83D\uDE00-style surrogate
+// pairs decode as two replacement runes instead of one code point —
+// irrelevant for the ASCII crypto identifiers this parser consumes.
 func unquoteJSBody(content string) string {
 	var b strings.Builder
 	b.Grow(len(content))

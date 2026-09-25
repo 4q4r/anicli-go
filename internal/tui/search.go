@@ -564,11 +564,12 @@ func (m *searchProgress) settleResults() {
 	m.resultCheck = NewCheckList("Выберите провайдеры:", items)
 }
 
-// View implements Screen. PR110 minimal shape: during the fan-out —
-// the title and ONE loading line (spinner + «Ищу по N провайдерам…»);
-// once every provider settles — the title, the found/not-found
-// summary line and the merged-results checklist (the PR62 surface,
-// unchanged). The bordered table is gone (removed in PR110).
+// View implements Screen. PR110 minimal shape, PR111 live counter:
+// during the fan-out — the title and ONE loading line (spinner +
+// «settled/total провайдеров, N результатов…», re-rendered per
+// settle); once every provider settles — the title, the found/
+// not-found summary line and the merged-results checklist (the PR62
+// surface, unchanged). The bordered table is gone (removed in PR110).
 func (m *searchProgress) View() tea.View {
 	header := m.titleOverride
 	if header == "" {
@@ -579,16 +580,20 @@ func (m *searchProgress) View() tea.View {
 	b.WriteString("\n")
 
 	if len(m.pending) > 0 {
-		// Fan-out in flight: one minimal loading line. The Shikimori
-		// enrichment phase keeps its own notice until the variants
-		// resolve and the per-provider fan-out starts.
+		// Fan-out in flight: one live-counter loading line (PR111) —
+		// settled/total providers + the running result total, updated
+		// on every providerResultMsg so the fan-out visibly moves.
+		// The Shikimori enrichment phase keeps its own notice until
+		// the variants resolve and the per-provider fan-out starts.
 		b.WriteString("\n")
 		if m.enriching {
 			b.WriteString(m.spin.View() + " " +
 				theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
 		} else {
-			b.WriteString(m.spin.View() + " Ищу по " +
-				strconv.Itoa(len(m.rows)) + " провайдерам…")
+			settled := len(m.rows) - len(m.pending)
+			b.WriteString(m.spin.View() + " " + strconv.Itoa(settled) + "/" +
+				strconv.Itoa(len(m.rows)) + " провайдеров, " +
+				strconv.Itoa(len(m.results)) + " результатов…")
 		}
 		b.WriteString("\n")
 		return tea.NewView(b.String())

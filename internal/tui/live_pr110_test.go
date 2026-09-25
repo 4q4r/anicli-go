@@ -10,8 +10,10 @@ package tui
 //
 // Prints, for the query below (or $ANICLI_LIVE_QUERY):
 //  1. the loading frame right after Init: ONE line — spinner +
-//     «Ищу по N провайдерам…» — with no table chrome;
-//  2. the first mid-flight settle: the loading line persists;
+//     «settled/N провайдеров, K результатов…» (PR111 live counter) —
+//     with no table chrome;
+//  2. the first mid-flight settle: the live-counter loading line
+//     persists;
 //  3. the settled frame: the found/not-found summary above the
 //     merged checklist;
 //  4. per-provider settle log lines carry the FULL errors on the log
@@ -56,9 +58,9 @@ func TestLivePR110MinimalFanout(t *testing.T) {
 	}
 
 	// 1. The loading frame BEFORE any settle: one minimal line under
-	// the title (the Shikimori notice while enriching, the «Ищу по N
-	// провайдерам…» line once the fan-out runs). Either way: no
-	// table, no summary.
+	// the title (the Shikimori notice while enriching, the live
+	// counter «settled/N провайдеров, K результатов…» once the
+	// fan-out runs). Either way: no table, no summary.
 	loading := sp.View().Content
 	t.Logf("=== LOADING FRAME (pending %d) ===\n%s", len(sp.pending), pr110Indent(loading))
 	for _, banned := range []string{"┌", "│", "└", "Ответившие"} {
@@ -66,7 +68,7 @@ func TestLivePR110MinimalFanout(t *testing.T) {
 			t.Fatalf("loading frame must not carry table chrome %q:\n%s", banned, loading)
 		}
 	}
-	if !strings.Contains(loading, "Shikimori") && !strings.Contains(loading, "Ищу по") {
+	if !strings.Contains(loading, "Shikimori") && !strings.Contains(loading, "провайдеров,") {
 		t.Fatalf("loading frame must carry a loading line:\n%s", loading)
 	}
 

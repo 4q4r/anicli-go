@@ -398,10 +398,11 @@ func TestSearchGroupLabelsCarryTorrentSuffix(t *testing.T) {
 	}
 }
 
-// TestSearchFanOutLoadingViewMinimal (PR110): during the fan-out the
-// screen is ONE minimal loading line (spinner + «Ищу по N
-// провайдерам…») under the title — no table, no checklist, no
-// summary counts.
+// TestSearchFanOutLoadingViewMinimal (PR110, PR111): during the
+// fan-out the screen is ONE live-counter loading line (spinner +
+// «settled/total провайдеров, N результатов…») under the title — no
+// table, no checklist, no summary counts. The counters re-render per
+// settle so the line shows the fan-out is alive, not stuck.
 func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
 	fs := newFakeSearch()
 	deps := &Deps{Search: fs}
@@ -413,8 +414,12 @@ func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
 	sp := NewSearchProgress(deps, "наруто")
 
 	v := sp.View().Content
-	if !strings.Contains(v, "Ищу по 3 провайдерам…") {
-		t.Fatalf("loading line missing:\n%s", v)
+	if !strings.Contains(v, "0/3 провайдеров, 0 результатов…") {
+		t.Fatalf("loading line missing the initial live counts:\n%s", v)
+	}
+	// The spinner frame still leads the line (animation unchanged).
+	if !strings.ContainsAny(v, "⣾⣽⣻⢿⡿⣟⣯⣷") {
+		t.Fatalf("loading line must still carry the spinner frame:\n%s", v)
 	}
 	for _, banned := range []string{"┌", "│", "└", "Выберите провайдеры", "Найдено:", "Ответившие"} {
 		if strings.Contains(v, banned) {
@@ -422,16 +427,56 @@ func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
 		}
 	}
 
-	// One provider settles: the loading line persists until the LAST
-	// settle, still without table chrome or summary counts.
+	// One provider settles: the line re-renders with the new counts —
+	// settled 1/3, one result so far — still without table chrome or
+	// summary counts.
 	sp.Update(providerResultMsg{provider: fs.providers[0],
 		results: []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}})
 	v = sp.View().Content
-	if !strings.Contains(v, "Ищу по 3 провайдерам…") {
-		t.Fatalf("loading line must persist while providers are pending:\n%s", v)
+	if !strings.Contains(v, "1/3 провайдеров, 1 результатов…") {
+		t.Fatalf("loading line must re-render with the settle counts:\n%s", v)
 	}
 	if strings.Contains(v, "Найдено:") || strings.Contains(v, "┌") {
 		t.Fatalf("no summary or table while in flight:\n%s", v)
+	}
+}
+
+// TestSearchFanOutSettleCountsTrackLive (PR111): the loading line
+// counts every settle the moment it lands — a success adds its
+// results, an error adds only to the settled half — and the LAST
+// settle flips the screen to the settled summary + checklist.
+func TestSearchFanOutSettleCountsTrackLive(t *testing.T) {
+	fs := newFakeSearch()
+	deps := &Deps{Search: fs}
+	sp := NewSearchProgress(deps, "наруто")
+
+	result := func(id string) []contracts.SearchResult {
+		return []contracts.SearchResult{{Title: "Наруто", URL: "u", SourceID: id}}
+	}
+
+	// First settle: 1/3, one result.
+	sp.Update(providerResultMsg{provider: fs.providers[0], results: result("animego")})
+	if v := sp.View().Content; !strings.Contains(v, "1/3 провайдеров, 1 результатов…") {
+		t.Fatalf("first settle must update the live counters:\n%s", v)
+	}
+
+	// An errored provider counts as settled but adds no results.
+	sp.Update(providerResultMsg{provider: fs.providers[2], err: errors.New("timeout")})
+	if v := sp.View().Content; !strings.Contains(v, "2/3 провайдеров, 1 результатов…") {
+		t.Fatalf("error settle must advance only the settled half:\n%s", v)
+	}
+
+	// Last settle: the loading line is gone, the settled view is in.
+	sp.Update(providerResultMsg{provider: fs.providers[1], results: result("anilib")})
+	v := sp.View().Content
+	if strings.Contains(v, "провайдеров,") {
+		t.Fatalf("the settled view must drop the loading line:\n%s", v)
+	}
+	if !strings.Contains(v, "Найдено: 2 · Без результатов/ошибок: 1") {
+		t.Fatalf("the last settle must transition to the summary:\n%s", v)
+	}
+	if !strings.Contains(v, "Выберите провайдеры") {
+		t.Fatalf("the last settle must show the checklist:\n%s", v)
 	}
 }
 

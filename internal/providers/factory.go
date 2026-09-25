@@ -128,6 +128,19 @@ var allFactories = []struct {
 	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
+	// animevib (PR103): the www.animevib.ru RU catalog — a DLE site
+	// (the controller's WordPress intel was wrong: DLE's ?s= is
+	// silently ignored; the real search is the index.php GET form).
+	// Written from the live site (2026-09-25); no credentials. Every
+	// post embeds ONE kodik player whose serial page lists the dub
+	// teams (per-translation serial pages) and per-episode seria
+	// hashes — the provider merges the (episode × dub) table and
+	// resolves the synthesized seria embeds through the shared kodik
+	// extractor. The per-translation fetch budget rides
+	// cfg.Network.MaxParallel (the kickassanime pattern).
+	{"animevib", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnimeVib(AnimeVibBase, http, cfg.Network.MaxParallel)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

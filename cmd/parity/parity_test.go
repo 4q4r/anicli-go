@@ -373,19 +373,19 @@ func TestParityResolveUnknownDubFails(t *testing.T) {
 }
 
 func TestParityAllGatePassesWithAllOK(t *testing.T) {
-	d := newToolDeps(t, 23)
+	d := newToolDeps(t, 25)
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("23/23 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("25/25 OK must pass the gate, exit %d, stderr: %s", code, errOut.String())
 	}
 	table := out.String()
-	if !strings.Contains(table, "OK") || !strings.Contains(table, "23/23") {
+	if !strings.Contains(table, "OK") || !strings.Contains(table, "25/25") {
 		t.Fatalf("summary table missing OK rows or total:\n%s", table)
 	}
 	// Every provider row present.
-	for i := range 23 {
+	for i := range 25 {
 		if !strings.Contains(table, fmt.Sprintf("p%02d", i)) {
 			t.Fatalf("table missing provider p%02d:\n%s", i, table)
 		}
@@ -397,30 +397,30 @@ func TestParityAllGatePassesWithAllOK(t *testing.T) {
 // PR56; 21 of 22 since hdrezka joined in PR69; 22 of 23 since
 // anistar joined in PR77; 23 of 24 after the fix/93 provider
 // removals; 22 of 23 after the PR107 provider removal; 23 of 24 since
-// anitokyo joined in PR100).
+// anitokyo joined in PR100; 24 of 25 since animiku joined in PR101).
 func TestParityAllGateToleratesOneDead(t *testing.T) {
-	d := newToolDeps(t, 24, 3) // provider p03 fails both queries.
+	d := newToolDeps(t, 25, 3) // provider p03 fails both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code != 0 {
-		t.Fatalf("23/24 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
+		t.Fatalf("24/25 OK must pass the gate (one-dead tolerance), exit %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "23/24") {
-		t.Fatalf("summary must show 23/24:\n%s", out.String())
+	if !strings.Contains(out.String(), "24/25") {
+		t.Fatalf("summary must show 24/25:\n%s", out.String())
 	}
 }
 
 func TestParityAllGateFailsBelowTwelve(t *testing.T) {
-	d := newToolDeps(t, 24, 3, 7) // p03 and p07 fail both queries.
+	d := newToolDeps(t, 25, 3, 7) // p03 and p07 fail both queries.
 	var out, errOut strings.Builder
 
 	code := run([]string{"all"}, &out, &errOut, d)
 	if code == 0 {
-		t.Fatalf("22/24 OK must fail the gate, stdout:\n%s", out.String())
+		t.Fatalf("23/25 OK must fail the gate, stdout:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "22/24") || !strings.Contains(out.String(), "FAIL") {
-		t.Fatalf("summary must show 22/24 and a FAIL row:\n%s", out.String())
+	if !strings.Contains(out.String(), "23/25") || !strings.Contains(out.String(), "FAIL") {
+		t.Fatalf("summary must show 23/25 and a FAIL row:\n%s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "gate") {
 		t.Fatalf("stderr must name the gate failure, got: %s", errOut.String())

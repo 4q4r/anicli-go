@@ -106,31 +106,32 @@ graph TD
         META["Метаданные<br/>internal/metadata"]
     end
 
-    subgraph sources["Источники — 24 провайдера"]
+    subgraph sources["Источники — 25 провайдеров"]
         P1[anilibria]
         P2[animevost]
         P3[anilib]
         P4[animego]
         P5[gogoanime]
-        P7[kickassanime]
-        P8[anizone]
-        P10[sameband]
-        P12[kodik]
-        P14[anidub]
-        P15[animedia]
-        P16[shiza]
-        P18[yummy]
-        P19[hdrezka]
-        P20[anistar]
-        P21[anifilm]
-        P22[animemobi]
-        P23[anitokyo]
-        P24[anilibria-torrent]
-        P25[animetosho]
-        P26[tokyotosho]
-        P27[rutor]
-        P28[anirena]
-        P29[subsplease]
+        P6[kickassanime]
+        P7[anizone]
+        P8[sameband]
+        P9[kodik]
+        P10[anidub]
+        P11[animedia]
+        P12[shiza]
+        P13[yummy]
+        P14[hdrezka]
+        P15[anistar]
+        P16[anifilm]
+        P17[animemobi]
+        P18[anitokyo]
+        P19[animiku]
+        P20[anilibria-torrent]
+        P21[animetosho]
+        P22[tokyotosho]
+        P23[rutor]
+        P24[anirena]
+        P25[subsplease]
     end
 
     EXT["Извлекатели плееров (10)<br/>internal/extractors"]
@@ -138,8 +139,8 @@ graph TD
     TUI --> REG & SHIKI & SKIP & DL & ST
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P7 & P8 & P10 & P12 & P13 & P14 & P15 & P16 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29
-    P3 & P4 & P5 & P12 & P14 & P15 & P16 & P18 & P20 & P21 & P22 & P23 --> EXT
+    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25
+    P3 & P4 & P5 & P9 & P10 & P11 & P12 & P13 & P15 & P16 & P17 & P18 & P19 --> EXT
     SKIP --> ST
     DL --> SKIP
 ```
@@ -315,6 +316,7 @@ trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.co
 | anifilm | anifilm.pro | видео (рус. озвучки) + торрент-раздачи | ✅ живой (PR91); не порт — кастомный движок (WebyTech, Yii+Vue), НЕ DLE: поиск GET-формой /releases?title=, серии из плейлиста /releases/api:online:{id}:{service} (kodik-first), стримы через kodik-эмбеды общим экстрактором (vInfo-плеер 2026-09); анонимный; из заблокированных сетей нужен `network.proxy_url` (зарубежный хостинг, прямой маршрут режется по SNI); торрент-раздел (прямые .torrent) — кандидат на расширение TorrentBase, в стрим-провайдер не входит; часть индекса ведёт на удалённые релизы (404 → типизированная ошибка) |
 | animemobi | animemobi.com | видео + DL (.torrent релизов) | ✅ живой (PR92); не порт — написан по живому сайту: мобильный DLE-каталог на UTF-8, анонимный, без проверок; поиск POST-формой (do=search), серии — по одной ссылке a.onlinevideo на эпизод (kodikplayer.com /seria/; старые тайтлы — цельносезонные /season/- и /video/-ссылки на aniqit.com), озвучка — из «Озвучка:» релиза (одна на релиз), стримы через общий kodik-экстрактор; RU-индекс ищет по фрагментам составных названий, общий RU-промпт «черная лагуна» мимо (склонения) — smoke-запрос объявлен; торрент-раздел (do=download → .torrent на зеркале animemobi.top, трекер tr.animemobi.ru) вне стримового контракта — задокументирован в animemobi.go |
 | anitokyo | anitokyo.tv | видео (рус. озвучки и субтитры) | ✅ живой (PR100); не порт — написан по живому сайту (2026-09-25): DLE-каталог на UTF-8 за Cloudflare без проверок, анонимный; поиск POST-формой (do=search), карточки article.story.shortstory (/anime/, /ongoing/, /ova/, /movie/ — играбельные; /hentai/ отфильтрован); серии и озвучки — из JSON-блоба RalodePlayer.init на странице релиза (одна выборка даёт ВСЕ пары озвучка×серия — у Дандадана ТВ-1 60 озвучек × 12 серий), стрим-ссылки — обёртки /video.php?id=N&cat=K самого сайта, scraping которых даёт kodik (codetype 110) или sibnet (codetype 13) — оба через общие экстракторы; анонсы («Анонс») без блоба — типизированная ошибка; RU-индекс, общий RU-промпт «черная лагуна» мимо (тайтла нет в каталоге) — smoke-запрос объявлен; из сетей, где прямой маршрут до сайта не отвечает, нужен `network.proxy_url` |
+| animiku | beta.animiku.tokyo | видео (рус. озвучки и субтитры; сайт рекламирует категории 4K/FHD) | ✅ живой (PR101); не порт — написан по живому сайту: DLE под кастомным шаблоном с мостом mrdeath/aaparser к kodik-стеку, анонимный на всех путях; поиск GET-формой (do=search&subaction=search), серии/озвучки одним ответом AJAX-моста (POST engine/ajax/controller.php?mod=anime_grabber&module=kodik_playlist_ajax, news_id+action=load_player; GET отвечает пустым телом): строка переводчиков = озвучки, сетка b-simple_episode__item = пары (эпизод, озвучка) с protocol-relative kodikplayer.com-ссылками, у фильмов/OVA ссылка на самом переводчике (kodik_translates_alt); матрица озвучка↔эпизод разреженная; стримы через общий kodik-экстрактор; заявленные 4K/FHD-плееры (AniLiberty/AniLib.me) — рантайм-резолверы по названию через API anilibria.top, детерминированных эмбедов нет — задокументированы в animiku.go, вне стримового контракта; RU-индекс, общий RU-промпт «черная лагуна» попадает (4 строки) — smoke-запрос не объявлен |
 | anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
 | animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
 | tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
@@ -341,7 +343,7 @@ make build          # сборка
 make test           # go test -race -count=1 ./...
 make lint           # golangci-lint run
 make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 23/24 провайдеров должны ответить
+make parity         # живой G1-гейт: минимум 24/25 провайдеров должны ответить
 make goldens-update # перегенерация золотых файлов контракта API
 make release        # релизные артефакты через goreleaser
 make docker-build   # distroless-образ
@@ -353,7 +355,7 @@ make docker-build   # distroless-образ
 |------|----------|
 | Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
 | Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 24, уникальны, в закреплённом порядке, у каждого фикстуры |
+| Ростер провайдеров | мета-тест: ровно 25, уникальны, в закреплённом порядке, у каждого фикстуры |
 | Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
 | Живые сайты | `cmd/parity` — capture-инструмент паритета |
 

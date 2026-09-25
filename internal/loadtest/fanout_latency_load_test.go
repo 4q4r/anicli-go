@@ -15,7 +15,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// PR81 latency fan-out profile: the full 24-provider roster fans out
+// PR81 latency fan-out profile: the full 25-provider roster fans out
 // ONE search each at simulated site latencies (50/200/1000ms) using
 // the production fan-out shape (goroutine per provider — the
 // searchProgress.startFanOut tea.Batch layout). Wall time must equal
@@ -23,7 +23,7 @@ import (
 // allocations per fan-out at the slowest round.
 
 const (
-	rosterProviders   = 24
+	rosterProviders   = 25
 	fanoutLatencyEps  = 100 * time.Millisecond // scheduling jitter allowance
 	fanoutSettleLimit = 25
 )

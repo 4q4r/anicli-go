@@ -38,7 +38,9 @@ import (
 // Yii/Vue catalog with its kodik-embed player stack) and animemobi
 // (PR92, the animemobi.com RU mobile DLE catalog with its kodik-family
 // players and per-release torrent downloads) closed the RU-dub block
-// after anistar; the torrents close the roster — rutor (PR87, the
+// after anistar; animiku (PR101, the beta.animiku.tokyo RU DLE catalog
+// with its mrdeath/aaparser kodik bridge) joined after anitokyo; the
+// torrents close the roster — rutor (PR87, the
 // rutor.info public tracker — the first RU-indexed torrent provider),
 // anirena (PR88, the anirena.com search RSS with direct .torrent
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
@@ -47,7 +49,8 @@ import (
 // after tokyotosho. The roster froze at 24 through the fix/93 wave;
 // the PR107 torrent-search removal took it to 23; anitokyo (PR100,
 // the anitokyo.tv RU DLE catalog with its RalodePlayer module) joined
-// after animemobi, taking it back to 24.
+// after animemobi, taking it back to 24; PR101 (animiku) took it
+// to 25.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -67,6 +70,7 @@ var expectedProviderOrder = []string{
 	"anifilm",
 	"animemobi",
 	"anitokyo",
+	"animiku",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

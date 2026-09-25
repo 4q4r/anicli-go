@@ -128,6 +128,20 @@ var allFactories = []struct {
 	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
+	// anikado (PR102): the anikado.net RU catalog (DLE, UTF-8,
+	// anonymous) — search POST form in, episodes off the title page's
+	// server-rendered anchor list, per-(episode, dub) kodik embeds off
+	// each episode page's b-translator__item table (fan-out bounded by
+	// network.max_parallel, the kickassanime pattern); movies carry
+	// their kodik /video/ embed directly in the title page's kodik tab.
+	// The title page's vkg/tomion fallback tabs are client-side
+	// hydrated or frame-gated — not anonymously resolvable, documented
+	// walls. kodik.info embed hosts normalize onto the interchangeable
+	// kodikplayer.com mirror (live-verified 2026-09-25). No frozen
+	// Python original; written from the live site.
+	{"anikado", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniKado(AniKadoBase, http, cfg.Network.MaxParallel)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

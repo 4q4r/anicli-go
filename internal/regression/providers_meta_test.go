@@ -45,7 +45,10 @@ import (
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
 // after tokyotosho. The roster froze at 24 through the fix/93 wave;
-// the PR107 torrent-search removal took it to 23.
+// the PR107 torrent-search removal took it to 23. anikado (PR102,
+// the anikado.net RU DLE catalog with its per-episode-page kodik
+// translator tables) reopened the RU-dub block after animemobi,
+// taking the roster back to 24.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -64,6 +67,7 @@ var expectedProviderOrder = []string{
 	"anistar",
 	"anifilm",
 	"animemobi",
+	"anikado",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

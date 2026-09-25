@@ -23,8 +23,8 @@ func TestAllRosterComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 23 {
-		t.Fatalf("All() = %d providers, want 23", len(bare))
+	if len(bare) != 24 {
+		t.Fatalf("All() = %d providers, want 24", len(bare))
 	}
 
 	wantIDs := []string{
@@ -32,7 +32,7 @@ func TestAllRosterComplete(t *testing.T) {
 		"gogoanime", "kickassanime", "anizone",
 		"sameband", "kodik",
 		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
-		"anifilm", "animemobi",
+		"anifilm", "animemobi", "anikado",
 		"anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
 	seen := map[string]bool{}
@@ -89,8 +89,8 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 	}
 
 	list := reg.List()
-	if len(list) != 23 {
-		t.Fatalf("List() = %d providers, want 23", len(list))
+	if len(list) != 24 {
+		t.Fatalf("List() = %d providers, want 24", len(list))
 	}
 	// Registration order follows All() (stable render/fan-out order).
 	// Wave-2 integration (fix/60) seated the five parallel providers
@@ -106,7 +106,7 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 		"gogoanime", "kickassanime", "anizone",
 		"sameband", "kodik",
 		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
-		"anifilm", "animemobi",
+		"anifilm", "animemobi", "anikado",
 		"anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
 	for i, p := range list {
@@ -184,8 +184,8 @@ func TestAllProvidersSourceTypeBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 23 {
-		t.Fatalf("All() = %d providers, want 23", len(bare))
+	if len(bare) != 24 {
+		t.Fatalf("All() = %d providers, want 24", len(bare))
 	}
 	for _, p := range bare {
 		if got := p.SourceType(); got != contracts.SourceTypeBoth {
@@ -220,6 +220,7 @@ func TestContentLanguageRoster(t *testing.T) {
 		"anistar":           "ru",
 		"anifilm":           "ru",
 		"animemobi":         "ru",
+		"anikado":           "ru",
 		"anilibria-torrent": "ru",
 		"animetosho":        "ja",
 		"tokyotosho":        "ja",
@@ -262,8 +263,8 @@ func TestAllSkipsExcludedProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(bare) != 21 {
-		t.Fatalf("All() = %d providers, want 21", len(bare))
+	if len(bare) != 22 {
+		t.Fatalf("All() = %d providers, want 22", len(bare))
 	}
 	for _, p := range bare {
 		if p.ID() == "gogoanime" || p.ID() == "kodik" {

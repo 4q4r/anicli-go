@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Клинок, рассекающий демонов: Бесконечный поезд. Фильм — AniKado</title></head>
+<body>
+<div class="pmovie__player tabs-block">
+    <div class="pmovie__player-controls d-flex ai-center">
+        <div class="tabs-block__select d-flex flex-grow-1">
+            <button class="player-tab active" data-tab="kodik">Kodik</button>
+            <button class="player-tab" data-tab="vkg">Плеер 2</button>
+            <button class="player-tab" data-tab="tomion">Плеер 3</button>
+        </div>
+        
+        <div class="pmovie__complaint2">
+            <a href="javascript:AddComplaint('11', 'news')">Не работает?</a>
+        </div>
+    </div>
+    
+    <!-- Kodik Player -->
+    <div id="kodik-player" class="player-content active">
+        <iframe title="Видеоплеер" src="//kodikplayer.com/video/109611/d41372e3683900687a68073a26e671f0/720p" width="100%" height="100%" border="0" frameborder="0" scrolling="no" allowfullscreen="true" allow="autoplay *; fullscreen *" style="min-height:460px"></iframe>
+    </div>
+    
+    <!-- VKG Player -->
+    <script async src="https://player.cdnvideohub.com/s2/stable/video-player.umd.js"></script>
+    <div id="vkg-player" class="player-content" style="height: 500px">
+        <div id="vkg" class="vkg-player"></div>
+        <video-player
+            id="myPlayer"
+            data-title-id="40456"
+            data-publisher-id="642"
+            ident="player_1"
+            data-aggregator="mali"
+            is-show-voice-only="false"
+            is-show-banner="true"
+        ></video-player>
+    </div>
+    
+    <!-- Tomion Player -->
+    <div id="tomion-player" class="player-content" style="min-height: 500px">
+        <iframe title="Видеоплеер" data-src="//tomion.org/yal/40456" width="100%" height="100%" frameborder="0" scrolling="no" allow="autoplay" allowfullscreen style="min-height:500px"></iframe>
+    </div>
+    
+    
+
+    
+    <ul class="mylists-switch" data-id="11"></ul>
+    
+    <div class="pmovie__player-bottom d-flex ai-center jc-space-between">
+        <div class="card__rating-ext site js-count-rating-all" data-text="">
+            <div class="card__rating-ext-count centered-content">9.5</div>
+            <span>Голосов: <span data-vote-num-id="11">57</span></span>
+        </div>
+        
+        <div class="pmovie__rating-likes d-flex">
+            <a href="#" onclick="doRate('plus', '11'); return false;" ><span class="fas fa-thumbs-up"></span><span data-likes-id="11">54</span></a>
+            <a href="#" onclick="doRate('minus', '11'); return false;" ><span class="fas fa-thumbs-down"></span><span data-dislikes-id="11">3</span></a>
+        </div>
+        
+        <div class="pmovie__share flex-grow-1">
+            <div class="ya-share2" data-services="vkontakte,odnoklassniki,viber," data-counter="ig"></div>
+        </div>
+        <!-- <a href="https://t.me/jyt_su" target="_blank" class="soc-channels__item tlg">Мы в <div>Телеграм</div></a> -->
+    </div>
+</div>
+</body>
+</html>

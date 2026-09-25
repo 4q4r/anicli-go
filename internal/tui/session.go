@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2396,6 +2397,11 @@ func (s *sessionScreen) buildActionMenu() {
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", choices...), defaultListHeight)
 }
 
+// seriesOnlyTitleRe matches an episode title that merely restates
+// the jump list's own «Серия N» prefix (PR112: RU providers echo the
+// player-API episode title, so the row read «Серия 3 — Серия 3»).
+var seriesOnlyTitleRe = regexp.MustCompile(`^Серия\s+\d+$`)
+
 // episodeChoices builds the full jump-list choices (one per episode in
 // watch order).
 func (s *sessionScreen) episodeChoices() []Choice {
@@ -2403,7 +2409,10 @@ func (s *sessionScreen) episodeChoices() []Choice {
 	for _, num := range s.order {
 		ep := s.episodes[num]
 		label := fmt.Sprintf("Серия %s", num)
-		if ep.Title != "" {
+		// PR112: a title that only restates «Серия N» is dropped —
+		// the jump list renders it once. A real distinct title keeps
+		// the «Серия N — Title» form.
+		if title := strings.TrimSpace(ep.Title); title != "" && !seriesOnlyTitleRe.MatchString(title) {
 			label += " — " + ep.Title
 		}
 		choices = append(choices, Choice{ID: num, Label: label, Value: num})

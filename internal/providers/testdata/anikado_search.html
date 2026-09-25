@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Поиск по сайту » AniKado</title></head>
+<body>
+<main><div id="dle-content"><form name="fullsearch" id="fullsearch" action="https://anikado.net/index.php?do=search" method="post">
+<input type="hidden" name="do" id="do" value="search" />
+<input type="hidden" name="subaction" id="subaction" value="search" />
+<input type="hidden" name="search_start" id="search_start" value="0" />
+<input type="hidden" name="full_search" id="full_search" value="0" />
+<input type="hidden" name="result_from" id="result_from" value="1" />
+<div class="search-page">
+	<h1 class="search-page__title">Поиск по сайту</h1>
+	<div class="searchtable" id="searchtable" name="searchtable"><table style="width:100%;">
+  <tr>
+    <td class="search">
+      <div style="margin:10px;">
+                <input type="text" name="story" id="searchinput" value="черная лагуна" class="textin" style="width:250px" onchange="document.getElementById('result_from').value = 1"><br /><br />
+                <input type="button" class="bbcodes" name="dosearch" id="dosearch" value="Начать поиск" onclick="javascript:list_submit(-1); return false;">
+                <input type="button" class="bbcodes" name="dofullsearch" id="dofullsearch" value="Расширенный поиск" onclick="javascript:full_submit(1); return false;" />
+            </div>
+
+        </td>
+    </tr>
+</table></div>
+	<div class="message-info message-info--yellow">По Вашему запросу найдено 2 ответов (Результаты запроса 1 - 2) :</div>
+</div><script>
+<!--
+function clearform(frmname){
+  var frm = document.getElementById(frmname);
+  for (var i=0;i<frm.length;i++) {
+    var el=frm.elements[i];
+    if (el.type=="checkbox" || el.type=="radio") {
+    	if (el.name=='showposts') {document.getElementById('rb_showposts_0').checked=1; } else {el.checked=0; }
+    }
+    if ((el.type=="text") || (el.type=="textarea") || (el.type == "password")) { el.value=""; continue; }
+    if ((el.type=="select-one") || (el.type=="select-multiple")) { el.selectedIndex=0; }
+  }
+  
+  if( document.getElementById('replylimit') ) {
+  	document.getElementById('replylimit').value = 0;
+  }
+  
+  document.getElementById('search_start').value = 0;
+  document.getElementById('result_from').value = 1;
+}
+function list_submit(prm){
+  var frm = document.getElementById('fullsearch');
+	if (prm == -1) {
+		prm=0;
+		frm.result_from.value=1;
+	} else {
+		frm.result_from.value=(prm-1) * 10 + 1;
+	}
+	frm.search_start.value=prm;
+
+  frm.submit();
+  return false;
+}
+function full_submit(prm){
+    document.getElementById('fullsearch').full_search.value=prm;
+    list_submit(-1);
+}
+//-->
+</script>
+</form>
+
+<article class="card d-flex">
+    
+    <a class="card__img img-fit-cover" href="https://anikado.net/573-piraty-chernoj-laguny-vtoroj-zalp.html">
+                <div class="poster__rating js-count-rating">0</div>
+
+        <img decoding="async" loading="lazy" alt="Пираты «Чёрной лагуны»: Второй залп" src="/uploads/posts/2024-03/piraty-chernoj-laguny-vtoroj-zalp.webp">
+    </a>
+    <div class="card__desc flex-grow-1">
+        <h2 class="card__title"><a href="https://anikado.net/573-piraty-chernoj-laguny-vtoroj-zalp.html">Пираты «Чёрной лагуны»: Второй залп (2006)</a></h2>
+		<div class="nser">Последняя серия: 12</div>
+		
+        <p class="card__text line-clamp">В аниме &quot;Пираты «Чёрной лагуны»: Второй залп&quot; рассказывается о Роке, бывшем обычном служащем, который попадает в руки компании-пиратов &quot;Лагуна&quot; и вынужден присоединиться к ним. Во втором сезоне сюжет сосредотачивается на борьбе японских преступных кланов за власть в мире преступности и присоединении могущественной преступной группировки &quot;Отель Москва&quot; к конфликту.</p>
+    </div>
+</article>
+
+
+
+
+
+
+<article class="card d-flex">
+    
+    <a class="card__img img-fit-cover" href="https://anikado.net/572-piraty-chernoj-laguny.html">
+                <div class="poster__rating js-count-rating">0</div>
+
+        <img decoding="async" loading="lazy" alt="Пираты «Чёрной лагуны»" src="/uploads/posts/2024-03/piraty-chernoj-laguny.webp">
+    </a>
+    <div class="card__desc flex-grow-1">
+        <h2 class="card__title"><a href="https://anikado.net/572-piraty-chernoj-laguny.html">Пираты «Чёрной лагуны» (2006)</a></h2>
+		<div class="nser">Последняя серия: 12</div>
+		
+        <p class="card__text line-clamp">Аниме &quot;Пираты «Чёрной лагуны»&quot; рассказывает о Рокуро Окадзиме, японском служащем, отправленном в Южно-Китайское море с важной посылкой. В пути он становится заложником пиратов, нанятых русской мафией, и вскоре вступает в их ряды. События развиваются быстро, когда бизнесмены начинают преследовать как пиратов, так и Рокуро, и между сторонами разгорается нешуточная борьба.</p>
+    </div>
+</article>
+
+
+
+
+</div></main>
+</body>
+</html>

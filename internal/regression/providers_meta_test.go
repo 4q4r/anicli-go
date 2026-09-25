@@ -50,7 +50,9 @@ import (
 // the PR107 torrent-search removal took it to 23; anitokyo (PR100,
 // the anitokyo.tv RU DLE catalog with its RalodePlayer module) joined
 // after animemobi, taking it back to 24; PR101 (animiku) took it
-// to 25.
+// to 25; anikado (PR102, the anikado.net RU DLE catalog with its
+// per-episode-page kodik translator tables) joined after animiku,
+// taking it to 26.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -71,6 +73,7 @@ var expectedProviderOrder = []string{
 	"animemobi",
 	"anitokyo",
 	"animiku",
+	"anikado",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

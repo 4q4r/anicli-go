@@ -40,8 +40,10 @@ import (
 // players and per-release torrent downloads) closed the RU-dub block
 // after anistar; animiku (PR101, the beta.animiku.tokyo RU DLE catalog
 // with its mrdeath/aaparser kodik bridge) joined after anitokyo, and
-// anikado (PR102) and animevib (PR103) after it; the
-// torrents close the roster — rutor (PR87, the
+// anikado (PR102), animevib (PR103), animeheaven (PR105, the
+// animeheaven.me EN sub-only direct-MP4 catalog) and anikoto (PR104,
+// the anikototv.to EN HiAnime-style catalog with its megaplay player
+// chain) after it; the torrents close the roster — rutor (PR87, the
 // rutor.info public tracker — the first RU-indexed torrent provider),
 // anirena (PR88, the anirena.com search RSS with direct .torrent
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
@@ -57,7 +59,8 @@ import (
 // with its kodik serial-embed player stack) joined after anikado,
 // taking it to 27; animeheaven (PR105, the animeheaven.me EN
 // sub-only catalog with direct-MP4 gate sources) joined after
-// animevib, taking it to 28.
+// animevib, taking it to 28; anikoto (PR104) joined after
+// animeheaven, taking it to 29.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -81,6 +84,7 @@ var expectedProviderOrder = []string{
 	"anikado",
 	"animevib",
 	"animeheaven",
+	"anikoto",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/metadata"
@@ -229,9 +228,10 @@ func resolveSearchVariants(deps *Deps, query string) searchVariantsMsg {
 // the same wire request the SearchIDs path makes).
 const shikiAutocompleteLimit = 16
 
-// searchProgress is the live fan-out table (python
+// searchProgress is the live fan-out screen (python
 // search_provider_task + generate_search_table port, PR24 hybrid
-// shape): the query first resolves Shikimori variants (when enabled),
+// shape, PR110 minimal view): the query first resolves Shikimori
+// variants (when enabled),
 // then one row per provider runs its language-routed variants inside
 // a per-provider timeout budget.
 //
@@ -247,29 +247,13 @@ type searchProgress struct {
 	query   string
 	spin    spinner.Model
 	rows    []ProviderMeta
-	status  map[string]string
 	pending map[string]bool
-	// counts carries each row's result count for the Результатов
-	// column; responded marks rows that settled without an error
-	// (0 results still counts as answered).
+	// counts carries each provider's settled result count for the
+	// found/not-found summary (PR110); responded marks rows that
+	// settled without an error (0 results still counts as answered).
 	counts    map[string]int
 	responded map[string]bool
-	// errs keeps each row's raw settled error (PR98): the view derives
-	// the ⏱/✗ class from it while the cell shows only the short label.
-	errs    map[string]error
-	results []contracts.SearchResult
-	// width is the tracked terminal width (tea.WindowSizeMsg forwarded
-	// by the App); zero means natural sizing.
-	width int
-	// height is the tracked terminal height (PR109): the fan-out table
-	// renders at most (height − chrome) data rows; zero means natural
-	// sizing — every row renders.
-	height int
-	// scroll is the first visible row of the settled review window
-	// (PR109): reset to the roster head when the fan-out settles,
-	// moved by Shift+↑/↓, clamped against the window at render time.
-	// Ignored while the live window tail-follows the pending rows.
-	scroll int
+	results   []contracts.SearchResult
 	// variants is the active query-variant set (bare query until the
 	// enrichment settles); enriching marks the Shikimori phase.
 	variants  []string
@@ -281,9 +265,10 @@ type searchProgress struct {
 	// the plain search flow. The catalog rebind flow sets it (PR30)
 	// so a group pick resumes the session.
 	resume *storage.AnimeProgress
-	// resultCheck renders the per-result provider checklist BELOW the
-	// table once every row settled (PR31: every result gets its own
-	// row — no similarity grouping); nil until then.
+	// resultCheck renders the per-result provider checklist on the
+	// settled screen (PR31: every result gets its own row — no
+	// similarity grouping; PR110 removed the table it used to grow
+	// below); nil until then.
 	resultCheck *CheckList
 	// titleOverride replaces the default live header when set (the
 	// catalog flow's «Поиск по провайдерам: …», PR30/PR31).
@@ -305,16 +290,13 @@ func NewSearchProgress(deps *Deps, query string) *searchProgress {
 		query:     query,
 		spin:      sp,
 		rows:      rows,
-		status:    make(map[string]string, len(rows)),
 		pending:   make(map[string]bool, len(rows)),
 		counts:    make(map[string]int, len(rows)),
 		responded: make(map[string]bool, len(rows)),
-		errs:      make(map[string]error, len(rows)),
 		variants:  []string{query},
 		logTag:    "search",
 	}
 	for _, r := range rows {
-		m.status[r.ID] = "Ожидание…"
 		// Rows are pending from construction: the enrichment phase and
 		// the fan-out both settle them later; Enter stays blocked
 		// until every row lands.
@@ -406,13 +388,6 @@ func latinOnlyQueries(queries []string) []string {
 // Update implements Screen.
 func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		// PR98: the App forwards the tracked terminal size; the table
-		// re-renders against the new budget on the next frame. PR109:
-		// the height re-binds the row window the same way.
-		m.width = msg.Width
-		m.height = msg.Height
-		return m, nil
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -432,30 +407,20 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				"provider", msg.provider.ID, "results", len(msg.results), "err", msg.err)
 		}
 		delete(m.pending, msg.provider.ID)
-		switch {
-		case msg.err != nil:
-			// PR98: the cell carries the short error-class label only;
-			// the full error stays in the file log line above and in
-			// m.errs (kept for tests/introspection).
-			m.errs[msg.provider.ID] = msg.err
-			m.status[msg.provider.ID] = searchErrLabel(msg.err)
-		default:
+		if msg.err == nil {
 			m.responded[msg.provider.ID] = true
 			m.counts[msg.provider.ID] = len(msg.results)
-			m.status[msg.provider.ID] = "Завершено"
 			m.results = append(m.results, msg.results...)
 		}
+		// PR110: both error and success settles fall through to the
+		// settle-complete check — an early return here would skip it
+		// when an erroring provider lands last (the rebind-test
+		// regression: Найдено: 2 but no checklist).
 		if len(m.pending) == 0 {
 			if m.deps != nil && m.deps.Log != nil {
 				m.deps.Log.Info(m.logTag+": complete",
 					"responded", len(m.responded), "results", len(m.results))
 			}
-			// PR109: the settled table opens its review window at the
-			// roster head.
-			m.scroll = 0
-			// PR30/PR31: the settled table grows its results below
-			// automatically — no enter gate between the fan-out and
-			// the provider checklist.
 			m.settleResults()
 		}
 		return m, nil
@@ -466,21 +431,7 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if IsCancelKey(msg) && (m.resultCheck == nil || !m.resultCheck.filterActive()) {
 			return m, pop()
 		}
-		if len(m.pending) == 0 {
-			// PR109 review scroll: Shift+↑/↓ slides the settled table
-			// window (read-only — no cursor). Plain arrows stay owned
-			// by the checklist below: its handler matches key CODES
-			// and would swallow the modified press, so this intercept
-			// runs before the delegation.
-			switch {
-			case msg.Code == tea.KeyUp && msg.Mod == tea.ModShift:
-				m.scroll = max(m.scroll-1, 0)
-				return m, nil
-			case msg.Code == tea.KeyDown && msg.Mod == tea.ModShift:
-				m.scroll = min(m.scroll+1, max(len(m.rows)-1, 0))
-				return m, nil
-			}
-		}
+		// PR30/PR31: the settled fan-out grows its results below
 		if m.resultCheck != nil {
 			// Settled (PR31): the below-table checklist owns the keys
 			// — space/a/i toggle, enter resolves the checked subset
@@ -613,153 +564,63 @@ func (m *searchProgress) settleResults() {
 	m.resultCheck = NewCheckList("Выберите провайдеры:", items)
 }
 
-// fanoutRows builds the render rows for the bordered table (PR98):
-// raw cell text plus the per-row style, derived from the settled
-// state — pending rows carry the spinner, ok rows ✓, timeouts ⏱,
-// every other error ✗ with its short class label.
-//
-// pendingTail (PR109) reorders the rows for the clipped LIVE window:
-// settled rows first, pending rows last (each group in roster order).
-// The tail-following window then always shows the in-flight rows while
-// the settled ones relocate above it. With the flag down the render
-// order is the plain roster order.
-func (m *searchProgress) fanoutRows(pendingTail bool) []fanoutRowData {
-	rows := make([]fanoutRowData, 0, len(m.rows))
-	pending := make([]fanoutRowData, 0)
-	for _, row := range m.rows {
-		data := fanoutRowData{name: row.Name, count: "—"}
-		if data.name == "" {
-			data.name = row.ID
-		}
-		switch {
-		case m.pending[row.ID] && m.enriching:
-			// Waiting for the Shikimori variant phase, not the
-			// provider itself yet.
-			data.status = m.status[row.ID]
-			data.style = theme.Dim
-		case m.pending[row.ID]:
-			data.status = m.spin.View() + " Поиск…"
-			data.style = theme.Accent
-		case m.responded[row.ID]:
-			data.status = "✓ Завершено"
-			data.count = strconv.Itoa(m.counts[row.ID])
-			data.style = theme.Success
-		default:
-			label := m.status[row.ID]
-			if label == "" {
-				label = labelError
-			}
-			if label == labelTimeout {
-				data.status = "⏱ " + label
-				data.style = theme.Warning
-			} else {
-				data.status = "✗ " + label
-				data.style = theme.Error
-			}
-		}
-		if pendingTail && m.pending[row.ID] {
-			pending = append(pending, data)
-			continue
-		}
-		rows = append(rows, data)
-	}
-	if pendingTail {
-		rows = append(rows, pending...)
-	}
-	return rows
-}
-
-// indentBlock prefixes every line with the two-space screen gutter.
-func indentBlock(s string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-		b.WriteString("  ")
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// View implements Screen: the live three-column status table with the
-// centered overall counter (PR24); once every row settled, the
-// grouped results render BELOW the table as a selectable list (PR30).
+// View implements Screen. PR110 minimal shape: during the fan-out —
+// the title and ONE loading line (spinner + «Ищу по N провайдерам…»);
+// once every provider settles — the title, the found/not-found
+// summary line and the merged-results checklist (the PR62 surface,
+// unchanged). The bordered table is gone (removed in PR110).
 func (m *searchProgress) View() tea.View {
-	// The chrome around the box is built first: the window budget
-	// counts every line the screen renders besides the table.
-	var pre, post strings.Builder
 	header := m.titleOverride
 	if header == "" {
-		header = fmt.Sprintf("Поиск аниме (Найдено: %d)", len(m.results))
+		header = "Поиск аниме"
 	}
-	pre.WriteString(theme.Title.Render(header))
-	pre.WriteString("\n\n")
-	if m.enriching {
-		pre.WriteString(theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
-		pre.WriteString("\n\n")
-	}
-	post.WriteString("\n")
-	responded := len(m.responded)
-	if len(m.rows) > 0 && (responded > 0 || len(m.pending) == 0) {
-		counter := fmt.Sprintf("Ответившие: %d/%d провайдеров · Всего результатов: %d",
-			responded, len(m.rows), len(m.results))
-		post.WriteString("  " + lipgloss.PlaceHorizontal(fanoutBoxWidth(m.fanoutRows(false), m.width),
-			lipgloss.Center, theme.StatusLine.Render(counter)))
-		post.WriteString("\n")
-	}
-	if m.resultCheck != nil {
-		// PR31: settled — the provider checklist replaces the bare
-		// counter area below the table (every result its own row).
-		post.WriteString("\n")
-		post.WriteString(m.resultCheck.Render())
-	}
-	if len(m.pending) == 0 && len(m.results) == 0 {
-		post.WriteString("\n")
-		post.WriteString(theme.Warning.Render("Ничего не найдено"))
-		post.WriteString("\n")
-	}
-	post.WriteString("\n")
-	// The settled checklist renders its own full key hints (space/a/
-	// i/enter), so the outer status line stays the plain back hint.
-	post.WriteString(theme.StatusLine.Render("esc — назад"))
-
-	// PR109 window: rows, budget, slice. The chrome is independent of
-	// the row list, so the budget is computable before the box.
-	chrome := strings.Count(pre.String(), "\n") + lipgloss.Height(post.String())
-	visible := fanoutWindowRows(m.height, chrome, len(m.rows))
-	liveFollow := len(m.pending) > 0 && visible < len(m.rows)
-	rows := m.fanoutRows(liveFollow)
-
 	var b strings.Builder
-	b.WriteString(pre.String())
-	switch {
-	case len(m.rows) == 0:
-		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
+	b.WriteString(theme.Title.Render(header))
+	b.WriteString("\n")
+
+	if len(m.pending) > 0 {
+		// Fan-out in flight: one minimal loading line. The Shikimori
+		// enrichment phase keeps its own notice until the variants
+		// resolve and the per-provider fan-out starts.
 		b.WriteString("\n")
-	case visible < len(rows):
-		// Clipped: tail-follow the in-flight rows while live (an
-		// offset past the end clamps to the tail), else honor the
-		// review scroll. The clamped offset writes back so the
-		// indicators and the next keypress agree.
-		offset := m.scroll
-		if liveFollow {
-			offset = len(rows)
+		if m.enriching {
+			b.WriteString(m.spin.View() + " " +
+				theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
+		} else {
+			b.WriteString(m.spin.View() + " Ищу по " +
+				strconv.Itoa(len(m.rows)) + " провайдерам…")
 		}
-		lo, hi := fanoutWindowSlice(len(rows), visible, offset)
-		m.scroll = lo
-		if lo > 0 {
-			b.WriteString("  " + theme.Dim.Render(fmt.Sprintf("▲ ещё %d", lo)) + "\n")
-		}
-		b.WriteString(indentBlock(renderFanoutTable(rows[lo:hi], m.width)))
-		if hi < len(rows) {
-			b.WriteString("  " + theme.Dim.Render(fmt.Sprintf("▼ ещё %d", len(rows)-hi)) + "\n")
-		}
-	default:
-		// PR98: a real bordered table — even fixed columns with box
-		// lines, per-cell truncation, no text ever leaves its cell.
-		b.WriteString(indentBlock(renderFanoutTable(rows, m.width)))
+		b.WriteString("\n")
+		return tea.NewView(b.String())
 	}
-	b.WriteString(post.String())
+
+	// Settled: the found/not-found summary above the checklist.
+	summary := fmt.Sprintf("Найдено: %d · Без результатов/ошибок: %d",
+		len(m.results), m.notFoundProviders())
+	b.WriteString("\n")
+	b.WriteString(theme.StatusLine.Render(summary))
+	b.WriteString("\n\n")
+
+	if m.resultCheck != nil {
+		b.WriteString(m.resultCheck.Render())
+	} else {
+		b.WriteString(theme.Dim.Render("Ничего не найдено"))
+	}
+	b.WriteString("\n")
+	b.WriteString(theme.StatusLine.Render("esc — назад"))
 	return tea.NewView(b.String())
+}
+
+// notFoundProviders counts providers that returned no results or
+// settled with an error — the «сколько нет» half of the summary.
+func (m *searchProgress) notFoundProviders() int {
+	found := 0
+	for _, row := range m.rows {
+		if m.counts[row.ID] > 0 {
+			found++
+		}
+	}
+	return len(m.rows) - found
 }
 
 // searchGroup is the manual grouping checklist: the user marks the

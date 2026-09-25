@@ -244,17 +244,15 @@ func BenchmarkSearchProgressView(b *testing.B) {
 	b.ReportAllocs()
 	results := benchSearchResults(1000)
 	rows := make([]ProviderMeta, 0, 30)
-	status := make(map[string]string, 30)
 	counts := make(map[string]int, 30)
 	responded := make(map[string]bool, 30)
 	for i := range 30 {
 		id := "prov" + strconv.Itoa(i)
 		rows = append(rows, ProviderMeta{ID: id, Name: "Провайдер " + strconv.Itoa(i)})
-		status[id] = "готово"
 		counts[id] = 1000 / 30
 		responded[id] = true
 	}
-	m := &searchProgress{deps: nil, rows: rows, status: status, counts: counts, responded: responded, results: results}
+	m := &searchProgress{deps: nil, rows: rows, counts: counts, responded: responded, results: results}
 	m.settleResults()
 	if m.resultCheck == nil {
 		b.Fatal("settleResults built no checklist")

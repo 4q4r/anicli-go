@@ -391,7 +391,7 @@ func firstMsg(cmd tea.Cmd) tea.Msg {
 // провайдеры:» list rendered ALL merged rows with no viewport, so the
 // cursor escaped below the screen bottom and «никогда больше не
 // возвращается». The window must follow the cursor, pin at the top and
-// keep the header block (counter + checklist title) rendered.
+// keep the header block (summary + checklist title) rendered.
 func TestChecklistViewportScrolling(t *testing.T) {
 	fs, deps := checklistTestDeps()
 	const total = 64 // the owner's screenshot size
@@ -419,7 +419,7 @@ func TestChecklistViewportScrolling(t *testing.T) {
 	// Settled at the top: the header block renders, the tail stays
 	// outside the window.
 	view := sp.View().Content
-	if !strings.Contains(view, "Выберите провайдеры:") || !strings.Contains(view, "Ответившие:") {
+	if !strings.Contains(view, "Выберите провайдеры:") || !strings.Contains(view, "Найдено: 64 · Без результатов/ошибок: 1") {
 		t.Fatalf("header block must stay rendered, got:\n%s", view)
 	}
 	if strings.Contains(view, "Тайтл 63") {

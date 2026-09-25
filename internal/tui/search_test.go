@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -121,25 +123,32 @@ func TestSearchFanOutProgress(t *testing.T) {
 
 	progress := topOf(model)
 	v := progress.View().Content
-	if !strings.Contains(v, "AnimeGO") || !strings.Contains(v, "AniLib") {
-		t.Fatalf("progress table must list providers, got:\n%s", v)
+
+	// PR110: the settled screen is header + summary + checklist — no
+	// bordered table anywhere.
+	for _, banned := range []string{"┌", "│", "└", "Ответившие"} {
+		if strings.Contains(v, banned) {
+			t.Fatalf("the fan-out view must not render table chrome %q:\n%s", banned, v)
+		}
 	}
-	if !strings.Contains(v, "Найдено") {
-		t.Fatalf("successful providers must show a found count, got:\n%s", v)
+	// The summary line: merged hits vs providers that found nothing.
+	if want := "Найдено: 2 · Без результатов/ошибок: 1"; !strings.Contains(v, want) {
+		t.Fatalf("summary missing %q:\n%s", want, v)
 	}
-	if !strings.Contains(v, "timeout") && !strings.Contains(v, "✗") {
-		t.Fatalf("failed provider must show its error, got:\n%s", v)
+	// The settled checklist below the summary.
+	if !strings.Contains(v, "AnimeGO — Наруто") || !strings.Contains(v, "AniLib — Наруто") {
+		t.Fatalf("settled checklist rows missing:\n%s", v)
 	}
 
 	// The panicking provider degraded to a row error (python
 	// try/except semantics): the app continues, no modal, no crash.
-	// PR98: the row renders the short error-class label, not the
-	// panic text.
 	if progress.ID() == errorScreenID {
 		t.Fatalf("a provider panic must not replace the fan-out screen")
 	}
-	if !strings.Contains(progress.View().Content, "✗ ошибка") {
-		t.Fatalf("the panicking provider must show a row error")
+	// PR110: the full provider error goes to the FILE logger only —
+	// the TUI view must not carry it.
+	if strings.Contains(v, "timeout") {
+		t.Errorf("the full provider error must stay out of the TUI, got:\n%s", v)
 	}
 	// The app-level net still routes injected errMsg to the modal.
 	model2 := drive(model, errMsg{screen: searchProgressID, err: errors.New("boom")})
@@ -161,7 +170,7 @@ func TestSearchFanOutProgress(t *testing.T) {
 	// no grouping.
 	v = progress.View().Content
 	if !strings.Contains(v, "Выберите провайдеры") {
-		t.Fatalf("settled fan-out must show the provider checklist below the table, got:\n%s", v)
+		t.Fatalf("settled fan-out must show the provider checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") || !strings.Contains(v, "AniLib — Наруто") {
 		t.Fatalf("the two provider hits must stay separate rows, got:\n%s", v)
@@ -186,10 +195,10 @@ func TestSearchProgressAssembly(t *testing.T) {
 		t.Fatalf("results must be assembled, got %d", len(progress.results))
 	}
 
-	// Settled: the checklist appears below the table WITHOUT enter.
+	// Settled: the checklist appears WITHOUT enter.
 	v := progress.View().Content
 	if !strings.Contains(v, "Выберите провайдеры") {
-		t.Fatalf("settled progress must show the checklist below the table, got:\n%s", v)
+		t.Fatalf("settled progress must show the checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") {
 		t.Fatalf("the result must render as its own row, got:\n%s", v)
@@ -228,6 +237,12 @@ func TestSearchEmptyResults(t *testing.T) {
 	sp := topOf(model).(*searchProgress)
 	if !contains(sp.View().Content, "Ничего не найдено") {
 		t.Fatalf("empty fan-out must show the empty state, got:\n%s", sp.View().Content)
+	}
+	// PR110 review: the all-failed/empty settle must render zero
+	// counts on BOTH summary halves — found 0, not-found 1 (the
+	// single provider returned nothing).
+	if !contains(sp.View().Content, "Найдено: 0 · Без результатов/ошибок: 1") {
+		t.Fatalf("empty fan-out must render zero counts, got:\n%s", sp.View().Content)
 	}
 	_, cmd := sp.Update(enter())
 	if cmd == nil {
@@ -380,5 +395,65 @@ func TestSearchGroupLabelsCarryTorrentSuffix(t *testing.T) {
 				t.Errorf("stream label = %q, want no torrent suffix", item.Label)
 			}
 		}
+	}
+}
+
+// TestSearchFanOutLoadingViewMinimal (PR110): during the fan-out the
+// screen is ONE minimal loading line (spinner + «Ищу по N
+// провайдерам…») under the title — no table, no checklist, no
+// summary counts.
+func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
+	fs := newFakeSearch()
+	deps := &Deps{Search: fs}
+
+	// drive() executes the fan-out commands synchronously, so the
+	// in-flight phase is pinned on the bare screen: the same pending
+	// state the runtime shows between the first frame and the last
+	// provider settle.
+	sp := NewSearchProgress(deps, "наруто")
+
+	v := sp.View().Content
+	if !strings.Contains(v, "Ищу по 3 провайдерам…") {
+		t.Fatalf("loading line missing:\n%s", v)
+	}
+	for _, banned := range []string{"┌", "│", "└", "Выберите провайдеры", "Найдено:", "Ответившие"} {
+		if strings.Contains(v, banned) {
+			t.Fatalf("loading view must be minimal (%q found):\n%s", banned, v)
+		}
+	}
+
+	// One provider settles: the loading line persists until the LAST
+	// settle, still without table chrome or summary counts.
+	sp.Update(providerResultMsg{provider: fs.providers[0],
+		results: []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}})
+	v = sp.View().Content
+	if !strings.Contains(v, "Ищу по 3 провайдерам…") {
+		t.Fatalf("loading line must persist while providers are pending:\n%s", v)
+	}
+	if strings.Contains(v, "Найдено:") || strings.Contains(v, "┌") {
+		t.Fatalf("no summary or table while in flight:\n%s", v)
+	}
+}
+
+// TestSearchProviderErrorsFileLogOnly (PR110): the per-provider
+// settle error carries the FULL text in the file logger; the TUI view
+// renders only the summary counts.
+func TestSearchProviderErrorsFileLogOnly(t *testing.T) {
+	fs := newFakeSearch()
+	logBuf := &bytes.Buffer{}
+	deps := &Deps{Search: fs, Log: slog.New(slog.NewTextHandler(logBuf, nil))}
+	app := NewApp(NewRootScreen(deps), deps, testLogger())
+
+	fs.errs["broken"] = errors.New("dial tcp: connection refused")
+
+	model := drive(app, pushMsg{screen: NewSearchProgress(deps, "наруто")})
+	model = drainCmds(model)
+
+	if !strings.Contains(logBuf.String(), "connection refused") {
+		t.Fatalf("the file log must carry the full provider error:\n%s", logBuf.String())
+	}
+	progress := topOf(model)
+	if v := progress.View().Content; strings.Contains(v, "connection refused") {
+		t.Fatalf("the TUI view must not carry the full error:\n%s", v)
 	}
 }

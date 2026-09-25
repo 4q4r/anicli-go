@@ -15,7 +15,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// PR81 latency fan-out profile: the full 27-provider roster fans out
+// PR81 latency fan-out profile: the full 28-provider roster fans out
 // ONE search each at simulated site latencies (50/200/1000ms) using
 // the production fan-out shape (goroutine per provider — the
 // searchProgress.startFanOut tea.Batch layout). Wall time must equal
@@ -23,7 +23,7 @@ import (
 // allocations per fan-out at the slowest round.
 
 const (
-	rosterProviders   = 27
+	rosterProviders   = 28
 	fanoutLatencyEps  = 100 * time.Millisecond // scheduling jitter allowance
 	fanoutSettleLimit = 25
 )
@@ -88,10 +88,10 @@ func fanOutRosterOnce(ctx context.Context, provs []*latencyProvider, query strin
 	return all
 }
 
-// TestLoadSearchFanout27Latencies proves 27-provider fan-out wall time
+// TestLoadSearchFanout28Latencies proves 28-provider fan-out wall time
 // tracks the slowest provider, not the sum — at 50/200/1000ms
 // simulated latencies.
-func TestLoadSearchFanout27Latencies(t *testing.T) {
+func TestLoadSearchFanout28Latencies(t *testing.T) {
 	ctx := context.Background()
 
 	provs := make([]*latencyProvider, 0, rosterProviders)
@@ -109,7 +109,7 @@ func TestLoadSearchFanout27Latencies(t *testing.T) {
 
 	goroutinesBefore := runtime.NumGoroutine()
 
-	fmt.Fprintf(os.Stdout, "\n=== 27-provider fan-out latency results ===\n")
+	fmt.Fprintf(os.Stdout, "\n=== 28-provider fan-out latency results ===\n")
 	fmt.Fprintln(os.Stdout, "latency\twall\toverhead\tresults\talloc_B/op")
 
 	for _, round := range rounds {

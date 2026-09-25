@@ -50,8 +50,8 @@ func (e *env) close() {
 // tracks the roster minus one dead-provider tolerance (11 of 12 at
 // PR24's roster; 12 of 13 since the PR36 torrent-search provider
 // joined; 13 of 14 since anilibria-torrent joined in PR37; 16 of 17 since animedia joined in
-// PR56; integration re-pin: 17 of 18 with animedia in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59; 19 of 20 after the PR65 provider removal; 20 of 21 since yummy joined in PR68; 21 of 22 since hdrezka joined in PR69; 22 of 23 since anistar joined in PR77; 24 of 25 — the fix/93 wave (rutor PR87, anirena PR88, subsplease PR89, anifilm PR91, animemobi PR92) finalized, then the fix/93 provider removals; 23 of 24 — the PR107 provider removal; 23 of 24 — the PR100 anitokyo re-pin at roster 24; 24 of 25 since animiku joined in PR101; 25 of 26 since anikado joined in PR102; 26 of 27 since animevib joined in PR103.
-const gateProviders = 26
+// PR56; integration re-pin: 17 of 18 with animedia in; 18 of 19 since shiza joined in PR57; 19 of 20 since kickassanime joined in PR58; 20 of 21 since anizone joined in PR59; 19 of 20 after the PR65 provider removal; 20 of 21 since yummy joined in PR68; 21 of 22 since hdrezka joined in PR69; 22 of 23 since anistar joined in PR77; 24 of 25 — the fix/93 wave (rutor PR87, anirena PR88, subsplease PR89, anifilm PR91, animemobi PR92) finalized, then the fix/93 provider removals; 23 of 24 — the PR107 provider removal; 23 of 24 — the PR100 anitokyo re-pin at roster 24; 24 of 25 since animiku joined in PR101; 25 of 26 since anikado joined in PR102; 26 of 27 since animevib joined in PR103; 27 of 28 since animeheaven joined in PR105.
+const gateProviders = 27
 
 // probeQueries are the two queries every provider must answer in
 // `parity all`.

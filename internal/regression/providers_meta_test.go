@@ -55,7 +55,9 @@ import (
 // per-episode-page kodik translator tables) joined after animiku,
 // taking it to 26; animevib (PR103, the www.animevib.ru DLE catalog
 // with its kodik serial-embed player stack) joined after anikado,
-// taking it to 27.
+// taking it to 27; animeheaven (PR105, the animeheaven.me EN
+// sub-only catalog with direct-MP4 gate sources) joined after
+// animevib, taking it to 28.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -78,6 +80,7 @@ var expectedProviderOrder = []string{
 	"animiku",
 	"anikado",
 	"animevib",
+	"animeheaven",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

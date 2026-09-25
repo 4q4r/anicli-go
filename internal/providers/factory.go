@@ -178,6 +178,21 @@ var allFactories = []struct {
 	{"animevib", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeVib(AnimeVibBase, http, cfg.Network.MaxParallel)
 	}},
+	// animeheaven (PR105): the animeheaven.me EN sub-only catalog —
+	// direct-MP4 sources, the roster's first latin stream provider
+	// since anizone. Written against the live site plus the AniVault
+	// scraper family (SH0MIK/Anivault-Scraper, jsmat0m/Anivault-Scraper),
+	// live-verified 2026-09-25; anonymous, NOT behind Cloudflare (the
+	// reference skips FlareSolverr too): /fastsearch.php anchor cards
+	// (id = href query part), /anime.php gateh/gatea episode keys
+	// (the live markup's space-after-paren breaks the reference
+	// regex — ours tolerates it), /gate.php with Cookie: key=<ep key>
+	// → direct mp4 <source>s, first /video.mp4 source wins (the
+	// site's onerror-fallback CDNs 404 when hit directly). No
+	// credentials, no per-provider settings.
+	{"animeheaven", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAnimeHeaven(AnimeHeavenBase, http)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

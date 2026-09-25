@@ -128,6 +128,16 @@ var allFactories = []struct {
 	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
+	// anitokyo (PR100): the anitokyo.tv RU DLE catalog with its
+	// RalodePlayer module — the release page embeds ONE JSON blob with
+	// every (dub, episode) pair (60-dub seasons hydrate from a single
+	// fetch); stream refs are the site's own /video.php wrappers scraping
+	// to kodik/sibnet embeds (shared extractor factory). Written from the
+	// live site (2026-09-25); anonymous on every leg; no credentials, no
+	// per-provider settings.
+	{"anitokyo", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniTokyo(AniTokyoBase, http)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

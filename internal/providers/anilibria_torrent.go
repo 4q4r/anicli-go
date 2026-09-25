@@ -1,7 +1,7 @@
 package providers
 
 // AniLibriaTorrent (PR37) — torrent search over the aniliberty.top
-// API, the TorrentBase sibling of nyaa. The new API has no query
+// API on the TorrentBase plumbing. The new API has no query
 // parameter on its torrents feed (/anime/torrents ignores query
 // params — live-verified 2026-09-17); search therefore rides the same
 // release search as the stream provider and expands each hit into the
@@ -84,7 +84,7 @@ type anilibriaTorrentItem struct {
 // torrent lists. The torrent link is the API's magnet verbatim (its
 // tr= announces aid peer discovery) when it carries a usable infohash,
 // a magnet built from the API hash otherwise; entries with neither are
-// dropped instead of handed downstream as dead results (nyaa rule).
+// dropped instead of handed downstream as dead results (the TorrentBase rule).
 func (p *AniLibriaTorrent) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {
@@ -194,7 +194,7 @@ func anilibriaTorrentLink(label, magnet, hash string) (string, bool) {
 		return magnet, true
 	}
 	h := strings.ToLower(strings.TrimSpace(hash))
-	if len(h) == nyaaInfoHashHexLen && isHex(h) {
+	if len(h) == infoHashHexLen && isHex(h) {
 		return "magnet:?xt=urn:btih:" + h + "&dn=" + url.QueryEscape(label), true
 	}
 	return "", false
@@ -210,7 +210,7 @@ func magnetURI(s string) bool {
 	for _, param := range strings.Split(s[len(prefix):], "&") {
 		if hash, ok := strings.CutPrefix(param, "xt=urn:btih:"); ok {
 			hash = strings.ToLower(hash)
-			return len(hash) == nyaaInfoHashHexLen && isHex(hash)
+			return len(hash) == infoHashHexLen && isHex(hash)
 		}
 	}
 	return false

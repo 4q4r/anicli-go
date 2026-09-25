@@ -225,7 +225,7 @@ func (e *Engine) AddLink(ctx context.Context, link string) (Release, error) {
 		}
 		// The PR35 URL-suffix precheck (path must end in .torrent) is
 		// gone as of PR38: real-world .torrent links rarely carry the
-		// suffix (anirena.com/dl/N, nyaa.si/view/N/torrent), so the
+		// suffix (anirena.com/dl/N and friends), so the
 		// guard is the fetched CONTENT — anything that is not bencode
 		// metainfo fails loud below (topic pages, login walls).
 		// This fetch rides the shared netclient — i.e.

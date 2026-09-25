@@ -75,8 +75,8 @@ func (r *Registry) TorrentEngine() *torrent.Engine {
 // SetEngine. A broken torrent transport fails registry construction
 // loud — the same contract as any provider client. The engine is
 // owned unconditionally: even when no torrent provider is registered
-// (e.g. nyaa in [providers].exclude) it stays — it costs nothing
-// while idle and Registry.Close tears it down.
+// (e.g. a torrent provider in [providers].exclude) it stays — it costs
+// nothing while idle and Registry.Close tears it down.
 func (r *Registry) wireTorrentEngine(cfg config.Settings, bare []contracts.Provider, log *slog.Logger) error {
 	net, err := netclient.New(cfg.Network, netclient.WithProvider("torrent"))
 	if err != nil {

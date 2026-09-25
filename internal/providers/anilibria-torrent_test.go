@@ -307,7 +307,7 @@ func TestAnilibriaTorrentSearchHTTPErrorTypedError(t *testing.T) {
 
 // TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait: the provider
 // GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the nyaa contract).
+// metadata fails loud on the caller's deadline (the TorrentBase contract).
 func TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	t.Parallel()
 
@@ -329,7 +329,7 @@ func TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	// wait error. The deduped ingest here returns instantly, so the
 	// budget below only ever bounds the metadata wait itself. The
 	// assertion semantics are unchanged: unreachable metadata fails
-	// loud on the caller's deadline (the nyaa contract).
+	// loud on the caller's deadline (the TorrentBase contract).
 	ingestCtx, ingestCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer ingestCancel()
 	if _, err := p.Ingest(ingestCtx, dead); err != nil {
@@ -390,7 +390,7 @@ func TestAnilibriaTorrentNotUnconfiguredByDefault(t *testing.T) {
 }
 
 // TestAnilibriaTorrentDisabledWhenTorrentOff pins the disabled-table
-// rule shared with nyaa: without the [torrent] subsystem the provider
+// rule: without the [torrent] subsystem the provider
 // cannot play anything, so it is not registered at all.
 func TestAnilibriaTorrentDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()

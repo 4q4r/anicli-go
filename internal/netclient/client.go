@@ -14,8 +14,8 @@
 // the no-first-byte watchdog (attempt/doWithWatchdog): an attempt that
 // produces no response headers within Network.ConnectTimeout is abandoned
 // so the retry policy can dial a fresh connection. That is not cosmetic —
-// flaky fronting (e.g. nyaa.si behind DDoS-Guard soft-tarpitting a proxy
-// exit) silently stalls a large fraction of fresh connections, and
+// flaky fronting (a DDoS-Guard-fronted torrent site soft-tarpitting a
+// proxy exit) silently stalls a large fraction of fresh connections, and
 // without the early cut one dead attempt burns the whole per-operation
 // budget before Do could ever retry.
 package netclient

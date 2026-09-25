@@ -1,8 +1,9 @@
 package providers
 
 // TokyoTosho (PR38) — torrent search over the Tokyo Toshokan search
-// RSS, the fourth TorrentBase provider after nyaa, anilibria-torrent
-// and animetosho. Anonymous feed, no credentials, nothing to
+// RSS, the fourth TorrentBase provider (anilibria-torrent PR37 and
+// animetosho PR38 joined before it). Anonymous feed, no credentials,
+// nothing to
 // configure. The search rides rss.php?terms={query}&type=1 — the very
 // "RSS Feed of these results" link the site's own search page renders.
 // Live-verified traps baked into this provider (curl 2026-09-17,
@@ -18,7 +19,7 @@ package providers
 //   - The description's magnet is base32 (nekoBT mirror hashes) and is
 //     deliberately NOT ingested: the engine contract is a 40-hex btih.
 //     Ingestion rides the <link> direct .torrent URL instead (often a
-//     nyaa.si mirror of the release) — the engine downloads it itself.
+//     cross-posted mirror of the release) — the engine downloads it itself.
 //   - The RSS carries no seed counts; the size text ("1.66GB") rides
 //     the description HTML blob and is parsed fail-soft. (The HTML
 //     search table has S:/L: stats, but no seed data in the feed.)
@@ -143,7 +144,7 @@ type ttItem struct {
 // is the <link> .torrent URL verbatim (the engine ingests it by URL —
 // no separate download step here); Anime-category items only, linkless
 // or titleless ones dropped instead of handed downstream as dead
-// results (nyaa rule).
+// results (the TorrentBase rule).
 func (p *TokyoTosho) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {
@@ -224,7 +225,7 @@ func (p *TokyoTosho) preflightBudget() time.Duration {
 // and parseable (dead hosts never surface), and hands the surviving
 // bytes to the engine under the original link so ingestion never
 // re-fetches. PR66: the mechanism lives on TorrentBase.preflightResults
-// (shared with nyaa and animetosho); the provider supplies its client,
+// (shared across the torrent family); the provider supplies its client,
 // logger, identity and the per-URL budget.
 func (p *TokyoTosho) preflight(ctx context.Context, results []contracts.SearchResult) []contracts.SearchResult {
 	return p.preflightResults(ctx, p.http, p.loggerOrDiscard(), p.ID(), p.preflightBudget(), results)

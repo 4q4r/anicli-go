@@ -11,11 +11,6 @@
 //     romaji/EN names and answers them, so the owner's failure was the
 //     cyrillic-only variant set, not lost routing.
 //
-//   - nyaa: one search through the real netclient ladder (3 attempts,
-//     no-first-byte watchdog, exponential backoff) — the provider has
-//     NO extra retry by design (the mandate's no-stacking rule); the
-//     probe shows the live outcome either way.
-//
 //     ANICLI_LIVE_PROXY=http://127.0.0.1:10809 \
 //     go test -tags live -run TestLivePR78 -count=1 -v ./internal/providers/
 package providers
@@ -68,30 +63,4 @@ func TestLivePR78AniZoneNoResults(t *testing.T) {
 		t.Fatal("latin query returned 0 results, want the Witch-Hat row")
 	}
 	t.Logf("[lat] %q → %d results, first: %q (slug %s)", latin, len(results), results[0].Title, results[0].URL)
-}
-
-// TestLivePR78NyaaSearch runs one nyaa search through the production
-// netclient ladder. Success proves the flapping class was absorbed;
-// a typed failure after the ladder is the honest terminal state (the
-// TUI fan-out renders it within its own 30s budget either way).
-func TestLivePR78NyaaSearch(t *testing.T) {
-	cfg := config.Default()
-	if proxy := os.Getenv("ANICLI_LIVE_PROXY"); proxy != "" {
-		cfg.Network.ProxyURL = proxy
-	}
-	http, err := netclient.New(cfg.Network, netclient.WithProvider("nyaa"))
-	if err != nil {
-		t.Fatalf("netclient: %v", err)
-	}
-	p := newNyaa(NyaaBase, http, nil) // no engine: preflight is skipped, search alone is the probe
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	results, err := p.Search(ctx, "witch hat atelier")
-	if err != nil {
-		t.Logf("[nyaa] typed failure after the netclient ladder: %v", err)
-		return
-	}
-	t.Logf("[nyaa] %d results, first: %q", len(results), results[0].Title)
 }

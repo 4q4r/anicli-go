@@ -17,7 +17,7 @@ import (
 // host as Referer. NOTE: the API filters content per requester IP —
 // some releases (and their search entries) are geo-hidden for certain
 // regions; from such networks `network.proxy_url` is required (same
-// convention as nyaa, PR36).
+// convention as the torrent providers, PR36).
 const (
 	// AniLibriaAPIBase is the JSON API root (aniliberty.top).
 	AniLibriaAPIBase = "https://aniliberty.top/api/v1"

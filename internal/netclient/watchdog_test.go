@@ -3,8 +3,9 @@ package netclient
 // Regression tests for the no-first-byte watchdog (ConnectTimeout).
 //
 // The incident (PR36 follow-up, controller-reproduced 2026-09-17):
-// `parity search nyaa --proxy …` hard-failed with "context deadline
-// exceeded" on nyaa.si RSS. Live probing showed the proxied route
+// `parity search` against the torrent RSS probe hard-failed with
+// "context deadline exceeded" on the (since-removed) flaky RSS front.
+// Live probing showed the proxied route
 // intermittently drops ~30-50% of FRESH connections into total silence
 // AFTER TCP+CONNECT+TLS+request-write (DDoS-Guard soft-tarpit of the
 // exit IP; curl, stdlib net/http and tls-client all hang identically;

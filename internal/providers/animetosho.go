@@ -1,7 +1,8 @@
 package providers
 
 // AnimeTosho (PR38) — torrent search over the AnimeTosho newznab API,
-// the third TorrentBase provider after nyaa and anilibria-torrent.
+// the third TorrentBase provider (after the PR36 origin and
+// anilibria-torrent).
 // Anonymous feed, no credentials, nothing to configure. Each RSS item
 // carries the release title plus newznab/torznab attribute twins
 // (infohash, size, seeders). PR66 .torrent-bytes ingestion (the
@@ -141,7 +142,7 @@ func (i atItem) attr(name string) string {
 // magneturl verbatim or an infohash-built magnet is the fallback when
 // the item carries no usable enclosure. Items with neither, or without
 // a title, are dropped instead of handed downstream as dead results
-// (nyaa rule).
+// (the TorrentBase rule).
 func (p *AnimeTosho) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {
@@ -237,7 +238,7 @@ func animeToshoResultLink(title, magnetURL, infoHash, enclosureURL string) strin
 		return magnetURL
 	}
 	hash := strings.ToLower(strings.TrimSpace(infoHash))
-	if len(hash) == nyaaInfoHashHexLen && isHex(hash) {
+	if len(hash) == infoHashHexLen && isHex(hash) {
 		return "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(title)
 	}
 	return ""

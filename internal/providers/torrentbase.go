@@ -8,8 +8,8 @@ package providers
 // single difference — the search result carries a torrent LINK, and
 // playback rides the core's loopback server. Providers never touch
 // the HTTP-embed pipeline: the capability (contracts.TorrentProvider)
-// routes them here by construction. New torrent providers (nyaa
-// siblings, …) embed this base.
+// routes them here by construction. New torrent providers embed this
+// base.
 
 import (
 	"bytes"
@@ -32,6 +32,36 @@ import (
 // torrentDubLabel is the single dub name torrent releases carry (the
 // session flow needs one dub slot; a torrent file has no dubs).
 const torrentDubLabel = "Торрент"
+
+// infoHashHexLen is the BitTorrent v1 infohash length in hex chars
+// (40) — the shared 40-hex btih contract a TorrentBase feed hash must
+// meet before it can ride a synthesized magnet (the engine rejects
+// anything else).
+const infoHashHexLen = 40
+
+// SearchMeta keys are the cross-package contract between torrent
+// search providers and the TUI result lists: the provider stashes
+// them in SearchResult.Meta, the TUI renders the torrent suffix.
+const (
+	// SearchMetaSize is the human release size ("1.2 GiB").
+	SearchMetaSize = "size"
+	// SearchMetaSeeders is the seeder count as reported ("421").
+	SearchMetaSeeders = "seeders"
+	// SearchMetaLeechers is the leecher count as reported ("33").
+	SearchMetaLeechers = "leechers"
+	// SearchMetaQuality is the PR35 quality badge ("1080p").
+	SearchMetaQuality = "quality"
+)
+
+// isHex reports whether s is non-empty lowercase hexadecimal.
+func isHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return s != ""
+}
 
 // filterSeedless drops search results whose feed-reported seeder count
 // parses to 0 — a seedless torrent is a dead result, and surfacing it
@@ -168,8 +198,8 @@ const torrentPreflightConcurrency = 8
 const torrentPreflightTimeout = 10 * time.Second
 
 // preflightResults is the torrent providers' shared search-time
-// dead-host preflight (the PR53 tokyotosho mechanism, generalized in
-// PR66 for nyaa and animetosho): every http(s)-linked result's
+// dead-host preflight (the PR53 tokyotosho mechanism, generalized
+// across the family in PR66): every http(s)-linked result's
 // .torrent bytes are fetched bounded-concurrent with a short per-URL
 // budget through the provider's own netclient route; a result whose
 // bytes cannot be fetched AND parsed as bencode metainfo is dropped

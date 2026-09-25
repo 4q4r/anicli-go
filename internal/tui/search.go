@@ -524,8 +524,8 @@ func bindRecordToSource(deps *Deps, rec *storage.AnimeProgress, primary contract
 }
 
 // torrentResultSuffix renders the torrent preview suffix for search
-// results that carry torrent metadata (PR36 — nyaa and the torrent
-// providers generally): " · quality · size · seeds↑/leechers↓".
+// results that carry torrent metadata (PR36 — the torrent
+// providers): " · quality · size · seeds↑/leechers↓".
 // Non-string meta values and absent keys are skipped; results without
 // torrent meta (every stream provider) keep their plain labels.
 func torrentResultSuffix(r contracts.SearchResult) string {

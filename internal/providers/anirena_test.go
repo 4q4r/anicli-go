@@ -137,7 +137,7 @@ func TestAniRenaSearchEmptyFeed(t *testing.T) {
 
 // TestAniRenaSearchSkipsOutOfScopeItems: an item with a non-Anime (or
 // missing) category, and an item without an <enclosure>, has nothing
-// this provider could surface — dropped like nyaa's linkless items,
+// this provider could surface — dropped like every linkless item,
 // never handed downstream as dead results.
 func TestAniRenaSearchSkipsOutOfScopeItems(t *testing.T) {
 	t.Parallel()

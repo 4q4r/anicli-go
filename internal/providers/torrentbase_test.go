@@ -361,7 +361,7 @@ func TestTorrentBaseNilEngineIngestFailsLoud(t *testing.T) {
 // [torrent] enabled the registry builds ONE lazy engine, injects it
 // into every torrent provider and exposes it (the TUI reuses the same
 // engine instead of booting a second client). With [torrent] disabled
-// nyaa never registers (disabled-table) and no engine exists.
+// tokyotosho never registers (disabled-table) and no engine exists.
 func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 	t.Parallel()
 
@@ -381,19 +381,19 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		if eng == nil {
 			t.Fatal("TorrentEngine() = nil with [torrent] enabled")
 		}
-		p, ok := reg.Get("nyaa")
+		p, ok := reg.Get("tokyotosho")
 		if !ok {
-			t.Fatal("nyaa not registered")
+			t.Fatal("tokyotosho not registered")
 		}
-		ny, ok := bareProvider(p).(*Nyaa)
+		tt, ok := bareProvider(p).(*TokyoTosho)
 		if !ok {
-			t.Fatalf("nyaa entry is %T, want *Nyaa", bareProvider(p))
+			t.Fatalf("tokyotosho entry is %T, want *TokyoTosho", bareProvider(p))
 		}
-		ny.mu.Lock()
-		wired := ny.engine
-		ny.mu.Unlock()
+		tt.mu.Lock()
+		wired := tt.engine
+		tt.mu.Unlock()
 		if wired == nil {
-			t.Fatal("the shared engine was not injected into the nyaa provider")
+			t.Fatal("the shared engine was not injected into the tokyotosho provider")
 		}
 	})
 
@@ -413,21 +413,22 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		if eng := reg.TorrentEngine(); eng != nil {
 			t.Error("TorrentEngine() must be nil with [torrent] disabled")
 		}
-		if _, ok := reg.Get("nyaa"); ok {
-			t.Error("nyaa must not register when the torrent subsystem is off")
+		if _, ok := reg.Get("tokyotosho"); ok {
+			t.Error("tokyotosho must not register when the torrent subsystem is off")
 		}
 	})
 
-	// nyaa excluded while [torrent] stays on: the shared engine must
-	// survive (it is lazy — zero idle cost) because every registered
-	// torrent provider resolves through it, and a re-registration or
-	// config reload must not lose the one shared client.
-	t.Run("nyaa-excluded", func(t *testing.T) {
+	// A torrent provider excluded while [torrent] stays on: the shared
+	// engine must survive (it is lazy — zero idle cost) because every
+	// registered torrent provider resolves through it, and a
+	// re-registration or config reload must not lose the one shared
+	// client.
+	t.Run("tokyotosho-excluded", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.Default()
 		cfg.Network.ProxyURL = ""
 		cfg.Providers.Kodik.Token = "test-token"
-		cfg.Providers.Exclude = []string{"nyaa"}
+		cfg.Providers.Exclude = []string{"tokyotosho"}
 
 		reg, err := NewRegistry(cfg, nil)
 		if err != nil {
@@ -437,10 +438,10 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 
 		eng := reg.TorrentEngine()
 		if eng == nil {
-			t.Fatal("TorrentEngine() = nil with nyaa excluded; the shared one-client rule would break on the next torrent provider")
+			t.Fatal("TorrentEngine() = nil with tokyotosho excluded; the shared one-client rule would break on the next torrent provider")
 		}
-		if _, ok := reg.Get("nyaa"); ok {
-			t.Error("excluded nyaa must not register")
+		if _, ok := reg.Get("tokyotosho"); ok {
+			t.Error("excluded tokyotosho must not register")
 		}
 	})
 }

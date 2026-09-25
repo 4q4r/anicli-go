@@ -141,7 +141,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	dlService.manager = manager
 	// PR35/PR36: the torrent engine is fully lazy (client + listeners
 	// on the first link) and is the registry's ONE shared client — the
-	// torrent search providers (nyaa, anilibria-torrent, animetosho,
+	// torrent search providers (anilibria-torrent, animetosho,
 	// tokyotosho) resolve their picks through it. The PR40 removal of
 	// the «Торренты» menu changed nothing here: the engine stays
 	// provider-side, including its teardown via Registry.Close.

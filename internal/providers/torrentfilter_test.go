@@ -27,40 +27,8 @@ func resultTitles(rs []contracts.SearchResult) []string {
 	return out
 }
 
-// TestNyaaSearchFiltersSeedless: seedless RSS items are dead results —
-// the provider drops them at search level; seeded items and items
-// without a parsable seed field (fail-soft) stay.
-func TestNyaaSearchFiltersSeedless(t *testing.T) {
-	body := `<?xml version="1.0" encoding="UTF-8"?>
-<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel>
-<item><title>Seeded Release</title><link>https://nyaa.si/download/1.torrent</link>
-<nyaa:seeders>42</nyaa:seeders><nyaa:infoHash>0123456789012345678901234567890123456789</nyaa:infoHash></item>
-<item><title>Dead Release</title><link>https://nyaa.si/download/2.torrent</link>
-<nyaa:seeders>0</nyaa:seeders><nyaa:infoHash>0123456789012345678901234567890123456788</nyaa:infoHash></item>
-<item><title>NoSeedField Release</title><link>https://nyaa.si/download/3.torrent</link>
-<nyaa:infoHash>0123456789012345678901234567890123456787</nyaa:infoHash></item>
-</channel></rss>`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	p := newNyaa(srv.URL, testClient(t, "nyaa"), nil)
-
-	results, err := p.Search(context.Background(), "query")
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	titles := resultTitles(results)
-	if len(titles) != 2 || titles[0] != "Seeded Release" || titles[1] != "NoSeedField Release" {
-		t.Fatalf("results = %v, want the seeded + fail-soft items, seedless dropped", titles)
-	}
-	if got := seedersOf(results[0]); got != "42" {
-		t.Fatalf("seeders meta = %q, want 42", got)
-	}
-}
-
-// TestAnimeToshoSearchFiltersSeedless: same rule over the newznab
-// attribute twins.
+// TestAnimeToshoSearchFiltersSeedless: the seedless-drop rule over the
+// newznab attribute twins.
 func TestAnimeToshoSearchFiltersSeedless(t *testing.T) {
 	body := `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"><channel>

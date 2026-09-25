@@ -77,6 +77,11 @@ type episodePartMsg struct {
 	sourceID string
 	episodes []contracts.Episode
 	err      error
+	// gen tags the fetch round (PR111): the initial open and
+	// «🔄 Обновить источники» share the fan-out machinery, and a
+	// superseded round's late settle must not pollute the fresh
+	// one's parts or settle it early.
+	gen int
 }
 
 // episodesDoneMsg finalizes the merge after every source settled.
@@ -116,6 +121,13 @@ type streamResolvedMsg struct {
 	skipChapters string
 	skipCleanup  func()
 	err          error
+	// freshEmbeds is the episode's embed map after the always-fresh
+	// hydration round (PR111) the resolve ran first: per provider,
+	// the fresh links replaced the cache (a provider whose round
+	// failed or yielded nothing kept its cached links). The settle
+	// writes it back so every later consumer (audio pick, next
+	// resolve round) sees the rotated links too.
+	freshEmbeds map[string][]string
 }
 
 // playedMsg settles one playback; quality is the label actually used
@@ -264,6 +276,15 @@ type sessionScreen struct {
 	hydrateGen  int
 	hydrateErrs map[string]map[string]error
 	sourceErrs  map[string]error
+	// refreshing marks an in-flight «🔄 Обновить источники» round
+	// (PR111): the menu item guards on it, and the fan-out settle
+	// uses it to route into the refresh finalization.
+	refreshing bool
+	// fetchGen tags the episode-fetch fan-out round (PR111): the
+	// initial open and the «🔄 Обновить источники» refresh share the
+	// machinery, and a superseded round's late settles must drop
+	// instead of polluting or pre-settling the fresh one.
+	fetchGen int
 	// providerNames caches the provider id → display name map for the
 	// header breakdown («Ист: 3 (AnimeLib, AniLibria)»).
 	providerNames map[string]string
@@ -398,18 +419,43 @@ func (s *sessionScreen) ID() string { return sessionScreenID }
 // fresh session, resolve the shikimori binding in the background
 // (commands own their timeout contexts — see the App.ctx note).
 func (s *sessionScreen) Init() tea.Cmd {
-	cmds := []tea.Cmd{}
-	for _, res := range s.group {
-		s.pending[res.SourceID] = true
-		cmds = append(cmds, safeCmd(sessionScreenID, func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-			defer cancel()
-			eps, err := s.deps.Episode.GetEpisodes(ctx, res.SourceID, res.URL)
-			return episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err}
-		}))
-	}
+	cmds := []tea.Cmd{s.beginFetchRound()}
 	if resolve := s.maybeShikiResolve(); resolve != nil {
 		cmds = append(cmds, resolve)
+	}
+	return tea.Batch(cmds...)
+}
+
+// startFetchRound resets the fan-out state for one episode-fetch round
+// and returns its generation tag (the stale-settle drop key).
+func (s *sessionScreen) startFetchRound() int {
+	s.fetchGen++
+	s.parts = nil
+	s.pending = map[string]bool{}
+	s.sourceErrs = nil
+	return s.fetchGen
+}
+
+// fetchEpisodesCmd fetches one source's episode list for the round.
+func fetchEpisodesCmd(deps *Deps, res contracts.SearchResult, gen int) tea.Cmd {
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		defer cancel()
+		eps, err := deps.Episode.GetEpisodes(ctx, res.SourceID, res.URL)
+		return episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err, gen: gen}
+	})
+}
+
+// beginFetchRound fans the episode fetch out over the session's group
+// — the SAME resolve path as the initial open; «🔄 Обновить
+// источники» (PR111) re-runs it verbatim.
+func (s *sessionScreen) beginFetchRound() tea.Cmd {
+	gen := s.startFetchRound()
+	deps := s.deps
+	cmds := make([]tea.Cmd, 0, len(s.group))
+	for _, res := range s.group {
+		s.pending[res.SourceID] = true
+		cmds = append(cmds, fetchEpisodesCmd(deps, res, gen))
 	}
 	return tea.Batch(cmds...)
 }
@@ -467,21 +513,57 @@ const shikiBindMinRatio = 0.6
 // loadEpisodesSync is the synchronous loading path for tests and for
 // rehydration flows that already hold the parts.
 func (s *sessionScreen) loadEpisodesSync() {
+	gen := s.startFetchRound()
 	for _, res := range s.group {
 		s.pending[res.SourceID] = true
 		eps, err := s.deps.Episode.GetEpisodes(context.Background(), res.SourceID, res.URL)
-		msg := episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err}
+		msg := episodePartMsg{sourceID: res.SourceID, episodes: eps, err: err, gen: gen}
 		s.Update(msg)
 	}
 	s.Update(episodesDoneMsg{})
 }
 
+// refreshSources re-runs the SAME resolve path as the initial open
+// (PR111): the episode-fetch fan-out over every group source, fresh
+// entries merged across providers with per-provider isolation (one
+// source's failure records its error and never blocks the others).
+// The refreshed entries REPLACE the cached ones at the settle, which
+// then re-hydrates the current episode — the button's whole promise.
+func (s *sessionScreen) refreshSources() (Screen, tea.Cmd) {
+	if s.refreshing {
+		return s, nil // a round is already running; its settle reports
+	}
+	s.refreshing = true
+	s.setStatus("Обновляю источники…")
+	s.setState(sessionStateLoading)
+	return s, s.beginFetchRound()
+}
+
+// settleRefresh finalizes the refresh round: the fresh merge replaces
+// the cached episodes wholesale (the owner's replace semantics), the
+// cursor stays on the episode the user is watching, and the current
+// episode's hydration runs so the round ends with an honest verdict
+// on the sources actually in hand.
+func (s *sessionScreen) settleRefresh() tea.Cmd {
+	s.refreshing = false
+	s.hydrated = map[string]bool{}
+	s.hydrateErrs = nil
+	idx := s.currentIdx
+	s.finalizeMerge()
+	if idx >= 0 && idx < len(s.order) {
+		s.currentIdx = idx
+	}
+	return s.hydrateEpisode(s.currentEpisode())
+}
+
 // hydrateEpisode issues one hydration round for the episode num (the
-// PR43 on-demand trigger behind «Смотреть» and the «🔄 Обновить
-// источники» recovery): the status line reports the work (the
-// legitimate progress display), the settle message merges the results
-// under the provider prefixes. The attempt is recorded so the header
-// cause can distinguish unopened episodes from genuinely empty ones.
+// PR43 on-demand trigger behind «Смотреть»; for «🔄 Обновить
+// источники» it is the SECOND phase of the refresh — the fetch
+// fan-out re-runs first, then this round re-hydrates the lazily-listing
+// providers of the opened episode): the status line reports the work,
+// the settle message merges the results under the provider prefixes.
+// The attempt is recorded so the header cause can distinguish
+// unopened episodes from genuinely empty ones.
 func (s *sessionScreen) hydrateEpisode(num string) tea.Cmd {
 	if num == "" {
 		s.setStatus("Нет серий")
@@ -582,15 +664,39 @@ func (s *sessionScreen) applyHydration(msg hydrateDoneMsg) tea.Cmd {
 	case len(msg.errs) > 0:
 		s.setStatus("Источники не найдены — причина в заголовке")
 	default:
-		s.setStatus("Источники не найдены")
+		// PR111: a zero-work round (every contributing provider
+		// already carries links — the eager-fetch reality after a
+		// refresh) is NOT a failure. The verdict counts the source
+		// tracks actually in hand; only a genuinely empty episode
+		// reports «не найдены» (the owner's false-failure defect).
+		if n := countSourceTracks(s.episodes[msg.num]); n > 0 {
+			s.setStatus(fmt.Sprintf("Источники актуальны: %d", n))
+		} else {
+			s.setStatus("Источники не найдены")
+		}
 	}
 	return nil
+}
+
+// countSourceTracks counts the dub keys of the episode that carry at
+// least one actual link (the same bar hasProviderEmbeds applies).
+func countSourceTracks(ep contracts.Episode) int {
+	n := 0
+	for _, links := range ep.RawEmbeds {
+		if len(links) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // Update implements Screen: the substate machine.
 func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case episodePartMsg:
+		if msg.gen != s.fetchGen {
+			return s, nil // a superseded round's late settle drops
+		}
 		delete(s.pending, msg.sourceID)
 		if msg.err != nil {
 			if s.sourceErrs == nil {
@@ -606,6 +712,9 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return s, nil
 	case episodesDoneMsg:
+		if s.refreshing {
+			return s, s.settleRefresh()
+		}
 		s.finalizeMerge()
 		return s, nil
 	case hydrateDoneMsg:
@@ -628,6 +737,29 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				msg.skipCleanup()
 			}
 			return s, nil
+		}
+		// PR111: the fresh hydration's verdict replaces the cached
+		// embeds (the round ran before the resolve; both the audio
+		// pick at play time and the next round read the current
+		// links). The dub stats follow the key set delta.
+		if msg.freshEmbeds != nil {
+			if ep, ok := s.episodes[msg.skipEpisode]; ok {
+				for key := range ep.RawEmbeds {
+					if _, kept := msg.freshEmbeds[key]; !kept {
+						s.dubStats[key]--
+						if s.dubStats[key] <= 0 {
+							delete(s.dubStats, key)
+						}
+					}
+				}
+				for key, links := range msg.freshEmbeds {
+					if _, had := ep.RawEmbeds[key]; !had && len(links) > 0 {
+						s.dubStats[key]++
+					}
+				}
+				ep.RawEmbeds = msg.freshEmbeds
+				s.episodes[msg.skipEpisode] = ep
+			}
 		}
 		if msg.err != nil {
 			if msg.skipCleanup != nil {
@@ -888,10 +1020,10 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		s.setState(sessionStateEpisodeList)
 		return s, nil
 	case "refresh":
-		if s.hydrating {
+		if s.hydrating || s.refreshing {
 			return s, nil // a round is already running; its settle will report
 		}
-		return s, s.hydrateEpisode(s.currentEpisode())
+		return s.refreshSources()
 	case "rebind":
 		// PR62 #3: re-run the provider fan-out over the stored record;
 		// the next checklist pick re-persists the binding (BindSource
@@ -901,13 +1033,9 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return s, replace(newRebindProgress(s.deps, s.resume))
 	case "redub":
-		// PR95: open the dub-selection menu over the episode's merged
-		// entries (cached ones when fresh, a fresh unscoped resolve
-		// otherwise). The dubs are NOT reset.
-		if s.streamEntriesEp == s.currentEpisode() && len(s.streamEntries) > 0 {
-			s.openRedubMenu()
-			return s, nil
-		}
+		// PR95/PR111: the dub menu is built from a FRESH resolve
+		// (redubPending) — the ResolveStream cache is banned, and the
+		// dub set itself rotates; cached entries never feed it.
 		s.redubPending = true
 		return s.beginStreamResolve("")
 	case "info":
@@ -1150,10 +1278,62 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s.launchPlayback()
 }
 
+// hydrateEpisodeFresh re-runs the per-provider dub hydration for the
+// episode (PR111 always-fresh): stream links rotate server-side, so
+// the cached embeds are never trusted for a resolve. Every
+// contributing provider is queried; a round that returned actual
+// links REPLACES that provider's cached keys (dubs the provider
+// dropped vanish); a failed or empty round keeps the cached links —
+// fail-soft per provider, and the eager providers (no DubsHydrator
+// capability, HydrateDubs passes the episode through unchanged) keep
+// the embeds their listing delivered. The resolve stays the
+// truth-teller: dead links it surfaces as the PR94 skip records.
+func hydrateEpisodeFresh(ctx context.Context, deps *Deps, ep contracts.Episode) contracts.Episode {
+	out := contracts.Episode{Num: ep.Num, Title: ep.Title, RawID: ep.RawID, RawEmbeds: map[string][]string{}}
+	for k, v := range ep.RawEmbeds {
+		out.RawEmbeds[k] = v
+	}
+	for _, part := range strings.Split(ep.RawID, "|") {
+		prov, id, found := strings.Cut(part, ":")
+		if !found || prov == "" || id == "" {
+			continue
+		}
+		local := contracts.Episode{Num: ep.Num, RawID: id, RawEmbeds: map[string][]string{}}
+		fresh, err := deps.Episode.HydrateDubs(ctx, prov, local)
+		if err != nil {
+			deps.logger().Warn("tui: fresh hydration failed; keeping cached embeds",
+				"provider", prov, "episode", ep.Num, "error", err)
+			continue
+		}
+		got := 0
+		for _, links := range fresh.RawEmbeds {
+			if len(links) > 0 {
+				got++
+			}
+		}
+		if got == 0 {
+			continue // nothing fresh — keep this provider's cached keys
+		}
+		for key := range out.RawEmbeds {
+			if providerOfTrackKey(key) == prov {
+				delete(out.RawEmbeds, key)
+			}
+		}
+		for dub, links := range fresh.RawEmbeds {
+			if len(links) > 0 {
+				out.RawEmbeds["["+prov+"] "+dub] = links
+			}
+		}
+	}
+	return out
+}
+
 // beginStreamResolve resolves the episode's streams for the picker.
 // An empty scope resolves EVERY dub carrying embed links — the merged
 // list (PR61); a dub key scopes the resolve to the remembered dub
-// (the fast path auto-plays its result).
+// (the fast path auto-plays its result). The round ALWAYS starts with
+// a fresh hydration (PR111): the ResolveStream cache is banned —
+// every episode open re-resolves from the provider's current links.
 func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	// PR84 review fix: CLEAR the previous round's entries BEFORE any
 	// surface is built — otherwise round 2's picker frame renders the
@@ -1184,7 +1364,8 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 	return s, safeCmd(sessionScreenID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
-		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, scope)
+		fresh := hydrateEpisodeFresh(ctx, deps, ep)
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, scope)
 		// The skip verdict is stream-independent — it fetches here so
 		// the note is ready at launch (PR61). Best-effort: a failure
 		// degrades the note, never the resolve.
@@ -1206,6 +1387,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 			skipChapters: chapters,
 			skipCleanup:  cleanup,
 			err:          err,
+			freshEmbeds:  fresh.RawEmbeds,
 		}
 	})
 }
@@ -1655,27 +1837,13 @@ func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 // pickRedub re-targets playback to the chosen dub: the remembered
-// pair updates (so «След.» keeps the new dub) and the dub's already
-// resolved stream launches immediately; a dub without resolved
-// streams falls back to the scoped resolve.
+// pair updates (so «След.» keeps the new dub) and the scoped resolve
+// re-resolves the dub's streams FRESH (PR111 — the banned-cache
+// removal: the settle's fast path auto-launches the fresh result). A
+// dub the rotation dropped falls to the scoped-error fallback (the
+// merged resolve of the rest, PR94).
 func (s *sessionScreen) pickRedub(dub string) (Screen, tea.Cmd) {
 	s.videoDub, s.audioDub = dub, dub
-	if s.streamEntriesEp == s.currentEpisode() {
-		var candidates []streamEntry
-		for _, e := range s.streamEntries {
-			if e.DubKey == dub && e.Source.URL != "" {
-				candidates = append(candidates, e)
-			}
-		}
-		if len(candidates) > 0 {
-			e := autoStreamEntry(candidates, s.lastQuality)
-			s.pickedVideo = e.Source
-			s.lastQuality = e.Quality
-			return s.launchPlayback()
-		}
-	}
-	// The dub's streams are not resolved for the current episode —
-	// the scoped resolve settles into the remembered-dub fast path.
 	return s.beginStreamResolve(dub)
 }
 

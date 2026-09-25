@@ -98,17 +98,18 @@ type downloadEpisodeReport struct {
 // dub first; if its mirror is dead on this episode (the per-episode
 // rotation), fall back to the other dubs in the established order —
 // the same sortedEmbedKeys order the merged picker and the audio
-// prompt use. Lazily-listing providers hydrate first (the same
-// on-demand round the watch flow runs). Returns "" when no dub is
-// viable — the caller types the failure instead of skipping silently.
+// prompt use. The hydration is FRESH (PR111: the ResolveStream cache
+// is banned — the ladder must probe the provider's current links, not
+// the episode's cached ones). Returns "" when no dub is viable — the
+// caller types the failure instead of skipping silently.
 //
 // The machinery is the watch flow's own: liveness = a scoped
-// resolveAllStreams success, hydration = hydrateEpisodeCmd — with the
-// watch flow's budgeting too: hydration and each probe are
+// resolveAllStreams success, hydration = hydrateEpisodeFresh — with
+// the watch flow's budgeting too: hydration and each probe are
 // independently bounded (review fix 1).
 func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, preferred string) string {
 	hctx, hcancel := context.WithTimeout(ctx, downloadHydrateBudget)
-	ep = hydrateForDownload(hctx, deps, ep)
+	ep = hydrateEpisodeFresh(hctx, deps, ep)
 	hcancel()
 	candidates := make([]string, 0, len(ep.RawEmbeds)+1)
 	if preferred != "" {
@@ -133,24 +134,9 @@ func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, p
 	return ""
 }
 
-// hydrateForDownload runs the watch flow's hydration round over one
-// range episode (the PR43 on-demand model — range episodes other than
-// the opened one are usually unhydrated) and merges the
-// provider-prefixed embeds into the episode copy. Providers already
-// carrying real links are skipped by hydrateEpisodeCmd itself.
-func hydrateForDownload(ctx context.Context, deps *Deps, ep contracts.Episode) contracts.Episode {
-	msg := hydrateEpisodeCmd(deps, ep.Num, ep, 0, ctx)
-	if len(msg.embeds) == 0 {
-		return ep
-	}
-	if ep.RawEmbeds == nil {
-		ep.RawEmbeds = map[string][]string{}
-	}
-	for dub, links := range msg.embeds {
-		ep.RawEmbeds[dub] = links
-	}
-	return ep
-}
+// hydrateForDownload was the watch flow's gated hydration round; the
+// PR111 always-fresh resolve replaced it with hydrateEpisodeFresh
+// everywhere (the ResolveStream cache is banned).
 
 // stampResolvedDub pins the per-episode resolution onto the task.
 func stampResolvedDub(task *DownloadTask, dub string) {

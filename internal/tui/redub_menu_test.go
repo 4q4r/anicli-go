@@ -25,23 +25,43 @@ func redubSession(t *testing.T) *sessionScreen {
 			streams: map[string]contracts.MediaStream{
 				"[animego] Дубль 1": {DubName: "d1", Links: map[string]contracts.VideoSource{
 					"1080": {URL: "v1080"},
+					"720":  {URL: "v720"},
+				}},
+				"[anilib] AniLib": {DubName: "d2", Links: map[string]contracts.VideoSource{
+					"1080": {URL: "a1080"},
 				}},
 			},
 		},
 		Playback: pb,
 	}
-	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	group := []contracts.SearchResult{
+		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
+		{Title: "Тайтл", URL: "u2", SourceID: "anilib"},
+	}
 	s := NewSessionScreen(deps, group[0], group)
 	s.loadEpisodesSync()
 	s.videoDub, s.audioDub = "[animego] Дубль 1", "[animego] Дубль 1"
-	s.streamEntries = []streamEntry{
-		{Quality: "1080", DubKey: "[animego] Дубль 1", Source: contracts.VideoSource{URL: "v1080"}},
-		{Quality: "720", DubKey: "[animego] Дубль 1", Source: contracts.VideoSource{URL: "v720"}},
-		{Quality: "1080", DubKey: "[anilib] AniLib", Source: contracts.VideoSource{URL: "a1080"}},
-	}
-	s.streamEntriesEp = s.currentEpisode()
 	s.setState(sessionStateMenu)
+	s.buildActionMenu()
 	return s
+}
+
+// settleRedubResolve runs the fresh unscoped resolve the redub menu
+// item schedules (PR111: the menu is built from a FRESH round, never
+// from the entries cached by an earlier one).
+func settleRedubResolve(t *testing.T, s *sessionScreen) *sessionScreen {
+	t.Helper()
+	_, cmd := s.handleMenuKey(enter())
+	if cmd == nil {
+		t.Fatal("«Сменить озвучку» must schedule a fresh resolve")
+	}
+	msg := cmd()
+	_scr, _ := s.Update(msg)
+	ss := _scr.(*sessionScreen)
+	if ss.state != sessionStateRedub {
+		t.Fatalf("state after settle = %v, want the redub menu", ss.state)
+	}
+	return ss
 }
 
 // TestRedubOpensDubMenu (дефект владельца): «Сменить озвучку»
@@ -50,14 +70,7 @@ func TestRedubOpensDubMenu(t *testing.T) {
 	s := redubSession(t)
 
 	s.list.Jump(sessionActionIndex(s, "redub"))
-	next, _ := s.handleMenuKey(enter())
-	ss, ok := next.(*sessionScreen)
-	if !ok {
-		t.Fatalf("scr = %T", next)
-	}
-	if ss.state != sessionStateRedub {
-		t.Fatalf("state = %v, want sessionStateRedub", ss.state)
-	}
+	ss := settleRedubResolve(t, s)
 	if ss.videoDub != "[animego] Дубль 1" || ss.audioDub != "[animego] Дубль 1" {
 		t.Fatalf("redub reset the dubs: %q/%q", ss.videoDub, ss.audioDub)
 	}
@@ -86,8 +99,7 @@ func TestRedubOpensDubMenu(t *testing.T) {
 func TestRedubPickRetargetsAndLaunches(t *testing.T) {
 	s := redubSession(t)
 	s.list.Jump(sessionActionIndex(s, "redub"))
-	next, _ := s.handleMenuKey(enter())
-	ss := next.(*sessionScreen)
+	ss := settleRedubResolve(t, s)
 
 	for i, c := range ss.redubList.Menu().Items {
 		if c.ID == "[anilib] AniLib" {
@@ -95,14 +107,21 @@ func TestRedubPickRetargetsAndLaunches(t *testing.T) {
 			break
 		}
 	}
-	next2, play := ss.Update(enter())
-	ss2 := next2.(*sessionScreen)
-
-	if ss2.videoDub != "[anilib] AniLib" || ss2.audioDub != "[anilib] AniLib" {
-		t.Fatalf("remembered pair = %q/%q, want the picked dub", ss2.videoDub, ss2.audioDub)
+	next, resolve := ss.Update(enter())
+	ss2 := next.(*sessionScreen)
+	// PR111: the pick re-resolves the dub FRESH (no cached launch);
+	// its settle auto-launches via the fast path.
+	if resolve == nil {
+		t.Fatal("the pick must schedule a fresh scoped resolve")
 	}
-	if ss2.state != sessionStatePlaying {
-		t.Fatalf("state = %v, want sessionStatePlaying (immediate launch)", ss2.state)
+	next3, play := ss2.Update(resolve())
+	ss3 := next3.(*sessionScreen)
+
+	if ss3.videoDub != "[anilib] AniLib" || ss3.audioDub != "[anilib] AniLib" {
+		t.Fatalf("remembered pair = %q/%q, want the picked dub", ss3.videoDub, ss3.audioDub)
+	}
+	if ss3.state != sessionStatePlaying {
+		t.Fatalf("state = %v, want sessionStatePlaying (immediate launch)", ss3.state)
 	}
 	if play == nil {
 		t.Fatal("missing playedMsg command")
@@ -125,11 +144,7 @@ func TestRedubPickRetargetsAndLaunches(t *testing.T) {
 func TestRedubEscReturnsUnchanged(t *testing.T) {
 	s := redubSession(t)
 	s.list.Jump(sessionActionIndex(s, "redub"))
-	next, _ := s.handleMenuKey(enter())
-	ss := next.(*sessionScreen)
-	if ss.state != sessionStateRedub {
-		t.Fatalf("state = %v, want the redub menu", ss.state)
-	}
+	ss := settleRedubResolve(t, s)
 
 	next2, cmd := ss.Update(esc())
 	ss2 := next2.(*sessionScreen)

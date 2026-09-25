@@ -285,9 +285,10 @@ func TestKnownDubKeysNeedNoHydration(t *testing.T) {
 	}
 }
 
-// TestSessionRefreshSources: «🔄 Обновить источники» re-runs the
-// per-episode hydration for the current episode (the recovery path
-// for transient failures) and reports progress while running.
+// TestSessionRefreshSources: «🔄 Обновить источники» re-runs the SAME
+// resolve path as the initial open (PR111) — the fetch fan-out, then
+// the current episode's hydration — so a transient failure heals, and
+// the verdict is honest.
 func TestSessionRefreshSources(t *testing.T) {
 	fix := &hydrateFixture{embeds: map[string]map[string][]string{"anilib": {}}}
 	s := newLazySession(t, fix, map[string][]contracts.Episode{
@@ -302,18 +303,30 @@ func TestSessionRefreshSources(t *testing.T) {
 	s.list.Jump(indexOfDayActionMenu(s, "refresh"))
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("refresh must schedule a re-resolve")
+		t.Fatal("refresh must schedule the fetch fan-out")
 	}
-	if s.status != "Ищу источники…" {
-		t.Fatalf("status during refresh = %q, want «Ищу источники…»", s.status)
+	if s.status != "Обновляю источники…" {
+		t.Fatalf("status during refresh = %q, want «Обновляю источники…»", s.status)
 	}
-	msg := cmd()
-	if _, ok := msg.(hydrateDoneMsg); !ok {
-		t.Fatalf("refresh settled %T, want hydrateDoneMsg", msg)
+	// Phase 1: the fetch fan-out settles.
+	next, follow := s.Update(cmd())
+	_ = next
+	if follow == nil {
+		t.Fatal("the fetch settle must schedule the merge")
 	}
-	s.Update(msg)
+	// Phase 2: the merge finalizes and schedules the hydration round.
+	next2, hydrate := s.Update(follow())
+	if hydrate == nil {
+		t.Fatal("the merge settle must schedule the current episode's hydration")
+	}
+	_ = next2
+	// Phase 3: the hydration settles with the fresh source.
+	s.Update(hydrate())
 	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1") {
 		t.Fatalf("post-refresh header = %q, want the recovered source", got)
+	}
+	if s.status == "Источники не найдены" {
+		t.Fatal("the refresh verdict must be honest — the round found a source")
 	}
 }
 
@@ -338,14 +351,22 @@ func TestRefreshSourcesHydratesKeyOnlyTier1Episodes(t *testing.T) {
 	s.list.Jump(indexOfDayActionMenu(s, "refresh"))
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("refresh must schedule a re-resolve")
+		t.Fatal("refresh must schedule the fetch fan-out")
 	}
-	msg := cmd()
-	done, ok := msg.(hydrateDoneMsg)
-	if !ok {
-		t.Fatalf("refresh settled %T, want hydrateDoneMsg", msg)
+	// Phase 1: the fetch settles; the merge finalizes.
+	next, follow := s.Update(cmd())
+	_ = next
+	if follow == nil {
+		t.Fatal("the fetch settle must schedule the merge")
 	}
-	s.Update(done)
+	// Phase 2: the merge schedules the hydration round.
+	next2, hydrate := s.Update(follow())
+	_ = next2
+	if hydrate == nil {
+		t.Fatal("the merge settle must schedule the current episode's hydration")
+	}
+	// Phase 3: the hydration settles.
+	s.Update(hydrate())
 
 	fix.mu.Lock()
 	calls := len(fix.calls)

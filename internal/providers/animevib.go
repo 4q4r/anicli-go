@@ -89,6 +89,12 @@ type AnimeVib struct {
 // plain desktop-UA requests (verified via curl and the netclient
 // fingerprint through the live probe), so no extra headers are sent.
 func newAnimeVib(baseURL string, http *netclient.Client, maxParallel int) *AnimeVib {
+	// netclient.Parallel treats ≤0 as unbounded — clamp to 1 so a bad
+	// config value cannot unbound the serial-page fan-out (wave A
+	// review F3, anikado precedent).
+	if maxParallel <= 0 {
+		maxParallel = 1
+	}
 	return &AnimeVib{
 		Base: Base{
 			id:          "animevib",
@@ -263,8 +269,11 @@ func (p *AnimeVib) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 
 	src, ok := doc.Find("iframe.player-shar[src]").First().Attr("src")
 	if !ok || src == "" {
-		// No player: a data gap, not an error (anidub precedent).
-		return nil, nil
+		// No player: a typed wall (wave A review F2) — a silent empty
+		// would fake a healthy title with no episodes.
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, resp.StatusCode,
+			fmt.Errorf("%w: post page carries no player iframe; no anonymous episode surface",
+				contracts.ErrNotFound))
 	}
 
 	embed, err := avParseEmbed(src, animeURL)
@@ -360,8 +369,11 @@ func (p *AnimeVib) GetEpisodes(ctx context.Context, animeURL string) ([]contract
 		if firstErr != nil {
 			return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0, firstErr)
 		}
-		// A serial page with selects but no episodes: an empty table.
-		return nil, nil
+		// A serial page with selects but no episode rows: a typed wall
+		// (wave A review F2), never a silent empty.
+		return nil, contracts.WrapProvider(p.ID(), contracts.OpGetEpisodes, 0,
+			fmt.Errorf("%w: serial page carries selects but no episode rows from any translation",
+				contracts.ErrNotFound))
 	}
 
 	nums := make([]string, 0, len(byNum))
@@ -471,7 +483,16 @@ func (p *AnimeVib) ResolveStream(ctx context.Context, episode contracts.Episode,
 		Links:   map[string]contracts.VideoSource{},
 	}
 
-	sources, err := resolveEmbeds(ctx, p.http, episode.RawEmbeds[dubID])
+	// A dub the episode does not carry is a caller bug (wave A review
+	// F2, animedia precedent): resolveEmbeds(nil) would answer a
+	// silent empty MediaStream.
+	links, ok := episode.RawEmbeds[dubID]
+	if !ok || len(links) == 0 {
+		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0,
+			fmt.Errorf("%w: episode %s carries no dub %q", contracts.ErrInvalidInput, episode.Num, dubID))
+	}
+
+	sources, err := resolveEmbeds(ctx, p.http, links)
 	if err != nil {
 		return stream, contracts.WrapProvider(p.ID(), contracts.OpResolveStream, 0, err)
 	}

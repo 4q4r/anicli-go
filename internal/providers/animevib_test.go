@@ -259,9 +259,11 @@ func TestAnimeVibGetEpisodesUnsupportedEmbed(t *testing.T) {
 	}
 }
 
-// Pages without the player-shar iframe yield no episodes, no error
-// (anidub precedent).
-func TestAnimeVibGetEpisodesNoPlayerIsEmpty(t *testing.T) {
+// Pages without the player-shar iframe are a typed wall (wave A
+// review F2): a silent empty would fake a healthy title with no
+// episodes — the same data gap the netclient surfaces as ErrNotFound
+// for a dead link.
+func TestAnimeVibGetEpisodesNoPlayerIsTypedWall(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -269,12 +271,43 @@ func TestAnimeVibGetEpisodesNoPlayerIsEmpty(t *testing.T) {
 	})
 	p := newAnimeVib(srv.URL, testClient(t, "animevib"), 4)
 
-	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/none.html")
-	if err != nil {
-		t.Fatalf("GetEpisodes: %v", err)
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/none.html")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the typed no-player wall)", err)
 	}
-	if len(episodes) != 0 {
-		t.Errorf("episodes = %d, want 0", len(episodes))
+}
+
+// TestAnimeVibGetEpisodesSerialZeroEpisodesIsTypedWall pins the second
+// silent-empty wall (wave A review F2): a serial page whose visible
+// series select carries no hash-bearing options builds an empty table —
+// typed ErrNotFound, never (nil, nil).
+func TestAnimeVibGetEpisodesSerialZeroEpisodesIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/2937-empty-serial.html":
+			//nolint:gosec // test-server host echo, trusted offline fixture shape
+			_, _ = w.Write([]byte(`<html><body>` +
+				`<iframe class="player-shar" src="http://` + r.Host + `/serial/1362451/a899a9b6ef3945f70a33c6ba2cd52c70/720p"></iframe>` +
+				`</body></html>`))
+		case strings.HasPrefix(r.URL.Path, "/serial/1362451/"):
+			// Translations select present, but the visible series
+			// select carries no data-id/data-hash options at all.
+			_, _ = w.Write([]byte(`<html><body>` +
+				`<div class="serial-translations-box"><option data-media-id="1362451" data-media-hash="a899a9b6ef3945f70a33c6ba2cd52c70" data-title="JAM">JAM (0 эп.)</option></div>` +
+				`<div class="serial-series-box"><select></select></div>` +
+				`</body></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := newAnimeVib(srv.URL, testClient(t, "animevib"), 4)
+
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/2937-empty-serial.html")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the empty-table wall)", err)
 	}
 }
 
@@ -324,18 +357,37 @@ func TestAnimeVibResolveStream(t *testing.T) {
 	}
 }
 
-func TestAnimeVibResolveStreamUnknownDubIsEmpty(t *testing.T) {
+// TestAnimeVibResolveStreamUnknownDubIsTypedWall pins the caller-bug
+// wall (wave A review F2, animedia precedent): a dub the episode does
+// not carry is typed ErrInvalidInput — resolveEmbeds(nil) would
+// otherwise answer a silent empty MediaStream.
+func TestAnimeVibResolveStreamUnknownDubIsTypedWall(t *testing.T) {
 	t.Parallel()
 
 	p := newAnimeVib(AnimeVibBase, testClient(t, "animevib"), 4)
 
-	stream, err := p.ResolveStream(context.Background(),
-		contracts.Episode{RawEmbeds: map[string][]string{}}, "NoSuchDub")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
+	_, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawEmbeds: map[string][]string{}}, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
-	if len(stream.Links) != 0 {
-		t.Errorf("Links = %v, want empty for an unknown dub", stream.Links)
+}
+
+// TestAnimeVibNewClampsMaxParallel pins the F3 clamp: netclient.
+// Parallel treats ≤0 as unbounded, so the constructor must clamp the
+// config value to 1 (anikado precedent).
+func TestAnimeVibNewClampsMaxParallel(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []int{0, -5} {
+		p := newAnimeVib(AnimeVibBase, testClient(t, "animevib"), in)
+		if p.maxParallel != 1 {
+			t.Errorf("newAnimeVib(maxParallel=%d).maxParallel = %d, want 1", in, p.maxParallel)
+		}
+	}
+	p := newAnimeVib(AnimeVibBase, testClient(t, "animevib"), 7)
+	if p.maxParallel != 7 {
+		t.Errorf("newAnimeVib(maxParallel=7).maxParallel = %d, want 7 (positive values pass through)", p.maxParallel)
 	}
 }
 

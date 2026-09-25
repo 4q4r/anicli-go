@@ -193,6 +193,19 @@ var allFactories = []struct {
 	{"animeheaven", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeHeaven(AnimeHeavenBase, http)
 	}},
+	// anikoto (PR104): the anikototv.to EN catalog — a HiAnime/Zoro-style
+	// clone (the anikoto.net platform family documented by the AniVault
+	// Scraper and the PyPI anikoto downloader, live-verified 2026-09-25).
+	// Written from the live site; no credentials: /filter?keyword= HTML
+	// search in, the {"status":N,"result":…} AJAX envelope out (episode
+	// list + SUB/DUB server groups + per-server stream resolver), and the
+	// megaplay embed chain statically unpacked — XOR string table, AES-256-CBC
+	// enc decrypt, HMAC-signed CDN URL — without executing any JavaScript.
+	// The controller's /api/search lead is a decoy: the site answers every
+	// parameter with the error envelope.
+	{"anikoto", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+		return newAniKoto(AniKotoBase, http)
+	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

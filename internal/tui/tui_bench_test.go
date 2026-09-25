@@ -212,7 +212,7 @@ func benchSearchResults(n int) []contracts.SearchResult {
 		out = append(out, contracts.SearchResult{
 			Title:    fmt.Sprintf("One Piece Wan Pisu %d", i),
 			URL:      "https://prov.example/anime/" + strconv.Itoa(i),
-			SourceID: "prov" + strconv.Itoa(i%25),
+			SourceID: "prov" + strconv.Itoa(i%27),
 			Poster:   "https://prov.example/p/" + strconv.Itoa(i) + ".jpg",
 		})
 	}
@@ -224,8 +224,8 @@ func benchSearchResults(n int) []contracts.SearchResult {
 func BenchmarkSettleResults1000(b *testing.B) {
 	b.ReportAllocs()
 	results := benchSearchResults(1000)
-	rows := make([]ProviderMeta, 0, 25)
-	for i := range 25 {
+	rows := make([]ProviderMeta, 0, 27)
+	for i := range 27 {
 		rows = append(rows, ProviderMeta{ID: "prov" + strconv.Itoa(i), Name: "Провайдер " + strconv.Itoa(i)})
 	}
 	for b.Loop() {
@@ -243,15 +243,15 @@ func BenchmarkSettleResults1000(b *testing.B) {
 func BenchmarkSearchProgressView(b *testing.B) {
 	b.ReportAllocs()
 	results := benchSearchResults(1000)
-	rows := make([]ProviderMeta, 0, 25)
-	status := make(map[string]string, 25)
-	counts := make(map[string]int, 25)
-	responded := make(map[string]bool, 25)
-	for i := range 25 {
+	rows := make([]ProviderMeta, 0, 27)
+	status := make(map[string]string, 27)
+	counts := make(map[string]int, 27)
+	responded := make(map[string]bool, 27)
+	for i := range 27 {
 		id := "prov" + strconv.Itoa(i)
 		rows = append(rows, ProviderMeta{ID: id, Name: "Провайдер " + strconv.Itoa(i)})
 		status[id] = "готово"
-		counts[id] = 1000 / 25
+		counts[id] = 1000 / 27
 		responded[id] = true
 	}
 	m := &searchProgress{deps: nil, rows: rows, status: status, counts: counts, responded: responded, results: results}

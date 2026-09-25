@@ -39,7 +39,8 @@ import (
 // (PR92, the animemobi.com RU mobile DLE catalog with its kodik-family
 // players and per-release torrent downloads) closed the RU-dub block
 // after anistar; animiku (PR101, the beta.animiku.tokyo RU DLE catalog
-// with its mrdeath/aaparser kodik bridge) joined after anitokyo; the
+// with its mrdeath/aaparser kodik bridge) joined after anitokyo, and
+// anikado (PR102) and animevib (PR103) after it; the
 // torrents close the roster — rutor (PR87, the
 // rutor.info public tracker — the first RU-indexed torrent provider),
 // anirena (PR88, the anirena.com search RSS with direct .torrent
@@ -52,7 +53,9 @@ import (
 // after animemobi, taking it back to 24; PR101 (animiku) took it
 // to 25; anikado (PR102, the anikado.net RU DLE catalog with its
 // per-episode-page kodik translator tables) joined after animiku,
-// taking it to 26.
+// taking it to 26; animevib (PR103, the www.animevib.ru DLE catalog
+// with its kodik serial-embed player stack) joined after anikado,
+// taking it to 27.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -74,6 +77,7 @@ var expectedProviderOrder = []string{
 	"anitokyo",
 	"animiku",
 	"anikado",
+	"animevib",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

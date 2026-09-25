@@ -1,0 +1,39 @@
+<!-- [LIVE-VERIFIED 2026-09-25] Derived from
+     GET https://kodikplayer.com/video/113757/15dee337f31b61f618be0c17b4b48b4e/720p
+     (HTTP 200, 25882 bytes; captured via plain curl with a desktop
+     Chrome/150 UA — no browser JS involved). The kodik video (movie) player page linked from
+     /6983-klinok-rassekajuschij-demonov-beskonechnyj-zamok.html —
+     the /video/ embed shape: NO serial-panel, NO translations, vInfo
+     carries type=video + the movie hash/id. The provider maps it to
+     one episode under the AnimeVib dub key without fetching.
+     Structural markup below is the verbatim capture trimmed to the
+     regions the provider parses; formatting/whitespace preserved.
+-->
+<script>
+    var playerLink = ["/assets/js/app.player.abed291a63d4f2a5592905082f598e7e63e7847b1d130772ebb1e04a09326c8d.js"];
+
+  playerSettings.block_c = { manifest: false, other: false };
+
+  playerSettings.p2p_trackers = ["wss://wt2.kodik.biz:8434"];
+  playerSettings.forceAdvertCount = true;
+  playerSettings.country = "DE";
+
+  var parsedStartFrom = {};
+  parsedStartFrom = parseStartfrom("");
+  playerSettings.startfrom = parsedStartFrom.startfrom;
+  playerSettings.skip = parsedStartFrom.skipObject;
+
+  playerSettings.skipButton = parseSkipButton("", "anime");
+
+
+  playerSettings.onlyAdvert = false;
+
+
+  var vInfo = {};
+  
+   vInfo.type = 'video'; 
+   vInfo.hash = '15dee337f31b61f618be0c17b4b48b4e'; 
+   vInfo.id = '113757'; 
+  
+  
+</script>

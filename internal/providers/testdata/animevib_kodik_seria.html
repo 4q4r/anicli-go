@@ -1,0 +1,38 @@
+<!-- [LIVE-VERIFIED 2026-09-25] Derived from
+     GET https://kodikplayer.com/seria/1362451/a899a9b6ef3945f70a33c6ba2cd52c70/720p
+     (HTTP 200, 37309 bytes; captured via plain curl with a desktop
+     Chrome/150 UA — no browser JS involved). The kodik seria (single-episode) player page the provider
+     synthesizes from a serial page's per-episode data-id/data-hash.
+     vInfo carries type=seria + the episode hash/id — the exact shape
+     the shared kodik extractor scrapes (internal/extractors/kodik.go).
+     Trimmed to the vInfo script verbatim.
+     Structural markup below is the verbatim capture trimmed to the
+     regions the provider parses; formatting/whitespace preserved.
+-->
+<script>
+    var playerLink = ["/assets/js/app.player.abed291a63d4f2a5592905082f598e7e63e7847b1d130772ebb1e04a09326c8d.js"];
+
+  playerSettings.block_c = { manifest: false, other: false };
+
+  playerSettings.p2p_trackers = ["wss://wt2.kodik.biz:8435"];
+  playerSettings.forceAdvertCount = true;
+  playerSettings.country = "DE";
+
+  var parsedStartFrom = {};
+  playerSettings.startfrom = parsedStartFrom.startfrom;
+  playerSettings.skip = parsedStartFrom.skipObject;
+
+  playerSettings.skipButton = parseSkipButton("0:00-1:52,22:32-24:20", "anime");
+
+
+  playerSettings.onlyAdvert = false;
+
+
+  var vInfo = {};
+  
+   vInfo.type = 'seria'; 
+   vInfo.hash = 'a899a9b6ef3945f70a33c6ba2cd52c70'; 
+   vInfo.id = '1362451'; 
+  
+  
+</script>

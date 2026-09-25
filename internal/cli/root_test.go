@@ -44,8 +44,8 @@ func TestDoctorListsProvidersWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if got := len(reg.List()); got != 29 {
-		t.Fatalf("registry has %d providers, want 29", got)
+	if got := len(reg.List()); got != 30 {
+		t.Fatalf("registry has %d providers, want 30", got)
 	}
 
 	var buf bytes.Buffer

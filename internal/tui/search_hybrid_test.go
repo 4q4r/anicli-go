@@ -367,8 +367,8 @@ func TestHybridSearchContinuesPastVariantErrors(t *testing.T) {
 	if len(progress.results) == 0 {
 		t.Fatalf("results from later variants must still surface, got none")
 	}
-	if progress.status["animego"] != "Завершено" {
-		t.Fatalf("a row with results must settle as Завершено, got %q", progress.status["animego"])
+	if len(progress.results) == 0 {
+		t.Fatal("a row with results must surface them in the merged set")
 	}
 }
 
@@ -389,14 +389,26 @@ func TestHybridSearchAllVariantsFailingFailsTheRow(t *testing.T) {
 	model = drainCmds(model)
 	progress := topOf(model).(*searchProgress)
 
-	// PR98: the row keeps the raw first error (errs) for introspection
-	// while the cell carries the short class label.
-	if progress.errs["animego"] == nil || progress.errs["animego"].Error() != "provider down" {
-		t.Fatalf("an all-error row must carry the first error, got %v", progress.errs["animego"])
+	// PR110: the full error stays OUT of the TUI (the file log only);
+	// the summary counts the provider as not-found.
+	if strings.Contains(topOf(model).View().Content, "provider down") {
+		t.Fatal("the TUI must not render the raw provider error")
 	}
-	if progress.status["animego"] != labelError {
-		t.Fatalf("an all-error row must classify onto the short label, got %q", progress.status["animego"])
+	if got := notFoundOf(progress); got != 1 {
+		t.Fatalf("not-found providers = %d, want 1", got)
 	}
+}
+
+// notFoundOf reads the summary's not-found half off a searchProgress
+// screen (the same computation the summary line renders).
+func notFoundOf(sp *searchProgress) int {
+	found := 0
+	for _, row := range sp.rows {
+		if sp.counts[row.ID] > 0 {
+			found++
+		}
+	}
+	return len(sp.rows) - found
 }
 
 // TestHybridSearchTimeoutStatus: a provider exceeding the per-provider
@@ -414,14 +426,18 @@ func TestHybridSearchTimeoutStatus(t *testing.T) {
 	model = drainCmds(model)
 
 	v := topOf(model).View().Content
-	if !strings.Contains(v, "⏱ таймаут") {
-		t.Fatalf("a blown budget must render a timeout status, got:\n%s", v)
+	if strings.Contains(v, "⏱ таймаут") {
+		t.Fatal("the timeout row must not render on the minimal view")
+	}
+	if got := notFoundOf(topOf(model).(*searchProgress)); got != 1 {
+		t.Fatalf("not-found providers = %d, want 1", got)
 	}
 }
 
-// TestSearchLiveTableRendering (PR24): the fan-out table renders the
-// three columns plus the centered overall counter.
-func TestSearchLiveTableRendering(t *testing.T) {
+// TestSearchLiveMinimalRendering (PR24, PR110 shape): the settled
+// fan-out renders the summary line and the merged checklist — no
+// table, no per-provider verdict rows.
+func TestSearchLiveMinimalRendering(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
 		{ID: "animego", Name: "AnimeGO"},
@@ -442,14 +458,18 @@ func TestSearchLiveTableRendering(t *testing.T) {
 	v := topOf(model).View().Content
 
 	for _, want := range []string{
-		"Провайдер", "Статус", "Результатов",
-		"AnimeGO", "AniLib",
-		"Завершено",
-		"Ответившие: 2/3 провайдеров",
-		"Всего результатов: 3",
+		"Найдено: 3 · Без результатов/ошибок: 1",
+		"Выберите провайдеры",
+		"AnimeGO — Наруто",
+		"AniLib — Наруто",
 	} {
 		if !strings.Contains(v, want) {
-			t.Errorf("live table missing %q, got:\n%s", want, v)
+			t.Errorf("minimal view missing %q, got:\n%s", want, v)
+		}
+	}
+	for _, banned := range []string{"Провайдер", "Статус", "Завершено", "Ответившие", "┌"} {
+		if strings.Contains(v, banned) {
+			t.Errorf("the table is gone; %q must not render:\n%s", banned, v)
 		}
 	}
 }

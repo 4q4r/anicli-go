@@ -492,7 +492,7 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	v := top.View().Content
 	for _, want := range []string{
 		"Поиск по провайдерам: Ванпанчмен",
-		"Завершено",
+		"Найдено: 1 · Без результатов/ошибок: 0",
 		"Выберите провайдеры",
 		"AnimeGO — Ванпанчмен",
 	} {

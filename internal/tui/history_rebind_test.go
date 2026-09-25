@@ -31,7 +31,7 @@ func rebindTestRecord() *storage.AnimeProgress {
 // after settlement and the centered overall counter — and once every
 // row settled, the grouped results appear BELOW the table
 // automatically.
-func TestRebindProgressRendersProviderTable(t *testing.T) {
+func TestRebindProgressRendersProviderChecklist(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
 		{ID: "animego", Name: "AnimeGO"},
@@ -49,18 +49,19 @@ func TestRebindProgressRendersProviderTable(t *testing.T) {
 	v := topOf(model).View().Content
 
 	for _, want := range []string{
-		"Провайдер", "Статус", "Результатов",
-		"AnimeGO", "AniLib", "Broken",
-		"Завершено",
-		"Ответившие: 2/3 провайдеров",
-		"Всего результатов: 2",
+		"Найдено: 2 · Без результатов/ошибок: 1",
 		"Выберите провайдеры",
 		"AnimeGO — Наруто",
 		"AniLib — Наруто",
 	} {
 		if !strings.Contains(v, want) {
-			t.Errorf("rebind table missing %q, got:\n%s", want, v)
+			t.Errorf("rebind view missing %q, got:\n%s", want, v)
 		}
+	}
+	// PR110: the full provider error stays in the file log, out of
+	// the TUI.
+	if strings.Contains(v, "boom") {
+		t.Errorf("the raw provider error must not render in the TUI")
 	}
 }
 

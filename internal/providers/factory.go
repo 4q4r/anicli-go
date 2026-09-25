@@ -128,13 +128,6 @@ var allFactories = []struct {
 	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
-	// nyaa (PR36): the first torrent search provider. No credentials
-	// and no per-provider settings; the shared torrent engine is
-	// injected by NewRegistry when [torrent] is enabled (All() leaves
-	// it nil — the base fails loud until wired).
-	{"nyaa", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newNyaa(NyaaBase, http, nil)
-	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

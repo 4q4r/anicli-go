@@ -55,7 +55,7 @@ func TestTokyoToshoSearchParsesRSS(t *testing.T) {
 		t.Fatalf("Search: %v", err)
 	}
 	// 4 fixture items → 2 results: the non-Anime item is filtered by
-	// category, the link-less constructed item is dropped (nyaa rule).
+	// category, the link-less constructed item is dropped (the TorrentBase rule).
 	if len(results) != 2 {
 		t.Fatalf("results = %d, want 2", len(results))
 	}
@@ -67,8 +67,8 @@ func TestTokyoToshoSearchParsesRSS(t *testing.T) {
 	if first.SourceID != "tokyotosho" {
 		t.Errorf("source id = %q, want tokyotosho", first.SourceID)
 	}
-	// The RSS <link> is a direct .torrent URL (here a nyaa mirror of
-	// the release) — the engine downloads it itself (URL ingest).
+	// The RSS <link> is a direct .torrent URL (here the capture's
+	// cross-posted mirror of the release) — the engine downloads it itself (URL ingest).
 	if first.URL != "https://www.anirena.com/dl/200716" {
 		t.Errorf("url = %q, want the RSS <link> .torrent URL verbatim", first.URL)
 	}
@@ -298,7 +298,7 @@ func TestTokyoToshoSearchHTTPErrorTypedError(t *testing.T) {
 
 // TestTokyoToshoGetEpisodesDelegatesToEpisodesWait: the provider
 // GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the nyaa contract).
+// metadata fails loud on the caller's deadline (the TorrentBase contract).
 func TestTokyoToshoGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	t.Parallel()
 
@@ -360,7 +360,7 @@ func TestTokyoToshoNotUnconfiguredByDefault(t *testing.T) {
 }
 
 // TestTokyoToshoDisabledWhenTorrentOff pins the disabled-table rule
-// shared with nyaa: without the [torrent] subsystem the provider
+// shared across the family: without the [torrent] subsystem the provider
 // cannot play anything, so it is not registered at all.
 func TestTokyoToshoDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()
@@ -620,7 +620,7 @@ func TestTokyoToshoSearchNoEngineSkipsPreflight(t *testing.T) {
 		t.Fatalf("results = %d, want 2 (nil engine: no preflight, nothing dropped)", len(results))
 	}
 	// Exactly ONE request happened: the RSS search itself. No
-	// preflight attempted the fixture's real anirena/nyaa URLs.
+	// preflight attempted the fixture's real cross-posted URLs.
 	if hits != 1 {
 		t.Errorf("server hits = %d, want 1 (search only)", hits)
 	}

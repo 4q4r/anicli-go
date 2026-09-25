@@ -15,10 +15,10 @@ import (
 // duplicated or re-ordered, and when a roster member loses its
 // dedicated fixture→DTO shape test. sovetromantica was removed in PR22
 // (domain hijacked off the anime project, frozen 2025); anidub (no
-// frozen Python original) joined the roster the same PR; nyaa (PR36,
-// first torrent search provider) joined after anidub; anilibria-torrent
-// (PR37, the new aniliberty.top API's per-release torrents) joined
-// after nyaa; animetosho (PR38, the newznab feed) joined after
+// frozen Python original) joined the roster the same PR; anilibria-torrent
+// (PR37, the new aniliberty.top API's per-release torrents) joined after
+// anidub (the PR36 torrent-search provider removed in PR107 briefly sat
+// between them); animetosho (PR38, the newznab feed) joined after
 // anilibria-torrent; tokyotosho (PR38, the search RSS) joined after
 // animetosho.
 // Wave-2 integration (fix/60) seated the five parallel providers
@@ -44,7 +44,8 @@ import (
 // enclosures) and subsplease (PR89, the subsplease.org JSON API
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
-// after tokyotosho. The roster is frozen at 24.
+// after tokyotosho. The roster froze at 24 through the fix/93 wave;
+// the PR107 torrent-search removal took it to 23.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -63,7 +64,6 @@ var expectedProviderOrder = []string{
 	"anistar",
 	"anifilm",
 	"animemobi",
-	"nyaa",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

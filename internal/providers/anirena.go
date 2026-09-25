@@ -1,13 +1,13 @@
 package providers
 
 // AniRena (anirena.com) — torrent search over the site's RSS feed, the
-// fifth TorrentBase provider (nyaa PR36, anilibria-torrent PR37,
-// animetosho/tokyotosho PR38 lineage; PR88). Anonymous public tracker,
+// fifth TorrentBase provider (the PR36/PR37/PR38 torrent lineage;
+// PR88). Anonymous public tracker,
 // JA/multilingual releases, no credentials, nothing to configure (the
 // documented JSON API gates uploads AND torrent search behind personal
 // API keys — POST /api/v1/torrents/search without a bearer answers 401,
 // live-verified 2026-09-23 — so the anonymous RSS is the provider
-// route, exactly like nyaa).
+// route, like the rest of the torrent family).
 //
 // Live-verified 2026-09-23 (curl, the fixtures in testdata/ are real
 // captures):
@@ -31,7 +31,7 @@ package providers
 //     /torrents/{uuid}/magnet sibling 302s to a tracker-rich magnet —
 //     unused: the RSS never omits the enclosure, and items without one
 //     are dropped (nothing the engine could ingest).
-//   - The feed carries NO seed fields: unlike nyaa/animetosho there is
+//   - The feed carries NO seed fields: unlike animetosho there is
 //     nothing for the PR44 seedless filter to key on, so every anime
 //     item surfaces and the search-time preflight (the PR66 bytes
 //     ingestion: bounded fetch, metainfo parse, IngestMetaInfo — the
@@ -203,7 +203,7 @@ func anirenaIsAnimeCategory(desc string) bool {
 // <enclosure> .torrent URL on the site itself (the PR66 ingestion: the
 // preflight carries its bytes to the engine); items without an
 // enclosure — or outside the Anime category — are dropped instead of
-// handed downstream as dead results (the nyaa rule). The feed carries
+// handed downstream as dead results (the TorrentBase rule). The feed carries
 // no seed fields, so the PR44 seedless filter has nothing to drop here:
 // the search-time preflight is the only dead-result gate.
 func (p *AniRena) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {

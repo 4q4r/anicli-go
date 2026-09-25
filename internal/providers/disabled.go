@@ -31,23 +31,10 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// nyaa (PR36) has no credentials of its own, but its results
-		// resolve through the torrent core — without the [torrent]
-		// subsystem it cannot play anything (kodik-parity: never
-		// register a provider that cannot run).
-		id: "nyaa",
-		disabled: func(cfg config.Settings) (string, bool) {
-			if !cfg.Torrent.Enabled {
-				return "выключена подсистема [torrent] (torrent.enabled)", true
-			}
-			return "", false
-		},
-	},
-	{
-		// anilibria-torrent (PR37) is nyaa's sibling: no credentials,
-		// but its results resolve through the torrent core — without
-		// the [torrent] subsystem it cannot play anything
-		// (kodik-parity: never register a provider that cannot run).
+		// anilibria-torrent (PR37): no credentials of its own, but its
+		// results resolve through the torrent core — without the
+		// [torrent] subsystem it cannot play anything (kodik-parity:
+		// never register a provider that cannot run).
 		id: "anilibria-torrent",
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
@@ -57,10 +44,10 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// animetosho (PR38) is nyaa's sibling too: no credentials, but
-		// its results resolve through the torrent core — without the
-		// [torrent] subsystem it cannot play anything (kodik-parity:
-		// never register a provider that cannot run).
+		// animetosho (PR38): no credentials, but its results resolve
+		// through the torrent core — without the [torrent] subsystem
+		// it cannot play anything (kodik-parity: never register a
+		// provider that cannot run).
 		id: "animetosho",
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
@@ -70,10 +57,10 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// tokyotosho (PR38) is nyaa's sibling too: no credentials, but
-		// its results resolve through the torrent core — without the
-		// [torrent] subsystem it cannot play anything (kodik-parity:
-		// never register a provider that cannot run).
+		// tokyotosho (PR38): no credentials, but its results resolve
+		// through the torrent core — without the [torrent] subsystem
+		// it cannot play anything (kodik-parity: never register a
+		// provider that cannot run).
 		id: "tokyotosho",
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
@@ -83,8 +70,8 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// rutor (PR87) is nyaa's sibling too: fully anonymous (search
-		// and .torrent downloads), but its results resolve through
+		// rutor (PR87): fully anonymous (search and .torrent
+		// downloads), but its results resolve through
 		// the torrent core — without the [torrent] subsystem it
 		// cannot play anything (kodik-parity: never register a
 		// provider that cannot run).
@@ -97,8 +84,8 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// anirena (PR88) is nyaa's sibling too: no credentials, but its
-		// results resolve through the torrent core — without the
+		// anirena (PR88): no credentials, but its results resolve
+		// through the torrent core — without the
 		// [torrent] subsystem it cannot play anything (kodik-parity:
 		// never register a provider that cannot run).
 		id: "anirena",
@@ -110,8 +97,8 @@ var unconfiguredRules = []struct {
 		},
 	},
 	{
-		// subsplease (PR89) is nyaa's sibling too: no credentials, but
-		// its results resolve through the torrent core — without the
+		// subsplease (PR89): no credentials, but its results resolve
+		// through the torrent core — without the
 		// [torrent] subsystem it cannot play anything (kodik-parity:
 		// never register a provider that cannot run). Integration
 		// note (fix/93): the rule was missing from the PR89 branch and

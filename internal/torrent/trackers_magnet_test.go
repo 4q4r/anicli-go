@@ -1,7 +1,7 @@
 package torrent
 
 // PR45 ITEM 2 tests: the engine's tracker pool must reach torrents
-// added via synthesized tracker-less magnets (the nyaa/animetosho/
+// added via synthesized tracker-less magnets (the animetosho/
 // anilibria-torrent link shape), both at the spec level (addSpec
 // attach) and as a queryable pool for magnet building.
 

@@ -177,7 +177,7 @@ func TestAddLinkUnsupported(t *testing.T) {
 
 // TestAddLinkURLServesMetainfoWithoutTorrentSuffix pins the PR38
 // relaxation the TokyoTosho feed forced: real-world .torrent links
-// rarely end in ".torrent" (anirena.com/dl/N, nyaa.si/view/N/torrent),
+// rarely end in ".torrent" (anirena.com/dl/N and friends),
 // so the engine validates the RESPONSE CONTENT (bencode metainfo)
 // instead of the URL suffix. A live dandadan search on TokyoTosho
 // returned exactly such links for its top Anime hits.

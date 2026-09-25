@@ -2,7 +2,7 @@ package providers
 
 // SubsPlease (subsplease.org) is the EN seasonal TORRENT provider
 // (PR89) — the biggest EN subtitle group — on the shared TorrentBase
-// plumbing (the nyaa PR36 pattern). Anonymous, no credentials,
+// plumbing (the TorrentBase PR36 pattern). Anonymous, no credentials,
 // nothing to configure. Not a Python port: written against the live
 // site, endpoints and field set captured by curl on 2026-09-23.
 //
@@ -11,8 +11,8 @@ package providers
 // torrent links, /rss magnet links — both captured live), but they
 // are latest-releases-only (~75 items), take no query parameter
 // (verified: s= is ignored, byte-identical answer), and the torrent
-// feed's <link> points at the nyaa.si view/torrent page — a 504-flaky
-// host from blocked networks (the documented nyaa RST/504 class).
+// feed's <link> points at the upstream view/torrent page — a 504-flaky
+// host from blocked networks (the documented RST/504 class).
 // The site's own JSON API is strictly better and the same one the
 // site's JavaScript drives:
 //
@@ -31,16 +31,16 @@ package providers
 //
 // Each release entry carries downloads[{res, magnet}] — the magnet is
 // the release's REAL distribution link, tracker-rich (13 tr= announces
-// from the nyaa.wf pool), so the PR66 bytes-over-magnet rationale does
+// from the upstream tracker pool), so the PR66 bytes-over-magnet rationale does
 // not apply here: that ruling exists because SYNTHESIZED tracker-less
 // magnets resolve metadata via DHT only and time out under real
 // budgets (the PR52 smoke FAIL class). These magnets announce to a
 // dozen live trackers, the engine owns magnets, and magnet results
 // skip the dead-host preflight by construction. The f=show payload
-// also carries per-download torrent= URLs — nyaa.si/view links, the
+// also carries per-download torrent= URLs — view-page links on the
 // flaky host above — deliberately not taken.
 //
-// The magnet xt= hashes are 32-char BASE32 (nyaa.wf convention). That
+// The magnet xt= hashes are 32-char BASE32 (the upstream convention). That
 // is engine-ingestable as-is: anacrolix ParseMagnetUri accepts both
 // 40-hex and 32-base32 encodings (the animetosho "40-hex contract"
 // note covers tracker-list FILES, not magnet URIs) — pinned by
@@ -135,8 +135,8 @@ func (p *SubsPlease) NamePreference() contracts.NamePreference {
 func (p *SubsPlease) SmokeQuery() string { return subspleaseSmokeQuery }
 
 // spDownload is one download slot of a release: the resolution label
-// ("480"/"720"/"1080") and the magnet link. The torrent= URL (nyaa.si
-// view page) appears on f=show payloads and is deliberately not
+// ("480"/"720"/"1080") and the magnet link. The torrent= URL (view
+// page) appears on f=show payloads and is deliberately not
 // consumed — see the header rationale.
 type spDownload struct {
 	Res     string `json:"res"`
@@ -353,7 +353,7 @@ func (p *SubsPlease) releaseResults(rel spRelease, out []contracts.SearchResult,
 		if err != nil {
 			// The engine could not ingest this link (no usable
 			// xt=urn:btih:) — drop it like an empty title instead of
-			// handing downstream a dead result (the nyaa rule).
+			// handing downstream a dead result (the TorrentBase rule).
 			continue
 		}
 		title := strings.TrimSpace(m.DisplayName)

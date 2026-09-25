@@ -264,7 +264,7 @@ type sessionScreen struct {
 	hydrateErrs map[string]map[string]error
 	sourceErrs  map[string]error
 	// providerNames caches the provider id → display name map for the
-	// header breakdown («Ист: 3 (AnimeLib, Nyaa)»).
+	// header breakdown («Ист: 3 (AnimeLib, AniLibria)»).
 	providerNames map[string]string
 
 	// PR43 buffered watch mode; PR44 arms it from the pre-play format

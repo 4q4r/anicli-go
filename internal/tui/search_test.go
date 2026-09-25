@@ -362,7 +362,7 @@ func TestSearchGroupLabelsCarryTorrentSuffix(t *testing.T) {
 	t.Parallel()
 
 	results := []contracts.SearchResult{
-		{Title: "Batch Release", SourceID: "nyaa", Meta: map[string]any{
+		{Title: "Batch Release", SourceID: "animetosho", Meta: map[string]any{
 			providers.SearchMetaSize:    "7.4 GiB",
 			providers.SearchMetaSeeders: "421",
 		}},

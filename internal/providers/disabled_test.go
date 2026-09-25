@@ -54,7 +54,7 @@ func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 	for _, d := range disabled {
 		byID[d.ID] = d.Reason
 	}
-	for _, id := range []string{"nyaa", "anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease"} {
+	for _, id := range []string{"anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease"} {
 		reason, ok := byID[id]
 		if !ok {
 			t.Errorf("%s must be in the unconfigured set when [torrent] is disabled", id)
@@ -80,8 +80,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
 		}
 	}
-	if len(bare) != 23 {
-		t.Fatalf("want the remaining 23 providers, got %d", len(bare))
+	if len(bare) != 22 {
+		t.Fatalf("want the remaining 22 providers, got %d", len(bare))
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 // TestTorrentProvidersNamePreference pins the PR42 name-preference
-// routing: the foreign torrent feeds (nyaa, animetosho, tokyotosho)
+// routing: the foreign torrent feeds (animetosho, tokyotosho)
 // index romaji/english release names only — a Cyrillic query there is
 // guaranteed-zero — so they declare NamePrefLatin and the search
 // fan-out routes them the latin variants. anilibria-torrent (PR37)
@@ -19,7 +19,6 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 	t.Parallel()
 
 	latin := map[string]contracts.Provider{
-		"nyaa":       newNyaa(NyaaBase, testClient(t, "nyaa"), nil),
 		"animetosho": newAnimeTosho(AnimeToshoFeedBase, testClient(t, "animetosho"), nil),
 		"tokyotosho": newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil),
 	}

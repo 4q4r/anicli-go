@@ -290,7 +290,7 @@ func TestRutorSearchSeedlessDropped(t *testing.T) {
 
 // TestRutorSearchSkipsLinklessRows: a row with neither a .downgif
 // nor a usable magnet has nothing the engine could ingest — dropped,
-// never a dead result (nyaa rule). A broken magnet (short/absent
+// never a dead result (the TorrentBase rule). A broken magnet (short/absent
 // infohash) counts as unusable.
 func TestRutorSearchSkipsLinklessRows(t *testing.T) {
 	t.Parallel()
@@ -393,7 +393,7 @@ func TestRutorNotUnconfiguredByDefault(t *testing.T) {
 }
 
 // TestRutorDisabledWhenTorrentOff pins the disabled-table rule shared
-// with nyaa: without the [torrent] subsystem the provider cannot play
+// across the family: without the [torrent] subsystem the provider cannot play
 // anything, so it is not registered at all.
 func TestRutorDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()

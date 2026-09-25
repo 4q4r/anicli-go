@@ -1,7 +1,7 @@
 package providers
 
 // RuTor (PR87) — torrent search over the rutor.info public tracker,
-// the fifth TorrentBase provider (nyaa/anilibria-torrent/animetosho/
+// the fifth TorrentBase provider (anilibria-torrent/animetosho/
 // tokyotosho lineage). A RU general catalog (movies/TV/anime), fully
 // anonymous: the search page and the .torrent downloads need no
 // account — live-verified 2026-09-23 (search «dandadan»/«черная
@@ -174,7 +174,7 @@ func (p *RuTor) IsTorrent() bool { return true }
 // is the row's absolute .torrent download URL (the PR66 preflight
 // carries its bytes to the engine); the row magnet is the fallback
 // when the download anchor is missing. Rows with neither are dropped
-// instead of handed downstream as dead results (nyaa rule).
+// instead of handed downstream as dead results (the TorrentBase rule).
 func (p *RuTor) Search(ctx context.Context, query string) ([]contracts.SearchResult, error) {
 	// Empty queries are a caller bug: reject before any network I/O.
 	if strings.TrimSpace(query) == "" {

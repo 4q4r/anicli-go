@@ -484,12 +484,12 @@ func TestSearchProgressScreenNotPinnedByEnrichment(t *testing.T) {
 func TestProviderQueryLatinPreference(t *testing.T) {
 	variants := []string{"Пираты «Чёрной лагуны»", "Пираты Чёрной лагуны", "Black Lagoon", "Burakku Ragūn"}
 	fs := newFakeSearch()
-	fs.namePrefs = map[string]contracts.NamePreference{"nyaa": contracts.NamePrefLatin}
-	deps := hybridDeps(fs, nil, nil, map[string]string{"nyaa": "ja", "animego": "ru"})
+	fs.namePrefs = map[string]contracts.NamePreference{"animetosho": contracts.NamePrefLatin}
+	deps := hybridDeps(fs, nil, nil, map[string]string{"animetosho": "ja", "animego": "ru"})
 	m := &searchProgress{deps: deps, variants: variants}
 
 	t.Run("latin-only provider gets latin variants only", func(t *testing.T) {
-		got := m.providerQueries("nyaa")
+		got := m.providerQueries("animetosho")
 		for _, q := range got {
 			if hasCyrillic.MatchString(q) {
 				t.Errorf("latin-only provider must never see the Cyrillic query %q", q)
@@ -510,7 +510,7 @@ func TestProviderQueryLatinPreference(t *testing.T) {
 	})
 	t.Run("no latin variants resolved falls back to the full set", func(t *testing.T) {
 		cyrOnly := &searchProgress{deps: deps, variants: []string{"Пираты «Чёрной лагуны»"}}
-		got := cyrOnly.providerQueries("nyaa")
+		got := cyrOnly.providerQueries("animetosho")
 		if len(got) != 1 || got[0] != "Пираты «Чёрной лагуны»" {
 			t.Fatalf("fail-soft fallback must search anyway, got %v", got)
 		}
@@ -521,25 +521,25 @@ func TestProviderQueryLatinPreference(t *testing.T) {
 // PR42 flow pin: a Cyrillic query binds through the russian name of
 // the Shikimori record, and the resolved romaji/english name rides the
 // variant pool — so the latin-only torrent providers are searched with
-// the latin title (the owner's «Пираты «Чёрной лагуны»» → nyaa/
-// animetosho/tokyotosho get "Black Lagoon", never the Cyrillic string
+// the latin title (the owner's «Пираты «Чёрной лагуны»» → animetosho/
+// tokyotosho get "Black Lagoon", never the Cyrillic string
 // that crashed tokyotosho's zero-result footer into a decode error).
 func TestHybridSearchCyrillicQueryRoutesLatinToTorrentProviders(t *testing.T) {
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{
 		{ID: "animego", Name: "AnimeGO"},
-		{ID: "nyaa", Name: "Nyaa"},
+		{ID: "animetosho", Name: "AnimeTosho"},
 	}
-	fs.namePrefs = map[string]contracts.NamePreference{"nyaa": contracts.NamePrefLatin}
+	fs.namePrefs = map[string]contracts.NamePreference{"animetosho": contracts.NamePrefLatin}
 	fs.results["animego"] = []contracts.SearchResult{{Title: "Пираты «Чёрной лагуны»", URL: "u1", SourceID: "animego"}}
-	fs.results["nyaa"] = []contracts.SearchResult{{Title: "[Group] Black Lagoon", URL: "u2", SourceID: "nyaa"}}
+	fs.results["animetosho"] = []contracts.SearchResult{{Title: "[Group] Black Lagoon", URL: "u2", SourceID: "animetosho"}}
 
 	shiki := &fakeShiki{
 		enabled: true,
 		items:   autocompleteItems([2]string{"Пираты «Чёрной лагуны»", "Black Lagoon"}),
 	}
 	md := &fakeMetadata{}
-	deps := hybridDeps(fs, shiki, md, map[string]string{"animego": "ru", "nyaa": "ja"})
+	deps := hybridDeps(fs, shiki, md, map[string]string{"animego": "ru", "animetosho": "ja"})
 
 	model := drive(NewApp(NewRootScreen(deps), deps, testLogger()),
 		pushMsg{screen: NewSearchProgress(deps, "Пираты «Чёрной лагуны»")})
@@ -550,9 +550,9 @@ func TestHybridSearchCyrillicQueryRoutesLatinToTorrentProviders(t *testing.T) {
 		t.Fatalf("shikimori must resolve the original query, got %v", shiki.queries)
 	}
 	// The latin-only provider saw ONLY the resolved latin names.
-	got := fs.queries["nyaa"]
+	got := fs.queries["animetosho"]
 	if len(got) == 0 {
-		t.Fatal("nyaa must have been searched")
+		t.Fatal("animetosho must have been searched")
 	}
 	for _, q := range got {
 		if hasCyrillic.MatchString(q) {
@@ -560,7 +560,7 @@ func TestHybridSearchCyrillicQueryRoutesLatinToTorrentProviders(t *testing.T) {
 		}
 	}
 	if got[0] != "Black Lagoon" {
-		t.Fatalf("nyaa must be searched with the resolved romaji/english name first, got %v", got)
+		t.Fatalf("animetosho must be searched with the resolved romaji/english name first, got %v", got)
 	}
 	// The RU provider keeps the Cyrillic-first order (original query).
 	ruQueries := fs.queries["animego"]

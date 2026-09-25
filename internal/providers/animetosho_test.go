@@ -294,7 +294,7 @@ func TestAnimeToshoSearchHTTPErrorTypedError(t *testing.T) {
 
 // TestAnimeToshoGetEpisodesDelegatesToEpisodesWait: the provider
 // GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the nyaa contract).
+// metadata fails loud on the caller's deadline (the TorrentBase contract).
 func TestAnimeToshoGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	t.Parallel()
 
@@ -355,8 +355,8 @@ func TestAnimeToshoNotUnconfiguredByDefault(t *testing.T) {
 	}
 }
 
-// TestAnimeToshoDisabledWhenTorrentOff pins the disabled-table rule
-// shared with nyaa: without the [torrent] subsystem the provider
+// TestAnimeToshoDisabledWhenTorrentOff pins the disabled-table rule:
+// without the [torrent] subsystem the provider
 // cannot play anything, so it is not registered at all.
 func TestAnimeToshoDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()

@@ -1,0 +1,193 @@
+			<script>
+				document.addEventListener('DOMContentLoaded', function(){
+				setTimeout(function(){
+					if( !$('#i_s_a_overlay').length || $('#i_s_a_overlay > iframe').length || !$('#i_s_a_overlay').is(':visible') ) {
+						$('.playerCode').prepend('<div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 55555;" onclick="$(this).remove();"></div>');
+					}
+				}, 200);
+			});
+			</script>	<html>
+	<head>
+		<meta name="robots" content="noindex,nofollow">
+		<meta name="vdd-key" content="47">
+		<style type="text/css">
+		iframe, embed, object, video { position: absolute; top: 0; left: 0; bottom: 0; height: 100%; width: 100%; border: 0 none;}
+		.vdd-wrapper {position: absolute!important; top: 0; left: 0; width: 100%!important; height: 100%!important;}
+		.custom-overlay {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			z-index: 55555;
+			color: #ffffff;
+			
+		}
+		#customAdIframe {
+			z-index: 1000;
+		}
+		.vjs-customAd-iframe {
+			width: 100%;
+			height: 100%;
+			border: none;
+			background: #2a2a2a;
+		}
+		.customAdTimerContent {
+				width: 300px;
+				max-width: 90%;
+				z-index: 999999;
+				margin: 0 auto;
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: 70px;
+				margin: auto;
+				height: 20px;
+		}
+		.customAdTimerText {
+			font-size: 16px;
+			margin: 0 0 10px;
+			text-align: center;
+		}
+		.customAdTimer {
+			width: 100%;
+			height: 20px;
+			background: #FFB74D;
+		}
+		.customAdTimerProgress {
+			height: 20px;
+			background: #29B6F6;
+			width: 0%;
+		}
+		@media only screen and (max-width:400px){
+			.customAdTimerContent {
+				bottom: 30px;
+			}
+			.customAdTimerProgress {
+				height: 10px;
+			}
+			.customAdTimer {
+				height: 10px;
+			}
+		}
+		
+		/* clickcadilla fix */
+		body { 
+			top: 0;
+			left: 0;
+			width: 100% !important;
+			height: 100% !important;
+		}
+		</style>
+	</head>
+	<body style="padding: 0; margin: 0" class="playerCode">
+		<iframe width="728" height="410" src="https://video.sibnet.ru/shell.php?videoid=5700645" class="vdd-element" frameborder="0" scrolling="no" allowfullscreen></iframe>
+		
+		<script src="/engine/classes/js/jquery.js"></script>			<script>
+			var wcount = 1;
+			var params = "menubar=yes,location=yes,resizable=yes,scrollbars=yes,status=yes"
+
+			var links = [
+				"https://bulkred.com/bens/vinos.js?23972&mode=redir",
+				"",
+			];
+			links = links.filter(Boolean);
+			// var adLink = links[Math.floor(Math.random()*links.length)];
+			// adLink = getNextAdLink(links, 'cycle');
+			var dv_count = 0;
+			var c_count = 0;
+			
+			function PopShow3() {
+				c_count ++;
+				CookieTest = navigator.cookieEnabled;
+				if (CookieTest){
+					ClickUndercookie = getCookie('clickunder');
+					if ( (!!!ClickUndercookie || ClickUndercookie <=100) && !dv_count && (wcount > 0 || c_count > 1) ){
+						if( !!!ClickUndercookie ) ClickUndercookie = 1;
+						else ClickUndercookie++;
+						dv_count = 1;
+						var ExpDate = new Date();
+						ExpDate.setTime(ExpDate.getTime() + (1 * 60 * 60 * 1000));
+						setCookie('clickunder', ClickUndercookie, ExpDate, "/");
+						let adLink = getNextAdLink(links, 'cycle');
+						new Image().src = 'https://li.ru/click?*udersite_clk_'+adLink;
+						console.log('Open clickunder: '+adLink);
+						window.open(adLink, "Yandex", params);
+						window.focus();
+					}
+				}
+			}
+			
+			function getNextAdLink(adLinks, mode = 'cycle', key = 'currentAdIndex') {
+				if (!Array.isArray(adLinks) || adLinks.length === 0) {
+					throw new Error('Передан некорректный массив ссылок');
+				}
+
+				if (mode === 'random') {
+					const randomIndex = Math.floor(Math.random() * adLinks.length);
+					return adLinks[randomIndex];
+				}
+
+				if (mode === 'cycle') {
+					let currentAdIndex = parseInt(localStorage.getItem(key)) || 0;
+
+					const currentAdLink = adLinks[currentAdIndex];
+
+					currentAdIndex = (currentAdIndex + 1) % adLinks.length;
+					localStorage.setItem(key, currentAdIndex);
+
+					return currentAdLink;
+				}
+
+				throw new Error('Некорректный режим работы: укажите "cycle" или "random"');
+			}
+			
+			(function() {
+				const originalOpen = window.open;
+
+				window.open = function(...args) {
+					wcount++;
+					console.log('Новая вкладка открыта с помощью window.open:', args[0]);
+					return originalOpen.apply(this, args);
+				};
+			})();
+
+			function getCookie(name) {
+				var matches = document.cookie.match(new RegExp(
+				  "(?:^|; )" + name.replace(/([\.$?*|{}\(\)\[\]\\/\+^])/g, '\$1') + "=([^;]*)"
+				))
+				return matches ? decodeURIComponent(matches[1]) : undefined
+			}
+
+			function setCookie(name, value, props) {
+				props = props || {}
+				var exp = props.expires
+				if (typeof exp == "number" && exp) {
+					var d = new Date()
+					d.setTime(d.getTime() + exp*1000)
+					exp = props.expires = d
+				}
+				if(exp && exp.toUTCString) { props.expires = exp.toUTCString() }
+				value = encodeURIComponent(value)
+				var updatedCookie = name + "=" + value
+				for(var propName in props){
+					updatedCookie += "; " + propName
+					var propValue = props[propName]
+					if(propValue !== true){ updatedCookie += "=" + propValue }
+				}
+				document.cookie = updatedCookie
+			}
+
+			document.onmouseup = PopShow3;
+			
+			// focus();
+			// var listener = addEventListener('blur', function() {
+				// if(document.activeElement === document.getElementsByClassName('vdd-element')[0]) {
+					// PopShow3();
+				// }
+				// removeEventListener(listener);
+			// });
+			</script>				
+		
+	<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4087ba66e4cefb7',t:'MTc5MDMyMzA5OA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+	</html>

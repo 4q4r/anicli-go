@@ -45,7 +45,9 @@ import (
 // torrent provider — the EN seasonal group's f=search catalog,
 // tracker-rich magnets, batch back-catalog via the show-page sid hop)
 // after tokyotosho. The roster froze at 24 through the fix/93 wave;
-// the PR107 torrent-search removal took it to 23.
+// the PR107 torrent-search removal took it to 23; anitokyo (PR100,
+// the anitokyo.tv RU DLE catalog with its RalodePlayer module) joined
+// after animemobi, taking it back to 24.
 var expectedProviderOrder = []string{
 	"anilibria",
 	"animevost",
@@ -64,6 +66,7 @@ var expectedProviderOrder = []string{
 	"anistar",
 	"anifilm",
 	"animemobi",
+	"anitokyo",
 	"anilibria-torrent",
 	"animetosho",
 	"tokyotosho",

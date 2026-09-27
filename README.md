@@ -168,6 +168,7 @@ anicli-go/
 | `extractors` | Player embeds → direct streams | kodik, sibnet, aniboom, alloha, aksor, dood, gogoplay, streamtape, blogger, cdnvideohub |
 | `torrent` | BitTorrent streaming | anacrolix engine wrapper, multilink ingest, loopback HTTP with `Range` |
 | `shikimori` | Tracker sync | cookie + OAuth2 (auto-refresh), autocomplete, full name card |
+| `mal` | MyAnimeList tracker sync | OAuth2 + PKCE (`plain`), auto-refresh, `my_list_status` CRUD |
 | `metadata` | Query expansion | anilist/kitsu/anisearch/anidb aliases merged with the Shikimori card, cap 16 |
 | `skip` | Opening/ending detection | `aniskip → anime_skip → intro_skipper` chain, FFMETADATA chapters |
 | `download` | Offline library | bounded concurrency, ffmpeg mux, `.anicli_offline_index.json` |
@@ -353,6 +354,9 @@ token_ttl = "15m"
 [shikimori]
 enabled = false           # cookie or OAuth2 (`anicli shikimori auth`)
 
+[mal]
+enabled = false           # OAuth2 + PKCE (`anicli mal auth`); syncs alongside Shikimori
+
 [skip]
 providers_order = ["aniskip", "anime_skip", "intro_skipper"]
 
@@ -445,6 +449,38 @@ anicli doctor     # live environment diagnostics (providers, player, paths)
 The root menu leads to the catalog lists (search lives there), downloads, DB
 management, and the health screen; disabled providers and unconfigured integrations
 show as red startup notices.
+
+### 4. Trackers (Shikimori + MyAnimeList)
+
+Progress syncs to every tracker you authorize — both at once is supported, and
+either one alone works exactly the same:
+
+```bash
+anicli shikimori auth     # Shikimori OAuth2 (app: https://shikimori.io/apps)
+anicli mal auth           # MyAnimeList OAuth2 + PKCE
+anicli shikimori status   # per-tracker diagnostics: anicli mal status
+```
+
+The first TUI launch also offers both trackers on the setup screen (arrow keys,
+Enter).
+
+**MyAnimeList app registration** (one-time, your own account):
+
+1. Sign in at [myanimelist.net](https://myanimelist.net) and open the API panel:
+   <https://myanimelist.net/en/apiproxy> → *Create App*.
+2. Fill **App name** (anything), **App type**: `web`.
+3. **Redirect URI**: `http://127.0.0.1:<port>/callback` — pick any loopback port
+   (e.g. `http://127.0.0.1:8765/callback`). With exactly one registered URI the
+   port may stay random on every run; otherwise pass `--port <port>`.
+4. Run `anicli mal auth --client-id <Client ID> --client-secret <Client Secret>`
+   — the browser opens, you approve, and the tokens land in `[mal]` of
+   `settings.toml` (the access token refreshes automatically; the refresh token
+   lives ~1 month).
+
+Episode progress pushes to Shikimori (`episodes=N`, `planned→watching`) and to
+MyAnimeList (`num_watched_episodes=N`, `plan_to_watch→watching`) at launch. A
+title missing from MyAnimeList is skipped with a typed note; the local history
+database is never touched by either tracker.
 
 ---
 

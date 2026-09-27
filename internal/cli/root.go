@@ -71,6 +71,7 @@ func NewRootCommand() *cobra.Command {
 		newVersionCommand(),
 		newCFCommand(),
 		newShikimoriCommand(),
+		newMALCommand(),
 	)
 	return root
 }
@@ -173,6 +174,7 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 
 	real, err := tui.NewRealDeps(*settings, store,
 		tui.WithShikiPersister(shikiTokenPersister(settingsPath)),
+		tui.WithMALPersister(malTokenPersister(settingsPath)),
 		tui.WithLogger(tuiLog.Logger))
 	if err != nil {
 		return fmt.Errorf("build tui services: %w", err)
@@ -182,6 +184,8 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.
 	wireShikiSetup(real.Deps, *settings, settingsPath)
+	// PR112: the MyAnimeList setup seams for the provider menu.
+	wireMALSetup(real.Deps, *settings, settingsPath)
 	// PR27: the startup two-way list sync seam.
 	wireStartupSync(real.Deps, settingsPath, real.ShikiNet, store.Progress, tuiLog.Logger)
 	// PR28: the search flow logs through Deps.Log (search start/settle
@@ -388,6 +392,19 @@ func runServe(ctx context.Context, out io.Writer, settingsPath string) error {
 func shikiTokenPersister(settingsPath string) func(config.Shikimori) error {
 	return func(section config.Shikimori) error {
 		return config.UpdateShikimori(settingsPath, func(s *config.Shikimori) {
+			s.AccessToken = section.AccessToken
+			s.RefreshToken = section.RefreshToken
+			s.TokenExpiresAt = section.TokenExpiresAt
+		})
+	}
+}
+
+// malTokenPersister builds the MAL OAuth persistence hook (PR112):
+// refreshed token fields survive process restarts, the application
+// credentials stay untouched.
+func malTokenPersister(settingsPath string) func(config.MAL) error {
+	return func(section config.MAL) error {
+		return config.UpdateMAL(settingsPath, func(s *config.MAL) {
 			s.AccessToken = section.AccessToken
 			s.RefreshToken = section.RefreshToken
 			s.TokenExpiresAt = section.TokenExpiresAt

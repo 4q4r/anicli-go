@@ -42,12 +42,12 @@ import (
 // Hosts, paths and policy constants.
 const (
 	OAuthBaseURL  = "https://myanimelist.net"
-	AuthorizePath = "/v1/oauth2/authorize"
-	TokenPath     = "/v1/oauth2/token"
-	APIBaseURL    = "https://api.myanimelist.net"
-	// UserAgent rides every request: a distinctive client identity is
-	// polite API etiquette (no MAL-side strict ruling like Shikimori's).
-	UserAgent = "anicli-go"
+	authorizePath = "/v1/oauth2/authorize"
+	// tokenPath is the URL path of the OAuth2 token endpoint. G101
+	// false positive: a route, not a credential.
+	tokenPath  = "/v1/oauth2/token" //nolint:gosec // G101: URL route, not a credential
+	APIBaseURL = "https://api.myanimelist.net"
+	UserAgent  = "anicli-go"
 
 	refreshWindow  = 5 * time.Minute // proactive-refresh window (PR25 C parity)
 	verifierBytes  = 64              // -> 86 base64url chars, within [43,128]
@@ -167,6 +167,14 @@ func (c *Client) Mode() string { return c.currentMode().String() }
 // the gate for personalized endpoints.
 func (c *Client) Authenticated() bool { return c.currentMode() == modeBearer }
 
+// Enabled reports whether the integration is switched on in settings
+// (the sync dispatcher's participation gate).
+func (c *Client) Enabled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cfg.Enabled
+}
+
 // Config exposes the live (refresh-mutated) [mal] section.
 func (c *Client) Config() config.MAL {
 	c.mu.Lock()
@@ -228,7 +236,7 @@ func AuthorizeURL(clientID, redirectURI, state, codeVerifier string) string {
 	q.Set("redirect_uri", redirectURI)
 	q.Set("code_challenge", codeVerifier)
 	q.Set("code_challenge_method", "plain")
-	return OAuthBaseURL + AuthorizePath + "?" + q.Encode()
+	return OAuthBaseURL + authorizePath + "?" + q.Encode()
 }
 
 // ExchangeCode trades an authorization code for the token pair. The
@@ -272,7 +280,7 @@ type TokenSet struct {
 func (c *Client) tokenRequest(ctx context.Context, form url.Values, op string) (*TokenSet, error) {
 	resp, err := c.net.Do(ctx, netclient.Request{
 		Method: http.MethodPost,
-		URL:    c.oauthBase + TokenPath,
+		URL:    c.oauthBase + tokenPath,
 		Headers: map[string]string{
 			"User-Agent":   UserAgent,
 			"Accept":       "application/json",
@@ -383,7 +391,7 @@ type ListEntry struct {
 func (c *Client) GetAnimeList(ctx context.Context) ([]ListEntry, error) {
 	var out []ListEntry
 	offset := 0
-	for page := 0; page < maxListPageNum; page++ {
+	for range maxListPageNum {
 		q := url.Values{}
 		q.Set("fields", "list_status{score,status,num_episodes_watched}")
 		q.Set("limit", fmt.Sprintf("%d", listPageLimit))

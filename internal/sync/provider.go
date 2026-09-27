@@ -1,5 +1,5 @@
 // Package sync is the dual-provider progress-sync layer (PR112): a
-// SyncProvider abstraction over the tracker pushes, the two
+// Provider abstraction over the tracker pushes, the two
 // implementations (Shikimori — the existing python-parity push, and
 // MyAnimeList — via the card-derived id mapping) and the dispatcher
 // that fans one episode-progress event out to every enabled tracker
@@ -36,12 +36,13 @@ var ErrNotOnMAL = errors.New("mal: title has no myanimelist id")
 type Note int
 
 const (
-	// NoteNone: not a skip (synced, or failed with Err).
+	// NoteNone reports "not a skip": synced, or failed with Err.
 	NoteNone Note = iota
-	// NoteAuthRequired: the provider is enabled but carries no
-	// credentials — the push was never attempted.
+	// NoteAuthRequired marks an enabled provider without credentials —
+	// the push was never attempted.
 	NoteAuthRequired
-	// NoteNotOnMAL: the title has no MAL mapping — nothing was pushed.
+	// NoteNotOnMAL marks a title with no MAL mapping — nothing was
+	// pushed.
 	NoteNotOnMAL
 )
 
@@ -64,8 +65,11 @@ type Report struct {
 	// the legacy single typed skip note at the call site.
 	Participated bool
 	// NoRollback reports the shared counter guard: the local progress
-	// is already ahead, nothing was pushed to anyone.
+	// is already ahead, nothing was pushed to anyone. Prior carries
+	// the stored counter for the verdict line.
 	NoRollback bool
+	// Prior is the local episode counter when NoRollback fired.
+	Prior int
 	// Verdicts are the per-provider outcomes, dispatcher order.
 	Verdicts []Verdict
 }
@@ -86,8 +90,8 @@ type PushRequest struct {
 	AnimeID int64
 }
 
-// SyncProvider is one tracker's episode-progress push surface.
-type SyncProvider interface {
+// Provider is one tracker's episode-progress push surface.
+type Provider interface {
 	// Key is the provider identity ("shikimori" / "myanimelist").
 	Key() string
 	// Participates reports whether the tracker is switched on in
@@ -112,7 +116,7 @@ type History interface {
 // Dispatcher fans one episode-progress event out to every enabled
 // tracker. Construct with NewDispatcher; safe for concurrent use.
 type Dispatcher struct {
-	providers []SyncProvider
+	providers []Provider
 	history   History
 	log       *slog.Logger
 }
@@ -120,7 +124,7 @@ type Dispatcher struct {
 // NewDispatcher builds the dispatcher over the tracker roster. history
 // may be nil (the guards run without the local row: pushes proceed);
 // logger may be nil (slog.Default).
-func NewDispatcher(history History, logger *slog.Logger, providers ...SyncProvider) *Dispatcher {
+func NewDispatcher(history History, logger *slog.Logger, providers ...Provider) *Dispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -141,7 +145,7 @@ func NewDispatcher(history History, logger *slog.Logger, providers ...SyncProvid
 //   - ErrNotOnMAL downgrades to NoteNotOnMAL (typed skip, not failure);
 //     everything else surfaces as the verdict's Err.
 func (d *Dispatcher) SyncEpisodeProgress(ctx context.Context, shikimoriID int64, episode int) Report {
-	var active []SyncProvider
+	var active []Provider
 	for _, p := range d.providers {
 		if p != nil && p.Participates() {
 			active = append(active, p)
@@ -176,7 +180,7 @@ func (d *Dispatcher) SyncEpisodeProgress(ctx context.Context, shikimoriID int64,
 			if prior := parseEpisodeCounter(rec.CurrentEpisode); prior > episode {
 				d.log.Info("sync: episode behind local progress; push skipped",
 					"episode", episode, "prior", prior)
-				return Report{Participated: true, NoRollback: true}
+				return Report{Participated: true, NoRollback: true, Prior: prior}
 			}
 		}
 	}
@@ -212,7 +216,7 @@ type ShikimoriPusher interface {
 	UpdateEpisodes(ctx context.Context, shikimoriID, rateID int64, episodes int, status string) (int64, error)
 }
 
-// ShikimoriSync is the Shikimori SyncProvider: the python-parity
+// ShikimoriSync is the Shikimori Provider: the python-parity
 // immediate push (episodes=N, ensured status) with the created-rate-id
 // persistence (the write survives caller cancellation).
 type ShikimoriSync struct {
@@ -221,19 +225,19 @@ type ShikimoriSync struct {
 	Log     *slog.Logger
 }
 
-// Key implements SyncProvider.
+// Key implements Provider.
 func (p *ShikimoriSync) Key() string { return "shikimori" }
 
-// Participates implements SyncProvider.
+// Participates implements Provider.
 func (p *ShikimoriSync) Participates() bool { return p.Shiki != nil && p.Shiki.Enabled() }
 
-// Ready implements SyncProvider: cookie and bearer modes carry
+// Ready implements Provider: cookie and bearer modes carry
 // credentials; "none"/"disabled" do not.
 func (p *ShikimoriSync) Ready() bool {
 	return p.Shiki != nil && p.Shiki.Mode() != "none" && p.Shiki.Mode() != "disabled"
 }
 
-// SyncEpisodeProgress implements SyncProvider.
+// SyncEpisodeProgress implements Provider.
 func (p *ShikimoriSync) SyncEpisodeProgress(ctx context.Context, req PushRequest) error {
 	newRate, err := p.Shiki.UpdateEpisodes(ctx, req.ShikimoriID, req.RateID, req.Episode, req.Status)
 	if err != nil {
@@ -273,7 +277,7 @@ type MALIDResolver interface {
 	ResolveMALID(ctx context.Context, shikimoriID int64) (int64, error)
 }
 
-// MALSync is the MyAnimeList SyncProvider: resolve the MAL id for the
+// MALSync is the MyAnimeList Provider: resolve the MAL id for the
 // shikimori-bound title, then PUT the mapped status + counter.
 type MALSync struct {
 	MAL      MALPusher
@@ -281,16 +285,16 @@ type MALSync struct {
 	Log      *slog.Logger
 }
 
-// Key implements SyncProvider.
+// Key implements Provider.
 func (p *MALSync) Key() string { return "myanimelist" }
 
-// Participates implements SyncProvider.
+// Participates implements Provider.
 func (p *MALSync) Participates() bool { return p.MAL != nil && p.MAL.Enabled() }
 
-// Ready implements SyncProvider.
+// Ready implements Provider.
 func (p *MALSync) Ready() bool { return p.MAL != nil && p.MAL.Authenticated() }
 
-// SyncEpisodeProgress implements SyncProvider. A mapping miss is the
+// SyncEpisodeProgress implements Provider. A mapping miss is the
 // typed ErrNotOnMAL (the dispatcher downgrades it to a skip verdict).
 func (p *MALSync) SyncEpisodeProgress(ctx context.Context, req PushRequest) error {
 	malID, err := p.Resolver.ResolveMALID(ctx, req.ShikimoriID)
@@ -305,6 +309,9 @@ func (p *MALSync) SyncEpisodeProgress(ctx context.Context, req PushRequest) erro
 	if err := p.MAL.UpdateMyListStatus(ctx, malID, in); err != nil {
 		return fmt.Errorf("mal push: %w", err)
 	}
+	p.logger().Debug("mal sync: progress pushed",
+		"shikimori_id", req.ShikimoriID, "mal_id", malID,
+		"episode", req.Episode, "status", status, "rewatching", rewatching)
 	return nil
 }
 

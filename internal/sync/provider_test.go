@@ -14,7 +14,7 @@ import (
 
 // --- fakes -----------------------------------------------------------
 
-// fakeProvider is a scriptable SyncProvider.
+// fakeProvider is a scriptable Provider.
 type fakeProvider struct {
 	key          string
 	participates bool

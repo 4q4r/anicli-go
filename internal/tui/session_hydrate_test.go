@@ -127,15 +127,15 @@ func TestEpisodeListSurfacesWithoutHydration(t *testing.T) {
 		t.Fatalf("hydration calls = %d, want 0 (nothing resolves in bulk)", calls)
 	}
 	got := s.renderHeader()
-	if !strings.Contains(got, "Ист: 0") {
+	if !strings.Contains(got, "Sources: 0") {
 		t.Fatalf("header = %q, want the honest 0-state", got)
 	}
-	if !strings.Contains(got, "источники не запрашивались") {
+	if !strings.Contains(got, "sources were not requested") {
 		t.Fatalf("header = %q, want the not-attempted cause", got)
 	}
 }
 
-// TestWatchTriggersOnDemandHydration: «▶ Смотреть» on an unopened
+// TestWatchTriggersOnDemandHydration: «▶ Watch» on an unopened
 // episode triggers the hydration of THAT episode only; after it
 // settles, the next watch opens the format selector.
 func TestWatchTriggersOnDemandHydration(t *testing.T) {
@@ -158,8 +158,8 @@ func TestWatchTriggersOnDemandHydration(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("watch on an unopened episode must schedule hydration")
 	}
-	if s.status != "Ищу источники…" {
-		t.Fatalf("status = %q, want «Ищу источники…»", s.status)
+	if s.status != "Looking for sources…" {
+		t.Fatalf("status = %q, want «Looking for sources…»", s.status)
 	}
 	msg := cmd()
 	done, ok := msg.(hydrateDoneMsg)
@@ -175,7 +175,7 @@ func TestWatchTriggersOnDemandHydration(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("hydration calls = %d, want 1 (the opened episode only)", calls)
 	}
-	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1 (AnimeLib)") {
+	if got := s.renderHeader(); !strings.Contains(got, "Sources: 1 (AnimeLib)") {
 		t.Fatalf("post-hydration header = %q, want the real source count", got)
 	}
 
@@ -198,7 +198,7 @@ func TestWatchTriggersOnDemandHydration(t *testing.T) {
 
 // TestWatchAttemptedEmptyDimsAndHints: a hydration that legitimately
 // found nothing dims «Смотреть», names the genuine no-results cause
-// and routes recovery through «🔄 Обновить источники».
+// and routes recovery through «🔄 Refresh sources».
 func TestWatchAttemptedEmptyDimsAndHints(t *testing.T) {
 	fix := &hydrateFixture{embeds: map[string]map[string][]string{"anilib": {}}}
 	s := newLazySession(t, fix, map[string][]contracts.Episode{
@@ -217,7 +217,7 @@ func TestWatchAttemptedEmptyDimsAndHints(t *testing.T) {
 			t.Fatal("«Смотреть» must be dimmed after an empty attempt")
 		}
 	}
-	if got := s.renderHeader(); !strings.Contains(got, "все провайдеры завершились без результатов") {
+	if got := s.renderHeader(); !strings.Contains(got, "all providers finished without results") {
 		t.Fatalf("header = %q, want the genuine no-results cause", got)
 	}
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
@@ -225,7 +225,7 @@ func TestWatchAttemptedEmptyDimsAndHints(t *testing.T) {
 	if s.state == sessionStateFormat {
 		t.Fatal("the format selector must never open without sources")
 	}
-	if !strings.Contains(s.status, "Обновить источники") {
+	if !strings.Contains(s.status, "Refresh sources") {
 		t.Fatalf("status = %q, want the refresh hint", s.status)
 	}
 }
@@ -251,7 +251,7 @@ func TestWatchHydrationErrorSurfacesCause(t *testing.T) {
 	if !strings.Contains(got, "anilib") || !strings.Contains(got, "boom") {
 		t.Fatalf("header = %q, want the per-provider error summary", got)
 	}
-	if strings.Contains(got, "источники не запрашивались") {
+	if strings.Contains(got, "sources were not requested") {
 		t.Fatalf("header = %q, the not-attempted cause must be gone after an attempt", got)
 	}
 }
@@ -267,7 +267,7 @@ func TestKnownDubKeysNeedNoHydration(t *testing.T) {
 		},
 	})
 
-	if got := s.renderHeader(); !strings.Contains(got, "Ист: 2 (AnimeLib)") {
+	if got := s.renderHeader(); !strings.Contains(got, "Sources: 2 (AnimeLib)") {
 		t.Fatalf("header = %q, want the tier-1 dub count", got)
 	}
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
@@ -285,7 +285,7 @@ func TestKnownDubKeysNeedNoHydration(t *testing.T) {
 	}
 }
 
-// TestSessionRefreshSources: «🔄 Обновить источники» re-runs the SAME
+// TestSessionRefreshSources: «🔄 Refresh sources» re-runs the SAME
 // resolve path as the initial open (PR111) — the fetch fan-out, then
 // the current episode's hydration — so a transient failure heals, and
 // the verdict is honest.
@@ -305,8 +305,8 @@ func TestSessionRefreshSources(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("refresh must schedule the fetch fan-out")
 	}
-	if s.status != "Обновляю источники…" {
-		t.Fatalf("status during refresh = %q, want «Обновляю источники…»", s.status)
+	if s.status != "Refreshing sources…" {
+		t.Fatalf("status during refresh = %q, want «Refreshing sources…»", s.status)
 	}
 	// Phase 1: the fetch fan-out settles.
 	next, follow := s.Update(cmd())
@@ -322,17 +322,17 @@ func TestSessionRefreshSources(t *testing.T) {
 	_ = next2
 	// Phase 3: the hydration settles with the fresh source.
 	s.Update(hydrate())
-	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1") {
+	if got := s.renderHeader(); !strings.Contains(got, "Sources: 1") {
 		t.Fatalf("post-refresh header = %q, want the recovered source", got)
 	}
-	if s.status == "Источники не найдены" {
+	if s.status == "Sources not found" {
 		t.Fatal("the refresh verdict must be honest — the round found a source")
 	}
 }
 
 // TestRefreshSourcesHydratesKeyOnlyTier1Episodes (review MAJOR): the
 // tier-1 dub list rides every episode as keys with EMPTY lists — that
-// is the NORMAL post-GetEpisodes state, and «🔄 Обновить источники»
+// is the NORMAL post-GetEpisodes state, and «🔄 Refresh sources»
 // must still call HydrateDubs for it (the skip guard counts only
 // embeds with actual LINKS, not key-only entries).
 func TestRefreshSourcesHydratesKeyOnlyTier1Episodes(t *testing.T) {
@@ -374,7 +374,7 @@ func TestRefreshSourcesHydratesKeyOnlyTier1Episodes(t *testing.T) {
 	if calls <= before {
 		t.Fatalf("HydrateDubs calls = %d, want > %d: key-only tier-1 episodes must not be skipped as already-hydrated", calls, before)
 	}
-	if got := s.renderHeader(); !strings.Contains(got, "Ист: 1 (AnimeLib)") {
+	if got := s.renderHeader(); !strings.Contains(got, "Sources: 1 (AnimeLib)") {
 		t.Fatalf("post-refresh header = %q, want the recovered source", got)
 	}
 }

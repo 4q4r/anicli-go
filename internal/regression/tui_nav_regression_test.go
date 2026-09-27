@@ -38,7 +38,7 @@ var navInvariants = []navInvariant{
 			)
 			last := len(menu.Items) - 1
 			if len(menu.Items) == 0 || menu.Items[last].ID != tui.BackID ||
-				menu.Items[last].Label != tui.BackLabel || menu.Items[last].Value != tui.Back {
+				menu.Items[last].Label != tui.BackLabel() || menu.Items[last].Value != tui.Back {
 				t.Fatalf("I1: menu items must end with the Back entry, got %+v", menu.Items)
 			}
 
@@ -46,7 +46,7 @@ var navInvariants = []navInvariant{
 			if len(empty.Items) != 1 || empty.Items[0].ID != tui.BackID {
 				t.Fatalf("I1: empty menu must still hold exactly the Back row, got %+v", empty.Items)
 			}
-			if want := "ничего нет\n" + tui.BackLabel; empty.RenderItems() != want {
+			if want := "ничего нет\n" + tui.BackLabel(); empty.RenderItems() != want {
 				t.Fatalf("I1: empty render = %q, want %q", empty.RenderItems(), want)
 			}
 		},
@@ -88,11 +88,11 @@ var navInvariants = []navInvariant{
 		id:   "I3",
 		name: "An empty choice list is legal: Back renders alone plus the empty-state message",
 		live: func(t *testing.T) {
-			menu := tui.NewMenu("Заголовок", "Ничего не найдено")
+			menu := tui.NewMenu("Заголовок", "Nothing found")
 			if got := tui.ResolveKey(menu, 0, enterKey()); got != tui.Back {
 				t.Fatalf("I3: enter on an empty menu must resolve the Back row, got %v", got)
 			}
-			if want := "Ничего не найдено\n" + tui.BackLabel; menu.RenderItems() != want {
+			if want := "Nothing found\n" + tui.BackLabel(); menu.RenderItems() != want {
 				t.Fatalf("I3: empty render = %q, want %q", menu.RenderItems(), want)
 			}
 		},

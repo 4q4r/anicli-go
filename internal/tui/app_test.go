@@ -128,8 +128,8 @@ func TestAppPanicRecovery(t *testing.T) {
 		if top.ID() != errorScreenID {
 			t.Fatalf("panic must surface the error screen, got %q", top.ID())
 		}
-		if !contains(top.View().Content, "Произошла ошибка") {
-			t.Fatalf("error screen must show a RU error banner, got %q", top.View().Content)
+		if !contains(top.View().Content, "An error occurred") {
+			t.Fatalf("error screen must show the error banner, got %q", top.View().Content)
 		}
 	})
 

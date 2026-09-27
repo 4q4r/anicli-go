@@ -10,7 +10,7 @@ package tui
 //
 // Prints, for the query below (or $ANICLI_LIVE_QUERY):
 //  1. the loading frame right after Init: ONE line — spinner +
-//     «settled/N провайдеров, K результатов…» (PR111 live counter) —
+//     «settled/N providers, K results…» (PR111 live counter) —
 //     with no table chrome;
 //  2. the first mid-flight settle: the live-counter loading line
 //     persists;
@@ -59,7 +59,7 @@ func TestLivePR110MinimalFanout(t *testing.T) {
 
 	// 1. The loading frame BEFORE any settle: one minimal line under
 	// the title (the Shikimori notice while enriching, the live
-	// counter «settled/N провайдеров, K результатов…» once the
+	// counter «settled/N providers, K results…» once the
 	// fan-out runs). Either way: no table, no summary.
 	loading := sp.View().Content
 	t.Logf("=== LOADING FRAME (pending %d) ===\n%s", len(sp.pending), pr110Indent(loading))
@@ -83,7 +83,7 @@ func TestLivePR110MinimalFanout(t *testing.T) {
 	v := sp.View().Content
 	t.Logf("=== SETTLED (results %d) ===\n%s", len(sp.results), pr110Indent(v))
 
-	want := "Найдено: " + strconv.Itoa(len(sp.results))
+	want := "Found: " + strconv.Itoa(len(sp.results))
 	if !strings.Contains(v, want) {
 		t.Fatalf("settled frame must carry the summary %q:\n%s", want, v)
 	}

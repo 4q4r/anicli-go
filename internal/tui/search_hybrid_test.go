@@ -455,8 +455,8 @@ func TestSearchLiveMinimalRendering(t *testing.T) {
 	v := topOf(model).View().Content
 
 	for _, want := range []string{
-		"Найдено: 3 · Без результатов/ошибок: 1",
-		"Выберите провайдеры",
+		"Found: 3 · No results/errors: 1",
+		"Pick providers",
 		"AnimeGO — Наруто",
 		"AniLib — Наруто",
 	} {
@@ -464,7 +464,7 @@ func TestSearchLiveMinimalRendering(t *testing.T) {
 			t.Errorf("minimal view missing %q, got:\n%s", want, v)
 		}
 	}
-	for _, banned := range []string{"Провайдер", "Статус", "Завершено", "Ответившие", "┌"} {
+	for _, banned := range []string{"Провайдер", "Status", "Завершено", "Ответившие", "┌"} {
 		if strings.Contains(v, banned) {
 			t.Errorf("the table is gone; %q must not render:\n%s", banned, v)
 		}

@@ -104,7 +104,7 @@ func TestPR94FailSoftAllBrokenNamesEveryProvider(t *testing.T) {
 	}
 	// sortedEmbedKeys puts [anilib] AniLib before [animego] Дубль 1 —
 	// attribution follows the consulted order, not completion order.
-	want := "потоки не получены: anilib (extract failed), animego (HTTP 503)"
+	want := "streams not fetched: anilib (extract failed), animego (HTTP 503)"
 	if err.Error() != want {
 		t.Fatalf("err = %q, want %q", err.Error(), want)
 	}
@@ -146,7 +146,7 @@ func TestPR94FailSoftSuccessButEmptyLinksPlusFailure(t *testing.T) {
 }
 
 // TestPR94FailSoftNoFailuresNoEntries: every provider answered without
-// links and without errors — the plain «потоки не найдены» verdict.
+// links and without errors — the plain «streams not found» verdict.
 func TestPR94FailSoftNoFailuresNoEntries(t *testing.T) {
 	eps := &failsoftEpisode{
 		fakeEpisode: &fakeEpisode{
@@ -158,8 +158,8 @@ func TestPR94FailSoftNoFailuresNoEntries(t *testing.T) {
 		},
 	}
 	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "")
-	if err == nil || err.Error() != "потоки не найдены" {
-		t.Fatalf("err = %v, want «потоки не найдены»", err)
+	if err == nil || err.Error() != "streams not found" {
+		t.Fatalf("err = %v, want %q", err, "streams not found")
 	}
 	if len(entries) != 0 || len(skipped) != 0 {
 		t.Fatalf("entries/skipped = %+v / %+v, want empty", entries, skipped)
@@ -258,7 +258,7 @@ func TestPR94ScopedFailureFallsThroughToMerged(t *testing.T) {
 	if len(ss3.streamEntries) != 1 || ss3.streamEntries[0].DubKey != "[anilib] AniLib" {
 		t.Fatalf("merged entries = %+v, want the healthy provider's stream", ss3.streamEntries)
 	}
-	if !strings.Contains(ss3.status, "пропущены: animego (HTTP 400)") {
+	if !strings.Contains(ss3.status, "skipped: animego (HTTP 400)") {
 		t.Fatalf("status = %q, want the skip summary", ss3.status)
 	}
 }
@@ -313,7 +313,7 @@ func TestPR94ScopedFailureAllBrokenNamesAll(t *testing.T) {
 }
 
 // TestPR94SummaryComposesWithVanishedDubNote: the merged picker's
-// skip summary composes with the vanished-dub warning the «⏭ След.»
+// skip summary composes with the vanished-dub warning the «⏭ Next»
 // flow already stamped — both honest notes stay visible (PR94
 // defect C, python resolve_dubs_smart parity).
 func TestPR94SummaryComposesWithVanishedDubNote(t *testing.T) {
@@ -343,12 +343,12 @@ func TestPR94SummaryComposesWithVanishedDubNote(t *testing.T) {
 	s.videoDub, s.audioDub = "[animego] Дубль 1", "[animego] Дубль 1"
 
 	// The vanished-dub path: episode 1 has no animego embeds for the
-	// REMEMBERED dub (simulate by wiping them), so «⏭ След.» warns and
+	// REMEMBERED dub (simulate by wiping them), so «⏭ Next» warns and
 	// runs the unscoped merged resolve.
 	s.currentEpisodeData().RawEmbeds["[animego] Дубль 1"] = nil
 	scr, cmd := s.autoWatchNext()
 	ss := scr.(*sessionScreen)
-	if !strings.Contains(ss.status, "Прошлые настройки недоступны") {
+	if !strings.Contains(ss.status, "Previous settings unavailable") {
 		t.Fatalf("status = %q, want the vanished-dub warning first", ss.status)
 	}
 	if cmd == nil {
@@ -360,10 +360,10 @@ func TestPR94SummaryComposesWithVanishedDubNote(t *testing.T) {
 	if len(ss2.streamEntries) != 1 {
 		t.Fatalf("entries = %+v, want the healthy anilib stream", ss2.streamEntries)
 	}
-	if !strings.Contains(ss2.status, "Прошлые настройки недоступны") {
+	if !strings.Contains(ss2.status, "Previous settings unavailable") {
 		t.Fatalf("status = %q, the vanished-dub note must survive", ss2.status)
 	}
-	if !strings.Contains(ss2.status, "пропущены: xprov (HTTP 403)") {
+	if !strings.Contains(ss2.status, "skipped: xprov (HTTP 403)") {
 		t.Fatalf("status = %q, want the skip summary", ss2.status)
 	}
 }

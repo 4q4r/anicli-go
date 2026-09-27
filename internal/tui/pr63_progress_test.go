@@ -121,7 +121,7 @@ func TestStreamingWatchSavesProgressAtLaunch(t *testing.T) {
 }
 
 // TestHistoryDisplayReadsSavedRow (PR63 #1): the «Списки» surface
-// renders the recorded progress — «Серия 1/13», not the stale «0/13».
+// renders the recorded progress — «Episode 1/13», not the stale «0/13».
 func TestHistoryDisplayReadsSavedRow(t *testing.T) {
 	s, _ := progressSession(t)
 	_ = watchToLaunch(t, s, "stream")
@@ -131,7 +131,7 @@ func TestHistoryDisplayReadsSavedRow(t *testing.T) {
 		t.Fatalf("load history: %v", err)
 	}
 	view := newHistoryListFromFiltered(s.deps, "", items).View().Content
-	if !contains(view, "Серия 1/13") {
+	if !contains(view, "Ep. 1/13") {
 		t.Fatalf("the library row must show the saved progress:\n%s", view)
 	}
 }

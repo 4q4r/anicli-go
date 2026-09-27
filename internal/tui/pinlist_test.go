@@ -34,10 +34,10 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 	t.Run("back label visible on first page, below the items", func(t *testing.T) {
 		m := NewPinList(NewMenu("М", "", numberedChoices(3)...), 10)
 		r := m.Render()
-		if !strings.Contains(r, BackLabel) {
+		if !strings.Contains(r, BackLabel()) {
 			t.Fatalf("Back must render on page 1")
 		}
-		if strings.Index(r, BackLabel) < strings.Index(r, "Элемент 3") {
+		if strings.Index(r, BackLabel()) < strings.Index(r, "Элемент 3") {
 			t.Fatalf("Back must render BELOW the items, got:\n%s", r)
 		}
 	})
@@ -47,7 +47,7 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 		for range 50 { // exactly to the end (further downs wrap — PR78)
 			m.MoveDown()
 		}
-		if !strings.Contains(m.Render(), BackLabel) {
+		if !strings.Contains(m.Render(), BackLabel()) {
 			t.Fatalf("Back must render on the last page too (I1: always in viewport)")
 		}
 		if !strings.Contains(m.Render(), "Элемент 50") {
@@ -58,16 +58,16 @@ func TestPinListBackRowAlwaysVisible(t *testing.T) {
 	t.Run("backless (root) menu pins the last choice at the bottom", func(t *testing.T) {
 		m := NewPinList(NewMenuWithoutBack("Корень", "",
 			Choice{ID: "a", Label: "Первый"},
-			Choice{ID: "exit", Label: "🚪 Выход"},
+			Choice{ID: "exit", Label: "🚪 Exit"},
 		), 10)
 		r := m.Render()
-		if !strings.Contains(r, "🚪 Выход") {
+		if !strings.Contains(r, "🚪 Exit") {
 			t.Fatalf("root list must render the exit entry, got:\n%s", r)
 		}
-		if strings.Contains(r, BackLabel) {
+		if strings.Contains(r, BackLabel()) {
 			t.Fatalf("root list must not render a Back row, got:\n%s", r)
 		}
-		if strings.Index(r, "🚪 Выход") < strings.Index(r, "Первый") {
+		if strings.Index(r, "🚪 Exit") < strings.Index(r, "Первый") {
 			t.Fatalf("the exit entry must render BELOW the body items, got:\n%s", r)
 		}
 	})
@@ -152,12 +152,12 @@ func TestPinListCursorAndPaging(t *testing.T) {
 	})
 
 	t.Run("empty menu renders the empty message above Back", func(t *testing.T) {
-		m := NewPinList(NewMenu("Пусто", "Ничего не найдено"), 10)
+		m := NewPinList(NewMenu("Пусто", "Nothing found"), 10)
 		r := m.Render()
-		if !strings.Contains(r, BackLabel) || !strings.Contains(r, "Ничего не найдено") {
+		if !strings.Contains(r, BackLabel()) || !strings.Contains(r, "Nothing found") {
 			t.Fatalf("empty menu must render message + Back, got %q", r)
 		}
-		if strings.Index(r, "Ничего не найдено") > strings.Index(r, BackLabel) {
+		if strings.Index(r, "Nothing found") > strings.Index(r, BackLabel()) {
 			t.Fatalf("empty message must render ABOVE the Back row, got %q", r)
 		}
 		// Enter on the lone Back resolves through nav.
@@ -173,7 +173,7 @@ func TestPinListCursorAndPaging(t *testing.T) {
 			m.MoveDown()
 		}
 		r := m.Render()
-		if !strings.Contains(r, BackLabel) {
+		if !strings.Contains(r, BackLabel()) {
 			t.Fatalf("pinned Back missing with tiny viewport")
 		}
 		if !strings.Contains(r, "Элемент 40") {

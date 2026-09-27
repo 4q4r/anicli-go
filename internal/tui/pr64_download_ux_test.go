@@ -48,7 +48,7 @@ func pr64Session(t *testing.T) *sessionScreen {
 }
 
 // seedPlaybackVerdict drives the REAL playback settle — the exact path
-// that produced the owner's screenshot («Воспроизведение завершено»
+// that produced the owner's screenshot («Playback finished»
 // rendered under the download prompt).
 func seedPlaybackVerdict(s *sessionScreen) *sessionScreen {
 	next, _ := s.Update(playedMsg{})
@@ -57,7 +57,7 @@ func seedPlaybackVerdict(s *sessionScreen) *sessionScreen {
 
 // TestDownloadDialogHidesStalePlaybackStatus (PR64 #1): after a
 // finished playback, the download-range prompt must render WITHOUT the
-// stale «Воспроизведение завершено» line.
+// stale «Playback finished» line.
 func TestDownloadDialogHidesStalePlaybackStatus(t *testing.T) {
 	s := pr64Session(t)
 	s.deps.Download = &fakeDownload{}
@@ -71,10 +71,10 @@ func TestDownloadDialogHidesStalePlaybackStatus(t *testing.T) {
 		t.Fatalf("download must open the range prompt, got %v", ss.state)
 	}
 	v := ss.View().Content
-	if !contains(v, "для загрузки") {
+	if !contains(v, "to download") {
 		t.Fatalf("the range prompt must render:\n%s", v)
 	}
-	if contains(v, "Воспроизведение завершено") {
+	if contains(v, "Playback finished") {
 		t.Fatalf("the playback verdict must not leak into the download dialog:\n%s", v)
 	}
 }
@@ -83,7 +83,7 @@ func TestDownloadDialogHidesStalePlaybackStatus(t *testing.T) {
 // playback verdict renders on the menu surface ONLY — every other
 // substate the user can enter next starts clean.
 func TestStatusNeverSurvivesSessionTransition(t *testing.T) {
-	const stale = "Воспроизведение завершено"
+	const stale = "Playback finished"
 	transitions := map[string]func(t *testing.T, s *sessionScreen) *sessionScreen{
 		"download-range": func(_ *testing.T, s *sessionScreen) *sessionScreen {
 			s.list.Jump(sessionActionIndex(s, "download"))
@@ -103,7 +103,7 @@ func TestStatusNeverSurvivesSessionTransition(t *testing.T) {
 		},
 		"info-status": func(_ *testing.T, s *sessionScreen) *sessionScreen {
 			ss := openInfo(s)
-			next, _ := ss.Update(enter()) // cursor on «Статус»
+			next, _ := ss.Update(enter()) // cursor on «Status»
 			return next.(*sessionScreen)
 		},
 		"episode-list": func(_ *testing.T, s *sessionScreen) *sessionScreen {
@@ -138,7 +138,7 @@ func TestStatusNeverSurvivesSessionTransition(t *testing.T) {
 // offline session carries the same transient-status model — its play
 // verdict must not leak onto the episode picker or the variant picker.
 func TestOfflineStatusNeverSurvivesSurfaceSwitch(t *testing.T) {
-	const stale = "Воспроизведение завершено"
+	const stale = "Playback finished"
 	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}, Playback: &fakePlayback{}}
 	titles, _ := deps.Offline.Titles()
 	s := NewOfflineSession(deps, titles[0])
@@ -195,13 +195,13 @@ func TestDescribeAvailableEpisodes(t *testing.T) {
 		order []string
 		want  string
 	}{
-		{"contiguous", []string{"1", "2", "3"}, "Доступно серий: 3 (1–3)"},
-		{"gaps", []string{"1", "2", "3", "7", "10"}, "Доступно серий: 5 (1–3, 7, 10)"},
-		{"single", []string{"5"}, "Доступно серий: 1 (5)"},
-		{"junk-label", []string{"1", "OVA"}, "Доступно серий: 2 (1, OVA)"},
+		{"contiguous", []string{"1", "2", "3"}, "Episodes available: 3 (1–3)"},
+		{"gaps", []string{"1", "2", "3", "7", "10"}, "Episodes available: 5 (1–3, 7, 10)"},
+		{"single", []string{"5"}, "Episodes available: 1 (5)"},
+		{"junk-label", []string{"1", "OVA"}, "Episodes available: 2 (1, OVA)"},
 		{"capped", []string{"1", "3", "5", "7", "9", "11", "13", "15", "17", "19", "21", "23"},
-			"Доступно серий: 12 (1, 3, 5, 7, 9, 11, 13, 15, … +4 ещё)"},
-		{"empty", nil, "Доступных серий нет"},
+			"Episodes available: 12 (1, 3, 5, 7, 9, 11, 13, 15, … +4 more)"},
+		{"empty", nil, "No episodes available"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestDownloadPromptShowsAvailableEpisodes(t *testing.T) {
 		t.Fatalf("download must open the range prompt, got %v", ss.state)
 	}
 	v := ss.View().Content
-	if !contains(v, "Доступно серий: 3 (1–3)") {
+	if !contains(v, "Episodes available: 3 (1–3)") {
 		t.Fatalf("the prompt must show the available episodes:\n%s", v)
 	}
 }
@@ -372,10 +372,10 @@ func TestDownloadRangeResolvesDubPerEpisode(t *testing.T) {
 		}
 	}
 	// The report types the dub per episode.
-	if !contains(status, "Серия 2 — [anilib] AniLib") {
+	if !contains(status, "Ep. 2 — [anilib] AniLib") {
 		t.Fatalf("the report must type the fallback dub for ep 2:\n%s", status)
 	}
-	if !contains(status, "Серия 1 — [animego] Дубль 1") {
+	if !contains(status, "Ep. 1 — [animego] Дубль 1") {
 		t.Fatalf("the report must type the remembered dub for ep 1:\n%s", status)
 	}
 }
@@ -407,17 +407,17 @@ func TestDownloadRangeTypesNoViableEpisode(t *testing.T) {
 	if !typed {
 		t.Fatalf("ep 2's failure must be typed in the report, got %+v", settled.report)
 	}
-	if !contains(status, "Серия 2") || !contains(status, "нет доступных озвучек") {
+	if !contains(status, "Ep. 2") || !contains(status, "no viable dubs") {
 		t.Fatalf("the status must type ep 2's failure:\n%s", status)
 	}
-	if !contains(status, "2 из 3") {
+	if !contains(status, "2 of 3") {
 		t.Fatalf("the headline must carry the partial verdict:\n%s", status)
 	}
 }
 
 // TestDownloadSettleReportRendersPerEpisode (PR64 #3): the compact
 // report line shape — ep → dub → path / failure — plus the headline
-// semantics the older tests pin («Загружено», «Ошибка загрузки»).
+// semantics the older tests pin («Episodes downloaded», «Download failed»).
 func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 	s := pr64Session(t)
 	msg := downloadSettledMsg{count: 1, total: 2, err: errors.New("ffmpeg exploded"),
@@ -428,9 +428,9 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 	next, _ := s.Update(msg)
 	status := next.(*sessionScreen).status
 	for _, want := range []string{
-		"Загружено серий: 1 из 2",
-		"Серия 1 — [animego] Дубль 1 — /dl/Тайтл/EP_1_Дубль_1_720p.mp4",
-		"Серия 2 — [anilib] AniLib — ошибка: ffmpeg exploded",
+		"Episodes downloaded: 1 of 2",
+		"Ep. 1 — [animego] Дубль 1 — /dl/Тайтл/EP_1_Дубль_1_720p.mp4",
+		"Ep. 2 — [anilib] AniLib — error: ffmpeg exploded",
 	} {
 		if !contains(status, want) {
 			t.Fatalf("report line %q missing:\n%s", want, status)
@@ -441,15 +441,15 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 		report: []downloadEpisodeReport{{Episode: "7", Err: errNoViableDub}}}
 	next, _ = s.Update(msg2)
 	status = next.(*sessionScreen).status
-	if !contains(status, "Ошибка загрузки: 0 из 1 серий") {
-		t.Fatalf("an all-failed range keeps the «Ошибка загрузки» headline:\n%s", status)
+	if !contains(status, "Download failed: 0 of 1 episodes") {
+		t.Fatalf("an all-failed range keeps the «Download failed» headline:\n%s", status)
 	}
-	if !contains(status, "Серия 7 — ✗ нет доступных озвучек") {
+	if !contains(status, "Ep. 7 — ✗ no viable dubs") {
 		t.Fatalf("the no-dub verdict must be typed:\n%s", status)
 	}
 
 	// Review fix 6: the headline carries the first error verbatim
-	// (the pre-PR64 «Ошибка загрузки: …» contract); the typed
+	// (the pre-PR64 «Error загрузки: …» contract); the typed
 	// no-dub verdict stays on its per-episode line only.
 	msg3 := downloadSettledMsg{count: 0, total: 2, err: errors.New("disk full"),
 		report: []downloadEpisodeReport{
@@ -458,7 +458,7 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 		}}
 	next, _ = s.Update(msg3)
 	status = next.(*sessionScreen).status
-	if !contains(status, "Ошибка загрузки: 0 из 2 серий — disk full") {
+	if !contains(status, "Download failed: 0 of 2 episodes — disk full") {
 		t.Fatalf("the headline must carry the first error verbatim:\n%s", status)
 	}
 }
@@ -486,10 +486,10 @@ func TestDownloadBackgroundResolvesDubPerEpisode(t *testing.T) {
 				task.EpisodeNum, want[task.EpisodeNum], task.DubID)
 		}
 	}
-	if !contains(status, "Отправлено в фон: 2 серий") {
+	if !contains(status, "Queued to background: 2 episodes") {
 		t.Fatalf("the queued headline expected:\n%s", status)
 	}
-	if !contains(status, "Серия 2 — [anilib] AniLib") {
+	if !contains(status, "Ep. 2 — [anilib] AniLib") {
 		t.Fatalf("the background report must type the fallback dub:\n%s", status)
 	}
 }
@@ -683,7 +683,7 @@ func TestDownloadRangeReportOrdered(t *testing.T) {
 	if len(dl.downloads) != 2 || dl.downloads[0].EpisodeNum != "1" || dl.downloads[1].EpisodeNum != "2" {
 		t.Fatalf("downloads must run in episode order, got %+v", dl.downloads)
 	}
-	idx1, idx2 := strings.Index(status, "Серия 1 —"), strings.Index(status, "Серия 2 —")
+	idx1, idx2 := strings.Index(status, "Ep. 1 —"), strings.Index(status, "Ep. 2 —")
 	if idx1 == -1 || idx2 == -1 || idx1 > idx2 {
 		t.Fatalf("the report must be in episode order:\n%s", status)
 	}
@@ -722,10 +722,10 @@ func TestDownloadProgressLines(t *testing.T) {
 	}
 	var start1, resolve1 bool
 	for _, line := range lines {
-		if strings.Contains(line, "Загрузка 1/2: эп 1 — [animego] Дубль 1…") {
+		if strings.Contains(line, "Downloading 1/2: ep 1 — [animego] Дубль 1…") {
 			start1 = true
 		}
-		if strings.HasPrefix(line, "Разрешение озвучек ") && strings.Contains(line, "эп 1 — [animego] Дубль 1") {
+		if strings.HasPrefix(line, "Resolving dubs ") && strings.Contains(line, "ep 1 — [animego] Дубль 1") {
 			resolve1 = true // the counter follows COMPLETION order (parallel)
 		}
 	}
@@ -845,16 +845,16 @@ func TestPlayingViewGatesStaleStatusBehindGen(t *testing.T) {
 	// A transition WITHOUT a fresh status: the old body branch would
 	// render the stale menu verdict verbatim.
 	s.setState(sessionStatePlaying)
-	if contains(s.View().Content, "Воспроизведение завершено") {
+	if contains(s.View().Content, "Playback finished") {
 		t.Fatalf("the stale status leaked through the playing body render:\n%s", s.View().Content)
 	}
 	s.setState(sessionStateBuffering)
-	if contains(s.View().Content, "Воспроизведение завершено") {
+	if contains(s.View().Content, "Playback finished") {
 		t.Fatalf("the stale status leaked through the buffering body render:\n%s", s.View().Content)
 	}
 	// And a fresh status on the CURRENT surface still renders.
-	s.setStatus("▶ Запуск mpv…")
-	if !contains(s.View().Content, "▶ Запуск mpv…") {
+	s.setStatus("▶ Launching mpv…")
+	if !contains(s.View().Content, "▶ Launching mpv…") {
 		t.Fatalf("a fresh status must render on the playing surface:\n%s", s.View().Content)
 	}
 }

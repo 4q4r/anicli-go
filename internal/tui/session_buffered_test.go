@@ -108,8 +108,8 @@ func newBufferedSession(t *testing.T) (*sessionScreen, *realFileBuffered, *fakeP
 }
 
 // TestWatchOpensFormatSelector pins the PR44 entry interaction:
-// the action menu has NO «Формат:» toggle item, and «▶ Смотреть»
-// opens a selector with EXACTLY two items («Потоковый», «Буферный»).
+// the action menu has NO «Формат:» toggle item, and «▶ Watch»
+// opens a selector with EXACTLY two items («Streaming», «Buffered»).
 func TestWatchOpensFormatSelector(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 
@@ -127,13 +127,13 @@ func TestWatchOpensFormatSelector(t *testing.T) {
 	if len(items) != 3 { // two formats + the pinned Back row
 		t.Fatalf("selector rows = %d, want 3 (two formats + Back)", len(items))
 	}
-	if items[0].Label != "Потоковый" || items[1].Label != "Буферный" {
-		t.Fatalf("selector labels = %q, %q; want «Потоковый», «Буферный»",
+	if items[0].Label != "Streaming" || items[1].Label != "Buffered" {
+		t.Fatalf("selector labels = %q, %q; want «Streaming», «Buffered»",
 			items[0].Label, items[1].Label)
 	}
 }
 
-// TestFormatSelectorStreamPickProceeds: Enter on «Потоковый» starts
+// TestFormatSelectorStreamPickProceeds: Enter on «Streaming» starts
 // the watch pipeline in streaming mode — the merged stream resolve
 // (PR61) schedules immediately for a fresh session.
 func TestFormatSelectorStreamPickProceeds(t *testing.T) {
@@ -141,7 +141,7 @@ func TestFormatSelectorStreamPickProceeds(t *testing.T) {
 
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	s.formatList.Jump(0) // «Потоковый»
+	s.formatList.Jump(0) // «Streaming»
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("stream pick must schedule the stream resolve")
@@ -164,14 +164,14 @@ func TestFormatSelectorStreamPickProceeds(t *testing.T) {
 	}
 }
 
-// TestFormatSelectorBufferedPickProceeds: Enter on «Буферный» arms the
+// TestFormatSelectorBufferedPickProceeds: Enter on «Buffered» arms the
 // buffered mode and starts the same merged resolve (PR61).
 func TestFormatSelectorBufferedPickProceeds(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	s.formatList.Jump(1) // «Буферный»
+	s.formatList.Jump(1) // «Buffered»
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("buffered pick must schedule the stream resolve")
@@ -185,15 +185,15 @@ func TestFormatSelectorBufferedPickProceeds(t *testing.T) {
 }
 
 // TestFormatSelectorBufferedUnavailable: without a BufferedService the
-// «Буферный» pick explains honestly and the selector stays open so
-// «Потоковый» remains pickable.
+// «Buffered» pick explains honestly and the selector stays open so
+// «Streaming» remains pickable.
 func TestFormatSelectorBufferedUnavailable(t *testing.T) {
 	s, _, _, _ := newBufferedSession(t)
 	s.deps.Buffered = nil
 
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	s.formatList.Jump(1) // «Буферный»
+	s.formatList.Jump(1) // «Buffered»
 	if _, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatalf("unavailable pick must stay in place, got cmd %T", cmd)
 	}
@@ -203,7 +203,7 @@ func TestFormatSelectorBufferedUnavailable(t *testing.T) {
 	if s.state != sessionStateFormat {
 		t.Fatalf("state = %s, want the selector to stay open", s.state)
 	}
-	if !strings.Contains(s.status, "Буферный режим недоступен") {
+	if !strings.Contains(s.status, "Buffered mode unavailable") {
 		t.Fatalf("status = %q, want the honest unavailability note", s.status)
 	}
 }
@@ -264,8 +264,8 @@ func TestSessionBufferedWatchDownloadsPlaysCleans(t *testing.T) {
 		return nil
 	}
 
-	// ▶ Смотреть → format selector («Буферный») → merged stream pick →
-	// «⭐ Как видео».
+	// ▶ Watch → format selector («Buffered») → merged stream pick →
+	// «⭐ Same as video».
 	s.list.Jump(indexOfDayActionMenu(s, "watch"))
 	_, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	s.formatList.Jump(indexOfDayFormatList(s, "buffer"))
@@ -361,21 +361,21 @@ func statUntilGone(path string, deadline time.Duration) error {
 // byte path (percent + speed) and the HLS segment path.
 func TestFormatBufferedProgress(t *testing.T) {
 	byBytes := formatBufferedProgress(buffered.Progress{Done: 500 << 20, Total: 1000 << 20, SpeedBPS: 3 << 20})
-	if !strings.Contains(byBytes, "50%") || !strings.Contains(byBytes, "3.0 МБ/с") {
+	if !strings.Contains(byBytes, "50%") || !strings.Contains(byBytes, "3.0 MB/s") {
 		t.Fatalf("byte progress = %q, want 50%% + speed", byBytes)
 	}
 	bySegments := formatBufferedProgress(buffered.Progress{SegmentsDone: 5, SegmentsTotal: 20, SpeedBPS: 1 << 20})
-	if !strings.Contains(bySegments, "25%") || !strings.Contains(bySegments, "сегмент 5/20") {
+	if !strings.Contains(bySegments, "25%") || !strings.Contains(bySegments, "segment 5/20") {
 		t.Fatalf("segment progress = %q, want 25%% + segment counts", bySegments)
 	}
 	// Segment-based samples carry no byte counts, so the byte speed is
-	// unknown — a bogus «0.0 МБ/с» must be suppressed (PR43 review).
+	// unknown — a bogus «0.0 MB/s» must be suppressed (PR43 review).
 	bySegmentsZero := formatBufferedProgress(buffered.Progress{SegmentsDone: 1, SegmentsTotal: 20})
-	if strings.Contains(bySegmentsZero, "МБ/с") {
+	if strings.Contains(bySegmentsZero, "MB/s") {
 		t.Fatalf("segment progress with zero speed = %q, want no speed segment", bySegmentsZero)
 	}
 	unknown := formatBufferedProgress(buffered.Progress{Done: 512, SpeedBPS: 0})
-	if !strings.Contains(unknown, "512 Б") {
+	if !strings.Contains(unknown, "512 B") {
 		t.Fatalf("unknown-total progress = %q, want the byte count", unknown)
 	}
 }
@@ -400,7 +400,7 @@ func TestSessionBufferedCancelCleans(t *testing.T) {
 	if s.state != sessionStateMenu {
 		t.Fatalf("state = %s, want menu after cancel", s.state)
 	}
-	if !strings.Contains(s.status, "Буферизация отменена") {
+	if !strings.Contains(s.status, "Buffering cancelled") {
 		t.Fatalf("status = %q, want the cancel verdict", s.status)
 	}
 	// The download goroutine settles (cancelled) — its message is
@@ -476,7 +476,7 @@ func pickMergedStream(t *testing.T, s *sessionScreen, cmd tea.Cmd, idx int) {
 	}
 }
 
-// confirmAudioStar confirms the «⭐ Как видео» row and returns the
+// confirmAudioStar confirms the «⭐ Same as video» row and returns the
 // launched command (the buffered batch or the play cmd).
 func confirmAudioStar(t *testing.T, s *sessionScreen) tea.Cmd {
 	t.Helper()

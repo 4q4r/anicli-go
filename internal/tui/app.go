@@ -113,7 +113,7 @@ func safeCmd(origin string, cmd tea.Cmd) tea.Cmd {
 // panicBrief renders the one-line user-facing panic form: the message
 // travels to the screen, the full debug.Stack travels to the file log.
 func panicBrief(r any) string {
-	return fmt.Sprintf("panic: %v — детали в логе", r)
+	return i18n.T("app.panic_brief", i18n.Vals{"detail": fmt.Sprint(r)})
 }
 
 // errorScreenID is the identity of the recovery screen.
@@ -152,10 +152,10 @@ func (e *errorScreen) View() tea.View {
 	if e.brief != "" {
 		cause = e.brief
 	}
-	body := theme.Title.Render("⚠ Произошла ошибка") + "\n\n" +
+	body := theme.Title.Render(i18n.T("app.error_title")) + "\n\n" +
 		theme.Error.Render(cause) + "\n" +
-		theme.Dim.Render("источник: "+e.origin) + "\n\n" +
-		theme.StatusLine.Render("Нажмите любую клавишу, чтобы вернуться")
+		theme.Dim.Render(i18n.T("app.error_source", i18n.Vals{"origin": e.origin})) + "\n\n" +
+		theme.StatusLine.Render(i18n.T("app.error_back"))
 	return tea.NewView(body)
 }
 

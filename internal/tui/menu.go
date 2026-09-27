@@ -2,6 +2,8 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // defaultListHeight is the fallback body height before the first
@@ -146,19 +148,17 @@ func (m *MenuScreen) View() tea.View {
 	return tea.NewView(string(b))
 }
 
-// Root screen ids and labels (RU vocabulary from the Python menu;
-// PR30: no free-text search entry — search happens strictly through
-// the catalog «📜 Списки»; PR40: no torrents entry either — the
-// torrent search providers superseded the PR35 menu).
-const (
-	rootScreenID     = "root"
-	rootListsLabel   = "📜 Списки"
-	rootOfflineLabel = "📂 Скачанное"
-	rootDBLabel      = "🗄️ Управление БД"
-	rootHealthLabel  = "🛠 Проверка"
-	rootExitLabel    = "🚪 Выход"
-	rootBackHint     = "enter — выбрать · ctrl+c — выход"
-)
+// Root screen ids and labels (PR110: labels resolve through i18n at
+// construction time — package-level vars would freeze the pre-Init
+// default, so the former consts became functions).
+const rootScreenID = "root"
+
+func rootListsLabel() string   { return i18n.T("menu.lists") }
+func rootOfflineLabel() string { return i18n.T("menu.offline") }
+func rootDBLabel() string      { return i18n.T("menu.db") }
+func rootHealthLabel() string  { return i18n.T("menu.health") }
+func rootExitLabel() string    { return i18n.T("menu.exit") }
+func rootBackHint() string     { return i18n.T("menu.root_hint") }
 
 // NewRootScreen builds the root menu: five entries with «🚪 Выход» as
 // the pinned BOTTOM row and NO «Назад» entry (there is nothing above
@@ -167,17 +167,17 @@ const (
 func NewRootScreen(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
 		ID:      rootScreenID,
-		Title:   "AniCLI — аниме в терминале",
+		Title:   i18n.T("menu.app_title"),
 		Root:    true,
 		Notices: deps.StartupNotices,
 		Choices: []Choice{
-			{ID: "lists", Label: rootListsLabel},
-			{ID: "downloads", Label: rootOfflineLabel},
-			{ID: "db", Label: rootDBLabel},
-			{ID: "check", Label: rootHealthLabel},
-			{ID: "exit", Label: rootExitLabel},
+			{ID: "lists", Label: rootListsLabel()},
+			{ID: "downloads", Label: rootOfflineLabel()},
+			{ID: "db", Label: rootDBLabel()},
+			{ID: "check", Label: rootHealthLabel()},
+			{ID: "exit", Label: rootExitLabel()},
 		},
-		Status: rootBackHint,
+		Status: rootBackHint(),
 		OnPick: func(pick any) tea.Cmd {
 			switch pick {
 			case Back:

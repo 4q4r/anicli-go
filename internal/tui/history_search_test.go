@@ -55,7 +55,7 @@ func TestHistoryFilterCtrlRWithArmedFilterKeepsQuery(t *testing.T) {
 	sync := &fakeSyncFull{}
 	deps := &Deps{History: &fakeHistory{items: historyItems()}, SyncFull: sync.sync}
 	filter := newHistoryFilter(deps)
-	typeOn(filter, "все")
+	typeOn(filter, "all")
 	f := filter
 	if !f.filter.active() {
 		t.Fatal("the query must be armed before Ctrl+R")
@@ -65,16 +65,16 @@ func TestHistoryFilterCtrlRWithArmedFilterKeepsQuery(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Ctrl+R must start the refresh with a filter armed")
 	}
-	if f.filter.value() != "все" {
+	if f.filter.value() != "all" {
 		t.Fatalf("the refresh must not clear the query, got %q", f.filter.value())
 	}
-	if !strings.Contains(f.View().Content, "Поиск: все") {
+	if !strings.Contains(f.View().Content, "Search: all") {
 		t.Errorf("the filtered view must survive the refresh, got:\n%s", f.View().Content)
 	}
 }
 
 // TestHistoryFilterTypeToSearchLiveFilter: typing narrows the status
-// choices live with the «Поиск: …» line between the title and the list.
+// choices live with the «Search: …» line between the title and the list.
 func TestHistoryFilterTypeToSearchLiveFilter(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	filter := newHistoryFilter(deps)
@@ -82,17 +82,17 @@ func TestHistoryFilterTypeToSearchLiveFilter(t *testing.T) {
 	if got := filter.View().Content; strings.Contains(got, "Поиск:") {
 		t.Fatalf("no query — no search line, got:\n%s", got)
 	}
-	typeOn(filter, "все")
+	typeOn(filter, "all")
 
 	f := filter
 	items := f.list.Menu().Items
 	if len(items) != 2 {
 		t.Fatalf("items = %v, want the matched choice + the Back row", labelsOf(items))
 	}
-	if !strings.Contains(items[0].Label, "Все [3]") {
+	if !strings.Contains(items[0].Label, "All [3]") {
 		t.Errorf("label = %q, want the narrowed «Все» choice", items[0].Label)
 	}
-	if v := filter.View().Content; !strings.Contains(v, "Поиск: все") {
+	if v := filter.View().Content; !strings.Contains(v, "Search: all") {
 		t.Errorf("view missing the search line:\n%s", v)
 	}
 }
@@ -102,7 +102,7 @@ func TestHistoryFilterTypeToSearchLiveFilter(t *testing.T) {
 func TestHistoryFilterEscPhases(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	filter := newHistoryFilter(deps)
-	typeOn(filter, "все")
+	typeOn(filter, "all")
 	f := filter
 	if len(f.list.Menu().Items) != 2 {
 		t.Fatalf("armed items = %v, want the matched choice + the Back row", labelsOf(f.list.Menu().Items))
@@ -130,7 +130,7 @@ func TestHistoryFilterEscPhases(t *testing.T) {
 func TestHistoryFilterEnterPicksFilteredItem(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	filter := newHistoryFilter(deps)
-	typeOn(filter, "планах")
+	typeOn(filter, "Planned")
 	f := filter
 
 	if got := len(f.list.Menu().Items); got != 2 {
@@ -160,7 +160,7 @@ func TestHistoryFilterEnterPicksFilteredItem(t *testing.T) {
 }
 
 // TestHistoryListTypeToSearch: the titles list narrows live with the
-// «Поиск: …» line.
+// «Search: …» line.
 func TestHistoryListTypeToSearch(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := newHistoryList(deps, "", historyItems())
@@ -169,7 +169,7 @@ func TestHistoryListTypeToSearch(t *testing.T) {
 	if got := len(list.list.Menu().Items); got != 2 {
 		t.Fatalf("rows = %d (%v), want the matched record + Back", got, labelsOf(list.list.Menu().Items))
 	}
-	if v := list.View().Content; !strings.Contains(v, "Поиск: нару") {
+	if v := list.View().Content; !strings.Contains(v, "Search: нару") {
 		t.Errorf("view missing the search line:\n%s", v)
 	}
 }
@@ -251,14 +251,14 @@ func labelsOf(items []Choice) string {
 
 // TestHistoryFilterCursorStaysOnRecordWhileNarrowing (PR83 review):
 // index-based cursor preservation parks the cursor on the wrong row
-// (or «🔙 Назад») when a narrowing drops earlier choices. The cursor
+// (or «🔙 Back») when a narrowing drops earlier choices. The cursor
 // must stay parked on THE SAME choice — the statuses carry stable IDs.
 func TestHistoryFilterCursorStaysOnRecordWhileNarrowing(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	filter := newHistoryFilter(deps)
 	f := filter
 
-	// Park the cursor on «Брошено» (the last status choice).
+	// Park the cursor on «Dropped» (the last status choice).
 	for i, item := range f.list.Menu().Items {
 		if item.ID == "dropped" {
 			f.list.Jump(i)
@@ -269,10 +269,10 @@ func TestHistoryFilterCursorStaysOnRecordWhileNarrowing(t *testing.T) {
 		t.Fatalf("precondition: cursor on %q, want dropped", got)
 	}
 
-	typeOn(filter, "бро")
+	typeOn(filter, "drop")
 	got := f.list.Menu().Items[f.list.Cursor()]
-	if !strings.Contains(got.Label, "Брошено") {
-		t.Fatalf("cursor parked on %q after narrowing, want «Брошено»", got.Label)
+	if !strings.Contains(got.Label, "Dropped") {
+		t.Fatalf("cursor parked on %q after narrowing, want «Dropped»", got.Label)
 	}
 }
 

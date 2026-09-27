@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/download"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // Offline flow screen ids.
@@ -34,7 +36,7 @@ func NewOfflineTitles(deps *Deps) *MenuScreen {
 	}
 	emptyMsg := ""
 	if len(titles) == 0 {
-		emptyMsg = "Нет скачанных тайтлов"
+		emptyMsg = i18n.T("offline.no_titles")
 	}
 	choices := make([]Choice, 0, len(titles))
 	for i := range titles {
@@ -44,14 +46,16 @@ func NewOfflineTitles(deps *Deps) *MenuScreen {
 			episodes[e.EpisodeNum] = struct{}{}
 		}
 		choices = append(choices, Choice{
-			ID:    t.Name,
-			Label: "📁 " + t.Name + " [" + strconv.Itoa(len(episodes)) + " сер., " + strconv.Itoa(t.Snapshot.TotalDownloaded()) + " лок. вариантов]",
+			ID: t.Name,
+			Label: i18n.T("offline.title_entry", i18n.Vals{
+				"name": t.Name, "eps": strconv.Itoa(len(episodes)),
+				"variants": strconv.Itoa(t.Snapshot.TotalDownloaded())}),
 			Value: &titles[i],
 		})
 	}
 	return NewMenuScreen(MenuScreenConfig{
 		ID:       offlineTitlesID,
-		Title:    "📂 Скачанные тайтлы:",
+		Title:    i18n.T("offline.titles_title"),
 		EmptyMsg: emptyMsg,
 		Choices:  choices,
 		OnPick: func(pick any) tea.Cmd {
@@ -156,12 +160,12 @@ func (s *offlineSession) buildEpisodeList() {
 	for _, num := range eps {
 		choices = append(choices, Choice{
 			ID:    num,
-			Label: "Эп. " + num,
+			Label: i18n.T("offline.ep_label", i18n.Vals{"num": num}),
 			Value: num,
 		})
 	}
 	choices = filterChoices(choices, s.episodeFilter.value())
-	s.episodeList = NewPinList(NewMenu("Выберите серию:", "Локальные серии не найдены", choices...), defaultListHeight)
+	s.episodeList = NewPinList(NewMenu(i18n.T("common.pick_episode"), i18n.T("offline.no_local_episodes"), choices...), defaultListHeight)
 	restoreCursor(s.episodeList, prev)
 }
 
@@ -170,11 +174,11 @@ func (s *offlineSession) buildEpisodeList() {
 // the menu's exit path (PR24 bottom pin).
 func (s *offlineSession) buildActionMenu() {
 	s.list = NewPinList(NewMenu(s.header(), "", []Choice{
-		{ID: "watch", Label: "▶ Смотреть"},
-		{ID: "next", Label: "⏭ След."},
-		{ID: "prev", Label: "⏮ Пред."},
-		{ID: "jump", Label: "🔢 Перейти к серии"},
-		{ID: "variant", Label: "🎛 Сменить локальный поток"},
+		{ID: "watch", Label: i18n.T("menu.watch")},
+		{ID: "next", Label: i18n.T("common.next_ep")},
+		{ID: "prev", Label: i18n.T("common.prev_ep")},
+		{ID: "jump", Label: i18n.T("common.jump_ep")},
+		{ID: "variant", Label: i18n.T("offline.switch_variant")},
 	}...), defaultListHeight)
 }
 
@@ -185,7 +189,9 @@ func (s *offlineSession) header() string {
 	if best := ResolveVariant(variants, s.videoKey, s.audioKey, s.quality); best != nil {
 		vLabel = stripProviderTag(best.VideoKey) + " · " + strconv.Itoa(best.Quality) + "p"
 	}
-	return "📂 " + s.title.Name + " | Эп. " + s.current + " | Вариантов: " + strconv.Itoa(len(variants)) + " | " + vLabel
+	return i18n.T("offline.header", i18n.Vals{
+		"name": s.title.Name, "ep": s.current,
+		"count": strconv.Itoa(len(variants)), "variant": vLabel})
 }
 
 // Update implements Screen: settles playback messages (C3) and
@@ -196,9 +202,9 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s.playLocal(m)
 	case offlinePlayedMsg:
 		if m.err != nil {
-			s.setStatus("Ошибка воспроизведения: " + m.err.Error())
+			s.setStatus(i18n.T("common.play_failed", i18n.Vals{"err": m.err.Error()}))
 		} else {
-			s.setStatus("Воспроизведение завершено")
+			s.setStatus(i18n.T("common.play_done"))
 		}
 		return s, nil
 	case tea.KeyPressMsg:
@@ -306,7 +312,7 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 	}
 	s.videoKey, s.audioKey, s.quality = entry.VideoKey, entry.AudioKey, entry.Quality
 	s.buildActionMenu()
-	s.setStatus("Локальный поток переключён")
+	s.setStatus(i18n.T("offline.switched"))
 	return s, nil
 }
 
@@ -314,7 +320,7 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 // service (C3): [OFFLINE] title, no skip lookups ever.
 func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	if s.deps == nil || s.deps.Playback == nil {
-		s.setStatus("Плеер недоступен")
+		s.setStatus(i18n.T("offline.player_unavailable"))
 		return s, nil
 	}
 	deps := s.deps
@@ -369,7 +375,7 @@ func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 			Value: e,
 		})
 	}
-	s.variantList = NewPinList(NewMenu("Локальные варианты:", "Нет вариантов", choices...), defaultListHeight)
+	s.variantList = NewPinList(NewMenu(i18n.T("offline.variants_title"), i18n.T("offline.no_variants"), choices...), defaultListHeight)
 	s.stateVariant = true
 	s.bumpSurface() // menu → picker (PR64 #1)
 	return s, nil

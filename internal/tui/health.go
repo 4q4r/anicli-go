@@ -8,6 +8,8 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/an0nx/anicli-go/internal/i18n"
+
 	"github.com/an0nx/anicli-go/internal/providers"
 )
 
@@ -58,7 +60,7 @@ func NewHealthScreen(deps *Deps) *healthScreen {
 		pending:  make(map[string]bool, len(rows)),
 	}
 	for _, r := range rows {
-		h.status[r.ID] = "Проверка…"
+		h.status[r.ID] = i18n.T("health.checking")
 		h.pending[r.ID] = true
 	}
 	return h
@@ -111,7 +113,7 @@ func (h *healthScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // as ОТКЛЮЧЁН rows below the checked ones (PR24).
 func (h *healthScreen) View() tea.View {
 	var b strings.Builder
-	b.WriteString(theme.Title.Render("🛠 Проверка провайдеров"))
+	b.WriteString(theme.Title.Render(i18n.T("health.title")))
 	b.WriteString("\n\n")
 	for _, row := range h.rows {
 		state := h.status[row.ID]
@@ -122,20 +124,20 @@ func (h *healthScreen) View() tea.View {
 			style = theme.Accent
 		case state == "OK":
 			style = theme.Success
-		case state != "Проверка…":
+		case state != i18n.T("health.checking"):
 			style = theme.Error
 		}
 		fmt.Fprintf(&b, "  %-16s %-6s %s\n", row.Name, "Ping", style.Render(state))
 	}
 	for _, d := range h.disabled {
 		fmt.Fprintf(&b, "  %-16s %-6s %s\n", d.ID, "—",
-			theme.Warning.Render("ОТКЛЮЧЁН: "+d.Reason))
+			theme.Warning.Render(i18n.T("health.disabled", i18n.Vals{"reason": d.Reason})))
 	}
 	if len(h.rows)+len(h.disabled) == 0 {
-		b.WriteString(theme.Dim.Render("Нет зарегистрированных провайдеров"))
+		b.WriteString(theme.Dim.Render(i18n.T("health.no_providers")))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(theme.StatusLine.Render("enter/esc — назад"))
+	b.WriteString(theme.StatusLine.Render(i18n.T("common.back_enter_hint")))
 	return tea.NewView(b.String())
 }

@@ -132,7 +132,7 @@ func TestSearchFanOutProgress(t *testing.T) {
 		}
 	}
 	// The summary line: merged hits vs providers that found nothing.
-	if want := "Найдено: 2 · Без результатов/ошибок: 1"; !strings.Contains(v, want) {
+	if want := "Found: 2 · No results/errors: 1"; !strings.Contains(v, want) {
 		t.Fatalf("summary missing %q:\n%s", want, v)
 	}
 	// The settled checklist below the summary.
@@ -169,7 +169,7 @@ func TestSearchFanOutProgress(t *testing.T) {
 	// checklist row BELOW the table automatically — no enter press,
 	// no grouping.
 	v = progress.View().Content
-	if !strings.Contains(v, "Выберите провайдеры") {
+	if !strings.Contains(v, "Pick providers") {
 		t.Fatalf("settled fan-out must show the provider checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") || !strings.Contains(v, "AniLib — Наруто") {
@@ -197,7 +197,7 @@ func TestSearchProgressAssembly(t *testing.T) {
 
 	// Settled: the checklist appears WITHOUT enter.
 	v := progress.View().Content
-	if !strings.Contains(v, "Выберите провайдеры") {
+	if !strings.Contains(v, "Pick providers") {
 		t.Fatalf("settled progress must show the checklist, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") {
@@ -235,13 +235,13 @@ func TestSearchEmptyResults(t *testing.T) {
 	model = drainCmds(model)
 
 	sp := topOf(model).(*searchProgress)
-	if !contains(sp.View().Content, "Ничего не найдено") {
+	if !contains(sp.View().Content, "Nothing found") {
 		t.Fatalf("empty fan-out must show the empty state, got:\n%s", sp.View().Content)
 	}
 	// PR110 review: the all-failed/empty settle must render zero
 	// counts on BOTH summary halves — found 0, not-found 1 (the
 	// single provider returned nothing).
-	if !contains(sp.View().Content, "Найдено: 0 · Без результатов/ошибок: 1") {
+	if !contains(sp.View().Content, "Found: 0 · No results/errors: 1") {
 		t.Fatalf("empty fan-out must render zero counts, got:\n%s", sp.View().Content)
 	}
 	_, cmd := sp.Update(enter())
@@ -400,7 +400,7 @@ func TestSearchGroupLabelsCarryTorrentSuffix(t *testing.T) {
 
 // TestSearchFanOutLoadingViewMinimal (PR110, PR111): during the
 // fan-out the screen is ONE live-counter loading line (spinner +
-// «settled/total провайдеров, N результатов…») under the title — no
+// «settled/total providers, N results…») under the title — no
 // table, no checklist, no summary counts. The counters re-render per
 // settle so the line shows the fan-out is alive, not stuck.
 func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
@@ -414,14 +414,14 @@ func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
 	sp := NewSearchProgress(deps, "наруто")
 
 	v := sp.View().Content
-	if !strings.Contains(v, "0/3 провайдеров, 0 результатов…") {
+	if !strings.Contains(v, "0/3 providers, 0 results…") {
 		t.Fatalf("loading line missing the initial live counts:\n%s", v)
 	}
 	// The spinner frame still leads the line (animation unchanged).
 	if !strings.ContainsAny(v, "⣾⣽⣻⢿⡿⣟⣯⣷") {
 		t.Fatalf("loading line must still carry the spinner frame:\n%s", v)
 	}
-	for _, banned := range []string{"┌", "│", "└", "Выберите провайдеры", "Найдено:", "Ответившие"} {
+	for _, banned := range []string{"┌", "│", "└", "Pick providers", "Найдено:", "Ответившие"} {
 		if strings.Contains(v, banned) {
 			t.Fatalf("loading view must be minimal (%q found):\n%s", banned, v)
 		}
@@ -433,7 +433,7 @@ func TestSearchFanOutLoadingViewMinimal(t *testing.T) {
 	sp.Update(providerResultMsg{provider: fs.providers[0],
 		results: []contracts.SearchResult{{Title: "Наруто", URL: "u1", SourceID: "animego"}}})
 	v = sp.View().Content
-	if !strings.Contains(v, "1/3 провайдеров, 1 результатов…") {
+	if !strings.Contains(v, "1/3 providers, 1 results…") {
 		t.Fatalf("loading line must re-render with the settle counts:\n%s", v)
 	}
 	if strings.Contains(v, "Найдено:") || strings.Contains(v, "┌") {
@@ -456,13 +456,13 @@ func TestSearchFanOutSettleCountsTrackLive(t *testing.T) {
 
 	// First settle: 1/3, one result.
 	sp.Update(providerResultMsg{provider: fs.providers[0], results: result("animego")})
-	if v := sp.View().Content; !strings.Contains(v, "1/3 провайдеров, 1 результатов…") {
+	if v := sp.View().Content; !strings.Contains(v, "1/3 providers, 1 results…") {
 		t.Fatalf("first settle must update the live counters:\n%s", v)
 	}
 
 	// An errored provider counts as settled but adds no results.
 	sp.Update(providerResultMsg{provider: fs.providers[2], err: errors.New("timeout")})
-	if v := sp.View().Content; !strings.Contains(v, "2/3 провайдеров, 1 результатов…") {
+	if v := sp.View().Content; !strings.Contains(v, "2/3 providers, 1 results…") {
 		t.Fatalf("error settle must advance only the settled half:\n%s", v)
 	}
 
@@ -472,10 +472,10 @@ func TestSearchFanOutSettleCountsTrackLive(t *testing.T) {
 	if strings.Contains(v, "провайдеров,") {
 		t.Fatalf("the settled view must drop the loading line:\n%s", v)
 	}
-	if !strings.Contains(v, "Найдено: 2 · Без результатов/ошибок: 1") {
+	if !strings.Contains(v, "Found: 2 · No results/errors: 1") {
 		t.Fatalf("the last settle must transition to the summary:\n%s", v)
 	}
-	if !strings.Contains(v, "Выберите провайдеры") {
+	if !strings.Contains(v, "Pick providers") {
 		t.Fatalf("the last settle must show the checklist:\n%s", v)
 	}
 }

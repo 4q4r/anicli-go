@@ -1,7 +1,7 @@
 // PR99 owner defect: the boundary episode actions never hide. After
 // watching ALL episodes the session sits on the LAST one and
-// «⏭ След.» is still offered (its pick no-oped since PR63's clamp);
-// on ep 1 «⏮ Пред.» is offered the same way. The owner's intent:
+// «⏭ Next» is still offered (its pick no-oped since PR63's clamp);
+// on ep 1 «⏮ Prev» is offered the same way. The owner's intent:
 // the items must be EXCLUDED from the menu when no target episode
 // exists — first episode hides «Пред.», last hides «След.», a
 // single-episode title hides both.
@@ -41,15 +41,15 @@ func newBoundedSession(t *testing.T, n int) *sessionScreen {
 	return s
 }
 
-// TestPR99FirstEpisodeHidesPrev: on ep 1 «⏮ Пред.» must be EXCLUDED
-// from the action menu (hidden, not dimmed) while «⏭ След.» stays.
+// TestPR99FirstEpisodeHidesPrev: on ep 1 «⏮ Prev» must be EXCLUDED
+// from the action menu (hidden, not dimmed) while «⏭ Next» stays.
 func TestPR99FirstEpisodeHidesPrev(t *testing.T) {
 	s := newBoundedSession(t, 3) // currentIdx=0 → ep 1
 	v := s.View().Content
-	if contains(v, "⏮ Пред.") {
+	if contains(v, "⏮ Prev") {
 		t.Fatalf("«Пред.» must be hidden on the first episode:\n%s", v)
 	}
-	if !contains(v, "⏭ След.") {
+	if !contains(v, "⏭ Next") {
 		t.Fatalf("«След.» must stay on the first episode:\n%s", v)
 	}
 	if sessionActionIndex(s, "prev") != -1 {
@@ -57,16 +57,16 @@ func TestPR99FirstEpisodeHidesPrev(t *testing.T) {
 	}
 }
 
-// TestPR99LastEpisodeHidesNext: on the last episode «⏭ След.» must be
-// EXCLUDED from the action menu while «⏮ Пред.» stays.
+// TestPR99LastEpisodeHidesNext: on the last episode «⏭ Next» must be
+// EXCLUDED from the action menu while «⏮ Prev» stays.
 func TestPR99LastEpisodeHidesNext(t *testing.T) {
 	s := newBoundedSession(t, 3)
 	s.jumpTo("3")
 	v := s.View().Content
-	if contains(v, "⏭ След.") {
+	if contains(v, "⏭ Next") {
 		t.Fatalf("«След.» must be hidden on the last episode:\n%s", v)
 	}
-	if !contains(v, "⏮ Пред.") {
+	if !contains(v, "⏮ Prev") {
 		t.Fatalf("«Пред.» must stay on the last episode:\n%s", v)
 	}
 	if sessionActionIndex(s, "next") != -1 {
@@ -80,7 +80,7 @@ func TestPR99MiddleEpisodeKeepsBoth(t *testing.T) {
 	s := newBoundedSession(t, 3)
 	s.jumpTo("2")
 	v := s.View().Content
-	if !contains(v, "⏭ След.") || !contains(v, "⏮ Пред.") {
+	if !contains(v, "⏭ Next") || !contains(v, "⏮ Prev") {
 		t.Fatalf("both boundary actions must stay mid-list:\n%s", v)
 	}
 }
@@ -90,7 +90,7 @@ func TestPR99MiddleEpisodeKeepsBoth(t *testing.T) {
 func TestPR99SingleEpisodeHidesBoth(t *testing.T) {
 	s := newBoundedSession(t, 1)
 	v := s.View().Content
-	if contains(v, "⏭ След.") || contains(v, "⏮ Пред.") {
+	if contains(v, "⏭ Next") || contains(v, "⏮ Prev") {
 		t.Fatalf("single-episode title must hide both boundary actions:\n%s", v)
 	}
 	if sessionActionIndex(s, "next") != -1 || sessionActionIndex(s, "prev") != -1 {
@@ -193,10 +193,10 @@ func TestPR99Live13EpisodeRenders(t *testing.T) {
 		t.Run("ep "+tc.ep, func(t *testing.T) {
 			s.jumpTo(tc.ep)
 			v := s.View().Content
-			if tc.noNext && contains(v, "⏭ След.") {
+			if tc.noNext && contains(v, "⏭ Next") {
 				t.Fatalf("ep %s: «След.» must be hidden:\n%s", tc.ep, v)
 			}
-			if tc.noPrev && contains(v, "⏮ Пред.") {
+			if tc.noPrev && contains(v, "⏮ Prev") {
 				t.Fatalf("ep %s: «Пред.» must be hidden:\n%s", tc.ep, v)
 			}
 			t.Logf("PR99 render @ ep %s:\n%s", tc.ep, v)

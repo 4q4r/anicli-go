@@ -91,19 +91,19 @@ func interpolate(s string, vals ...Vals) string {
 			b.WriteString(s)
 			return b.String()
 		}
-		close_ := strings.IndexByte(s[open:], '}')
-		if close_ < 0 {
+		end := strings.IndexByte(s[open:], '}')
+		if end < 0 {
 			b.WriteString(s)
 			return b.String()
 		}
-		close_ += open
+		end += open
 		b.WriteString(s[:open])
-		if v, ok := merged[s[open+1 : close_]]; ok {
+		if v, ok := merged[s[open+1:end]]; ok {
 			b.WriteString(v)
 		} else {
-			b.WriteString(s[open : close_+1])
+			b.WriteString(s[open : end+1])
 		}
-		s = s[close_+1:]
+		s = s[end+1:]
 	}
 }
 
@@ -143,6 +143,7 @@ func userTable(userDir, name string) func() (fs.File, error) {
 		return nil
 	}
 	path := filepath.Join(userDir, name)
+	//nolint:gosec // reading the user's own locale table is the feature
 	return func() (fs.File, error) { return os.Open(path) }
 }
 

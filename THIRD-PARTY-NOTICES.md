@@ -24,6 +24,7 @@ that clause requires notice reproduction in binary distributions.
 | `github.com/chromedp/chromedp` | v0.16.0 | MIT |
 | `github.com/go-chi/chi/v5` | v5.3.2 | MIT |
 | `github.com/jmespath/go-jmespath` | v0.4.0 | Apache-2.0 |
+| `github.com/yuin/gopher-lua` | v1.1.2 | MIT |
 | `github.com/anacrolix/torrent` | v1.61.0 | **MPL-2.0** (note below) |
 | `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause (Go Authors) |

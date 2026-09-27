@@ -13,8 +13,8 @@ import (
 func TestToLuaValuePrimitives(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	tests := []struct {
 		name string
@@ -34,7 +34,7 @@ func TestToLuaValuePrimitives(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ToLuaValue(L, tt.in)
+			got := ToLuaValue(ls, tt.in)
 			if got.Type() != tt.want.Type() || got.String() != tt.want.String() {
 				t.Fatalf("ToLuaValue(%v) = %v (%s), want %v (%s)",
 					tt.in, got, got.Type().String(), tt.want, tt.want.Type().String())
@@ -46,10 +46,10 @@ func TestToLuaValuePrimitives(t *testing.T) {
 func TestToLuaValueContainers(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
-	arr := ToLuaValue(L, []any{"a", "b"})
+	arr := ToLuaValue(ls, []any{"a", "b"})
 	tbl, ok := arr.(*lua.LTable)
 	if !ok {
 		t.Fatalf("[]any converted to %s, want table", arr.Type().String())
@@ -61,7 +61,7 @@ func TestToLuaValueContainers(t *testing.T) {
 		t.Fatalf("array elements = [%s, %s], want [a, b]", tbl.RawGetInt(1), tbl.RawGetInt(2))
 	}
 
-	m := ToLuaValue(L, map[string]any{"k": "v", "n": 3.0})
+	m := ToLuaValue(ls, map[string]any{"k": "v", "n": 3.0})
 	mt, ok := m.(*lua.LTable)
 	if !ok {
 		t.Fatalf("map converted to %s, want table", m.Type().String())
@@ -74,7 +74,7 @@ func TestToLuaValueContainers(t *testing.T) {
 	}
 
 	// Nested containers must recurse.
-	deep := ToLuaValue(L, map[string]any{"list": []any{map[string]any{"x": true}}})
+	deep := ToLuaValue(ls, map[string]any{"list": []any{map[string]any{"x": true}}})
 	dt := deep.(*lua.LTable)
 	list := dt.RawGetH(lua.LString("list")).(*lua.LTable)
 	inner := list.RawGetInt(1).(*lua.LTable)
@@ -88,8 +88,8 @@ func TestToLuaValueContainers(t *testing.T) {
 func TestToGoValuePrimitives(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	tests := []struct {
 		name string
@@ -126,10 +126,10 @@ func TestToGoValuePrimitives(t *testing.T) {
 func TestToGoValueArrayTable(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetInt(1, lua.LString("x"))
 	tbl.RawSetInt(2, lua.LString("y"))
 
@@ -149,10 +149,10 @@ func TestToGoValueArrayTable(t *testing.T) {
 func TestToGoValueMapTable(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetH(lua.LString("a"), lua.LNumber(1))
 	tbl.RawSetH(lua.LString("b"), lua.LTrue)
 
@@ -172,10 +172,10 @@ func TestToGoValueMapTable(t *testing.T) {
 func TestToGoValueCyclicTable(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetH(lua.LString("self"), tbl) // cycle
 
 	_, err := ToGoValue(tbl)
@@ -190,14 +190,14 @@ func TestToGoValueCyclicTable(t *testing.T) {
 func TestToGoValueDepthLimit(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	// Build a nesting chain deeper than maxConvertDepth.
-	root := L.NewTable()
+	root := ls.NewTable()
 	cur := root
 	for range maxConvertDepth + 4 {
-		next := L.NewTable()
+		next := ls.NewTable()
 		cur.RawSetH(lua.LString("d"), next)
 		cur = next
 	}
@@ -210,10 +210,10 @@ func TestToGoValueDepthLimit(t *testing.T) {
 func TestToGoValueUnsupportedType(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
-	fn := L.NewFunction(func(*lua.LState) int { return 0 })
+	fn := ls.NewFunction(func(*lua.LState) int { return 0 })
 	if _, err := ToGoValue(fn); err == nil {
 		t.Fatal("function must not convert")
 	}
@@ -224,19 +224,19 @@ func TestToGoValueUnsupportedType(t *testing.T) {
 func TestJSONValueRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	src := `return {a = 1, b = "s", c = {true, 2.5}, d = {nested = "n"}}`
-	fn, err := L.LoadString(src)
+	fn, err := ls.LoadString(src)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if err := L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}); err != nil {
+	if err := ls.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}); err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	tbl := L.Get(-1)
-	L.Pop(1)
+	tbl := ls.Get(-1)
+	ls.Pop(1)
 
 	encoded, err := EncodeJSON(tbl)
 	if err != nil {
@@ -259,12 +259,12 @@ func TestJSONValueRoundTrip(t *testing.T) {
 func TestValidatorRequiredString(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	v := newValidator("mysite", "search")
 
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetH(lua.LString("title"), lua.LString("Bebop"))
 	got, err := v.str(tbl, "title", "results[1]")
 	if err != nil || got != "Bebop" {
@@ -272,14 +272,14 @@ func TestValidatorRequiredString(t *testing.T) {
 	}
 
 	// Missing field.
-	if _, err := v.str(L.NewTable(), "title", "results[2]"); err == nil {
+	if _, err := v.str(ls.NewTable(), "title", "results[2]"); err == nil {
 		t.Fatal("missing required field must error")
 	} else if want := `provider "mysite" search: results[2].title: expected string, got nil`; err.Error() != want {
 		t.Fatalf("missing field error = %q, want %q", err, want)
 	}
 
 	// Wrong type.
-	bad := L.NewTable()
+	bad := ls.NewTable()
 	bad.RawSetH(lua.LString("title"), lua.LNumber(7))
 	if _, err := v.str(bad, "title", "results[3]"); err == nil {
 		t.Fatal("number title must error")
@@ -291,32 +291,32 @@ func TestValidatorRequiredString(t *testing.T) {
 func TestValidatorNumStr(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	v := newValidator("mysite", "episodes")
 
 	// String passes through.
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetH(lua.LString("num"), lua.LString("OVA"))
 	if got, err := v.numStr(tbl, "num", "eps[1]"); err != nil || got != "OVA" {
 		t.Fatalf("numStr(string) = %q, %v; want OVA, nil", got, err)
 	}
 
 	// Integer number coerces Lua-style: 1 -> "1", 1.5 -> "1.5".
-	num := L.NewTable()
+	num := ls.NewTable()
 	num.RawSetH(lua.LString("num"), lua.LNumber(1))
 	if got, err := v.numStr(num, "num", "eps[2]"); err != nil || got != "1" {
 		t.Fatalf("numStr(1) = %q, %v; want 1, nil", got, err)
 	}
-	fnum := L.NewTable()
+	fnum := ls.NewTable()
 	fnum.RawSetH(lua.LString("num"), lua.LNumber(1.5))
 	if got, err := v.numStr(fnum, "num", "eps[3]"); err != nil || got != "1.5" {
 		t.Fatalf("numStr(1.5) = %q, %v; want 1.5, nil", got, err)
 	}
 
 	// Other types error.
-	bad := L.NewTable()
+	bad := ls.NewTable()
 	bad.RawSetH(lua.LString("num"), lua.LTrue)
 	want := `provider "mysite" episodes: eps[4].num: expected string or number, got boolean`
 	if _, err := v.numStr(bad, "num", "eps[4]"); err == nil || err.Error() != want {
@@ -327,25 +327,25 @@ func TestValidatorNumStr(t *testing.T) {
 func TestValidatorOptionalString(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	v := newValidator("mysite", "streams")
 
 	// Missing -> ("", false, nil).
-	if got, ok, err := v.optStr(L.NewTable(), "quality", "links[1]"); got != "" || ok || err != nil {
+	if got, ok, err := v.optStr(ls.NewTable(), "quality", "links[1]"); got != "" || ok || err != nil {
 		t.Fatalf("optStr(missing) = %q, %v, %v; want empty, false, nil", got, ok, err)
 	}
 
 	// Present string -> (value, true, nil).
-	tbl := L.NewTable()
+	tbl := ls.NewTable()
 	tbl.RawSetH(lua.LString("quality"), lua.LString("1080"))
 	if got, ok, err := v.optStr(tbl, "quality", "links[1]"); got != "1080" || !ok || err != nil {
 		t.Fatalf("optStr(1080) = %q, %v, %v; want 1080, true, nil", got, ok, err)
 	}
 
 	// Wrong type -> precise error.
-	bad := L.NewTable()
+	bad := ls.NewTable()
 	bad.RawSetH(lua.LString("quality"), lua.LTrue)
 	want := `provider "mysite" streams: links[1].quality: expected string, got boolean`
 	if _, _, err := v.optStr(bad, "quality", "links[1]"); err == nil || err.Error() != want {
@@ -356,13 +356,13 @@ func TestValidatorOptionalString(t *testing.T) {
 func TestValidatorStrArray(t *testing.T) {
 	t.Parallel()
 
-	L := lua.NewState()
-	defer L.Close()
+	ls := lua.NewState()
+	defer ls.Close()
 
 	v := newValidator("mysite", "episodes")
 
-	tbl := L.NewTable()
-	urls := L.NewTable()
+	tbl := ls.NewTable()
+	urls := ls.NewTable()
 	urls.RawSetInt(1, lua.LString("https://e/1"))
 	urls.RawSetInt(2, lua.LString("https://e/2"))
 	tbl.RawSetH(lua.LString("embeds"), urls)
@@ -376,10 +376,10 @@ func TestValidatorStrArray(t *testing.T) {
 	}
 
 	// Non-string element names the index.
-	badURLs := L.NewTable()
+	badURLs := ls.NewTable()
 	badURLs.RawSetInt(1, lua.LString("ok"))
 	badURLs.RawSetInt(2, lua.LNumber(9))
-	bad := L.NewTable()
+	bad := ls.NewTable()
 	bad.RawSetH(lua.LString("embeds"), badURLs)
 	want := `provider "mysite" episodes: eps[2].embeds[2]: expected string, got number`
 	if _, err := v.strArray(bad, "embeds", "eps[2]"); err == nil || err.Error() != want {

@@ -16,15 +16,15 @@ func eval(t *testing.T, e *Engine, ctx context.Context, src string) error {
 
 	sctx, cancel := e.stateCtx(ctx)
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
-	fn, err := L.Load(strings.NewReader(src), "test-chunk")
+	fn, err := ls.Load(strings.NewReader(src), "test-chunk")
 	if err != nil {
 		return err
 	}
-	L.Push(fn)
-	return L.PCall(0, lua.MultRet, nil)
+	ls.Push(fn)
+	return ls.PCall(0, lua.MultRet, nil)
 }
 
 // evalRun runs src and returns the first return value.
@@ -33,19 +33,19 @@ func evalRun(t *testing.T, e *Engine, ctx context.Context, src string) lua.LValu
 
 	sctx, cancel := e.stateCtx(ctx)
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
-	fn, err := L.Load(strings.NewReader(src), "test-chunk")
+	fn, err := ls.Load(strings.NewReader(src), "test-chunk")
 	if err != nil {
 		t.Fatalf("load %q: %v", src, err)
 	}
-	L.Push(fn)
-	if err := L.PCall(0, 1, nil); err != nil {
+	ls.Push(fn)
+	if err := ls.PCall(0, 1, nil); err != nil {
 		t.Fatalf("run %q: %v", src, err)
 	}
-	v := L.Get(-1)
-	L.Pop(1)
+	v := ls.Get(-1)
+	ls.Pop(1)
 	return v
 }
 
@@ -55,16 +55,16 @@ func TestSandboxForbiddenLibrariesAbsent(t *testing.T) {
 	e := NewEngine(DefaultConfig(), mustLogger(t))
 	sctx, cancel := e.stateCtx(context.Background())
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
 	// os, io, debug are never opened — absent as globals AND from
 	// package.loaded (reopening them via require must be impossible).
 	for _, name := range []string{"os", "io", "debug"} {
-		if g := L.GetGlobal(name); g.Type() != lua.LTNil {
+		if g := ls.GetGlobal(name); g.Type() != lua.LTNil {
 			t.Fatalf("global %s = %s, want nil", name, g.Type().String())
 		}
-		if loaded := L.GetField(L.GetField(L.Get(lua.RegistryIndex), "_LOADED"), name); loaded.Type() != lua.LTNil {
+		if loaded := ls.GetField(ls.GetField(ls.Get(lua.RegistryIndex), "_LOADED"), name); loaded.Type() != lua.LTNil {
 			t.Fatalf("package.loaded[%s] = %s, want nil", name, loaded.Type().String())
 		}
 	}
@@ -76,8 +76,8 @@ func TestSandboxWhitelistedLibrariesPresent(t *testing.T) {
 	e := NewEngine(DefaultConfig(), mustLogger(t))
 	sctx, cancel := e.stateCtx(context.Background())
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
 	// The whitelist: base essentials, table, string (minus dump), math,
 	// coroutine.
@@ -102,14 +102,14 @@ func TestSandboxBaseStripped(t *testing.T) {
 	e := NewEngine(DefaultConfig(), mustLogger(t))
 	sctx, cancel := e.stateCtx(context.Background())
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
 	// Every escape hatch in the strip list must be nil. load/loadstring
 	// are the bytecode+chunk loaders, dofile/loadfile the direct file
 	// readers, getfenv/setfenv the environment breakout pair.
 	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv"} {
-		if g := L.GetGlobal(name); g.Type() != lua.LTNil {
+		if g := ls.GetGlobal(name); g.Type() != lua.LTNil {
 			t.Fatalf("global %s = %s, want nil (stripped)", name, g.Type().String())
 		}
 	}
@@ -241,31 +241,31 @@ func TestSandboxPackagePreloadOnly(t *testing.T) {
 	e := NewEngine(DefaultConfig(), mustLogger(t))
 	sctx, cancel := e.stateCtx(context.Background())
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
+	ls := e.NewState(sctx)
+	defer ls.Close()
 
 	// Preload a module the way the SDK does; require must find it.
-	L.PreloadModule("testmod", func(L *lua.LState) int {
-		tbl := L.NewTable()
+	ls.PreloadModule("testmod", func(ls *lua.LState) int {
+		tbl := ls.NewTable()
 		tbl.RawSetH(lua.LString("answer"), lua.LNumber(42))
-		L.Push(tbl)
+		ls.Push(tbl)
 		return 1
 	})
 	// Preload + require must run on the SAME state: fresh states are
 	// isolated by design, so a preload never leaks across invocations.
-	fn, err := L.Load(strings.NewReader(`return require("testmod").answer`), "preload-chunk")
+	fn, err := ls.Load(strings.NewReader(`return require("testmod").answer`), "preload-chunk")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	L.Push(fn)
-	if err := L.PCall(0, 1, nil); err != nil {
+	ls.Push(fn)
+	if err := ls.PCall(0, 1, nil); err != nil {
 		t.Fatalf("preload require: %v", err)
 	}
-	if v := L.Get(-1); v.String() != "42" {
-		L.Pop(1)
+	if v := ls.Get(-1); v.String() != "42" {
+		ls.Pop(1)
 		t.Fatalf("preload require = %s, want 42", v)
 	}
-	L.Pop(1)
+	ls.Pop(1)
 
 	// package.path must be empty and the file searcher gone: require
 	// can never touch the filesystem.

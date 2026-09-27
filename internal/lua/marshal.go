@@ -17,7 +17,7 @@ const maxConvertDepth = 32
 // (1..n) and map[string]any a string-keyed table. Values arriving from
 // encoding/json (map[string]any / []any / json.Number) therefore pass
 // through losslessly.
-func ToLuaValue(L *lua.LState, v any) lua.LValue {
+func ToLuaValue(ls *lua.LState, v any) lua.LValue {
 	switch val := v.(type) {
 	case nil:
 		return lua.LNil
@@ -37,15 +37,15 @@ func ToLuaValue(L *lua.LState, v any) lua.LValue {
 		}
 		return lua.LString(val.String())
 	case []any:
-		t := L.NewTable()
+		t := ls.NewTable()
 		for i, item := range val {
-			t.RawSetInt(i+1, ToLuaValue(L, item))
+			t.RawSetInt(i+1, ToLuaValue(ls, item))
 		}
 		return t
 	case map[string]any:
-		t := L.NewTable()
+		t := ls.NewTable()
 		for k, item := range val {
-			t.RawSetString(k, ToLuaValue(L, item))
+			t.RawSetString(k, ToLuaValue(ls, item))
 		}
 		return t
 	default:
@@ -153,12 +153,21 @@ func (v *validator) errf(format string, args ...any) error {
 		fmt.Sprintf(format, args...))
 }
 
+// joinPath renders a field reference: "results[1].title" — the field
+// alone at the top level.
+func joinPath(path, field string) string {
+	if path == "" {
+		return field
+	}
+	return path + "." + field
+}
+
 // str reads a required string field.
 func (v *validator) str(t *lua.LTable, field, path string) (string, error) {
 	val := t.RawGetH(lua.LString(field))
 	s, ok := val.(lua.LString)
 	if !ok {
-		return "", v.errf("%s.%s: expected string, got %s", path, field, val.Type().String())
+		return "", v.errf("%s: expected string, got %s", joinPath(path, field), val.Type().String())
 	}
 	return string(s), nil
 }
@@ -173,7 +182,7 @@ func (v *validator) numStr(t *lua.LTable, field, path string) (string, error) {
 	case lua.LNumber:
 		return strconv.FormatFloat(float64(lv), 'f', -1, 64), nil
 	default:
-		return "", v.errf("%s.%s: expected string or number, got %s", path, field, val.Type().String())
+		return "", v.errf("%s: expected string or number, got %s", joinPath(path, field), val.Type().String())
 	}
 }
 
@@ -185,7 +194,7 @@ func (v *validator) optStr(t *lua.LTable, field, path string) (string, bool, err
 	}
 	s, ok := val.(lua.LString)
 	if !ok {
-		return "", false, v.errf("%s.%s: expected string, got %s", path, field, val.Type().String())
+		return "", false, v.errf("%s: expected string, got %s", joinPath(path, field), val.Type().String())
 	}
 	return string(s), true, nil
 }
@@ -196,7 +205,7 @@ func (v *validator) strArray(t *lua.LTable, field, path string) ([]string, error
 	arr := t.RawGetH(lua.LString(field))
 	tbl, ok := arr.(*lua.LTable)
 	if !ok {
-		return nil, v.errf("%s.%s: expected table, got %s", path, field, arr.Type().String())
+		return nil, v.errf("%s: expected table, got %s", joinPath(path, field), arr.Type().String())
 	}
 	n := tbl.Len()
 	out := make([]string, 0, n)
@@ -204,7 +213,7 @@ func (v *validator) strArray(t *lua.LTable, field, path string) ([]string, error
 		el := tbl.RawGetInt(i)
 		s, ok := el.(lua.LString)
 		if !ok {
-			return nil, v.errf("%s.%s[%d]: expected string, got %s", path, field, i, el.Type().String())
+			return nil, v.errf("%s[%d]: expected string, got %s", joinPath(path, field), i, el.Type().String())
 		}
 		out = append(out, string(s))
 	}
@@ -216,7 +225,7 @@ func (v *validator) table(t *lua.LTable, field, path string) (*lua.LTable, error
 	val := t.RawGetH(lua.LString(field))
 	tbl, ok := val.(*lua.LTable)
 	if !ok {
-		return nil, v.errf("%s.%s: expected table, got %s", path, field, val.Type().String())
+		return nil, v.errf("%s: expected table, got %s", joinPath(path, field), val.Type().String())
 	}
 	return tbl, nil
 }
@@ -232,14 +241,4 @@ func (v *validator) optTable(t *lua.LTable, field, path string) (*lua.LTable, bo
 		return nil, false, v.errf("%s.%s: expected table, got %s", path, field, val.Type().String())
 	}
 	return tbl, true, nil
-}
-
-// fn reads a required function field (the provider method contract).
-func (v *validator) fn(t *lua.LTable, field, path string) (*lua.LFunction, error) {
-	val := t.RawGetH(lua.LString(field))
-	f, ok := val.(*lua.LFunction)
-	if !ok {
-		return nil, v.errf("%s.%s: expected function, got %s", path, field, val.Type().String())
-	}
-	return f, nil
 }

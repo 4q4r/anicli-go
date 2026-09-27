@@ -17,6 +17,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.41.0
@@ -121,7 +122,6 @@ require (
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/wlynxg/anet v0.0.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/gopher-lua v1.1.2 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.38.0 // indirect

@@ -30,12 +30,12 @@ func evalSDK(t *testing.T, e *Engine, src string) (string, error) {
 	t.Helper()
 	sctx, cancel := e.stateCtx(context.Background())
 	defer cancel()
-	L := e.NewState(sctx)
-	defer L.Close()
-	if err := L.DoString(src); err != nil {
+	ls := e.NewState(sctx)
+	defer ls.Close()
+	if err := ls.DoString(src); err != nil {
 		return "", err
 	}
-	return L.Get(-1).String(), nil
+	return ls.Get(-1).String(), nil
 }
 
 func TestSDKHTTPGet(t *testing.T) {
@@ -43,7 +43,7 @@ func TestSDKHTTPGet(t *testing.T) {
 	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotMethod = r.URL.Path, r.Method
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "hello lua")
+		_, _ = fmt.Fprint(w, "hello lua")
 	}))
 
 	got, err := evalSDK(t, e, fmt.Sprintf(`
@@ -63,7 +63,7 @@ func TestSDKHTTPGet(t *testing.T) {
 
 func TestSDKHTTPGetJSON(t *testing.T) {
 	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"a": 1, "list": ["x"]}`)
+		_, _ = fmt.Fprint(w, `{"a": 1, "list": ["x"]}`)
 	}))
 	got, err := evalSDK(t, e, fmt.Sprintf(`
 		local t = anicli.http.get_json(%q)
@@ -85,7 +85,7 @@ func TestSDKHTTPGetJSON(t *testing.T) {
 
 func TestSDKHTTPGetJSONInvalid(t *testing.T) {
 	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{not json`)
+		_, _ = fmt.Fprint(w, `{not json`)
 	}))
 	_, err := evalSDK(t, e, fmt.Sprintf(`return anicli.http.get_json(%q)`, srv.URL))
 	if err == nil || !strings.Contains(err.Error(), "json") {
@@ -102,7 +102,7 @@ func TestSDKHTTPPost(t *testing.T) {
 		n, _ := r.Body.Read(buf)
 		gotBody = string(buf[:n])
 		w.Header().Set("X-Answer", "42")
-		fmt.Fprint(w, "posted")
+		_, _ = fmt.Fprint(w, "posted")
 	}))
 
 	got, err := evalSDK(t, e, fmt.Sprintf(`
@@ -124,7 +124,7 @@ func TestSDKHTTPPost(t *testing.T) {
 // reach a script (issue #521 mitigation).
 func TestSDKHTTPBodyCap(t *testing.T) {
 	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(bytes.Repeat([]byte("x"), 4096))
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 4096))
 	}))
 	_, err := evalSDK(t, e, fmt.Sprintf(`return anicli.http.get(%q).body`, srv.URL))
 	if err == nil || !strings.Contains(err.Error(), "cap") {
@@ -137,7 +137,7 @@ func TestSDKHTTPBodyCap(t *testing.T) {
 func TestSDKHTTPDeadlineCarried(t *testing.T) {
 	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
-		fmt.Fprint(w, "late")
+		_, _ = fmt.Fprint(w, "late")
 	}))
 	e.cfg.Timeout = 100 * time.Millisecond
 	start := time.Now()

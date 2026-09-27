@@ -23,8 +23,8 @@ func TestHealthScreenShowsDisabledProviders(t *testing.T) {
 	if !strings.Contains(view, "kodik") {
 		t.Fatalf("disabled provider must be listed, got:\n%s", view)
 	}
-	if !strings.Contains(view, "ОТКЛЮЧЁН") {
-		t.Fatalf("disabled provider must be marked ОТКЛЮЧЁН, got:\n%s", view)
+	if !strings.Contains(view, "DISABLED") {
+		t.Fatalf("disabled provider must be marked DISABLED, got:\n%s", view)
 	}
 	if !strings.Contains(view, "не задан токен") {
 		t.Fatalf("the disabled row must carry the reason, got:\n%s", view)

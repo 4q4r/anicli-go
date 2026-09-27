@@ -21,6 +21,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/player"
@@ -336,14 +337,14 @@ func formatSkipClock(sec float64) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
-// formatSkipNote renders the found ranges ("скипы: op 0:00–1:30 · …").
+// formatSkipNote renders the found ranges ("skips: op 0:00–1:30 · …").
 func formatSkipNote(b skip.Bundle) string {
 	parts := make([]string, 0, len(b.Intervals))
 	for _, iv := range b.Intervals {
 		parts = append(parts, fmt.Sprintf("%s %s–%s",
 			iv.SkipType, formatSkipClock(iv.StartTime), formatSkipClock(iv.EndTime)))
 	}
-	return "скипы: " + strings.Join(parts, " · ")
+	return i18n.T("real.skips_note", i18n.Vals{"ranges": strings.Join(parts, " · ")})
 }
 
 // ResolveSkips resolves the episode's skip chapters and reports the
@@ -362,17 +363,17 @@ func (s *realPlayback) ResolveSkips(ctx context.Context, shikimoriID int64, epis
 	})
 	if err != nil {
 		log.Warn("tui: skips: lookup failed", "episode", episode, "error", err)
-		return "", func() {}, "скипы: недоступны", err
+		return "", func() {}, i18n.T("real.skips_unavailable"), err
 	}
 	if bundle.Empty() {
 		log.Info("tui: skips: no entry found",
 			"episode", episode, "details", bundle.Details)
-		return "", func() {}, "скипы: не найдены", nil
+		return "", func() {}, i18n.T("real.skips_not_found"), nil
 	}
 	path, werr := bundle.WriteChaptersFile(os.TempDir())
 	if werr != nil {
 		log.Warn("tui: skips: chapters file write failed", "episode", episode, "error", werr)
-		return "", func() {}, "скипы: недоступны", werr
+		return "", func() {}, i18n.T("real.skips_unavailable"), werr
 	}
 	note := formatSkipNote(bundle)
 	log.Info("tui: skips: resolved",
@@ -712,7 +713,7 @@ func (s *realDownload) ActiveBanner() string {
 	if len(active) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("⬇ Фоновых загрузок: %d", len(active))
+	return i18n.T("real.bg_downloads", i18n.Vals{"count": strconv.Itoa(len(active))})
 }
 
 // recall fetches the resolve parts of one manager task.
@@ -830,7 +831,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		Audio:        audio,
 		ChaptersFile: chaptersFile,
 		OutputPath:   outPath,
-		Title:        fmt.Sprintf("%s — серия %s", task.AnimeTitle, task.Episode.Num),
+		Title:        i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
 	}
 	if err := c.dl.Download(ctx, input); err != nil {
 		return "", err

@@ -2,7 +2,7 @@
 
 package tui
 
-// LIVE probes for PR63 (local progress at launch, «⏭ След.»
+// LIVE probes for PR63 (local progress at launch, «⏭ Next»
 // auto-launch). Excluded from the hermetic default suite by the `live`
 // build tag. Run manually:
 //
@@ -133,7 +133,7 @@ func liveWatchToLaunch(t *testing.T, s *sessionScreen, format string) tea.Cmd {
 	ss.qualityList.Jump(0)
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	ss.dubList.Jump(0) // «⭐ Как видео»
+	ss.dubList.Jump(0) // «⭐ Same as video»
 	_, launch := ss.Update(enter())
 	if launch == nil {
 		t.Fatalf("the audio pick must launch playback")
@@ -167,7 +167,7 @@ func libraryView(t *testing.T, s *sessionScreen) string {
 
 // TestLivePR63LaunchSaveAndNextAutoLaunch: watching an episode records
 // the local row AT LAUNCH (before the player even runs), the library
-// surface renders it, and «⏭ След.» auto-launches the next episode
+// surface renders it, and «⏭ Next» auto-launches the next episode
 // over the remembered dubs.
 func TestLivePR63LaunchSaveAndNextAutoLaunch(t *testing.T) {
 	_, deps := liveDeps(t)
@@ -205,7 +205,7 @@ func TestLivePR63LaunchSaveAndNextAutoLaunch(t *testing.T) {
 	}
 	// The runtime delivers every settled message; without the
 	// playedMsg the screen stays in sessionStatePlaying (which eats
-	// keys) and «⏭ След.» never reaches the menu.
+	// keys) and «⏭ Next» never reaches the menu.
 	upd, _ := s.Update(*played)
 	s = upd.(*sessionScreen)
 
@@ -216,18 +216,18 @@ func TestLivePR63LaunchSaveAndNextAutoLaunch(t *testing.T) {
 
 	// The library surface reads the saved row.
 	view := libraryView(t, s)
-	want := fmt.Sprintf("Серия %s/13", row.CurrentEpisode)
+	want := fmt.Sprintf("Ep. %s/13", row.CurrentEpisode)
 	if !contains(view, want) {
 		t.Fatalf("library must render %q:\n%s", want, view)
 	}
 	t.Logf("LIBRARY ROW RENDERED: %q", firstListLine(view))
 
-	// --- Defect 2: «⏭ След.» auto-launches the next episode.
+	// --- Defect 2: «⏭ Next» auto-launches the next episode.
 	dub := s.videoDub
 	s.list.Jump(sessionActionIndex(s, "next"))
 	next, cmd := s.Update(enter())
 	ss := next.(*sessionScreen)
-	t.Logf("after «⏭ След.»: ep=%q state=%v status=%q", ss.currentEpisode(), ss.state, ss.status)
+	t.Logf("after «⏭ Next»: ep=%q state=%v status=%q", ss.currentEpisode(), ss.state, ss.status)
 	if ss.currentEpisode() == row.CurrentEpisode || cmd == nil {
 		t.Fatalf("next must advance AND carry the auto-launch resolve")
 	}
@@ -278,7 +278,7 @@ func TestLivePR63LaunchSaveAndNextAutoLaunch(t *testing.T) {
 	ss = next.(*sessionScreen)
 	t.Logf("CHANGED-DUBS FALLBACK: ep=%q status=%q state=%v",
 		ss.currentEpisode(), ss.status, ss.state)
-	if !contains(ss.status, "Прошлые настройки недоступны") || ss.state != sessionStateQuality {
+	if !contains(ss.status, "Previous settings unavailable") || ss.state != sessionStateQuality {
 		t.Fatalf("the fallback must show the typed note + the stream selection, status=%q state=%v",
 			ss.status, ss.state)
 	}

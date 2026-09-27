@@ -1,11 +1,11 @@
 package tui
 
-// PR112: the «🔢 Перейти к серии» jump list duplicated the episode
-// label — every row read «Серия 1 — Серия 1», because RU providers
+// PR112: the «🔢 Jump to episode» jump list duplicated the episode
+// label — every row read «Episode 1 — Episode 1», because RU providers
 // fill contracts.Episode.Title with the player-API episode title,
-// which is already «Серия N». A title that merely restates the row's
-// own «Серия N» prefix must render once («Серия 3»); a real distinct
-// title keeps today's «Серия N — Title» form; an empty title keeps
+// which is already «Episode N». A title that merely restates the row's
+// own «Episode N» prefix must render once («Episode 3»); a real distinct
+// title keeps today's «Episode N — Title» form; an empty title keeps
 // the bare row. The dedupe applies to the jump list only — the
 // episode screen header keeps its own format.
 
@@ -17,7 +17,7 @@ import (
 )
 
 // pr112Session loads a session whose episodes carry every label
-// shape: a «Серия N» echo (RU providers), a real distinct title, an
+// shape: a «Episode N» echo (RU providers), a real distinct title, an
 // empty title, and a whitespace-padded echo (normalized match,
 // multi-digit).
 func pr112Session(t *testing.T) *sessionScreen {
@@ -50,16 +50,16 @@ func pr112Label(t *testing.T, s *sessionScreen, num string) string {
 
 func TestPR112JumpLabelSeriesTitleDedupe(t *testing.T) {
 	s := pr112Session(t)
-	if got := pr112Label(t, s, "3"); got != "Серия 3" {
-		t.Fatalf("an echoed «Серия N» title must render once, got %q", got)
+	if got := pr112Label(t, s, "3"); got != "Episode 3" {
+		t.Fatalf("an echoed «Episode N» title must render once, got %q", got)
 	}
-	if got := pr112Label(t, s, "5"); got != "Серия 5 — Опенинг" {
+	if got := pr112Label(t, s, "5"); got != "Episode 5 — Опенинг" {
 		t.Fatalf("a distinct title must keep the dash form, got %q", got)
 	}
-	if got := pr112Label(t, s, "7"); got != "Серия 7" {
+	if got := pr112Label(t, s, "7"); got != "Episode 7" {
 		t.Fatalf("an empty title must render the bare row, got %q", got)
 	}
-	if got := pr112Label(t, s, "12"); got != "Серия 12" {
+	if got := pr112Label(t, s, "12"); got != "Episode 12" {
 		t.Fatalf("a whitespace-padded echo must normalize to a single label, got %q", got)
 	}
 }
@@ -68,10 +68,10 @@ func TestPR112JumpListViewHasNoDuplicate(t *testing.T) {
 	s := pr112Session(t)
 	s.buildEpisodeList()
 	v := s.episodeList.Render()
-	if strings.Contains(v, "Серия 3 — Серия 3") {
+	if strings.Contains(v, "Episode 3 — Episode 3") {
 		t.Fatalf("jump list must not duplicate the episode label:\n%s", v)
 	}
-	if !strings.Contains(v, "Серия 5 — Опенинг") {
+	if !strings.Contains(v, "Episode 5 — Опенинг") {
 		t.Fatalf("jump list must keep distinct titles:\n%s", v)
 	}
 }

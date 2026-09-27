@@ -159,7 +159,7 @@ func TestShikiCookieScreenVerifyFailsButSaved(t *testing.T) {
 		t.Fatalf("the cookie must be persisted before verification")
 	}
 	view := s.View().Content
-	if !strings.Contains(view, "сохранён") || !strings.Contains(view, "401") {
+	if !strings.Contains(view, "saved") || !strings.Contains(view, "401") {
 		t.Fatalf("done view must show saved + warning, got:\n%s", view)
 	}
 	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
@@ -319,7 +319,7 @@ func TestShikiOAuthScreenPrefilledCreds(t *testing.T) {
 	}
 
 	view := s.View().Content
-	if !strings.Contains(view, "токены сохранены") || !strings.Contains(view, "oauth-fan") {
+	if !strings.Contains(view, "tokens saved") || !strings.Contains(view, "oauth-fan") {
 		t.Fatalf("done view must show saved tokens + nickname, got:\n%s", view)
 	}
 	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
@@ -441,7 +441,7 @@ func TestShikiOAuthScreenNilSeam(t *testing.T) {
 		t.Fatalf("want a start error, got %#v", msg)
 	}
 	_, _ = s.Update(msg)
-	if view := s.View().Content; !strings.Contains(view, "недоступен") {
+	if view := s.View().Content; !strings.Contains(view, "unavailable") {
 		t.Fatalf("error view must say the flow is unavailable, got:\n%s", view)
 	}
 }
@@ -457,16 +457,16 @@ func TestShikiSetupMenu(t *testing.T) {
 	t.Run("view carries warning and choices", func(t *testing.T) {
 		view := s.View().Content
 		for _, want := range []string{
-			"Shikimori не настроен",
-			"авторизация обязательна",
-			"🔑 Cookie (вставить _kawai_session из браузера)",
-			"🔐 OAuth2 (открыть браузер для авторизации)",
+			"Shikimori is not configured",
+			"authorization is required",
+			"🔑 Cookie (paste the _kawai_session value from your browser)",
+			"🔐 OAuth2 (open the browser to authorize)",
 		} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("setup view must contain %q, got:\n%s", want, view)
 			}
 		}
-		for _, banned := range []string{BackLabel, "Пропустить"} {
+		for _, banned := range []string{BackLabel(), "Пропустить"} {
 			if strings.Contains(view, banned) {
 				t.Fatalf("setup view must NOT contain %q (auth is mandatory), got:\n%s", banned, view)
 			}

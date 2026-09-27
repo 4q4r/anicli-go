@@ -10,9 +10,10 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -88,7 +89,7 @@ func (f *listFilter) render() string {
 	if !f.active() {
 		return ""
 	}
-	return theme.StatusLine.Render(fmt.Sprintf("Поиск: %s▏  (esc — сбросить, ещё раз — назад)", f.value()))
+	return theme.StatusLine.Render(i18n.T("filter.line", i18n.Vals{"query": f.value()}))
 }
 
 // filterLineAbove prepends the filter input line (when active) above a

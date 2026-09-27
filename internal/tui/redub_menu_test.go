@@ -1,6 +1,6 @@
 package tui
 
-// PR95: «🎨 Сменить озвучку» открывает меню выбора озвучки из слитых
+// PR95: «🎨 Change dub» открывает меню выбора озвучки из слитых
 // записей эпизода (разные дабы, подпись дубляж · провайдер · качества);
 // выбор перенацеливает воспроизведение на этот дубль (пара
 // запоминается — «След.» продолжает с ним); Esc возвращает без сброса
@@ -89,7 +89,7 @@ func TestRedubOpensDubMenu(t *testing.T) {
 			t.Errorf("AniLib row %q missing %q", anilibRow, want)
 		}
 	}
-	if v := ss.View().Content; !strings.Contains(v, "Выберите озвучку") {
+	if v := ss.View().Content; !strings.Contains(v, "Pick a dub") {
 		t.Errorf("view missing the redub title:\n%s", v)
 	}
 }

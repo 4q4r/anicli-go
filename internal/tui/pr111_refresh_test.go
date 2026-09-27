@@ -1,10 +1,10 @@
 package tui
 
-// PR111 refresh tests (owner defect 1): «Обновить источники» must
+// PR111 refresh tests (owner defect 1): «Refresh sources» must
 // re-run the SAME resolve path as the initial open — the fetch
 // fan-out plus the current episode's hydration — so the refreshed
 // entries REPLACE the cached ones and the verdict is honest (never
-// the blanket «Источники не найдены» while sources are in hand).
+// the blanket «Sources not found» while sources are in hand).
 // The shared rotation fixtures live in pr111_fresh_test.go.
 
 import (
@@ -140,7 +140,7 @@ func newRotatingSession(t *testing.T) (*sessionScreen, *rotateFixture) {
 // TestRefreshRerunsEpisodeFetch (owner defect 1): «🔄 Обновить
 // источники» re-runs the SAME fetch path as the initial open, the
 // refreshed entries REPLACE the cached ones, and the verdict is
-// honest — never the blanket «Источники не найдены».
+// honest — never the blanket «Sources not found».
 func TestRefreshRerunsEpisodeFetch(t *testing.T) {
 	s, fix := newRotatingSession(t)
 	cached := s.episodes["1"].RawEmbeds["[kodik] Kodik"]
@@ -170,8 +170,8 @@ func TestRefreshRerunsEpisodeFetch(t *testing.T) {
 	if s.state != sessionStateMenu {
 		t.Fatalf("state = %s, want the rebuilt menu", s.state)
 	}
-	if s.status == "Источники не найдены" {
-		t.Fatal("refresh reported «Источники не найдены» — the owner defect — the verdict must be honest")
+	if s.status == "Sources not found" {
+		t.Fatal("refresh reported «Sources not found» — the owner defect — the verdict must be honest")
 	}
 }
 
@@ -243,7 +243,7 @@ func TestHydrateZeroWorkHonestVerdict(t *testing.T) {
 		t.Fatal("hydrate must schedule a round")
 	}
 	s.Update(cmd())
-	if s.status == "Источники не найдены" {
+	if s.status == "Sources not found" {
 		t.Fatalf("status = %q while the episode carries %d source tracks — the owner's false failure",
 			s.status, len(s.episodes["1"].RawEmbeds))
 	}

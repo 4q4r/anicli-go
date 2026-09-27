@@ -14,8 +14,8 @@ func TestI1BackAlwaysAppendedLast(t *testing.T) {
 	t.Run("three choices get Back at the last index", func(t *testing.T) {
 		m := NewMenu("Меню", "",
 			Choice{ID: "search", Label: "🔎 Поиск"},
-			Choice{ID: "lists", Label: "📜 Списки"},
-			Choice{ID: "exit", Label: "🚪 Выход"},
+			Choice{ID: "lists", Label: "📜 Lists"},
+			Choice{ID: "exit", Label: "🚪 Exit"},
 		)
 		if len(m.Items) != 4 {
 			t.Fatalf("want 4 items (3 + Back), got %d", len(m.Items))
@@ -30,7 +30,7 @@ func TestI1BackAlwaysAppendedLast(t *testing.T) {
 	})
 
 	t.Run("empty choices still get Back as the lone last item (I3 overlap)", func(t *testing.T) {
-		m := NewMenu("Пусто", "Ничего не найдено")
+		m := NewMenu("Пусто", "Nothing found")
 		if len(m.Items) != 1 {
 			t.Fatalf("want exactly Back, got %d items", len(m.Items))
 		}
@@ -42,7 +42,7 @@ func TestI1BackAlwaysAppendedLast(t *testing.T) {
 	t.Run("backless menu (root) has no Back entry at all", func(t *testing.T) {
 		m := NewMenuWithoutBack("Корень", "",
 			Choice{ID: "search", Label: "🔎 Поиск"},
-			Choice{ID: "exit", Label: "🚪 Выход"},
+			Choice{ID: "exit", Label: "🚪 Exit"},
 		)
 		if len(m.Items) != 2 {
 			t.Fatalf("backless menu keeps exactly the caller choices, got %d", len(m.Items))
@@ -59,25 +59,25 @@ func TestI1BackAlwaysAppendedLast(t *testing.T) {
 // legal menu: Back alone plus an empty-state message.
 func TestI3EmptyChoiceListLegal(t *testing.T) {
 	t.Run("empty message rendered for empty list", func(t *testing.T) {
-		m := NewMenu("Результаты", "Список пуст")
-		if m.EmptyMessage != "Список пуст" {
+		m := NewMenu("Результаты", "List is empty")
+		if m.EmptyMessage != "List is empty" {
 			t.Fatalf("empty-state message lost: %q", m.EmptyMessage)
 		}
-		if !strings.Contains(m.RenderItems(), "Список пуст") {
+		if !strings.Contains(m.RenderItems(), "List is empty") {
 			t.Fatalf("rendered menu must show empty-state message, got %q", m.RenderItems())
 		}
 	})
 
 	t.Run("empty menu renders Back plus empty-state (PinList parity, M15)", func(t *testing.T) {
-		m := NewMenu("Результаты", "Список пуст")
+		m := NewMenu("Результаты", "List is empty")
 		r := m.RenderItems()
-		if !strings.Contains(r, BackLabel) {
+		if !strings.Contains(r, BackLabel()) {
 			t.Fatalf("empty menu must still render the Back row (I1), got %q", r)
 		}
-		if !strings.Contains(r, "Список пуст") {
+		if !strings.Contains(r, "List is empty") {
 			t.Fatalf("empty-state message must render alongside Back, got %q", r)
 		}
-		if strings.Index(r, "Список пуст") > strings.Index(r, BackLabel) {
+		if strings.Index(r, "List is empty") > strings.Index(r, BackLabel()) {
 			t.Fatalf("empty-state message renders above the trailing Back row, got %q", r)
 		}
 	})
@@ -92,7 +92,7 @@ func TestI3EmptyChoiceListLegal(t *testing.T) {
 		if !strings.Contains(m.RenderItems(), "Первый") {
 			t.Fatalf("choice label missing in render")
 		}
-		if !strings.Contains(m.RenderItems(), BackLabel) {
+		if !strings.Contains(m.RenderItems(), BackLabel()) {
 			t.Fatalf("Back label must render on non-empty menu")
 		}
 	})

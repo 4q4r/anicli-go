@@ -202,12 +202,12 @@ func TestHistoryFilterFirst(t *testing.T) {
 	filter := NewHistoryFilter(deps)
 
 	v := filter.View().Content
-	for _, want := range []string{"Смотрю", "В планах", "Пересмотр", "Просмотрено", "Отложено", "Брошено", "Все"} {
+	for _, want := range []string{"Watching", "Planned", "Rewatch", "Completed", "On hold", "Dropped", "All"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("filter must offer %q:\n%s", want, v)
 		}
 	}
-	if !strings.Contains(v, "Смотрю [2]") {
+	if !strings.Contains(v, "Watching [2]") {
 		t.Fatalf("filter must show per-status counts:\n%s", v)
 	}
 }
@@ -249,10 +249,10 @@ func TestHistoryListRendering(t *testing.T) {
 	deps := &Deps{History: &fakeHistory{items: historyItems()}}
 	list := newHistoryListFromFiltered(deps, "watching", FilterHistory(historyItems(), "watching"))
 	v := list.View().Content
-	if !strings.Contains(v, "[С] Ванпанчмен") {
-		t.Fatalf("status badge [С] missing:\n%s", v)
+	if !strings.Contains(v, "[W] Ванпанчмен") {
+		t.Fatalf("status badge [W] missing:\n%s", v)
 	}
-	if !strings.Contains(v, "(Серия 3)") {
+	if !strings.Contains(v, "(Ep. 3)") {
 		t.Fatalf("episode info missing:\n%s", v)
 	}
 	if !strings.Contains(v, "[⚠]") || !strings.Contains(v, "Bleach") {
@@ -383,9 +383,9 @@ func TestDBMenuConfirmFlow(t *testing.T) {
 
 	v := menu.View().Content
 	for _, want := range []string{
-		"Очистить предсказания таймкодов",
-		"Очистить всю историю просмотров",
-		"Полная очистка БД",
+		"Clear timecode predictions",
+		"Clear the entire watch history",
+		"Full database wipe",
 	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("db menu must offer %q:\n%s", want, v)
@@ -399,7 +399,7 @@ func TestDBMenuConfirmFlow(t *testing.T) {
 		_, cmd := m.Update(enter())
 		pm := cmd().(pushMsg)
 		conf := pm.screen
-		if !strings.Contains(conf.View().Content, "Вы уверены") {
+		if !strings.Contains(conf.View().Content, "Are you sure") {
 			t.Fatalf("confirm must warn:\n%s", conf.View().Content)
 		}
 		_, cmd = conf.Update(esc())
@@ -441,7 +441,7 @@ func TestDBMenuConfirmFlow(t *testing.T) {
 		// The screen must CONSUME dbClearedMsg: counts on the status
 		// line, no silent drop.
 		next, _ = next.Update(cm)
-		if !contains(next.View().Content, "Удалено 7") {
+		if !contains(next.View().Content, "Deleted 7") {
 			t.Fatalf("cleared counts must render:\n%s", next.View().Content)
 		}
 		// Enter after clearing pops back instead of re-clearing.
@@ -491,9 +491,9 @@ func TestCatalogSearchAutoShowsResultsAndEntersSession(t *testing.T) {
 	top := topOf(model)
 	v := top.View().Content
 	for _, want := range []string{
-		"Поиск по провайдерам: Ванпанчмен",
-		"Найдено: 1 · Без результатов/ошибок: 0",
-		"Выберите провайдеры",
+		"Provider search: Ванпанчмен",
+		"Found: 1 · No results/errors: 0",
+		"Pick providers",
 		"AnimeGO — Ванпанчмен",
 	} {
 		if !contains(v, want) {
@@ -552,7 +552,7 @@ func TestCatalogSearchNoMatchStillShowsGroups(t *testing.T) {
 	model = drainCmds(model)
 
 	v := topOf(model).View().Content
-	if !contains(v, "Выберите провайдеры") || !contains(v, "AnimeGO — Совсем Другое Аниме") {
+	if !contains(v, "Pick providers") || !contains(v, "AnimeGO — Совсем Другое Аниме") {
 		t.Fatalf("non-matching results must still render on the settled screen, got:\n%s", v)
 	}
 

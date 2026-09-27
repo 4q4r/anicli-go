@@ -20,7 +20,7 @@ import (
 )
 
 // openThroughUI drives the real watch path: menu «Смотреть» → the
-// format selector → «Потоковый» → the merged resolve settles into the
+// format selector → «Streaming» → the merged resolve settles into the
 // quality picker.
 func openThroughUI(t *testing.T, s *sessionScreen) {
 	t.Helper()
@@ -37,7 +37,7 @@ func openThroughUI(t *testing.T, s *sessionScreen) {
 	if s.state != sessionStateFormat {
 		t.Fatalf("state = %s, want the format selector", s.state)
 	}
-	s.formatList.Jump(0) // «Потоковый»
+	s.formatList.Jump(0) // «Streaming»
 	next, cmd = s.handleFormatKey(enter())
 	if ss, ok := next.(*sessionScreen); ok {
 		s = ss

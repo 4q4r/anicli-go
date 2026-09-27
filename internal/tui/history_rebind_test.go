@@ -48,8 +48,8 @@ func TestRebindProgressRendersProviderChecklist(t *testing.T) {
 	v := topOf(model).View().Content
 
 	for _, want := range []string{
-		"Найдено: 2 · Без результатов/ошибок: 1",
-		"Выберите провайдеры",
+		"Found: 2 · No results/errors: 1",
+		"Pick providers",
 		"AnimeGO — Наруто",
 		"AniLib — Наруто",
 	} {
@@ -87,7 +87,7 @@ func TestRebindProgressSettlesWithoutEnterGate(t *testing.T) {
 	})
 	r = next.(*rebindProgress)
 	v := r.View().Content
-	if !strings.Contains(v, "Выберите провайдеры") {
+	if !strings.Contains(v, "Pick providers") {
 		t.Fatalf("settled results must appear without enter, got:\n%s", v)
 	}
 	if !strings.Contains(v, "AnimeGO — Наруто") {

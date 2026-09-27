@@ -16,6 +16,8 @@ import (
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // Search flow screen ids.
@@ -42,7 +44,9 @@ func withProvider(msg providerResultMsg, prov ProviderMeta) providerResultMsg {
 
 // errSearchTimeout marks a provider that blew its whole fan-out budget
 // (all query variants included) — rendered as the dedicated ⏱ row.
-var errSearchTimeout = errors.New("таймаут")
+// PR110: the text is a stable internal identity (nothing renders it
+// directly); the UI-localized wording lives in the locale tables.
+var errSearchTimeout = errors.New("timeout")
 
 // searchProviderVariants runs ONE provider's share of the hybrid
 // fan-out (PR24, redesigned in PR97): EVERY language-routed query
@@ -470,7 +474,7 @@ func (m *searchProgress) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				}
 				sess := newResumedSession(m.deps, primary, stableGroup(group), *m.resume)
 				if bindErr != nil {
-					sess.setStatus("⚠ Не удалось сохранить привязку: " + bindErr.Error())
+					sess.setStatus(i18n.T("search.bind_failed", i18n.Vals{"err": bindErr.Error()}))
 				}
 				return m, replace(sess)
 			}
@@ -561,7 +565,7 @@ func (m *searchProgress) settleResults() {
 			Value: r,
 		})
 	}
-	m.resultCheck = NewCheckList("Выберите провайдеры:", items)
+	m.resultCheck = NewCheckList(i18n.T("search.pick_providers"), items)
 }
 
 // View implements Screen. PR110 minimal shape, PR111 live counter:
@@ -573,7 +577,7 @@ func (m *searchProgress) settleResults() {
 func (m *searchProgress) View() tea.View {
 	header := m.titleOverride
 	if header == "" {
-		header = "Поиск аниме"
+		header = i18n.T("search.title")
 	}
 	var b strings.Builder
 	b.WriteString(theme.Title.Render(header))
@@ -588,20 +592,22 @@ func (m *searchProgress) View() tea.View {
 		b.WriteString("\n")
 		if m.enriching {
 			b.WriteString(m.spin.View() + " " +
-				theme.Accent.Render("Shikimori: подбор вариантов поиска…"))
+				theme.Accent.Render(i18n.T("search.shiki_enriching")))
 		} else {
 			settled := len(m.rows) - len(m.pending)
-			b.WriteString(m.spin.View() + " " + strconv.Itoa(settled) + "/" +
-				strconv.Itoa(len(m.rows)) + " провайдеров, " +
-				strconv.Itoa(len(m.results)) + " результатов…")
+			b.WriteString(m.spin.View() + " " + i18n.T("search.progress", i18n.Vals{
+				"settled": strconv.Itoa(settled),
+				"total":   strconv.Itoa(len(m.rows)),
+				"results": strconv.Itoa(len(m.results))}))
 		}
 		b.WriteString("\n")
 		return tea.NewView(b.String())
 	}
 
 	// Settled: the found/not-found summary above the checklist.
-	summary := fmt.Sprintf("Найдено: %d · Без результатов/ошибок: %d",
-		len(m.results), m.notFoundProviders())
+	summary := i18n.T("search.found", i18n.Vals{
+		"found":  strconv.Itoa(len(m.results)),
+		"failed": strconv.Itoa(m.notFoundProviders())})
 	b.WriteString("\n")
 	b.WriteString(theme.StatusLine.Render(summary))
 	b.WriteString("\n\n")
@@ -609,10 +615,10 @@ func (m *searchProgress) View() tea.View {
 	if m.resultCheck != nil {
 		b.WriteString(m.resultCheck.Render())
 	} else {
-		b.WriteString(theme.Dim.Render("Ничего не найдено"))
+		b.WriteString(theme.Dim.Render(i18n.T("search.nothing")))
 	}
 	b.WriteString("\n")
-	b.WriteString(theme.StatusLine.Render("esc — назад"))
+	b.WriteString(theme.StatusLine.Render(i18n.T("common.back_hint")))
 	return tea.NewView(b.String())
 }
 
@@ -657,7 +663,7 @@ func newSearchGroupNoted(deps *Deps, results []contracts.SearchResult, note stri
 			Value: r,
 		})
 	}
-	return &searchGroup{deps: deps, check: NewCheckList("Результаты поиска — отметьте один тайтл", items), note: note}
+	return &searchGroup{deps: deps, check: NewCheckList(i18n.T("search.pick_result"), items), note: note}
 }
 
 // ID implements Screen.

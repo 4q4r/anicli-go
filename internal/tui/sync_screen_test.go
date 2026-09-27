@@ -26,10 +26,10 @@ func syncDeps(result *shikimori.SyncResult, err error) *Deps {
 func TestSyncScreenShowsProgressWhileRunning(t *testing.T) {
 	s := NewSyncScreen(syncDeps(nil, nil))
 	view := s.View().Content
-	if !contains(view, "Синхронизация с Shikimori") {
+	if !contains(view, "Shikimori sync") {
 		t.Fatalf("running view must carry the sync label, got:\n%s", view)
 	}
-	if contains(view, "Синхронизировано") {
+	if contains(view, "Synchronized") {
 		t.Fatalf("running view must not show the summary yet, got:\n%s", view)
 	}
 }
@@ -61,10 +61,10 @@ func TestSyncScreenCompletionShowsSummary(t *testing.T) {
 		Updated: 4, Created: 5, Pushed: 6,
 	}})
 	view := next.View().Content
-	if !contains(view, "Обновлено: 4 · Добавлено: 5 · Отправлено: 6") {
+	if !contains(view, "Updated: 4 · Added: 5 · Pushed: 6") {
 		t.Fatalf("summary line missing, got:\n%s", view)
 	}
-	if !contains(view, "завершена") {
+	if !contains(view, "finished") {
 		t.Fatalf("success line missing, got:\n%s", view)
 	}
 }
@@ -105,13 +105,13 @@ func TestSyncScreenDoneTransitionsToRoot(t *testing.T) {
 // network failure renders the yellow warning, waits for a key press
 // (no auto-advance) and then continues to the root menu.
 func TestSyncScreenFailureShowsWarning(t *testing.T) {
-	var s Screen = NewSyncScreen(syncDeps(nil, errors.New("сеть недоступна")))
-	s, cmd := s.Update(syncDoneMsg{err: errors.New("сеть недоступна")})
+	var s Screen = NewSyncScreen(syncDeps(nil, errors.New("network unavailable")))
+	s, cmd := s.Update(syncDoneMsg{err: errors.New("network unavailable")})
 	if cmd != nil {
 		t.Fatal("failure must not schedule the auto-advance")
 	}
 	view := s.View().Content
-	if !contains(view, "Синхронизация не удалась") {
+	if !contains(view, "Sync failed") {
 		t.Fatalf("warning line missing, got:\n%s", view)
 	}
 

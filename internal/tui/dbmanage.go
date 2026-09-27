@@ -3,8 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // Database flow screen ids.
@@ -25,11 +28,11 @@ type dbClearedMsg struct {
 func NewDBMenu(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
 		ID:    dbMenuID,
-		Title: "Управление базой данных:",
+		Title: i18n.T("db.title"),
 		Choices: []Choice{
-			{ID: "clear_skips", Label: "Очистить предсказания таймкодов"},
-			{ID: "clear_history", Label: "Очистить всю историю просмотров"},
-			{ID: "clear_all", Label: "Полная очистка БД (история + таймкоды)"},
+			{ID: "clear_skips", Label: dbActionLabel("clear_skips")},
+			{ID: "clear_history", Label: dbActionLabel("clear_history")},
+			{ID: "clear_all", Label: dbActionLabel("clear_all")},
 		},
 		OnPick: func(pick any) tea.Cmd {
 			if pick == Back {
@@ -41,14 +44,25 @@ func NewDBMenu(deps *Deps) *MenuScreen {
 	})
 }
 
+// dbActionKey maps a clear action id to its i18n key (the label map in
+// newDBConfirm shares it — one vocabulary, two render sites).
+func dbActionKey(action string) string {
+	switch action {
+	case "clear_skips":
+		return "db.clear_skips"
+	case "clear_history":
+		return "db.clear_history"
+	case "clear_all":
+		return "db.clear_all"
+	}
+	return action
+}
+
+func dbActionLabel(action string) string { return i18n.T(dbActionKey(action)) }
+
 // newDBConfirm builds the confirmation screen for one clear action.
 func newDBConfirm(deps *Deps, action string) *dbConfirm {
-	label := map[string]string{
-		"clear_skips":   "Очистить предсказания таймкодов",
-		"clear_history": "Очистить всю историю просмотров",
-		"clear_all":     "Полная очистка БД (история + таймкоды)",
-	}[action]
-	return &dbConfirm{deps: deps, action: action, label: label}
+	return &dbConfirm{deps: deps, action: action, label: dbActionLabel(action)}
 }
 
 // dbConfirm is the yes/no gate; after a successful clear it turns
@@ -94,22 +108,22 @@ func (c *dbConfirm) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				if err != nil {
 					return errMsg{screen: c.ID(), err: err}
 				}
-				return dbClearedMsg{action: c.action, counts: fmt.Sprintf("Удалено %d записей о таймкодах.", n)}
+				return dbClearedMsg{action: c.action, counts: i18n.T("db.cleared_skips", i18n.Vals{"count": strconv.FormatInt(n, 10)})}
 			case "clear_history":
 				n, err := c.deps.Database.ClearHistory(ctx)
 				if err != nil {
 					return errMsg{screen: c.ID(), err: err}
 				}
-				return dbClearedMsg{action: c.action, counts: fmt.Sprintf("Удалено %d записей истории.", n)}
+				return dbClearedMsg{action: c.action, counts: i18n.T("db.cleared_history", i18n.Vals{"count": strconv.FormatInt(n, 10)})}
 			case "clear_all":
 				h, sk, err := c.deps.Database.ClearAll(ctx)
 				if err != nil {
 					return errMsg{screen: c.ID(), err: err}
 				}
 				return dbClearedMsg{action: c.action,
-					counts: fmt.Sprintf("Удалено %d записей истории и %d записей о таймкодах.", h, sk)}
+					counts: i18n.T("db.cleared_all", i18n.Vals{"history": strconv.FormatInt(h, 10), "skips": strconv.FormatInt(sk, 10)})}
 			default:
-				return errMsg{screen: c.ID(), err: fmt.Errorf("неизвестное действие %q", c.action)}
+				return errMsg{screen: c.ID(), err: fmt.Errorf("unknown db action %q", c.action)}
 			}
 		})
 	default:
@@ -120,14 +134,13 @@ func (c *dbConfirm) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // View implements Screen.
 func (c *dbConfirm) View() tea.View {
 	if c.cleared != "" {
-		body := theme.Title.Render("Готово") + "\n\n" +
+		body := theme.Title.Render(i18n.T("db.done")) + "\n\n" +
 			theme.Success.Render(c.cleared) +
-			"\n\n" + theme.StatusLine.Render("любая клавиша — назад")
+			"\n\n" + theme.StatusLine.Render(i18n.T("common.any_key_back"))
 		return tea.NewView(body)
 	}
-	body := theme.Title.Render("Подтверждение") + "\n\n" +
-		theme.Warning.Render(fmt.Sprintf(
-			"Вы уверены, что хотите выполнить '%s'? Это действие необратимо.", c.label)) +
-		"\n\n" + theme.StatusLine.Render("enter — да · esc — отмена")
+	body := theme.Title.Render(i18n.T("db.confirm_title")) + "\n\n" +
+		theme.Warning.Render(i18n.T("db.confirm_body", i18n.Vals{"action": c.label})) +
+		"\n\n" + theme.StatusLine.Render(i18n.T("db.confirm_hint"))
 	return tea.NewView(body)
 }

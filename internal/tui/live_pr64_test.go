@@ -86,7 +86,7 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 	}
 	prompt := ss.View().Content
 	t.Logf("PROMPT VIEW:\n%s", prompt)
-	if !contains(prompt, "Доступно серий: ") {
+	if !contains(prompt, "Episodes available: ") {
 		t.Fatalf("the prompt must carry the availability line:\n%s", prompt)
 	}
 
@@ -165,7 +165,7 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 		t.Logf("LIVE RESOLUTION: ep %s -> %s [%s] (remembered %q was rotated away)",
 			task.EpisodeNum, task.DubID, task.ProviderID, s.videoDub)
 	}
-	if !contains(ss.status, "Серия "+rotated+" —") {
+	if !contains(ss.status, "Episode "+rotated+" —") {
 		t.Fatalf("the report must type the rotated episode's verdict:\n%s", ss.status)
 	}
 }

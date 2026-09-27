@@ -1,6 +1,6 @@
 package tui
 
-// PR63 owner defect #2: «⏭ След.» must advance the episode AND launch
+// PR63 owner defect #2: «⏭ Next» must advance the episode AND launch
 // playback (python session_loop parity — the pick falls through into
 // resolve_dubs_smart + extract_and_play):
 //   - remembered dubs still available on the new episode → straight to
@@ -44,7 +44,7 @@ func nextSession(t *testing.T) (*sessionScreen, *fakePlayback) {
 	return s, deps.Playback.(*fakePlayback)
 }
 
-// pressNext picks «⏭ След.» from the action menu.
+// pressNext picks «⏭ Next» from the action menu.
 func pressNext(t *testing.T, s *sessionScreen) (*sessionScreen, tea.Cmd) {
 	t.Helper()
 	s.list.Jump(sessionActionIndex(s, "next"))
@@ -57,7 +57,7 @@ func pressNext(t *testing.T, s *sessionScreen) (*sessionScreen, tea.Cmd) {
 }
 
 // TestNextAutoLaunchesWhenDubsUnchanged (PR63 #2): with the remembered
-// dubs still available on the new episode, «⏭ След.» runs the scoped
+// dubs still available on the new episode, «⏭ Next» runs the scoped
 // fast path and LAUNCHES the player — no format selector, no stream
 // list, no audio prompt.
 func TestNextAutoLaunchesWhenDubsUnchanged(t *testing.T) {
@@ -117,7 +117,7 @@ func TestNextDubChangedShowsSelection(t *testing.T) {
 	if len(fp.played) != 0 {
 		t.Fatalf("nothing may play before the pick, got %+v", fp.played)
 	}
-	if v := ss.View().Content; !contains(v, "Выберите аудиопоток") {
+	if v := ss.View().Content; !contains(v, "Pick an audio stream") {
 		t.Fatalf("the audio prompt must render:\n%s", v)
 	}
 }
@@ -134,7 +134,7 @@ func TestNextSourceGoneShowsStatusAndSelection(t *testing.T) {
 	if ss.currentEpisode() != "2" {
 		t.Fatalf("next must advance to ep 2, got %q", ss.currentEpisode())
 	}
-	if !contains(ss.status, "Прошлые настройки недоступны") {
+	if !contains(ss.status, "Previous settings unavailable") {
 		t.Fatalf("the typed warning must surface, status %q", ss.status)
 	}
 	if cmd == nil {

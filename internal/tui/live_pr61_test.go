@@ -195,7 +195,7 @@ func TestLivePR61MergedStreams(t *testing.T) {
 		t.Logf("  %2d. %s | url=%s", i, s.streamEntryLabel(e), e.Source.URL)
 	}
 
-	// mpv argv, muxed mode (⭐ Как видео — one stream for both).
+	// mpv argv, muxed mode (⭐ Same as video — one stream for both).
 	best := entries[0]
 	muxed := player.BuildArgs(player.Request{
 		URL:   best.Source.URL,

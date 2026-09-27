@@ -66,7 +66,7 @@ func TestSearchSettledResultsNoGrouping(t *testing.T) {
 	}
 	v := sp.View().Content
 	for _, want := range []string{
-		"Выберите провайдеры",
+		"Pick providers",
 		"AnimeGO — Наруто",
 		"AniLib — Наруто",
 	} {
@@ -419,7 +419,7 @@ func TestChecklistViewportScrolling(t *testing.T) {
 	// Settled at the top: the header block renders, the tail stays
 	// outside the window.
 	view := sp.View().Content
-	if !strings.Contains(view, "Выберите провайдеры:") || !strings.Contains(view, "Найдено: 64 · Без результатов/ошибок: 1") {
+	if !strings.Contains(view, "Pick providers:") || !strings.Contains(view, "Found: 64 · No results/errors: 1") {
 		t.Fatalf("header block must stay rendered, got:\n%s", view)
 	}
 	if strings.Contains(view, "Тайтл 63") {
@@ -428,7 +428,7 @@ func TestChecklistViewportScrolling(t *testing.T) {
 	assertBounded("settled", view)
 
 	// Cursor below the fold: the window follows, the cursor row and the
-	// «ещё» hint stay visible.
+	// «more» hint stay visible.
 	for range defaultListHeight + 3 {
 		next, _ := sp.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		sp = next.(*searchProgress)

@@ -25,7 +25,7 @@ func benchEpisodeSources(total int) []SourceEpisodes {
 		for n := from; n <= total; n += step {
 			eps = append(eps, contracts.Episode{
 				Num:       strconv.Itoa(n),
-				Title:     fmt.Sprintf("Серия %d", n),
+				Title:     fmt.Sprintf("Episode %d", n),
 				RawID:     fmt.Sprintf("ep-%d", n),
 				RawEmbeds: map[string][]string{"1080": {"https://" + sourceID + ".example/" + strconv.Itoa(n)}},
 			})
@@ -148,7 +148,7 @@ func BenchmarkFilterChoices1178(b *testing.B) {
 // behind the window) — the per-frame cost of the session list.
 func BenchmarkPinListRender64(b *testing.B) {
 	b.ReportAllocs()
-	list := NewPinList(NewMenu("Выберите серию:", "Нет серий", benchChoices(64)...), defaultListHeight)
+	list := NewPinList(NewMenu("Выберите серию:", "No episodes", benchChoices(64)...), defaultListHeight)
 	for b.Loop() {
 		benchSinkRender = list.Render()
 	}
@@ -159,7 +159,7 @@ func BenchmarkPinListRender64(b *testing.B) {
 // scrolling fixes).
 func BenchmarkPinListRender1178(b *testing.B) {
 	b.ReportAllocs()
-	list := NewPinList(NewMenu("Выберите серию:", "Нет серий", benchChoices(1178)...), defaultListHeight)
+	list := NewPinList(NewMenu("Выберите серию:", "No episodes", benchChoices(1178)...), defaultListHeight)
 	for b.Loop() {
 		benchSinkRender = list.Render()
 	}
@@ -168,7 +168,7 @@ func BenchmarkPinListRender1178(b *testing.B) {
 // benchCheckList builds the provider-results checklist at scale n.
 func benchCheckList(b *testing.B, n int) *CheckList {
 	b.Helper()
-	return NewCheckList("Выберите провайдеры:", benchChoices(n))
+	return NewCheckList("Pick providers:", benchChoices(n))
 }
 
 // BenchmarkCheckListApplyFilter1178 — one filter keystroke over a
@@ -178,7 +178,7 @@ func BenchmarkCheckListApplyFilter1178(b *testing.B) {
 	items := benchChoices(1178)
 	key := tea.KeyPressMsg{Code: 'o'}
 	for b.Loop() {
-		fresh := NewCheckList("Выберите провайдеры:", items)
+		fresh := NewCheckList("Pick providers:", items)
 		fresh.filter.consume(key, checklistBoundRunes)
 		fresh.applyFilter()
 		benchSinkCheckList = fresh

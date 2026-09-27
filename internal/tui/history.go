@@ -13,6 +13,8 @@ import (
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/storage"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // History flow screen ids.
@@ -22,22 +24,23 @@ const (
 	historyRebindID = "history-rebind"
 )
 
-// historyStatusChoices pairs storage status keys with RU labels plus
-// per-status counts for the filter screen (python RUSSIAN_STATUSES).
+// historyStatusChoices pairs storage status keys with localized labels
+// plus per-status counts for the filter screen (python
+// RUSSIAN_STATUSES).
 func historyStatusChoices(items []storage.AnimeProgress) []Choice {
 	counts := make(map[string]int)
 	for _, it := range items {
 		counts[it.ShikimoriStatus]++
 	}
-	choices := make([]Choice, 0, len(ruStatuses)+1)
-	for _, st := range ruStatuses {
+	choices := make([]Choice, 0, len(shikiStatuses())+1)
+	for _, st := range shikiStatuses() {
 		choices = append(choices, Choice{
 			ID:    st.Key,
 			Label: st.Label + " [" + strconv.Itoa(counts[st.Key]) + "]",
 			Value: st.Key,
 		})
 	}
-	choices = append(choices, Choice{ID: "all", Label: "Все [" + strconv.Itoa(len(items)) + "]", Value: ""})
+	choices = append(choices, Choice{ID: "all", Label: i18n.T("history.all", i18n.Vals{"count": strconv.Itoa(len(items))}), Value: ""})
 	return choices
 }
 
@@ -53,8 +56,9 @@ func FilterHistory(items []storage.AnimeProgress, status string) []storage.Anime
 }
 
 // historyFilterHint is the static key hint on the library screen (the
-// binding itself stays silent — see historyFilter.Update).
-const historyFilterHint = "ctrl+r — проверить обновления списков"
+// binding itself stays silent — see historyFilter.Update; PR110: the
+// const became a function for the same init-order reason as BackLabel).
+func historyFilterHint() string { return i18n.T("history.refresh_hint") }
 
 // historyRefreshMsg settles one background library refresh (Ctrl+R
 // on the history filter screen): the reloaded snapshot, or the error
@@ -102,8 +106,8 @@ func newHistoryFilter(deps *Deps) *historyFilter {
 	if err != nil {
 		items = nil
 	}
-	h := &historyFilter{deps: deps, items: items, status: historyFilterHint}
-	h.render(historyFilterHint)
+	h := &historyFilter{deps: deps, items: items, status: historyFilterHint()}
+	h.render(historyFilterHint())
 	return h
 }
 
@@ -130,11 +134,11 @@ func (h *historyFilter) rebuild() { h.render(h.status) }
 func (h *historyFilter) config(status string) MenuScreenConfig {
 	emptyMsg := ""
 	if len(h.items) == 0 {
-		emptyMsg = "История пуста"
+		emptyMsg = i18n.T("history.empty")
 	}
 	return MenuScreenConfig{
 		ID:       historyFilterID,
-		Title:    "Фильтр списка:",
+		Title:    i18n.T("history.filter_title"),
 		EmptyMsg: emptyMsg,
 		Choices:  historyStatusChoices(h.items),
 		Status:   status,
@@ -219,19 +223,19 @@ func (h *historyFilter) applyRefresh(m historyRefreshMsg) {
 	if m.err != nil {
 		h.deps.logger().Error("tui: history refresh failed",
 			"screen", historyFilterID, "error", m.err)
-		h.swap(h.items, "⚠ Не удалось обновить списки: "+m.err.Error())
+		h.swap(h.items, i18n.T("history.refresh_failed", i18n.Vals{"err": m.err.Error()}))
 		return
 	}
 	if reflect.DeepEqual(h.items, m.items) {
 		// Identical data: zero visual noise — EXCEPT that a fresh
 		// success supersedes a prior failure (the stale error line
 		// must not outlive the check that disproved it).
-		if h.status != historyFilterHint {
-			h.swap(h.items, historyFilterHint)
+		if h.status != historyFilterHint() {
+			h.swap(h.items, historyFilterHint())
 		}
 		return
 	}
-	h.swap(m.items, historyFilterHint)
+	h.swap(m.items, historyFilterHint())
 }
 
 // swap rebuilds the wrapped menu screen for a new snapshot + status
@@ -258,7 +262,7 @@ func historyBadge(it storage.AnimeProgress) string {
 	if it.NeedsCorrection {
 		return "[⚠]"
 	}
-	for _, st := range ruStatuses {
+	for _, st := range shikiStatuses() {
 		if st.Key == it.ShikimoriStatus {
 			first := []rune(st.Label)[:1]
 			return "[" + strings.ToUpper(string(first)) + "]"
@@ -267,9 +271,9 @@ func historyBadge(it storage.AnimeProgress) string {
 	return "[?]"
 }
 
-// statusLabelRU renders the RU label of a status key.
-func statusLabelRU(key string) string {
-	for _, st := range ruStatuses {
+// statusLabel renders the localized label of a status key.
+func statusLabel(key string) string {
+	for _, st := range shikiStatuses() {
 		if st.Key == key {
 			return st.Label
 		}
@@ -322,7 +326,7 @@ func (l *historyListScreen) build() *MenuScreen {
 		if it.TotalEpisodes > 0 {
 			ep += "/" + strconv.Itoa(it.TotalEpisodes)
 		}
-		label := historyBadge(it) + " " + it.Title + " (Серия " + ep + ")"
+		label := historyBadge(it) + " " + it.Title + " " + i18n.T("history.episode_suffix", i18n.Vals{"ep": ep})
 		choices = append(choices, Choice{
 			ID:    strconv.Itoa(int(it.ID)),
 			Label: label,
@@ -332,11 +336,11 @@ func (l *historyListScreen) build() *MenuScreen {
 	choices = filterChoices(choices, l.filter.value())
 	emptyMsg := ""
 	if len(choices) == 0 {
-		emptyMsg = "Список пуст"
+		emptyMsg = i18n.T("history.list_empty")
 	}
 	return NewMenuScreen(MenuScreenConfig{
 		ID:       historyListID,
-		Title:    "Список — " + statusLabelRU(l.status),
+		Title:    i18n.T("history.list_title", i18n.Vals{"status": statusLabel(l.status)}),
 		EmptyMsg: emptyMsg,
 		Choices:  choices,
 		OnPick:   l.onPick,
@@ -437,7 +441,7 @@ func newRebindProgress(deps *Deps, rec *storage.AnimeProgress) *rebindProgress {
 	query := derefStr(rec.ShikimoriTitle, rec.Title)
 	sp := NewSearchProgress(deps, query)
 	sp.logTag = "rebind"
-	sp.titleOverride = "Поиск по провайдерам: " + query
+	sp.titleOverride = i18n.T("search.providers_query", i18n.Vals{"query": query})
 	// The record rides along as the resume payload: a group pick
 	// enters the session restored to the saved episode and dubs.
 	sp.resume = rec

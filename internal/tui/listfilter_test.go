@@ -55,7 +55,7 @@ func TestChecklistTypeToFilter(t *testing.T) {
 	// Typing "07" opens the line and narrows the list to one row.
 	sp = typeRunes(sp, "07").(*searchProgress)
 	view := sp.View().Content
-	if !strings.Contains(view, "Поиск: 07") {
+	if !strings.Contains(view, "Search: 07") {
 		t.Fatalf("the search line must render with the query, got:\n%s", view)
 	}
 	if !strings.Contains(view, "Тайтл 07") {
@@ -104,7 +104,7 @@ func TestChecklistNonMatchingFilter(t *testing.T) {
 
 	sp = typeRunes(sp, "йцукен").(*searchProgress)
 	view := sp.View().Content
-	if !strings.Contains(view, "Поиск: йцукен") {
+	if !strings.Contains(view, "Search: йцукен") {
 		t.Fatalf("the query must render, got:\n%s", view)
 	}
 	if strings.Contains(view, "Тайтл 0") {
@@ -247,10 +247,10 @@ func TestEpisodeListTypeToFilter(t *testing.T) {
 	// Typing "3" narrows to episode 3; Enter picks the real episode.
 	ss = typeRunes(ss, "3").(*sessionScreen)
 	view := ss.View().Content
-	if !strings.Contains(view, "Поиск: 3") {
+	if !strings.Contains(view, "Search: 3") {
 		t.Fatalf("the search line must render:\n%s", view)
 	}
-	if !strings.Contains(view, "Серия 3") || strings.Contains(view, "Серия 1\n") {
+	if !strings.Contains(view, "Episode 3") || strings.Contains(view, "Episode 1\n") {
 		t.Fatalf("the list must be narrowed to the match:\n%s", view)
 	}
 	// Esc inside the filter clears first; a second Esc leaves the
@@ -261,7 +261,7 @@ func TestEpisodeListTypeToFilter(t *testing.T) {
 	if cmd != nil || ss.episodeFilter.active() {
 		t.Fatalf("the first Esc must clear the filter in place")
 	}
-	if !strings.Contains(ss.View().Content, "Серия 1") {
+	if !strings.Contains(ss.View().Content, "Episode 1") {
 		t.Fatalf("clearing must restore the unfiltered list")
 	}
 	next, cmd = ss.Update(escKey())
@@ -299,13 +299,13 @@ func TestOfflineListTypeToFilter(t *testing.T) {
 
 	s = typeRunes(s, "2").(*offlineSession)
 	view := s.View().Content
-	if !strings.Contains(view, "Поиск: 2") {
+	if !strings.Contains(view, "Search: 2") {
 		t.Fatalf("the search line must render:\n%s", view)
 	}
-	if !strings.Contains(view, "Эп. 2") {
+	if !strings.Contains(view, "Ep. 2") {
 		t.Fatalf("the matching episode must stay visible:\n%s", view)
 	}
-	if strings.Contains(view, "Эп. 1\n") {
+	if strings.Contains(view, "Ep. 1\n") {
 		t.Fatalf("non-matching episodes must disappear:\n%s", view)
 	}
 
@@ -316,7 +316,7 @@ func TestOfflineListTypeToFilter(t *testing.T) {
 	if cmd != nil || s.episodeFilter.active() {
 		t.Fatalf("the first Esc must clear the filter in place")
 	}
-	if !strings.Contains(s.View().Content, "Эп. 1") {
+	if !strings.Contains(s.View().Content, "Ep. 1") {
 		t.Fatalf("clearing must restore the unfiltered list")
 	}
 	_, cmd = s.Update(escKey())

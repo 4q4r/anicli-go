@@ -10,7 +10,7 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +18,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/config"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // shikiVerifyBudget bounds one whoami verification round-trip: the
@@ -52,9 +54,9 @@ type ShikiOAuthResult struct {
 // and tests that wire no persistence): the screens surface these
 // instead of pretending success.
 var (
-	errShikiSettingsUnavailable = errors.New("сохранение настроек недоступно (сборка без писателя settings.toml)")
-	errShikiWhoAmIUnavailable   = errors.New("проверка учётных данных недоступна (сборка без whoami-пробы)")
-	errShikiOAuthUnavailable    = errors.New("OAuth2-поток недоступен (сборка без авторизации)")
+	errShikiSettingsUnavailable = errors.New("settings persistence unavailable (build without a settings.toml writer)")
+	errShikiWhoAmIUnavailable   = errors.New("credential verification unavailable (build without the whoami probe)")
+	errShikiOAuthUnavailable    = errors.New("OAuth2 flow unavailable (build without authorization)")
 )
 
 // shikiSavedMsg settles both setup flows' persist+verify step.
@@ -73,12 +75,12 @@ type shikiSavedMsg struct {
 // fallback) on success, the failure warning otherwise.
 func shikiUserLine(user ShikiUser, err error) string {
 	if err != nil {
-		return theme.Warning.Render("⚠ Проверка не удалась: " + err.Error())
+		return theme.Warning.Render(i18n.T("shiki.verify_failed", i18n.Vals{"err": err.Error()}))
 	}
 	if user.Nickname != "" {
-		return theme.Success.Render("Пользователь Shikimori: " + user.Nickname)
+		return theme.Success.Render(i18n.T("shiki.user_nick", i18n.Vals{"nick": user.Nickname}))
 	}
-	return theme.Success.Render(fmt.Sprintf("Пользователь Shikimori: id %d", user.ID))
+	return theme.Success.Render(i18n.T("shiki.user_id", i18n.Vals{"id": strconv.FormatInt(user.ID, 10)}))
 }
 
 // shikiSaveAndVerify persists section and verifies it with one whoami
@@ -134,7 +136,7 @@ const shikiCookieID = "shikimori_cookie"
 // newShikiCookieScreen builds the cookie input phase.
 func newShikiCookieScreen(deps *Deps) *shikiCookieScreen {
 	input := textinput.New()
-	input.Placeholder = "значение cookie из браузера"
+	input.Placeholder = i18n.T("shiki.cookie_placeholder")
 	input.Focus()
 	return &shikiCookieScreen{deps: deps, input: input, phase: shikiPhaseInput}
 }
@@ -174,7 +176,7 @@ func (s *shikiCookieScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.settled = settled
 			if settled.persistErr != nil {
 				s.phase = shikiPhaseError
-				s.failLine = "✗ Не удалось сохранить настройки: " + settled.persistErr.Error()
+				s.failLine = i18n.T("shiki.settings_save_failed", i18n.Vals{"err": settled.persistErr.Error()})
 			} else {
 				s.phase = shikiPhaseDone
 			}
@@ -196,26 +198,26 @@ func (s *shikiCookieScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // View implements Screen.
 func (s *shikiCookieScreen) View() tea.View {
 	var b []byte
-	b = append(b, theme.Title.Render("🔑 Cookie _kawai_session")...)
+	b = append(b, theme.Title.Render(i18n.T("shiki.cookie_title"))...)
 	b = append(b, '\n', '\n')
 	switch s.phase {
 	case shikiPhaseInput:
-		b = append(b, "Вставьте значение cookie _kawai_session:\n\n"...)
+		b = append(b, i18n.T("shiki.cookie_prompt")...)
 		b = append(b, s.input.View()...)
 		b = append(b, '\n')
-		b = append(b, theme.StatusLine.Render("enter — сохранить и проверить · esc — назад")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("shiki.cookie_save_hint"))...)
 	case shikiPhaseBusy:
-		b = append(b, theme.Dim.Render("⏳ Сохранение и проверка cookie…")...)
+		b = append(b, theme.Dim.Render(i18n.T("shiki.cookie_busy"))...)
 	case shikiPhaseDone:
-		b = append(b, theme.Success.Render("✓ Cookie сохранён в settings.toml")...)
+		b = append(b, theme.Success.Render(i18n.T("shiki.cookie_done"))...)
 		b = append(b, '\n', '\n')
 		b = append(b, shikiUserLine(s.settled.user, s.settled.verifyErr)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("enter — продолжить")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.enter_continue"))...)
 	default:
 		b = append(b, theme.Error.Render(s.failLine)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("esc — назад")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.esc_back"))...)
 	}
 	return tea.NewView(string(b))
 }
@@ -364,7 +366,7 @@ func (s *shikiOAuthScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.settled = settled
 			if settled.persistErr != nil {
 				s.phase = shikiOAuthError
-				s.failLine = "✗ Не удалось сохранить токены: " + settled.persistErr.Error()
+				s.failLine = i18n.T("shiki.tokens_save_failed", i18n.Vals{"err": settled.persistErr.Error()})
 			} else {
 				s.phase = shikiOAuthDone
 			}
@@ -431,7 +433,7 @@ func (s *shikiOAuthScreen) updateRunning(msg tea.Msg) (Screen, tea.Cmd) {
 	case shikiOAuthReadyMsg:
 		if m.err != nil {
 			s.phase = shikiOAuthError
-			s.failLine = "✗ OAuth2 не удалось начать: " + m.err.Error()
+			s.failLine = i18n.T("shiki.oauth_start_failed", i18n.Vals{"err": m.err.Error()})
 			return s, nil
 		}
 		s.authURL = m.authURL
@@ -440,7 +442,7 @@ func (s *shikiOAuthScreen) updateRunning(msg tea.Msg) (Screen, tea.Cmd) {
 	case shikiOAuthTokensMsg:
 		if m.err != nil {
 			s.phase = shikiOAuthError
-			s.failLine = "✗ OAuth2 не завершён: " + m.err.Error()
+			s.failLine = i18n.T("shiki.oauth_finish_failed", i18n.Vals{"err": m.err.Error()})
 			return s, nil
 		}
 		s.phase = shikiOAuthSaving
@@ -459,48 +461,49 @@ func (s *shikiOAuthScreen) updateRunning(msg tea.Msg) (Screen, tea.Cmd) {
 // View implements Screen.
 func (s *shikiOAuthScreen) View() tea.View {
 	var b []byte
+	oauthTitle := i18n.T("shiki.oauth_title")
 	switch s.phase {
 	case shikiOAuthInputID, shikiOAuthInputSecret:
-		b = append(b, theme.Title.Render("🔐 OAuth2 авторизация")...)
+		b = append(b, theme.Title.Render(oauthTitle)...)
 		b = append(b, '\n', '\n')
 		if s.phase == shikiOAuthInputID {
-			b = append(b, "client_id приложения (создайте на https://shikimori.io/apps):\n\n"...)
+			b = append(b, i18n.T("shiki.oauth_client_id_prompt")...)
 			b = append(b, s.idInput.View()...)
 		} else {
-			b = append(b, "client_secret приложения:\n\n"...)
+			b = append(b, i18n.T("shiki.oauth_client_secret_prompt")...)
 			b = append(b, s.secretInput.View()...)
 		}
 		b = append(b, '\n')
-		b = append(b, theme.StatusLine.Render("enter — далее · esc — назад")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.enter_next_esc_back"))...)
 	case shikiOAuthRunning:
-		b = append(b, theme.Title.Render("🔐 OAuth2 авторизация")...)
+		b = append(b, theme.Title.Render(oauthTitle)...)
 		b = append(b, '\n', '\n')
-		b = append(b, "Откройте в браузере и разрешите доступ:\n\n"...)
+		b = append(b, i18n.T("shiki.oauth_open_url")...)
 		if s.authURL != "" {
 			b = append(b, theme.Accent.Render(s.authURL)...)
 			b = append(b, '\n', '\n')
 		}
-		b = append(b, theme.Dim.Render("⏳ Ожидание ответа из браузера (до 5 минут)…")...)
+		b = append(b, theme.Dim.Render(i18n.T("shiki.oauth_waiting"))...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("esc — отменить")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.esc_cancel"))...)
 	case shikiOAuthSaving:
-		b = append(b, theme.Title.Render("🔐 OAuth2 авторизация")...)
+		b = append(b, theme.Title.Render(oauthTitle)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.Dim.Render("⏳ Сохранение токенов и проверка…")...)
+		b = append(b, theme.Dim.Render(i18n.T("shiki.oauth_saving"))...)
 	case shikiOAuthDone:
-		b = append(b, theme.Title.Render("🔐 OAuth2 авторизация")...)
+		b = append(b, theme.Title.Render(oauthTitle)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.Success.Render("✓ OAuth2 токены сохранены в settings.toml (access-токен живёт сутки, продление автоматическое)")...)
+		b = append(b, theme.Success.Render(i18n.T("shiki.oauth_done"))...)
 		b = append(b, '\n', '\n')
 		b = append(b, shikiUserLine(s.settled.user, s.settled.verifyErr)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("enter — продолжить")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.enter_continue"))...)
 	default:
-		b = append(b, theme.Title.Render("🔐 OAuth2 авторизация")...)
+		b = append(b, theme.Title.Render(oauthTitle)...)
 		b = append(b, '\n', '\n')
 		b = append(b, theme.Error.Render(s.failLine)...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("esc — назад")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.esc_back"))...)
 	}
 	return tea.NewView(string(b))
 }
@@ -521,10 +524,10 @@ type ShikiSetupScreen struct {
 // NewShikimoriSetup builds the selection screen.
 func NewShikimoriSetup(deps *Deps) *ShikiSetupScreen {
 	menu := NewMenuWithoutBack(
-		"⚠ Shikimori не настроен — авторизация обязательна",
+		i18n.T("shiki.setup_title"),
 		"",
-		Choice{ID: "cookie", Label: "🔑 Cookie (вставить _kawai_session из браузера)"},
-		Choice{ID: "oauth", Label: "🔐 OAuth2 (открыть браузер для авторизации)"},
+		Choice{ID: "cookie", Label: i18n.T("shiki.setup_cookie_choice")},
+		Choice{ID: "oauth", Label: i18n.T("shiki.setup_oauth_choice")},
 	)
 	return &ShikiSetupScreen{deps: deps, list: NewPinList(menu, defaultListHeight)}
 }
@@ -571,13 +574,13 @@ func (s *ShikiSetupScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // View implements Screen: red warning header, the subtitle, the list.
 func (s *ShikiSetupScreen) View() tea.View {
 	var b []byte
-	b = append(b, theme.Error.Render("⚠ Shikimori не настроен — синхронизация списка отключена")...)
+	b = append(b, theme.Error.Render(i18n.T("shiki.setup_warning"))...)
 	b = append(b, '\n', '\n')
-	b = append(b, theme.Item.Render("Выберите способ авторизации:")...)
+	b = append(b, theme.Item.Render(i18n.T("shiki.setup_pick_method"))...)
 	b = append(b, '\n', '\n')
 	b = append(b, s.list.Render()...)
 	b = append(b, '\n')
-	b = append(b, theme.StatusLine.Render("enter — выбрать · esc/ctrl+c — выход (авторизация обязательна)")...)
+	b = append(b, theme.StatusLine.Render(i18n.T("shiki.setup_hint"))...)
 	return tea.NewView(string(b))
 }
 

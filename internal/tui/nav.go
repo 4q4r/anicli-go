@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // backToken is the unexported sentinel type; because it is unexported,
@@ -41,9 +43,10 @@ var Back = &backToken{}
 // BackID is the stable menu item id of the Back entry.
 const BackID = "__back__"
 
-// BackLabel is the RU display label of the Back entry, matching the
-// Python «🔙 Назад» vocabulary.
-const BackLabel = "🔙 Назад"
+// BackLabel is the display label of the Back entry (PR110: resolved
+// through i18n; the const became a function because package vars
+// freeze the pre-Init default).
+func BackLabel() string { return i18n.T("nav.back") }
 
 // Choice is one selectable menu entry.
 type Choice struct {
@@ -80,7 +83,7 @@ type Menu struct {
 func NewMenu(title, emptyMessage string, choices ...Choice) Menu {
 	items := make([]Choice, 0, len(choices)+1)
 	items = append(items, choices...)
-	items = append(items, Choice{ID: BackID, Label: BackLabel, Value: Back})
+	items = append(items, Choice{ID: BackID, Label: BackLabel(), Value: Back})
 	return Menu{Title: title, Items: items, EmptyMessage: emptyMessage}
 }
 
@@ -97,7 +100,7 @@ func NewMenuWithoutBack(title, emptyMessage string, choices ...Choice) Menu {
 // PinList.Render uses for empty menus.
 func (m Menu) RenderItems() string {
 	if len(m.Items) == 1 && m.EmptyMessage != "" {
-		return m.EmptyMessage + "\n" + BackLabel
+		return m.EmptyMessage + "\n" + BackLabel()
 	}
 	lines := make([]string, 0, len(m.Items))
 	for _, item := range m.Items {

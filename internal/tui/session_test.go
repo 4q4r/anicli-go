@@ -123,30 +123,30 @@ func TestSessionEpisodesMerged(t *testing.T) {
 }
 
 // TestSessionMenuActions: the action menu covers the Python
-// session_loop entries PLUS the PR43 «🔄 Обновить источники» recovery
+// session_loop entries PLUS the PR43 «🔄 Refresh sources» recovery
 // action (the PR44 «Формат» toggle moved into the pre-play selector),
 // in order, with the pinned exit row last; exit pops to root.
-// PR99: the session loads onto the FIRST episode, where «⏮ Пред.» has
+// PR99: the session loads onto the FIRST episode, where «⏮ Prev» has
 // no target and is excluded (the boundary test lives in
 // pr99_boundary_test.go).
 func TestSessionMenuActions(t *testing.T) {
 	s := newSessionForTests(t)
 	v := s.View().Content
 	for _, want := range []string{
-		"▶ Смотреть",
-		"⏭ След.",
-		"🔢 Перейти к серии",
-		"🎨 Сменить озвучку",
-		"📝 Изменить инфо",
-		"⬇ Скачать серии",
-		"🔄 Обновить источники",
-		"🚪 Выход",
+		"▶ Watch",
+		"⏭ Next",
+		"🔢 Jump to episode",
+		"🎨 Change dub",
+		"📝 Edit info",
+		"⬇ Download episodes",
+		"🔄 Refresh sources",
+		"🚪 Exit",
 	} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("session menu must contain %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, "⏮ Пред.") {
+	if strings.Contains(v, "⏮ Prev") {
 		t.Fatalf("«Пред.» must be hidden on the first episode (PR99):\n%s", v)
 	}
 	if strings.Contains(v, "Формат:") {
@@ -263,9 +263,9 @@ func TestSessionMergedStreamList(t *testing.T) {
 		labels = append(labels, c.Label)
 	}
 	want := []string{
-		"1080p · AniLib [anilib] · 2 сер.",
-		"1080p · Дубль 1 [animego] · 2 сер.",
-		"720p · Дубль 1 [animego] · 2 сер.",
+		"1080p · AniLib [anilib] · 2 ep.",
+		"1080p · Дубль 1 [animego] · 2 ep.",
+		"720p · Дубль 1 [animego] · 2 ep.",
 	}
 	if len(labels) != len(want)+1 { // entries + the pinned Back row
 		t.Fatalf("merged list labels = %v, want %v (+Back)", labels, want)
@@ -278,7 +278,7 @@ func TestSessionMergedStreamList(t *testing.T) {
 }
 
 // TestSessionMergedPickMuxedSingleURL (PR61): picking a merged entry
-// continues to the audio prompt; «⭐ Как видео» plays ONE url — the
+// continues to the audio prompt; «⭐ Same as video» plays ONE url — the
 // muxed case, no separate audio file.
 func TestSessionMergedPickMuxedSingleURL(t *testing.T) {
 	deps := &Deps{
@@ -315,7 +315,7 @@ func TestSessionMergedPickMuxedSingleURL(t *testing.T) {
 		t.Fatalf("the pick must record dub and quality, got %q/%q",
 			ss.videoDub, ss.lastQuality)
 	}
-	// «⭐ Как видео» is the first row.
+	// «⭐ Same as video» is the first row.
 	ss.dubList.Jump(0)
 	_, cmd := ss.Update(enter())
 	if cmd == nil {
@@ -384,7 +384,7 @@ func TestSessionMergedPickSeparateAudio(t *testing.T) {
 	if len(items) != 3 { // ⭐ + animego + Back
 		t.Fatalf("audio rows = %d, want 3 (⭐ + animego + Back)", len(items))
 	}
-	if !strings.Contains(items[0].Label, "⭐ Как видео") {
+	if !strings.Contains(items[0].Label, "⭐ Same as video") {
 		t.Fatalf("the ⭐ row must lead the audio prompt, got %q", items[0].Label)
 	}
 	ss.dubList.Jump(1)
@@ -544,10 +544,10 @@ func TestSessionDubSelectLanguageTags(t *testing.T) {
 	for _, c := range s.qualityList.Menu().Items {
 		labels[c.ID] = c.Label
 	}
-	if got := labels["s0"]; got != "1080p · [RU] Дубль 1 [animego] · 2 сер." {
+	if got := labels["s0"]; got != "1080p · [RU] Дубль 1 [animego] · 2 ep." {
 		t.Errorf("tagged dub label = %q", got)
 	}
-	if got := labels["s1"]; got != "1080p · AniLib [anilib] · 2 сер." {
+	if got := labels["s1"]; got != "1080p · AniLib [anilib] · 2 ep." {
 		t.Errorf("plain dub label = %q", got)
 	}
 }
@@ -572,7 +572,7 @@ func TestSessionChangeDub(t *testing.T) {
 }
 
 // TestSessionEpisodeListMarkers: episodes available locally carry the
-// ★ marker and the header shows «локально: N».
+// ★ marker and the header shows «local: N».
 func TestSessionEpisodeListMarkers(t *testing.T) {
 	s := newSessionForTests(t)
 	s.localCounts = map[string]int{"1": 2}
@@ -580,7 +580,7 @@ func TestSessionEpisodeListMarkers(t *testing.T) {
 	if !strings.Contains(v, "★") {
 		t.Fatalf("local episodes must be starred:\n%s", v)
 	}
-	if !strings.Contains(s.renderHeader(), "локально: 2") {
+	if !strings.Contains(s.renderHeader(), "local: 2") {
 		t.Fatalf("header must show the local count: %q", s.renderHeader())
 	}
 }
@@ -597,7 +597,7 @@ func TestSessionInfoMenu(t *testing.T) {
 		t.Fatalf("info must open the submenu, got %v", ss.state)
 	}
 	v := ss.renderInfoMenu()
-	for _, want := range []string{"Статус", "Оценка", "Пересмотры"} {
+	for _, want := range []string{"Status", "Score", "Rewatches"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("info menu must contain %q:\n%s", want, v)
 		}
@@ -644,7 +644,7 @@ func TestSessionDownloadRange(t *testing.T) {
 		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
 	}
 	v := ss.View().Content
-	if !strings.Contains(v, "Передний план") || !strings.Contains(v, "Фон") {
+	if !strings.Contains(v, "Foreground") || !strings.Contains(v, "Background") {
 		t.Fatalf("download modes must be offered:\n%s", v)
 	}
 }
@@ -704,7 +704,7 @@ func TestSessionScoreSubmitsAsScore(t *testing.T) {
 	s := shikiSessionForTests(t, shiki, nil)
 
 	ss := openInfo(s)
-	next, _ := ss.Update(down()) // cursor → Оценка (Статус is index 0)
+	next, _ := ss.Update(down()) // cursor → Score (Status is index 0)
 	next, _ = next.Update(enter())
 	prompt := next.(*sessionScreen)
 	if prompt.state != sessionStateInfoScore {
@@ -731,7 +731,7 @@ func TestSessionScoreSubmitsAsScore(t *testing.T) {
 	if ss.state != sessionStateMenu {
 		t.Fatalf("after submit the menu returns, got %v", ss.state)
 	}
-	if !contains(ss.status, "Информация обновлена") {
+	if !contains(ss.status, "Info updated") {
 		t.Fatalf("dedicated success status expected, got %q", ss.status)
 	}
 }
@@ -743,8 +743,8 @@ func TestSessionRewatchesSubmit(t *testing.T) {
 	s := shikiSessionForTests(t, shiki, nil)
 
 	ss := openInfo(s)
-	next, _ := ss.Update(down())  // → Оценка
-	next, _ = next.Update(down()) // → Пересмотры
+	next, _ := ss.Update(down())  // → Score
+	next, _ = next.Update(down()) // → Rewatches
 	next, _ = next.Update(enter())
 	prompt := next.(*sessionScreen)
 	if prompt.state != sessionStateInfoRewatches {
@@ -787,7 +787,7 @@ func TestSessionStatusPickDispatches(t *testing.T) {
 	if sp.state != sessionStateInfoStatus {
 		t.Fatalf("must open the status picker, got %v", sp.state)
 	}
-	// The cursor starts on «Смотрю»; Enter resolves it (not Back).
+	// The cursor starts on «Watching»; Enter resolves it (not Back).
 	_, cmd := sp.Update(enter())
 	if cmd == nil {
 		t.Fatalf("status pick must dispatch UpdateStatus")
@@ -853,7 +853,7 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 		}
 	}
 	next, _ = next.Update(settled)
-	if !contains(next.(*sessionScreen).status, "Загружено") {
+	if !contains(next.(*sessionScreen).status, "Episodes downloaded") {
 		t.Fatalf("settle must update the status line, got %q", next.(*sessionScreen).status)
 	}
 }
@@ -893,7 +893,7 @@ func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 	if len(dl.submitted) != 1 {
 		t.Fatalf("background pick must submit one task, got %d", len(dl.submitted))
 	}
-	if !contains(next.(*sessionScreen).status, "фон") {
+	if !contains(next.(*sessionScreen).status, "background") {
 		t.Fatalf("background status expected, got %q", next.(*sessionScreen).status)
 	}
 }
@@ -930,7 +930,7 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 		t.Fatalf("download failure must be carried")
 	}
 	next, _ = next.Update(settled)
-	if !contains(next.(*sessionScreen).status, "Ошибка загрузки") {
+	if !contains(next.(*sessionScreen).status, "Download failed") {
 		t.Fatalf("failure must surface on the status line, got %q", next.(*sessionScreen).status)
 	}
 }
@@ -942,8 +942,8 @@ func (f *errDownload) Download(_ context.Context, _ DownloadTask) (string, error
 	return "", errors.New("disk full")
 }
 
-// watchStreaming drives «▶ Смотреть» through the PR44 format selector
-// picking «Потоковый» and settles the fresh-session merged resolve
+// watchStreaming drives «▶ Watch» through the PR44 format selector
+// picking «Streaming» and settles the fresh-session merged resolve
 // (PR61), landing on the filled stream list.
 func watchStreaming(t *testing.T, s *sessionScreen) *sessionScreen {
 	t.Helper()
@@ -1007,7 +1007,7 @@ func TestSessionQualityMemory(t *testing.T) {
 	if ss.state != sessionStateDubAudio {
 		t.Fatalf("audio prompt expected, got %v", ss.state)
 	}
-	ss.dubList.Jump(0) // ⭐ Как видео
+	ss.dubList.Jump(0) // ⭐ Same as video
 	_, cmd := ss.Update(enter())
 	msg := cmd().(playedMsg)
 	if msg.err != nil {
@@ -1064,10 +1064,10 @@ func TestSessionStatusUpdateRateIDReuse(t *testing.T) {
 
 	pickStatus := func(sess *sessionScreen) (*sessionScreen, tea.Cmd) {
 		ss := openInfo(sess)
-		// The info menu cursor starts on «Статус» (PR24 layout).
+		// The info menu cursor starts on «Status» (PR24 layout).
 		next, _ := ss.Update(enter())
 		sp := next.(*sessionScreen)
-		// The status picker cursor starts on «Смотрю».
+		// The status picker cursor starts on «Watching».
 		screen, cmd := sp.Update(enter())
 		return screen.(*sessionScreen), cmd
 	}
@@ -1109,12 +1109,12 @@ func TestSessionStatusMessageDistinct(t *testing.T) {
 	if contains(ss.status, "Воспроизведение") {
 		t.Fatalf("status patch must not report playback verdicts, got %q", ss.status)
 	}
-	if !contains(ss.status, "Информация обновлена") {
+	if !contains(ss.status, "Info updated") {
 		t.Fatalf("dedicated status expected, got %q", ss.status)
 	}
 
 	next, _ = s.Update(shikiUpdatedMsg{err: errors.New("boom")})
-	if !contains(next.(*sessionScreen).status, "Ошибка") {
+	if !contains(next.(*sessionScreen).status, "Update error") {
 		t.Fatalf("failure must surface, got %q", next.(*sessionScreen).status)
 	}
 }
@@ -1247,7 +1247,7 @@ func TestSessionShikiResolveFreshSearch(t *testing.T) {
 }
 
 // TestSessionSkipNoteComposedAtLaunch (PR61): the skip verdict fetched
-// during the stream resolve rides the launch line — «▶ Запуск mpv… ·
+// during the stream resolve rides the launch line — «▶ Launching mpv… ·
 // ⏭ …» — and auto-clears when playback settles.
 func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
 	deps := &Deps{
@@ -1259,7 +1259,7 @@ func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
 				}},
 			},
 		},
-		Playback: &fakePlayback{skipNote: "скипы: op 0:00–1:30"},
+		Playback: &fakePlayback{skipNote: "skips: op 0:00–1:30"},
 		Log:      testLogger(),
 	}
 	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
@@ -1276,7 +1276,7 @@ func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
 	if !ok {
 		t.Fatalf("stream resolve expected, got %T", cmd())
 	}
-	if sr.skipNote != "скипы: op 0:00–1:30" {
+	if sr.skipNote != "skips: op 0:00–1:30" {
 		t.Fatalf("the resolve settle must carry the skip note, got %q", sr.skipNote)
 	}
 	next, _ = ss.Update(sr)
@@ -1287,8 +1287,8 @@ func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
 	ss.Update(enter())
 	ss.dubList.Jump(0)
 	ss.Update(enter())
-	if !strings.Contains(ss.status, "▶ Запуск mpv…") ||
-		!strings.Contains(ss.status, "⏭ скипы: op 0:00–1:30") {
+	if !strings.Contains(ss.status, "▶ Launching mpv…") ||
+		!strings.Contains(ss.status, "⏭ skips: op 0:00–1:30") {
 		t.Fatalf("launch line must compose the skip note, got %q", ss.status)
 	}
 	// Playback settling auto-clears the note (the completion verdict
@@ -1300,7 +1300,7 @@ func TestSessionSkipNoteComposedAtLaunch(t *testing.T) {
 }
 
 // TestSessionSkipNoteAbsentKeepsPlainLaunch (PR61): without a note the
-// launch line stays the plain «▶ Запуск mpv…».
+// launch line stays the plain «▶ Launching mpv…».
 func TestSessionSkipNoteAbsentKeepsPlainLaunch(t *testing.T) {
 	deps := &Deps{
 		Episode: &fakeEpisode{
@@ -1328,7 +1328,7 @@ func TestSessionSkipNoteAbsentKeepsPlainLaunch(t *testing.T) {
 	ss.Update(enter())
 	ss.dubList.Jump(0)
 	ss.Update(enter())
-	if ss.status != "▶ Запуск mpv…" {
+	if ss.status != "▶ Launching mpv…" {
 		t.Fatalf("launch line = %q, want the plain form", ss.status)
 	}
 }
@@ -1412,7 +1412,7 @@ func TestSessionWatchSyncsShikiProgress(t *testing.T) {
 			if sm.err != nil {
 				t.Fatalf("sync must succeed, got %v", sm.err)
 			}
-			if !strings.Contains(sm.note, "Shikimori: прогресс синхронизирован (эп 1)") {
+			if !strings.Contains(sm.note, "Shikimori: progress synchronized (ep 1)") {
 				t.Fatalf("note = %q, want the synced verdict with the full product name", sm.note)
 			}
 		}
@@ -1477,7 +1477,7 @@ func TestSessionWatchSyncSkipsUnauthenticated(t *testing.T) {
 	msgs := shikiPlayToLaunch(t, s)
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
-			if !strings.Contains(sm.note, "Shikimori: нет авторизации") {
+			if !strings.Contains(sm.note, "Shikimori: not authorized") {
 				t.Fatalf("note = %q, want the typed unauth skip", sm.note)
 			}
 		}
@@ -1502,7 +1502,7 @@ func TestSessionWatchSyncDisabledTyped(t *testing.T) {
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
 			found = true
-			if !strings.Contains(sm.note, "Shikimori: трекер отключён") {
+			if !strings.Contains(sm.note, "Shikimori: tracker disabled") {
 				t.Fatalf("note = %q, want the disabled skip", sm.note)
 			}
 		}
@@ -1532,7 +1532,7 @@ func TestSessionWatchSyncNeverRollsBack(t *testing.T) {
 	sawNote := false
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok {
-			if !strings.Contains(sm.note, "Shikimori: серия") && !strings.Contains(sm.note, "не откатывается") {
+			if !strings.Contains(sm.note, "Shikimori: episode") && !strings.Contains(sm.note, "is not rolled back") {
 				t.Fatalf("note = %q, want the rollback guard", sm.note)
 			}
 			sawNote = true
@@ -1574,7 +1574,7 @@ func TestSessionWatchSyncFailureLogged(t *testing.T) {
 	for _, m := range msgs {
 		if sm, ok := m.(shikiSyncedMsg); ok && sm.err != nil {
 			sawErr = true
-			if !strings.Contains(sm.err.Error(), "Shikimori: ошибка синхронизации") {
+			if !strings.Contains(sm.err.Error(), "Shikimori: sync error") {
 				t.Fatalf("err = %v, want the sync failure prefix", sm.err)
 			}
 		}
@@ -1603,7 +1603,7 @@ func (f *leakProbePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _
 	}
 	path := fh.Name()
 	_ = fh.Close()
-	return path, func() { _ = os.Remove(path) }, "скипы: op 0:00–1:00", nil
+	return path, func() { _ = os.Remove(path) }, "skips: op 0:00–1:00", nil
 }
 
 func leakProbeSession(t *testing.T) (*sessionScreen, *leakProbePlayback, string) {

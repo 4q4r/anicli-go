@@ -3,6 +3,7 @@ package i18n
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"testing/fstest"
 
@@ -218,10 +219,11 @@ func TestBundledParityENRU(t *testing.T) {
 // writeFile creates a user-contributed locale table in userDir.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	//nolint:gosec // test fixture path, not sensitive
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
@@ -240,6 +242,36 @@ func mustBundled(t *testing.T, locale string) *Bundle {
 // resetInstalled clears the process-wide bundle (tests of the
 // pre-Init lazy path install nothing).
 func resetInstalled() { SetBundle(nil) }
+
+// TestEveryReferencedKeyExists guards the code→table direction: every
+// i18n key referenced in the tui package source must exist in the
+// embedded en table (the ru side is guarded by TestBundledParityENRU).
+// A renamed key without a table update renders the raw key on screen —
+// this test turns that into a build-time failure.
+func TestEveryReferencedKeyExists(t *testing.T) {
+	en := mustBundled(t, "en")
+	files, err := filepath.Glob("../tui/*.go")
+	if err != nil {
+		t.Fatalf("glob tui sources: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no tui sources found — wrong relative path?")
+	}
+	re := regexp.MustCompile(`i18n\.T\("([a-z_.]+)"`)
+	for _, f := range files {
+		//nolint:gosec // the test reads its own package sources
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+			key := m[1]
+			if _, ok := en.active[key]; !ok {
+				t.Errorf("%s references key %q which is missing from locales/en.toml", f, key)
+			}
+		}
+	}
+}
 
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || indexOf(s, sub) >= 0)

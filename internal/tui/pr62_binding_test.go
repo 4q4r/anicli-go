@@ -187,8 +187,8 @@ func TestSessionRebindMenuItemPresentForResumedRecord(t *testing.T) {
 	if item == nil {
 		t.Fatalf("resumed session must offer «Перепривязать», got %v", s.list.Menu().Items)
 	}
-	if item.Label != "🔗 Перепривязать" {
-		t.Fatalf("label = %q, want «🔗 Перепривязать»", item.Label)
+	if item.Label != "🔗 Rebind" {
+		t.Fatalf("label = %q, want «🔗 Rebind»", item.Label)
 	}
 }
 

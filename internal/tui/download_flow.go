@@ -15,6 +15,8 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // availabilityMaxRuns caps the rendered run list: a pathological
@@ -31,7 +33,7 @@ const availabilityMaxRuns = 8
 // availabilityMaxRuns runs truncate to the first ones plus «… +N ещё».
 func describeAvailableEpisodes(order []string) string {
 	if len(order) == 0 {
-		return "Доступных серий нет"
+		return i18n.T("download.no_episodes")
 	}
 	runs := make([]string, 0, len(order))
 	for i := 0; i < len(order); {
@@ -58,9 +60,10 @@ func describeAvailableEpisodes(order []string) string {
 	}
 	if len(runs) > availabilityMaxRuns {
 		hidden := len(runs) - availabilityMaxRuns
-		runs = append(runs[:availabilityMaxRuns], fmt.Sprintf("… +%d ещё", hidden))
+		runs = append(runs[:availabilityMaxRuns], i18n.T("download.more_runs", i18n.Vals{"count": strconv.Itoa(hidden)}))
 	}
-	return fmt.Sprintf("Доступно серий: %d (%s)", len(order), strings.Join(runs, ", "))
+	return i18n.T("download.available", i18n.Vals{
+		"count": strconv.Itoa(len(order)), "runs": strings.Join(runs, ", ")})
 }
 
 // The download-resolution budgets are the watch-flow lookup budget
@@ -77,7 +80,7 @@ var (
 // errNoViableDub types the verdict of a range episode whose every dub
 // is dead (PR64 #3): the report names the episode instead of silently
 // skipping it or aborting the whole range.
-var errNoViableDub = fmt.Errorf("нет доступных озвучек с потоками")
+var errNoViableDub = fmt.Errorf("no viable dubs with streams")
 
 // downloadEpisodeReport is one line of the per-episode download
 // report (PR64 #3): the episode, the dub actually used, and the
@@ -165,11 +168,15 @@ func emitProgress(ch chan<- string, line string) {
 // downloadResolveLine / downloadProgressLine render the per-episode
 // progress ticks of a running range batch.
 func downloadResolveLine(done, total int, episode, verdict string) string {
-	return fmt.Sprintf("Разрешение озвучек %d/%d: эп %s — %s", done, total, episode, verdict)
+	return i18n.T("download.resolve_line", i18n.Vals{
+		"done": strconv.Itoa(done), "total": strconv.Itoa(total),
+		"ep": episode, "verdict": verdict})
 }
 
 func downloadProgressLine(done, total int, episode, verdict string) string {
-	return fmt.Sprintf("Загрузка %d/%d: эп %s — %s", done, total, episode, verdict)
+	return i18n.T("download.progress_line", i18n.Vals{
+		"done": strconv.Itoa(done), "total": strconv.Itoa(total),
+		"ep": episode, "verdict": verdict})
 }
 
 // resolveDownloadDubs resolves EVERY range episode's dub through the
@@ -199,7 +206,7 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 		done++
 		if dub == "" {
 			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Err: errNoViableDub}
-			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, "✗ нет доступных озвучек"))
+			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.no_dubs_verdict")))
 			return nil
 		}
 		stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub}
@@ -233,7 +240,7 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 		path, err := deps.Download.Download(ctx, stamped)
 		if err != nil {
 			report[i].Err = err
-			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, "ошибка: "+err.Error()))
+			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_error", i18n.Vals{"err": err.Error()})))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -241,7 +248,7 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 		}
 		report[i].Path = path
 		ok++
-		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, "готово"))
+		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_done")))
 	}
 	return downloadSettledMsg{count: ok, total: len(tasks), err: firstErr, report: report}
 }
@@ -277,11 +284,12 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 	var b strings.Builder
 	switch {
 	case msg.err == nil:
-		fmt.Fprintf(&b, "✓ Загружено серий: %d", msg.count)
+		fmt.Fprintf(&b, "%s", i18n.T("download.settle_ok", i18n.Vals{"count": strconv.Itoa(msg.count)}))
 	case msg.count > 0:
-		fmt.Fprintf(&b, "⚠ Загружено серий: %d из %d", msg.count, msg.total)
+		fmt.Fprintf(&b, "%s", i18n.T("download.settle_partial", i18n.Vals{
+			"count": strconv.Itoa(msg.count), "total": strconv.Itoa(msg.total)}))
 	default:
-		fmt.Fprintf(&b, "Ошибка загрузки: 0 из %d серий", msg.total)
+		fmt.Fprintf(&b, "%s", i18n.T("download.settle_failed", i18n.Vals{"total": strconv.Itoa(msg.total)}))
 		if msg.err != nil && !errors.Is(msg.err, errNoViableDub) {
 			fmt.Fprintf(&b, " — %v", msg.err)
 		}
@@ -290,13 +298,16 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 		b.WriteString("\n")
 		switch {
 		case r.Err != nil && r.Dub != "":
-			fmt.Fprintf(&b, "Серия %s — %s — ошибка: %v", r.Episode, r.Dub, r.Err)
+			fmt.Fprintf(&b, "%s", i18n.T("download.row_error", i18n.Vals{
+				"ep": r.Episode, "dub": r.Dub, "err": fmt.Sprint(r.Err)}))
 		case r.Err != nil:
-			fmt.Fprintf(&b, "Серия %s — ✗ нет доступных озвучек", r.Episode)
+			fmt.Fprintf(&b, "%s", i18n.T("download.row_no_dubs", i18n.Vals{"ep": r.Episode}))
 		case r.Path != "":
-			fmt.Fprintf(&b, "Серия %s — %s — %s", r.Episode, r.Dub, r.Path)
+			fmt.Fprintf(&b, "%s", i18n.T("download.row_path", i18n.Vals{
+				"ep": r.Episode, "dub": r.Dub, "path": r.Path}))
 		default:
-			fmt.Fprintf(&b, "Серия %s — %s — готово", r.Episode, r.Dub)
+			fmt.Fprintf(&b, "%s", i18n.T("download.row_done", i18n.Vals{
+				"ep": r.Episode, "dub": r.Dub}))
 		}
 	}
 	return b.String()
@@ -307,17 +318,19 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 func renderBackgroundQueued(msg backgroundQueuedMsg) string {
 	var b strings.Builder
 	if msg.queued == msg.total {
-		fmt.Fprintf(&b, "Отправлено в фон: %d серий", msg.queued)
+		fmt.Fprintf(&b, "%s", i18n.T("download.bg_queued_all", i18n.Vals{"count": strconv.Itoa(msg.queued)}))
 	} else {
-		fmt.Fprintf(&b, "Отправлено в фон: %d из %d серий", msg.queued, msg.total)
+		fmt.Fprintf(&b, "%s", i18n.T("download.bg_queued_partial", i18n.Vals{
+			"count": strconv.Itoa(msg.queued), "total": strconv.Itoa(msg.total)}))
 	}
 	for _, r := range msg.report {
 		b.WriteString("\n")
 		if r.Err != nil {
-			fmt.Fprintf(&b, "Серия %s — ✗ нет доступных озвучек", r.Episode)
+			fmt.Fprintf(&b, "%s", i18n.T("download.row_no_dubs", i18n.Vals{"ep": r.Episode}))
 			continue
 		}
-		fmt.Fprintf(&b, "Серия %s — %s — фон", r.Episode, r.Dub)
+		fmt.Fprintf(&b, "%s", i18n.T("download.row_background", i18n.Vals{
+			"ep": r.Episode, "dub": r.Dub}))
 	}
 	return b.String()
 }

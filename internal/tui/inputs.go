@@ -1,11 +1,13 @@
 package tui
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // TextPromptConfig parameterizes a one-line text prompt.
@@ -126,7 +128,7 @@ type CheckList struct {
 // row exists in the underlying menu for nav resolution, but the
 // cursor never parks on it).
 func NewCheckList(title string, items []Choice) *CheckList {
-	menu := NewMenu(title, "Нет элементов", items...)
+	menu := NewMenu(title, i18n.T("common.empty"), items...)
 	lowered := make([]string, len(items))
 	for i, item := range items {
 		lowered[i] = strings.ToLower(item.Label)
@@ -169,7 +171,7 @@ func (c *CheckList) applyFilter() {
 	shown := filterChoicesLowered(c.items, c.itemsLower, c.filter.value())
 	if !c.filter.active() {
 		c.visible = nil
-		c.list = NewPinList(NewMenu(c.title, "Нет элементов", c.items...), defaultListHeight)
+		c.list = NewPinList(NewMenu(c.title, i18n.T("common.empty"), c.items...), defaultListHeight)
 		restoreCursor(c.list, prev)
 		return
 	}
@@ -183,7 +185,7 @@ func (c *CheckList) applyFilter() {
 		c.visible = append(c.visible, index[item.ID])
 		choices = append(choices, item)
 	}
-	c.list = NewPinList(NewMenu(c.title, "Нет элементов", choices...), defaultListHeight)
+	c.list = NewPinList(NewMenu(c.title, i18n.T("common.empty"), choices...), defaultListHeight)
 	restoreCursor(c.list, prev)
 }
 
@@ -359,9 +361,9 @@ func (c *CheckList) Render() string {
 		b.WriteString("\n")
 	}
 	if remaining := c.list.bodyEnd() - hi; remaining > 0 {
-		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", remaining)))
+		b.WriteString(theme.Dim.Render(i18n.T("common.more", i18n.Vals{"count": strconv.Itoa(remaining)})))
 		b.WriteString("\n")
 	}
-	b.WriteString(theme.StatusLine.Render("space — отметить · a — все/ничего · i — инверт · enter — продолжить · esc — назад"))
+	b.WriteString(theme.StatusLine.Render(i18n.T("inputs.checklist_hint")))
 	return b.String()
 }

@@ -10,12 +10,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
@@ -43,8 +45,9 @@ type syncDoneMsg struct {
 type syncAdvanceMsg struct{}
 
 // errSyncUnavailable is the loud-degradation sentinel for a screen
-// built without the sync seam (embedded builds).
-var errSyncUnavailable = errors.New("синхронизация недоступна (сборка без запуска синхронизации)")
+// built without the sync seam (embedded builds). The text is a stable
+// internal identity; the sync screen renders the localized notice.
+var errSyncUnavailable = errors.New("sync unavailable (build without sync runner)")
 
 // syncPhase is the sync screen lifecycle.
 type syncPhase int
@@ -185,26 +188,26 @@ func (s *SyncScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // bar for the metadata/pull phases, then the summary.
 func (s *SyncScreen) View() tea.View {
 	var b []byte
-	b = append(b, theme.Title.Render("Синхронизация с Shikimori")...)
+	b = append(b, theme.Title.Render(i18n.T("sync.title"))...)
 	b = append(b, '\n', '\n')
 	switch s.phase {
 	case syncPhaseRunning:
 		if s.progress == nil {
-			b = append(b, theme.Accent.Render(s.spin.View()+" Загрузка списков Shikimori…")...)
+			b = append(b, theme.Accent.Render(s.spin.View()+" "+i18n.T("sync.fetching_rates"))...)
 		} else {
 			switch s.progress.Phase {
 			case "rates":
-				b = append(b, theme.Accent.Render(s.spin.View()+" Загрузка списков Shikimori…")...)
+				b = append(b, theme.Accent.Render(s.spin.View()+" "+i18n.T("sync.fetching_rates"))...)
 			case "pull":
-				b = append(b, theme.Accent.Render(s.spin.View()+" Сопоставление локальных записей")...)
+				b = append(b, theme.Accent.Render(s.spin.View()+" "+i18n.T("sync.matching"))...)
 				b = append(b, '\n', '\n')
 				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
 			case "new":
-				b = append(b, theme.Success.Render(fmt.Sprintf("Найдено %d новых аниме. Загрузка метаданных…", s.progress.Total))...)
+				b = append(b, theme.Success.Render(i18n.T("sync.found_new", i18n.Vals{"count": strconv.Itoa(s.progress.Total)}))...)
 				b = append(b, '\n', '\n')
 				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
 			case "push":
-				b = append(b, theme.Warning.Render(s.spin.View()+" Отправка отложенных изменений")...)
+				b = append(b, theme.Warning.Render(s.spin.View()+" "+i18n.T("sync.pushing"))...)
 				b = append(b, '\n', '\n')
 				b = append(b, renderProgressBar(s.progress.Done, s.progress.Total, 30)...)
 			default:
@@ -216,23 +219,22 @@ func (s *SyncScreen) View() tea.View {
 		if r == nil {
 			r = &shikimori.SyncResult{}
 		}
-		b = append(b, theme.Success.Render("✓ Синхронизация завершена")...)
+		b = append(b, theme.Success.Render(i18n.T("sync.done"))...)
 		b = append(b, '\n', '\n')
-		b = append(b, fmt.Sprintf("Обновлено: %d · Добавлено: %d · Отправлено: %d",
-			r.Updated, r.Created, r.Pushed)...)
+		b = append(b, i18n.T("sync.summary", i18n.Vals{
+			"updated": strconv.Itoa(r.Updated), "created": strconv.Itoa(r.Created), "pushed": strconv.Itoa(r.Pushed)})...)
 		if r.Conflicts > 0 {
 			b = append(b, '\n')
-			b = append(b, theme.Warning.Render(fmt.Sprintf(
-				"⚠ Конфликтов: %d (статус — с Shikimori, прогресс — локальный)", r.Conflicts))...)
+			b = append(b, theme.Warning.Render(i18n.T("sync.conflicts", i18n.Vals{"count": strconv.Itoa(r.Conflicts)}))...)
 		}
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("любая клавиша — продолжить")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.any_key_continue"))...)
 	default: // syncPhaseFailed
-		b = append(b, theme.Warning.Render("⚠ Синхронизация не удалась: "+s.err.Error())...)
+		b = append(b, theme.Warning.Render(i18n.T("sync.failed", i18n.Vals{"err": s.err.Error()}))...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.Dim.Render("Локальный список не изменился; отложенные изменения уйдут при следующем запуске")...)
+		b = append(b, theme.Dim.Render(i18n.T("sync.failed_note"))...)
 		b = append(b, '\n', '\n')
-		b = append(b, theme.StatusLine.Render("любая клавиша — продолжить")...)
+		b = append(b, theme.StatusLine.Render(i18n.T("common.any_key_continue"))...)
 	}
 	return tea.NewView(string(b))
 }

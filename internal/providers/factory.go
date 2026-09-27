@@ -7,6 +7,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/cfbrowser"
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/lua"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -286,6 +287,10 @@ type registryOptions struct {
 	// cfBrowserLogger is the cfbrowser diagnostics sink (PR85); nil
 	// degrades to discard inside cfbrowser — never stderr.
 	cfBrowserLogger *slog.Logger
+	// luaDiscovery enables the user Lua provider scan (PR111):
+	// ~/.config/anicli/providers/<id>/main.lua loaded into the
+	// sandboxed engine and registered alongside the built-ins.
+	luaDiscovery bool
 }
 
 // RegistryOption customizes NewRegistry.
@@ -296,6 +301,15 @@ type RegistryOption func(*registryOptions)
 // alt-screen); a nil logger keeps the engine default.
 func WithTorrentLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.torrentLogger = log }
+}
+
+// WithLuaDiscovery enables auto-discovery of user Lua providers
+// (PR111): every ~/.config/anicli/providers/<id>/main.lua conforming
+// to the provider contract registers alongside the built-ins. A
+// duplicate id (a Lua shadow of a built-in) and a non-conforming
+// script are logged and skipped — never fatal to startup.
+func WithLuaDiscovery() RegistryOption {
+	return func(o *registryOptions) { o.luaDiscovery = true }
 }
 
 // WithCFBrowserLogger routes the CF-bypass stack's diagnostics (the
@@ -444,6 +458,21 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 		}
 		if err := reg.Register(SearchDelegator{Provider: p, stats: stats, logger: providerLog}); err != nil {
 			return nil, err
+		}
+	}
+	// PR111: user Lua providers, discovered after the built-ins so a
+	// script can never shadow a compiled provider (Register rejects
+	// duplicate ids; the skip is logged, not fatal).
+	if o.luaDiscovery {
+		luaLog := providerLog
+		provs, skips := lua.Discover(lua.DefaultConfig(), luaLog)
+		for _, p := range provs {
+			if err := reg.Register(p); err != nil {
+				luaLog.Warn("lua: provider not registered", "provider", p.ID(), "error", err.Error())
+			}
+		}
+		for _, skip := range skips {
+			luaLog.Warn("lua: provider script skipped", "provider", skip.Dir, "error", skip.Err.Error())
 		}
 	}
 	reg.disabled = disabled

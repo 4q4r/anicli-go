@@ -21,6 +21,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
+	syncr "github.com/an0nx/anicli-go/internal/sync"
 )
 
 // Stable internal error identities (PR110): the text stays English
@@ -1928,18 +1929,28 @@ func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) 
 }
 
 // shikiSyncCmd schedules the bounded watch-progress push for the
-// episode about to play (PR62 #1): nil when there is no wired shiki
-// service, no binding or a non-numeric episode.
+// episode about to play (PR62 #1; PR112 dual sync): the dual dispatcher
+// seam wins when wired, otherwise the legacy shiki-only push runs.
+// nil when there is no binding or a non-numeric episode.
 func (s *sessionScreen) shikiSyncCmd() tea.Cmd {
-	if s.deps == nil || s.deps.Shiki == nil {
+	if s.deps == nil {
 		return nil
 	}
-	if id := s.shikimoriID(); id != 0 {
-		if episode := parseWatchEpisode(s.currentEpisode()); episode > 0 {
-			return syncWatchProgressCmd(s.deps, id, episode)
-		}
+	id := s.shikimoriID()
+	if id == 0 {
+		return nil
 	}
-	return nil
+	episode := parseWatchEpisode(s.currentEpisode())
+	if episode <= 0 {
+		return nil
+	}
+	if s.deps.ProgressSync != nil {
+		return progressSyncCmd(s.deps, id, episode)
+	}
+	if s.deps.Shiki == nil {
+		return nil
+	}
+	return syncWatchProgressCmd(s.deps, id, episode)
 }
 
 // launchPlayback continues after the video (and, when fresh, audio)
@@ -2071,6 +2082,69 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 	log.Info("tui: shiki: progress synced",
 		"episode", episode, "rate", newRate, "status", status)
 	return shikiSyncedMsg{note: i18n.T("shiki.note_synced", i18n.Vals{"ep": strconv.Itoa(episode)})}
+}
+
+// progressSyncCmd schedules the bounded dual-provider push (PR112):
+// the sync dispatcher fans the event out to every enabled tracker and
+// the settled report composes one verdict line per provider.
+func progressSyncCmd(deps *Deps, shikimoriID int64, episode int) tea.Cmd {
+	return safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
+		defer cancel()
+		report := deps.ProgressSync(ctx, shikimoriID, episode)
+		return shikiSyncedMsg{note: renderSyncReport(deps, report, episode)}
+	})
+}
+
+// syncVerdictKeys maps a provider's verdict identity onto its i18n key
+// set: the legacy shiki.* table stays untouched; the mal.* keys are the
+// PR112 additions.
+var syncVerdictKeys = map[string]struct{ success, authRequired, failed string }{
+	"shikimori":   {"shiki.note_synced", "shiki.note_unauthorized", "shiki.note_sync_error"},
+	"myanimelist": {"mal.sync_success", "mal.auth_required", "mal.sync_failed"},
+}
+
+// renderSyncReport composes the per-provider verdict lines from a
+// dispatch round (PR112 task E): one line per provider — «Shikimori:
+// прогресс синхронизирован (эп N)» and «MyAnimeList: ...» render
+// separately, and a mixed outcome shows both verdicts. The lines join
+// with the status-line separator.
+func renderSyncReport(deps *Deps, report syncr.Report, episode int) string {
+	ep := strconv.Itoa(episode)
+	if !report.Participated {
+		// Nothing enabled: the legacy single typed note (shiki-shaped,
+		// matching the pre-dual behavior).
+		if deps.Shiki == nil || !deps.Shiki.Enabled() {
+			return i18n.T("shiki.note_disabled")
+		}
+		return i18n.T("shiki.note_unauthorized")
+	}
+	if report.NoRollback {
+		return i18n.T("shiki.note_no_rollback", i18n.Vals{
+			"ep": ep, "prior": strconv.Itoa(report.Prior)})
+	}
+
+	lines := make([]string, 0, len(report.Verdicts))
+	for _, v := range report.Verdicts {
+		keys, ok := syncVerdictKeys[v.Key]
+		if !ok {
+			continue // unknown provider: no line to render
+		}
+		switch {
+		case v.Synced:
+			lines = append(lines, i18n.T(keys.success, i18n.Vals{"ep": ep}))
+		case v.Note == syncr.NoteAuthRequired:
+			lines = append(lines, i18n.T(keys.authRequired))
+		case v.Note == syncr.NoteNotOnMAL:
+			lines = append(lines, i18n.T("mal.not_on_mal"))
+		case v.Err != nil && v.Key == "myanimelist":
+			lines = append(lines, i18n.T(keys.failed, i18n.Vals{"err": v.Err.Error()}))
+		case v.Err != nil:
+			//nolint:staticcheck // ST1005: user-facing verdict carries the product name (PR80 owner ruling)
+			lines = append(lines, fmt.Errorf("%s: %w", i18n.T(keys.failed), v.Err).Error())
+		}
+	}
+	return strings.Join(lines, " · ")
 }
 
 // playCmd runs the player; it settles into playedMsg.

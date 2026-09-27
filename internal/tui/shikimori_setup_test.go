@@ -454,13 +454,13 @@ func TestShikiSetupMenu(t *testing.T) {
 	deps := shikiSetupDeps(config.Shikimori{Enabled: true}, &fakeSettingsWriter{}, &fakeShikiWhoAmI{})
 	s := NewShikimoriSetup(deps)
 
-	t.Run("view carries warning and choices", func(t *testing.T) {
+	t.Run("view carries warning and the provider rows", func(t *testing.T) {
 		view := s.View().Content
 		for _, want := range []string{
 			"Shikimori is not configured",
-			"authorization is required",
-			"🔑 Cookie (paste the _kawai_session value from your browser)",
-			"🔐 OAuth2 (open the browser to authorize)",
+			"Pick a tracker to authorize:",
+			"Shikimori",
+			"MyAnimeList",
 		} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("setup view must contain %q, got:\n%s", want, view)
@@ -483,23 +483,27 @@ func TestShikiSetupMenu(t *testing.T) {
 		}
 	})
 
-	t.Run("cookie pushes the cookie screen", func(t *testing.T) {
+	t.Run("shikimori leads to the method menu with both paths", func(t *testing.T) {
 		m := NewShikimoriSetup(deps)
-		m.list.Jump(indexOfSetupChoice(m, "cookie"))
+		m.list.Jump(indexOfSetupChoice(m, "shikimori"))
 		msg := cmdMsg(updateCmd(t, m, enter()))
 		pm, ok := msg.(pushMsg)
-		if !ok || pm.screen.ID() != shikiCookieID {
-			t.Fatalf("cookie pick must push the cookie screen, got %#v", msg)
+		if !ok || pm.screen.ID() != shikiMethodID {
+			t.Fatalf("shikimori pick must push the method menu, got %#v", msg)
+		}
+		method := pm.screen.(*shikiMethodScreen)
+		if view := method.View().Content; !strings.Contains(view, "🔑 Cookie") || !strings.Contains(view, "🔐 OAuth2") {
+			t.Fatalf("method menu must carry both auth paths, got:\n%s", view)
 		}
 	})
 
-	t.Run("oauth pushes the oauth screen", func(t *testing.T) {
+	t.Run("myanimelist leads to the MAL oauth screen", func(t *testing.T) {
 		m := NewShikimoriSetup(deps)
-		m.list.Jump(indexOfSetupChoice(m, "oauth"))
+		m.list.Jump(indexOfSetupChoice(m, "myanimelist"))
 		msg := cmdMsg(updateCmd(t, m, enter()))
 		pm, ok := msg.(pushMsg)
-		if !ok || pm.screen.ID() != shikiOAuthID {
-			t.Fatalf("oauth pick must push the oauth screen, got %#v", msg)
+		if !ok || pm.screen.ID() != malOAuthID {
+			t.Fatalf("myanimelist pick must push the MAL oauth screen, got %#v", msg)
 		}
 	})
 }

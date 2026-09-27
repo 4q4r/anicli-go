@@ -36,6 +36,9 @@ func TestRealDepsConstruction(t *testing.T) {
 		real.Deps.Download == nil || real.Deps.Metadata == nil {
 		t.Fatalf("all services must be wired (incl. metadata, PR24)")
 	}
+	if real.Deps.ProgressSync == nil {
+		t.Fatalf("ProgressSync must be wired (PR112 dual sync)")
+	}
 	if real.Deps.SearchTimeout != settings.Network.SearchTimeout {
 		t.Fatalf("SearchTimeout must propagate from settings: got %v want %v",
 			real.Deps.SearchTimeout, settings.Network.SearchTimeout)

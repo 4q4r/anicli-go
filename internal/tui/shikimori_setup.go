@@ -508,26 +508,57 @@ func (s *shikiOAuthScreen) View() tea.View {
 	return tea.NewView(string(b))
 }
 
-// shikiSetupID is the selection screen identity.
+// shikiSetupID is the provider selection screen identity (PR112: the
+// screen grew from the Shikimori-only method menu into the tracker
+// provider menu; the identity stays — it is the first-run gate).
 const shikiSetupID = "shikimori_setup"
 
-// ShikiSetupScreen is the PR26 first-run selection menu: the red
-// warning header plus the three auth choices. It is backless (no
-// «Назад» row) — «Пропустить» is the explicit escape and the I2
-// interrupt keys normalize to the same skip semantics (a pop), never
-// an app exit: only the root menu's Ctrl-C quits.
+// shikiMethodID is the Shikimori method submenu identity (PR112 split
+// out of the old single menu: the provider menu now sits above it).
+const shikiMethodID = "shikimori_method"
+
+// ShikiSetupScreen is the PR112 provider selection menu: the red
+// warning header plus one row per tracker with its live authorization
+// status (Shikimori, MyAnimeList). It is backless (no «Назад» row) —
+// Esc/I2 normalize to the same exit semantics as before (a pop, never
+// an app exit): only the root menu's Ctrl-C quits. Shikimori
+// authorization stays mandatory (the hybrid search requires it);
+// MyAnimeList is the optional second tracker.
 type ShikiSetupScreen struct {
 	deps *Deps
 	list *PinList
 }
 
-// NewShikimoriSetup builds the selection screen.
+// shikiAuthed reports the shikimori authorization from the deps
+// snapshot.
+func shikiAuthed(cfg config.Shikimori) bool {
+	return cfg.Session != "" || cfg.AccessToken != ""
+}
+
+// malAuthed reports the MAL authorization from the deps snapshot.
+func malAuthed(cfg config.MAL) bool {
+	return cfg.AccessToken != ""
+}
+
+// providerChoiceLabel composes one menu row: the tracker name plus the
+// live authorization marker.
+func providerChoiceLabel(name string, authed bool) string {
+	if authed {
+		return name + " · " + i18n.T("setup.auth_ok")
+	}
+	return name + " · " + i18n.T("setup.auth_no")
+}
+
+// NewShikimoriSetup builds the provider selection screen with live
+// authorization markers from the deps snapshots.
 func NewShikimoriSetup(deps *Deps) *ShikiSetupScreen {
 	menu := NewMenuWithoutBack(
 		i18n.T("shiki.setup_title"),
-		"",
-		Choice{ID: "cookie", Label: i18n.T("shiki.setup_cookie_choice")},
-		Choice{ID: "oauth", Label: i18n.T("shiki.setup_oauth_choice")},
+		i18n.T("setup.pick_provider"),
+		Choice{ID: "shikimori", Label: providerChoiceLabel(
+			i18n.T("setup.shiki_choice"), shikiAuthed(deps.ShikiCfg))},
+		Choice{ID: "myanimelist", Label: providerChoiceLabel(
+			i18n.T("setup.mal_choice"), malAuthed(deps.MALCfg))},
 	)
 	return &ShikiSetupScreen{deps: deps, list: NewPinList(menu, defaultListHeight)}
 }
@@ -539,8 +570,9 @@ func (s *ShikiSetupScreen) ID() string { return shikiSetupID }
 func (s *ShikiSetupScreen) Init() tea.Cmd { return nil }
 
 // Update implements Screen: movement drives the list, Enter resolves
-// the pick. Auth is MANDATORY — Esc/Ctrl-C exits the app (the search
-// requires Shikimori for hybrid enrichment; skipping is not allowed).
+// the pick. Shikimori auth is MANDATORY — Esc/Ctrl-C exits the app
+// (the search requires Shikimori for hybrid enrichment; skipping is
+// not allowed).
 func (s *ShikiSetupScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -562,10 +594,10 @@ func (s *ShikiSetupScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s, quit()
 	case string:
 		switch pick {
-		case "cookie":
-			return s, push(newShikiCookieScreen(s.deps))
-		case "oauth":
-			return s, push(newShikiOAuthScreen(s.deps))
+		case "shikimori":
+			return s, push(newShikiMethodScreen(s.deps))
+		case "myanimelist":
+			return s, push(newMALOAuthScreen(s.deps))
 		}
 	}
 	return s, nil
@@ -576,11 +608,78 @@ func (s *ShikiSetupScreen) View() tea.View {
 	var b []byte
 	b = append(b, theme.Error.Render(i18n.T("shiki.setup_warning"))...)
 	b = append(b, '\n', '\n')
+	b = append(b, theme.Item.Render(i18n.T("setup.pick_provider"))...)
+	b = append(b, '\n', '\n')
+	b = append(b, s.list.Render()...)
+	b = append(b, '\n')
+	b = append(b, theme.StatusLine.Render(i18n.T("setup.hint"))...)
+	return tea.NewView(string(b))
+}
+
+// shikiMethodScreen is the Shikimori method submenu (PR112): the two
+// auth paths of the Shikimori provider, reached from the provider
+// menu. Esc pops back to it (unlike the backless provider gate).
+type shikiMethodScreen struct {
+	deps *Deps
+	list *PinList
+}
+
+// newShikiMethodScreen builds the method submenu.
+func newShikiMethodScreen(deps *Deps) *shikiMethodScreen {
+	menu := NewMenu(
+		i18n.T("shiki.setup_title"),
+		"",
+		Choice{ID: "cookie", Label: i18n.T("shiki.setup_cookie_choice")},
+		Choice{ID: "oauth", Label: i18n.T("shiki.setup_oauth_choice")},
+	)
+	return &shikiMethodScreen{deps: deps, list: NewPinList(menu, defaultListHeight)}
+}
+
+// ID implements Screen.
+func (s *shikiMethodScreen) ID() string { return shikiMethodID }
+
+// Init implements Screen.
+func (s *shikiMethodScreen) Init() tea.Cmd { return nil }
+
+// Update implements Screen.
+func (s *shikiMethodScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return s, nil
+	}
+	if s.list.HandleKey(key) {
+		return s, nil
+	}
+	if IsCancelKey(key) {
+		return s, pop()
+	}
+	resolved := ResolveKey(s.list.Menu(), s.list.Cursor(), key)
+	switch pick := resolved.(type) {
+	case nil:
+		return s, nil
+	case *backToken:
+		return s, pop()
+	case string:
+		switch pick {
+		case "cookie":
+			return s, push(newShikiCookieScreen(s.deps))
+		case "oauth":
+			return s, push(newShikiOAuthScreen(s.deps))
+		}
+	}
+	return s, nil
+}
+
+// View implements Screen.
+func (s *shikiMethodScreen) View() tea.View {
+	var b []byte
+	b = append(b, theme.Error.Render(i18n.T("shiki.setup_warning"))...)
+	b = append(b, '\n', '\n')
 	b = append(b, theme.Item.Render(i18n.T("shiki.setup_pick_method"))...)
 	b = append(b, '\n', '\n')
 	b = append(b, s.list.Render()...)
 	b = append(b, '\n')
-	b = append(b, theme.StatusLine.Render(i18n.T("shiki.setup_hint"))...)
+	b = append(b, theme.StatusLine.Render(i18n.T("common.esc_back"))...)
 	return tea.NewView(string(b))
 }
 

@@ -13,6 +13,9 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/shikimori"
+	// syncr is the dual-provider sync layer (PR112); aliased because
+	// stdlib sync is imported in several files of this package.
+	syncr "github.com/an0nx/anicli-go/internal/sync"
 )
 
 // errPanic marks a recovered panic; errors surfacing from screens or
@@ -404,6 +407,30 @@ type Deps struct {
 	// package default (embedded en). The dependency direction is
 	// tui → i18n: this package never imports tui from i18n.
 	I18n *i18n.Bundle
+
+	// MALCfg snapshots the [mal] section at startup (PR112): the setup
+	// screens compose their updates on top of it and refresh it after
+	// a successful persist, so the provider menu renders fresh
+	// authorization status.
+	MALCfg config.MAL
+	// MALSettingsWriter persists an updated [mal] section to the
+	// settings file (wired from the CLI's config.UpdateMAL; nil in
+	// embedded builds — the setup screen surfaces that as an error
+	// instead of pretending success).
+	MALSettingsWriter func(config.MAL) error
+	// MALWhoAmI verifies candidate MAL credentials with one whoami
+	// round-trip, without touching any running client (nil surfaces
+	// as an error in the setup screen).
+	MALWhoAmI func(ctx context.Context, section config.MAL) (MALUser, error)
+	// MALOAuth starts the MAL OAuth2 PKCE flow: it opens the loopback
+	// callback server, returns the authorize URL and a blocking resolve
+	// that waits for the code and exchanges it for tokens (nil
+	// surfaces as an error in the setup screen).
+	MALOAuth func(clientID, clientSecret string, port int) (authURL string, resolve func(ctx context.Context) (MALOAuthResult, error), err error)
+	// ProgressSync fans one episode-progress event out to every enabled
+	// tracker (PR112 dual sync; the CLI wires the sync dispatcher). nil
+	// keeps the legacy shiki-only push.
+	ProgressSync func(ctx context.Context, shikimoriID int64, episode int) syncr.Report
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

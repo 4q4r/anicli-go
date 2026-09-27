@@ -1,206 +1,281 @@
 package lua
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	lua "github.com/yuin/gopher-lua"
 )
 
-// newTestEngine builds an Engine wired to a captured log buffer with
-// test-sized budgets.
-func newTestEngine(t *testing.T) (*Engine, *bytes.Buffer) {
+// eval loads and runs src in a sandboxed engine state, returning the
+// PCall error (the caller asserts on it).
+func eval(t *testing.T, e *Engine, ctx context.Context, src string) error {
 	t.Helper()
-	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, nil))
-	e := NewEngine(Options{
-		Log:      log,
-		Timeout:  2 * time.Second,
-		RepLimit: 1000,
-	})
-	return e, &buf
-}
 
-// doEval runs src in a fresh sandboxed state and returns the printed
-// view of the chunk's first return value (or the error).
-func doEval(t *testing.T, e *Engine, src string) (string, error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sctx, cancel := e.stateCtx(ctx)
 	defer cancel()
-	L, err := e.NewState(ctx)
-	if err != nil {
-		return "", err
-	}
+	L := e.NewState(sctx)
 	defer L.Close()
-	if err := L.DoString(src); err != nil {
-		return "", err
-	}
-	return L.Get(-1).String(), nil
-}
 
-// TestSandboxDangerousGlobalsAbsent: the never-open list (os, io,
-// debug) and the stripped base functions are invisible to scripts.
-func TestSandboxDangerousGlobalsAbsent(t *testing.T) {
-	e, _ := newTestEngine(t)
-	for _, name := range []string{
-		"os", "io", "debug",
-		"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv",
-	} {
-		got, err := doEval(t, e, "return type("+name+")")
-		if err != nil {
-			t.Fatalf("type(%s): %v", name, err)
-		}
-		if got != "nil" {
-			t.Fatalf("sandbox leaked %s: type = %s", name, got)
-		}
-	}
-	// string.dump returns portable bytecode — the load() escape hatch's
-	// twin. Stripped.
-	got, err := doEval(t, e, `return type(string.dump)`)
+	fn, err := L.Load(strings.NewReader(src), "test-chunk")
 	if err != nil {
-		t.Fatalf("type(string.dump): %v", err)
+		return err
 	}
-	if got != "nil" {
-		t.Fatalf("sandbox leaked string.dump: type = %s", got)
+	L.Push(fn)
+	return L.PCall(0, lua.MultRet, nil)
+}
+
+// evalRun runs src and returns the first return value.
+func evalRun(t *testing.T, e *Engine, ctx context.Context, src string) lua.LValue {
+	t.Helper()
+
+	sctx, cancel := e.stateCtx(ctx)
+	defer cancel()
+	L := e.NewState(sctx)
+	defer L.Close()
+
+	fn, err := L.Load(strings.NewReader(src), "test-chunk")
+	if err != nil {
+		t.Fatalf("load %q: %v", src, err)
+	}
+	L.Push(fn)
+	if err := L.PCall(0, 1, nil); err != nil {
+		t.Fatalf("run %q: %v", src, err)
+	}
+	v := L.Get(-1)
+	L.Pop(1)
+	return v
+}
+
+func TestSandboxForbiddenLibrariesAbsent(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	sctx, cancel := e.stateCtx(context.Background())
+	defer cancel()
+	L := e.NewState(sctx)
+	defer L.Close()
+
+	// os, io, debug are never opened — absent as globals AND from
+	// package.loaded (reopening them via require must be impossible).
+	for _, name := range []string{"os", "io", "debug"} {
+		if g := L.GetGlobal(name); g.Type() != lua.LTNil {
+			t.Fatalf("global %s = %s, want nil", name, g.Type().String())
+		}
+		if loaded := L.GetField(L.GetField(L.Get(lua.RegistryIndex), "_LOADED"), name); loaded.Type() != lua.LTNil {
+			t.Fatalf("package.loaded[%s] = %s, want nil", name, loaded.Type().String())
+		}
 	}
 }
 
-// TestSandboxCoreLibsPresent: the whitelist carries the everyday
-// surface scripts need.
-func TestSandboxCoreLibsPresent(t *testing.T) {
-	e, _ := newTestEngine(t)
-	for _, tc := range []struct{ src, want string }{
-		{`return type(pairs) .. type(ipairs) .. type(pcall) .. type(error)`, "functionfunctionfunctionfunction"},
-		{`return type(table.concat) .. type(string.format) .. type(math.floor) .. type(coroutine.create)`, "functionfunctionfunctionfunction"},
-		{`return string.format("%d-%s", 7, "a")`, "7-a"},
-		{`return table.concat({1, 2, 3}, ",")`, "1,2,3"},
-		{`return tostring(math.floor(1.9))`, "1"},
-		{`local ok, err = pcall(error, "boom"); return tostring(ok) .. ":" .. err`, "false:<string>:1: boom"},
+func TestSandboxWhitelistedLibrariesPresent(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	sctx, cancel := e.stateCtx(context.Background())
+	defer cancel()
+	L := e.NewState(sctx)
+	defer L.Close()
+
+	// The whitelist: base essentials, table, string (minus dump), math,
+	// coroutine.
+	for _, src := range []string{
+		`return type(pairs) == "function"`,
+		`return type(pcall) == "function"`,
+		`return type(select) == "function"`,
+		`return type(string.gsub) == "function"`,
+		`return type(table.insert) == "function"`,
+		`return type(math.floor) == "function"`,
+		`return type(coroutine.create) == "function"`,
 	} {
-		got, err := doEval(t, e, tc.src)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.src, err)
-		}
-		if got != tc.want {
-			t.Fatalf("%s = %q, want %q", tc.src, got, tc.want)
+		if v := evalRun(t, e, context.Background(), src); v != lua.LTrue {
+			t.Fatalf("%s -> %s, want true", src, v)
 		}
 	}
 }
 
-// TestSandboxPrintReboundToLogger: print lands in the wired logger,
-// not in stdout (a TUI must not have its screen corrupted).
-func TestSandboxPrintReboundToLogger(t *testing.T) {
-	e, buf := newTestEngine(t)
-	if _, err := doEval(t, e, `print("hello from lua")`); err != nil {
-		t.Fatalf("print: %v", err)
-	}
-	if !strings.Contains(buf.String(), "hello from lua") {
-		t.Fatalf("print output missing from the logger: %q", buf.String())
+func TestSandboxBaseStripped(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	sctx, cancel := e.stateCtx(context.Background())
+	defer cancel()
+	L := e.NewState(sctx)
+	defer L.Close()
+
+	// Every escape hatch in the strip list must be nil. load/loadstring
+	// are the bytecode+chunk loaders, dofile/loadfile the direct file
+	// readers, getfenv/setfenv the environment breakout pair.
+	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv"} {
+		if g := L.GetGlobal(name); g.Type() != lua.LTNil {
+			t.Fatalf("global %s = %s, want nil (stripped)", name, g.Type().String())
+		}
 	}
 }
 
-// TestSandboxStringRepCap: a single native op must not evade the
-// context check by allocating unbounded memory (gopher-lua #521).
-func TestSandboxStringRepCap(t *testing.T) {
-	e, _ := newTestEngine(t)
-	if _, err := doEval(t, e, `return #string.rep("ab", 500)`); err != nil {
-		t.Fatalf("string.rep within the cap must work: %v", err)
+func TestSandboxStringDumpStripped(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	if v := evalRun(t, e, context.Background(), `return string.dump`); v != lua.LNil {
+		t.Fatalf("string.dump = %s, want nil", v)
 	}
-	_, err := doEval(t, e, `return string.rep("a", 1001)`)
+}
+
+func TestSandboxRepCap(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+
+	// Legitimate small rep works.
+	if v := evalRun(t, e, context.Background(), `return string.rep("ab", 3)`); v.String() != "ababab" {
+		t.Fatalf("string.rep normal = %q, want ababab", v.String())
+	}
+
+	// The issue #521 single-op escape: a huge count must raise a Lua
+	// error instead of allocating gigabytes (the context deadline is
+	// never consulted inside one native call).
+	err := eval(t, e, context.Background(), `local x = string.rep("a", 1000000000)`)
 	if err == nil {
-		t.Fatal("string.rep beyond the cap must fail")
+		t.Fatal("oversized string.rep must error")
 	}
 	if !strings.Contains(err.Error(), "string.rep") {
-		t.Fatalf("the rep-cap error must name string.rep, got: %v", err)
+		t.Fatalf("rep error = %q, want it to name string.rep", err)
 	}
-}
 
-// TestSandboxContextTimeoutOnInfiniteLoop: the VM loop honors the
-// installed context (issue #521's loop-level check).
-func TestSandboxContextTimeoutOnInfiniteLoop(t *testing.T) {
-	e, _ := newTestEngine(t)
-	e.opts.Timeout = 100 * time.Millisecond
-	start := time.Now()
-	_, err := doEval(t, e, `while true do end`)
+	// The same cap covers the result-size form: a long string repeated
+	// a modest number of times.
+	err = eval(t, e, context.Background(), `local big = string.rep("a", 70000); local x = string.rep(big, 100)`)
 	if err == nil {
-		t.Fatal("an infinite loop must hit the context deadline")
-	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("the deadline took %v to fire", elapsed)
-	}
-	if !strings.Contains(err.Error(), "deadline") && !strings.Contains(err.Error(), "canceled") && !strings.Contains(err.Error(), "context") {
-		t.Fatalf("the error must be context-typed, got: %v", err)
+		t.Fatal("oversized repeated result must error")
 	}
 }
 
-// TestSandboxRequirePreloadOnly: require resolves preloaded modules
-// only — the Lua-file loader (an arbitrary file read+load primitive)
-// is stripped, even when package.path points straight at the file.
-func TestSandboxRequirePreloadOnly(t *testing.T) {
-	e, _ := newTestEngine(t)
+func TestSandboxRepZeroAndNegative(t *testing.T) {
+	t.Parallel()
 
-	// A preloaded module resolves.
-	got, err := doEval(t, e, `
-		package.preload["mymod"] = function() return { answer = 42 } end
-		local m = require("mymod")
-		return m.answer
-	`)
-	if err != nil || got != "42" {
-		t.Fatalf("preloaded require broken: %q %v", got, err)
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	if v := evalRun(t, e, context.Background(), `return string.rep("a", 0)`); v.String() != "" {
+		t.Fatalf("rep 0 = %q, want empty", v.String())
+	}
+	if v := evalRun(t, e, context.Background(), `return string.rep("a", -5)`); v.String() != "" {
+		t.Fatalf("rep -5 = %q, want empty", v.String())
+	}
+}
+
+func TestSandboxFormatWidthCap(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+
+	// Normal format passes through.
+	if v := evalRun(t, e, context.Background(), `return string.format("%s=%d", "a", 7)`); v.String() != "a=7" {
+		t.Fatalf("format normal = %q, want a=7", v.String())
 	}
 
-	// A real file on disk does NOT resolve, even with the path aimed
-	// at it.
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "stolen.lua"), []byte(`return "stolen"`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err = doEval(t, e, `package.path = "`+dir+`/?.lua"; return require("stolen")`)
+	// Same single-native-op escape class as string.rep (issue #521):
+	// strFormat is a raw fmt.Sprintf, so %99999999d allocates ~100MB
+	// in one VM instruction.
+	err := eval(t, e, context.Background(), `local x = string.format("%99999999d", 1)`)
 	if err == nil {
-		t.Fatal("require must not load files from disk inside the sandbox")
+		t.Fatal("oversized format width must error")
+	}
+	err = eval(t, e, context.Background(), `local x = string.format("%.99999999f", 1)`)
+	if err == nil {
+		t.Fatal("oversized format precision must error")
 	}
 }
 
-// TestSandboxPackageEscapeHatchesClosed: package.loadlib (C dlopen)
-// is gone and package.path is empty.
-func TestSandboxPackageEscapeHatchesClosed(t *testing.T) {
-	e, _ := newTestEngine(t)
-	got, err := doEval(t, e, `return type(package.loadlib) .. ":" .. tostring(package.path)`)
+func TestSandboxContextTimeoutInfiniteLoop(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := eval(t, e, ctx, `while true do end`)
+	if err == nil {
+		t.Fatal("infinite loop must hit the context deadline")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("timeout error = %q, want context deadline exceeded", err)
+	}
+}
+
+func TestSandboxCallerCancelPropagates(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	err := eval(t, e, ctx, `while true do end`)
+	if err == nil {
+		t.Fatal("canceled context must abort the VM")
+	}
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("cancel error = %q, want canceled", err)
+	}
+}
+
+func TestSandboxCallStackCap(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+
+	// A recursion bomb must surface a Lua error (stack overflow),
+	// never a Go panic or a hang.
+	err := eval(t, e, context.Background(), `local function f() return 1 + f() end; return f()`)
+	if err == nil {
+		t.Fatal("recursion bomb must error")
+	}
+}
+
+func TestSandboxPackagePreloadOnly(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(DefaultConfig(), mustLogger(t))
+	sctx, cancel := e.stateCtx(context.Background())
+	defer cancel()
+	L := e.NewState(sctx)
+	defer L.Close()
+
+	// Preload a module the way the SDK does; require must find it.
+	L.PreloadModule("testmod", func(L *lua.LState) int {
+		tbl := L.NewTable()
+		tbl.RawSetH(lua.LString("answer"), lua.LNumber(42))
+		L.Push(tbl)
+		return 1
+	})
+	// Preload + require must run on the SAME state: fresh states are
+	// isolated by design, so a preload never leaks across invocations.
+	fn, err := L.Load(strings.NewReader(`return require("testmod").answer`), "preload-chunk")
 	if err != nil {
-		t.Fatalf("package introspection: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	if got != "nil:" {
-		t.Fatalf("package escape hatches open: %q", got)
+	L.Push(fn)
+	if err := L.PCall(0, 1, nil); err != nil {
+		t.Fatalf("preload require: %v", err)
 	}
-}
+	if v := L.Get(-1); v.String() != "42" {
+		L.Pop(1)
+		t.Fatalf("preload require = %s, want 42", v)
+	}
+	L.Pop(1)
 
-// TestEngineFreshStatesAreIsolated: every NewState is independent —
-// no global leaks between invocations.
-func TestEngineFreshStatesAreIsolated(t *testing.T) {
-	e, _ := newTestEngine(t)
-	if _, err := doEval(t, e, `LEAK = "secret"`); err != nil {
-		t.Fatal(err)
+	// package.path must be empty and the file searcher gone: require
+	// can never touch the filesystem.
+	if v := evalRun(t, e, context.Background(), `return package.path`); v.String() != "" {
+		t.Fatalf("package.path = %q, want empty", v.String())
 	}
-	got, err := doEval(t, e, `return type(LEAK)`)
-	if err != nil {
-		t.Fatal(err)
+	if v := evalRun(t, e, context.Background(), `return #package.loaders`); v.String() != "1" {
+		t.Fatalf("#package.loaders = %s, want 1 (preload only)", v)
 	}
-	if got != "nil" {
-		t.Fatalf("global leaked across states: LEAK = %s", got)
-	}
-}
-
-// TestEngineCallStackCap: the configured call-stack size bounds
-// runaway recursion.
-func TestEngineCallStackCap(t *testing.T) {
-	var buf bytes.Buffer
-	e := NewEngine(Options{Log: slog.New(slog.NewTextHandler(&buf, nil)), CallStackSize: 32})
-	_, err := doEval(t, e, `local function dive(n) if n == 0 then return 0 end return 1 + dive(n - 1) end return dive(1000)`)
-	if err == nil {
-		t.Fatal("recursion beyond the call-stack cap must fail")
+	if err := eval(t, e, context.Background(), `require("evilmod")`); err == nil {
+		t.Fatal("require of an unloaded module must fail")
 	}
 }

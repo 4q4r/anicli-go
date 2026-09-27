@@ -109,7 +109,7 @@ func TestHistoryFilterRefreshDedupWhileInFlight(t *testing.T) {
 // success status text (zero visual noise on success). The cursor
 // position survives the re-render.
 func TestHistoryFilterRefreshAppliesChangedCounts(t *testing.T) {
-	hist := &fakeHistory{items: historyItems()} // Смотрю [2]
+	hist := &fakeHistory{items: historyItems()} // Watching [2]
 	sync := &fakeSyncFull{}
 	sync.onSync = func() {
 		hist.items = append(hist.items, storage.AnimeProgress{
@@ -128,7 +128,7 @@ func TestHistoryFilterRefreshAppliesChangedCounts(t *testing.T) {
 	}
 	filter.Update(settled) // the program loop delivers the message
 	v := filter.View().Content
-	if !strings.Contains(v, "Смотрю [3]") {
+	if !strings.Contains(v, "Watching [3]") {
 		t.Fatalf("refresh must re-render the new count:\n%s", v)
 	}
 	if strings.Contains(v, "Не удалось") || strings.Contains(v, "обновлено") {
@@ -159,7 +159,7 @@ func TestHistoryFilterRefreshUnchangedStaysSilent(t *testing.T) {
 // the rendered data, surfaces the error on the status line (fail loud)
 // and reaches the logger (the file sink in production).
 func TestHistoryFilterRefreshErrorShowsStatusLine(t *testing.T) {
-	syncErr := errors.New("shikimori недоступен")
+	syncErr := errors.New("shikimori unavailable")
 	sync := &fakeSyncFull{err: syncErr}
 	var buf bytes.Buffer
 	deps := &Deps{
@@ -173,10 +173,10 @@ func TestHistoryFilterRefreshErrorShowsStatusLine(t *testing.T) {
 	settled := cmd()
 	filter.Update(settled) // the program loop delivers the message
 	v := filter.View().Content
-	if !strings.Contains(v, "Не удалось обновить списки") || !strings.Contains(v, syncErr.Error()) {
+	if !strings.Contains(v, "Failed to refresh lists") || !strings.Contains(v, syncErr.Error()) {
 		t.Fatalf("refresh failure must surface on the status line:\n%s", v)
 	}
-	if !strings.Contains(v, "Смотрю [2]") {
+	if !strings.Contains(v, "Watching [2]") {
 		t.Fatalf("failed refresh must keep the rendered data:\n%s", v)
 	}
 	if !strings.Contains(buf.String(), "history refresh failed") {
@@ -201,7 +201,7 @@ func TestHistoryFilterRefreshNilSeamFailsLoud(t *testing.T) {
 		t.Fatalf("nil seam must settle with errSyncUnavailable, got %#v", settled)
 	}
 	filter.Update(settled) // the program loop delivers the message
-	if v := filter.View().Content; !strings.Contains(v, "Не удалось обновить списки") {
+	if v := filter.View().Content; !strings.Contains(v, "Failed to refresh lists") {
 		t.Fatalf("nil seam must surface on the status line:\n%s", v)
 	}
 }
@@ -215,11 +215,11 @@ func TestHistoryFilterRefreshSuccessSupersedesStaleError(t *testing.T) {
 	filter := newHistoryFilter(deps)
 
 	// First check fails: the error lands on the status line.
-	sync.err = errors.New("shikimori недоступен")
+	sync.err = errors.New("shikimori unavailable")
 	_, failCmd := filter.Update(ctrlR())
 	failMsg := failCmd()
 	filter.Update(failMsg)
-	if v := filter.View().Content; !strings.Contains(v, "Не удалось обновить списки") {
+	if v := filter.View().Content; !strings.Contains(v, "Failed to refresh lists") {
 		t.Fatalf("precondition: the failed check must show its error:\n%s", v)
 	}
 
@@ -229,10 +229,10 @@ func TestHistoryFilterRefreshSuccessSupersedesStaleError(t *testing.T) {
 	okMsg := okCmd()
 	filter.Update(okMsg)
 	v := filter.View().Content
-	if strings.Contains(v, "Не удалось обновить списки") {
+	if strings.Contains(v, "refresh lists") || strings.Contains(v, "Failed to refresh lists") {
 		t.Fatalf("a fresh success must supersede the stale error:\n%s", v)
 	}
-	if !strings.Contains(v, historyFilterHint) {
+	if !strings.Contains(v, historyFilterHint()) {
 		t.Fatalf("the hint line must be restored after the supersede:\n%s", v)
 	}
 }

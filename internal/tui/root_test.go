@@ -13,17 +13,17 @@ func newTestDeps() *Deps { return &Deps{} }
 
 // TestRootMenuContents: the root menu shows the five RU entries (PR40
 // removes the PR35 «🧲 Торренты» entry — torrent providers superseded
-// it). Root shows NO «Назад» row: «🚪 Выход» takes its place as the
+// it). Root shows NO «Назад» row: «🚪 Exit» takes its place as the
 // pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
 	for _, want := range []string{
-		"📜 Списки",
-		"📂 Скачанное",
-		"🗄️ Управление БД",
-		"🛠 Проверка",
-		"🚪 Выход",
+		"📜 Lists",
+		"📂 Downloads",
+		"🗄️ Database management",
+		"🛠 Check",
+		"🚪 Exit",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("root view must contain %q, got:\n%s", want, view)
@@ -35,16 +35,16 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, "Поиск") {
 		t.Fatalf("root view must NOT contain the removed free-text search entry, got:\n%s", view)
 	}
-	if strings.Contains(view, BackLabel) {
-		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel, view)
+	if strings.Contains(view, BackLabel()) {
+		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel(), view)
 	}
 	// Exactly five entries (PR40: the torrents entry removed again).
 	if items := root.list.Menu().Items; len(items) != 5 {
 		t.Fatalf("root menu must hold 5 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
-	exitIdx := strings.LastIndex(view, "🚪 Выход")
-	listsIdx := strings.LastIndex(view, "📜 Списки")
+	exitIdx := strings.LastIndex(view, "🚪 Exit")
+	listsIdx := strings.LastIndex(view, "📜 Lists")
 	if exitIdx < listsIdx {
 		t.Fatalf("Выход must render below the other root entries, got:\n%s", view)
 	}

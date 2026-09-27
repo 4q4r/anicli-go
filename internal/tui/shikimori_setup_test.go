@@ -159,7 +159,7 @@ func TestShikiCookieScreenVerifyFailsButSaved(t *testing.T) {
 		t.Fatalf("the cookie must be persisted before verification")
 	}
 	view := s.View().Content
-	if !strings.Contains(view, "сохранён") || !strings.Contains(view, "401") {
+	if !strings.Contains(view, "saved") || !strings.Contains(view, "401") {
 		t.Fatalf("done view must show saved + warning, got:\n%s", view)
 	}
 	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
@@ -319,7 +319,7 @@ func TestShikiOAuthScreenPrefilledCreds(t *testing.T) {
 	}
 
 	view := s.View().Content
-	if !strings.Contains(view, "токены сохранены") || !strings.Contains(view, "oauth-fan") {
+	if !strings.Contains(view, "tokens saved") || !strings.Contains(view, "oauth-fan") {
 		t.Fatalf("done view must show saved tokens + nickname, got:\n%s", view)
 	}
 	if _, ok := cmdMsg(updateCmd(t, s, enter())).(replaceMsg); !ok {
@@ -441,7 +441,7 @@ func TestShikiOAuthScreenNilSeam(t *testing.T) {
 		t.Fatalf("want a start error, got %#v", msg)
 	}
 	_, _ = s.Update(msg)
-	if view := s.View().Content; !strings.Contains(view, "недоступен") {
+	if view := s.View().Content; !strings.Contains(view, "unavailable") {
 		t.Fatalf("error view must say the flow is unavailable, got:\n%s", view)
 	}
 }
@@ -454,19 +454,19 @@ func TestShikiSetupMenu(t *testing.T) {
 	deps := shikiSetupDeps(config.Shikimori{Enabled: true}, &fakeSettingsWriter{}, &fakeShikiWhoAmI{})
 	s := NewShikimoriSetup(deps)
 
-	t.Run("view carries warning and choices", func(t *testing.T) {
+	t.Run("view carries warning and the provider rows", func(t *testing.T) {
 		view := s.View().Content
 		for _, want := range []string{
-			"Shikimori не настроен",
-			"авторизация обязательна",
-			"🔑 Cookie (вставить _kawai_session из браузера)",
-			"🔐 OAuth2 (открыть браузер для авторизации)",
+			"Shikimori is not configured",
+			"Pick a tracker to authorize:",
+			"Shikimori",
+			"MyAnimeList",
 		} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("setup view must contain %q, got:\n%s", want, view)
 			}
 		}
-		for _, banned := range []string{BackLabel, "Пропустить"} {
+		for _, banned := range []string{BackLabel(), "Пропустить"} {
 			if strings.Contains(view, banned) {
 				t.Fatalf("setup view must NOT contain %q (auth is mandatory), got:\n%s", banned, view)
 			}
@@ -483,23 +483,27 @@ func TestShikiSetupMenu(t *testing.T) {
 		}
 	})
 
-	t.Run("cookie pushes the cookie screen", func(t *testing.T) {
+	t.Run("shikimori leads to the method menu with both paths", func(t *testing.T) {
 		m := NewShikimoriSetup(deps)
-		m.list.Jump(indexOfSetupChoice(m, "cookie"))
+		m.list.Jump(indexOfSetupChoice(m, "shikimori"))
 		msg := cmdMsg(updateCmd(t, m, enter()))
 		pm, ok := msg.(pushMsg)
-		if !ok || pm.screen.ID() != shikiCookieID {
-			t.Fatalf("cookie pick must push the cookie screen, got %#v", msg)
+		if !ok || pm.screen.ID() != shikiMethodID {
+			t.Fatalf("shikimori pick must push the method menu, got %#v", msg)
+		}
+		method := pm.screen.(*shikiMethodScreen)
+		if view := method.View().Content; !strings.Contains(view, "🔑 Cookie") || !strings.Contains(view, "🔐 OAuth2") {
+			t.Fatalf("method menu must carry both auth paths, got:\n%s", view)
 		}
 	})
 
-	t.Run("oauth pushes the oauth screen", func(t *testing.T) {
+	t.Run("myanimelist leads to the MAL oauth screen", func(t *testing.T) {
 		m := NewShikimoriSetup(deps)
-		m.list.Jump(indexOfSetupChoice(m, "oauth"))
+		m.list.Jump(indexOfSetupChoice(m, "myanimelist"))
 		msg := cmdMsg(updateCmd(t, m, enter()))
 		pm, ok := msg.(pushMsg)
-		if !ok || pm.screen.ID() != shikiOAuthID {
-			t.Fatalf("oauth pick must push the oauth screen, got %#v", msg)
+		if !ok || pm.screen.ID() != malOAuthID {
+			t.Fatalf("myanimelist pick must push the MAL oauth screen, got %#v", msg)
 		}
 	})
 }

@@ -87,11 +87,20 @@ func writeShikimoriSection(path string, section *Shikimori) error {
 //
 // A missing section is appended at the end of the file.
 func rewriteShikimoriSection(src string, section *Shikimori) string {
+	return rewriteTOMLSection(src, shikimoriSectionName, shikimoriKeyLines(section))
+}
+
+// rewriteTOMLSection is the comment-preserving section rewrite shared
+// by every runtime-mutated section ([shikimori] PR32, [mal] PR112):
+// replace name's key-value lines with keyLines, keep standalone section
+// comments above the fresh block, keep every other line and the section
+// ordering verbatim, append the section at the end when absent.
+func rewriteTOMLSection(src, name string, keyLines []string) string {
 	lines := strings.Split(src, "\n")
 
 	start := -1
 	for i, line := range lines {
-		if isShikimoriHeader(line) {
+		if sectionHeaderName(line) == name {
 			start = i
 			break
 		}
@@ -104,7 +113,7 @@ func rewriteShikimoriSection(src string, section *Shikimori) string {
 		if out != "" {
 			out = strings.TrimRight(out, "\n") + "\n\n"
 		}
-		return out + encodeShikimoriSection(section)
+		return out + "[" + name + "]\n" + strings.Join(keyLines, "\n")
 	}
 
 	// The section body reaches until the next table header line.
@@ -126,9 +135,9 @@ func rewriteShikimoriSection(src string, section *Shikimori) string {
 
 	var out []string
 	out = append(out, lines[:start]...)
-	out = append(out, "["+shikimoriSectionName+"]")
+	out = append(out, "["+name+"]")
 	out = append(out, kept...)
-	out = append(out, shikimoriKeyLines(section)...)
+	out = append(out, keyLines...)
 	if end < len(lines) {
 		// Another section follows: keep it separated by one blank line.
 		out = append(out, "")
@@ -226,4 +235,79 @@ func writeSettingsAtomic(path string, data []byte) error {
 		return fmt.Errorf("install settings %s: %w", path, err)
 	}
 	return nil
+}
+
+// malSectionName is the TOML table header of the [mal] section.
+const malSectionName = "mal"
+
+// UpdateMAL loads the settings file at path (defaults when the file is
+// missing), applies mutate to the [mal] section and writes the result
+// back atomically, replacing only the section's key-value lines (PR112)
+// — user comments and file ordering survive; the [shikimori] section is
+// untouched, so both trackers stay authenticated independently. A
+// malformed or unknown-key file fails loud and is left untouched.
+func UpdateMAL(path string, mutate func(*MAL)) error {
+	if mutate == nil {
+		return fmt.Errorf("config: UpdateMAL: nil mutator")
+	}
+
+	s := Default()
+	if path != "" {
+		if _, err := os.Stat(path); err == nil {
+			if err := applyFile(path, &s); err != nil {
+				return fmt.Errorf("rewrite settings %s: %w", path, err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat settings %s: %w", path, err)
+		}
+	}
+
+	mutate(&s.MAL)
+
+	if err := s.Validate(); err != nil {
+		return fmt.Errorf("rewrite settings %s: %w", path, err)
+	}
+	return writeMALSection(path, &s.MAL)
+}
+
+// writeMALSection rewrites the file at path so its [mal] section carries
+// section, preserving everything else. A missing file is created fresh
+// with just the section.
+func writeMALSection(path string, section *MAL) error {
+	var body string
+	// G304: path is the caller-resolved settings file (ResolveConfigPath
+	// or --config), already validated by applyFile — not user input.
+	data, err := os.ReadFile(path) //nolint:gosec // settings path, see above
+	switch {
+	case err == nil:
+		body = rewriteTOMLSection(string(data), malSectionName, malKeyLines(section))
+	case os.IsNotExist(err):
+		body = encodeMALSection(section)
+	default:
+		return fmt.Errorf("rewrite settings %s: %w", path, err)
+	}
+	return writeSettingsAtomic(path, []byte(body))
+}
+
+// encodeMALSection renders the section as a standalone TOML document
+// via the real encoder, so value quoting matches a full encode exactly.
+func encodeMALSection(section *MAL) string {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(struct {
+		MAL MAL `toml:"mal"`
+	}{*section}); err != nil {
+		// A struct of scalars cannot fail to encode; panic-guard only.
+		return "[" + malSectionName + "]\n"
+	}
+	return buf.String()
+}
+
+// malKeyLines renders just the section's key-value lines (the encoder
+// output minus its header line).
+func malKeyLines(section *MAL) []string {
+	encoded := strings.Split(strings.TrimSuffix(encodeMALSection(section), "\n"), "\n")
+	if len(encoded) > 0 && sectionHeaderName(encoded[0]) == malSectionName {
+		return encoded[1:]
+	}
+	return encoded
 }

@@ -11,7 +11,7 @@ package tui
 // Prints, for the query below (or $ANICLI_LIVE_QUERY):
 //  1. the loading frame right after Init;
 //  2. mid-flight frames at the first two settles and at the halfway
-//     mark: the line re-renders as «k/N провайдеров, K результатов…»
+//     mark: the line re-renders as «k/N providers, K results…»
 //     while the spinner frame animates — the fan-out visibly moves;
 //  3. the settled frame: the found/not-found summary above the
 //     merged checklist (the PR110 surface, unchanged).
@@ -58,7 +58,7 @@ func TestLivePR111SettleCounter(t *testing.T) {
 	if strings.Contains(v, "провайдеров,") {
 		t.Fatalf("the settled frame must drop the loading line:\n%s", v)
 	}
-	if want := "Найдено: " + strconv.Itoa(len(sp.results)); !strings.Contains(v, want) {
+	if want := "Found: " + strconv.Itoa(len(sp.results)); !strings.Contains(v, want) {
 		t.Fatalf("settled frame must carry the summary %q:\n%s", want, v)
 	}
 }

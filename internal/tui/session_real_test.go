@@ -68,7 +68,7 @@ func TestRealPlaybackSkipNoteSuccess(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("cleanup must remove the chapters file")
 	}
-	if note != "скипы: op 0:00–1:30" {
+	if note != "skips: op 0:00–1:30" {
 		t.Fatalf("note = %q, want the op range", note)
 	}
 	if !strings.Contains(logs.String(), "skips: resolved") {
@@ -86,8 +86,8 @@ func TestRealPlaybackSkipNoteNotFound(t *testing.T) {
 		t.Fatalf("clean empty must give no file and no error, got %q/%v", path, err)
 	}
 	cleanup()
-	if note != "скипы: не найдены" {
-		t.Fatalf("note = %q, want не найдены", note)
+	if note != "skips: not found" {
+		t.Fatalf("note = %q, want not found", note)
 	}
 	if !strings.Contains(logs.String(), "skips: no entry") {
 		t.Fatalf("the miss must reach the file logger, got:\n%s", logs.String())
@@ -103,8 +103,8 @@ func TestRealPlaybackSkipNoteUnavailable(t *testing.T) {
 	if err == nil {
 		t.Fatal("the transport failure must be reported")
 	}
-	if note != "скипы: недоступны" {
-		t.Fatalf("note = %q, want недоступны", note)
+	if note != "skips: unavailable" {
+		t.Fatalf("note = %q, want unavailable", note)
 	}
 	if !strings.Contains(logs.String(), "skips: lookup failed") {
 		t.Fatalf("the failure must reach the file logger, got:\n%s", logs.String())

@@ -21,6 +21,8 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/download"
+	"github.com/an0nx/anicli-go/internal/i18n"
+	"github.com/an0nx/anicli-go/internal/mal"
 	"github.com/an0nx/anicli-go/internal/metadata"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/player"
@@ -28,6 +30,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/skip"
 	"github.com/an0nx/anicli-go/internal/storage"
+	syncr "github.com/an0nx/anicli-go/internal/sync"
 )
 
 // RealDeps bundles the production services with their teardown hooks.
@@ -58,9 +61,18 @@ type realOptions struct {
 	// shikiPersister reports refreshed Shikimori OAuth sections to the
 	// settings file (PR25 E); nil keeps the client in-memory only.
 	shikiPersister func(config.Shikimori) error
+	// malPersister reports refreshed [mal] OAuth sections to the
+	// settings file (PR112); nil keeps the client in-memory only.
+	malPersister func(config.MAL) error
 	// logger is the diagnostics sink for the torrent engine (PR35);
 	// nil degrades to a discard logger — never stderr inside the TUI.
 	logger *slog.Logger
+}
+
+// WithMALPersister installs the MAL token persistence hook (PR112):
+// successful OAuth refreshes survive process restarts.
+func WithMALPersister(p func(config.MAL) error) RealOption {
+	return func(o *realOptions) { o.malPersister = p }
 }
 
 // WithLogger installs the diagnostics sink the torrent engine logs to
@@ -161,6 +173,28 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		// default 30s — PR24).
 		SearchTimeout: settings.Network.SearchTimeout,
 	}
+
+	// PR112 dual sync: the progress push fans out to every enabled
+	// tracker. The MAL client carries its own transport (a different
+	// host than Shikimori) and persists refreshed tokens; the id
+	// resolver caches card-derived mappings in the local store.
+	malNet, err := netclient.New(settings.Network, netclient.WithProvider("mal"))
+	if err != nil {
+		return nil, fmt.Errorf("build mal transport: %w", err)
+	}
+	real.mal = mal.New(settings.MAL, mal.APIBaseURL, mal.OAuthBaseURL, malNet,
+		mal.WithTokenPersister(o.malPersister), mal.WithLogger(logf(o.logger)))
+	syncLog := logf(o.logger)
+	deps.ProgressSync = syncr.NewDispatcher(
+		deps.History,
+		syncLog,
+		&syncr.ShikimoriSync{Shiki: deps.Shiki, History: deps.History, Log: syncLog},
+		&syncr.MALSync{
+			MAL:      real.mal,
+			Resolver: &syncr.CardMALIDResolver{Cards: deps.Shiki, Store: store.MALMap, Log: syncLog},
+			Log:      syncLog,
+		},
+	).SyncEpisodeProgress
 	return &RealDeps{
 		Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet,
 		registry: registry, buffered: real.buffered,
@@ -201,6 +235,7 @@ type realCore struct {
 	dl             *download.Downloader
 	buffered       *buffered.Downloader
 	shiki          *shikimori.Client
+	mal            *mal.Client
 	settings       config.Settings
 	downloadBridge *realDownload
 	// log is the file diagnostics sink (PR74: the download path's
@@ -336,14 +371,14 @@ func formatSkipClock(sec float64) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
-// formatSkipNote renders the found ranges ("скипы: op 0:00–1:30 · …").
+// formatSkipNote renders the found ranges ("skips: op 0:00–1:30 · …").
 func formatSkipNote(b skip.Bundle) string {
 	parts := make([]string, 0, len(b.Intervals))
 	for _, iv := range b.Intervals {
 		parts = append(parts, fmt.Sprintf("%s %s–%s",
 			iv.SkipType, formatSkipClock(iv.StartTime), formatSkipClock(iv.EndTime)))
 	}
-	return "скипы: " + strings.Join(parts, " · ")
+	return i18n.T("real.skips_note", i18n.Vals{"ranges": strings.Join(parts, " · ")})
 }
 
 // ResolveSkips resolves the episode's skip chapters and reports the
@@ -362,17 +397,17 @@ func (s *realPlayback) ResolveSkips(ctx context.Context, shikimoriID int64, epis
 	})
 	if err != nil {
 		log.Warn("tui: skips: lookup failed", "episode", episode, "error", err)
-		return "", func() {}, "скипы: недоступны", err
+		return "", func() {}, i18n.T("real.skips_unavailable"), err
 	}
 	if bundle.Empty() {
 		log.Info("tui: skips: no entry found",
 			"episode", episode, "details", bundle.Details)
-		return "", func() {}, "скипы: не найдены", nil
+		return "", func() {}, i18n.T("real.skips_not_found"), nil
 	}
 	path, werr := bundle.WriteChaptersFile(os.TempDir())
 	if werr != nil {
 		log.Warn("tui: skips: chapters file write failed", "episode", episode, "error", werr)
-		return "", func() {}, "скипы: недоступны", werr
+		return "", func() {}, i18n.T("real.skips_unavailable"), werr
 	}
 	note := formatSkipNote(bundle)
 	log.Info("tui: skips: resolved",
@@ -712,7 +747,7 @@ func (s *realDownload) ActiveBanner() string {
 	if len(active) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("⬇ Фоновых загрузок: %d", len(active))
+	return i18n.T("real.bg_downloads", i18n.Vals{"count": strconv.Itoa(len(active))})
 }
 
 // recall fetches the resolve parts of one manager task.
@@ -830,7 +865,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		Audio:        audio,
 		ChaptersFile: chaptersFile,
 		OutputPath:   outPath,
-		Title:        fmt.Sprintf("%s — серия %s", task.AnimeTitle, task.Episode.Num),
+		Title:        i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
 	}
 	if err := c.dl.Download(ctx, input); err != nil {
 		return "", err

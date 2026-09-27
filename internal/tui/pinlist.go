@@ -1,11 +1,13 @@
 package tui
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // PinList is the menu list component enforcing the viewport half of
@@ -194,7 +196,7 @@ func (l *PinList) Render() string {
 		b.WriteString(renderRow(l.menu.Items[i], i, l.cursor, l.markers[i]))
 	}
 	if hi < l.bodyEnd() {
-		b.WriteString(theme.Dim.Render(fmt.Sprintf("  … ещё %d", l.bodyEnd()-hi)))
+		b.WriteString(theme.Dim.Render(i18n.T("common.more", i18n.Vals{"count": strconv.Itoa(l.bodyEnd() - hi)})))
 		b.WriteString("\n")
 	}
 

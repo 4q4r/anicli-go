@@ -2,10 +2,10 @@ package tui
 
 // PR84: the remembered-dub auto-launch (proceedWatch's scoped resolve)
 // rendered the SELECTION surface (the quality picker's title with the
-// «Ищу потоки…» row) while the streams were still resolving — the
+// «Looking for streams…» row) while the streams were still resolving — the
 // owner read it as «pick again». The fix: a DISTINCT minimal loading
-// surface («Загрузка потоков…» + ep/dub context) for every armed
-// auto-launch (▶ Смотреть, ⏭ След., ⏮ Пред.); the picker appears
+// surface («Resolving streams…» + ep/dub context) for every armed
+// auto-launch (▶ Watch, ⏭ Next, ⏮ Prev); the picker appears
 // only when a choice is genuinely needed (the remembered dub
 // vanished) with its typed warning. These tests pin the surface
 // sequence frame by frame.
@@ -57,9 +57,9 @@ func playloadSession(t *testing.T, num string, buffered bool) *sessionScreen {
 	return s
 }
 
-// TestAutoWatchNextArmedShowsResolveLoadingNotPicker: ⏭ След. on a
+// TestAutoWatchNextArmedShowsResolveLoadingNotPicker: ⏭ Next on a
 // remembered-dubs episode opens the DISTINCT loading surface — the
-// picker's title and its «Ищу потоки…» row must never flash.
+// picker's title and its «Looking for streams…» row must never flash.
 func TestAutoWatchNextArmedShowsResolveLoadingNotPicker(t *testing.T) {
 	s := playloadSession(t, "2", false)
 
@@ -75,12 +75,12 @@ func TestAutoWatchNextArmedShowsResolveLoadingNotPicker(t *testing.T) {
 		t.Fatal("the scoped resolve command is missing")
 	}
 	view := ss.View().Content
-	for _, want := range []string{"Загрузка потоков…", "Эп. 2", "Дубль 1"} {
+	for _, want := range []string{"Resolving streams…", "Ep. 2", "Дубль 1"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("loading surface missing %q:\n%s", want, view)
 		}
 	}
-	for _, banned := range []string{"Выберите поток", "Ищу потоки…"} {
+	for _, banned := range []string{"Pick a stream", "Looking for streams…"} {
 		if strings.Contains(view, banned) {
 			t.Errorf("the picker surface flashed during the resolve:\n%s", view)
 		}
@@ -141,7 +141,7 @@ func TestResolveLoadingSettleLaunchesDirectly(t *testing.T) {
 	if len(pb.played) != 1 {
 		t.Fatalf("exactly one playback must run, got %d", len(pb.played))
 	}
-	if strings.Contains(seen, "Выберите поток") {
+	if strings.Contains(seen, "Pick a stream") {
 		t.Errorf("the picker flashed before the launch:\n%s", seen)
 	}
 }
@@ -182,12 +182,12 @@ func TestResolveLoadingVanishedDubOpensPickerWithWarning(t *testing.T) {
 		t.Fatalf("state = %v, want sessionStateQuality (the picker path)", ss.state)
 	}
 	view := ss.View().Content
-	for _, want := range []string{"Выберите поток", "Ищу потоки…"} {
+	for _, want := range []string{"Pick a stream", "Looking for streams…"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("picker loading surface missing %q:\n%s", want, view)
 		}
 	}
-	if !strings.Contains(ss.status, "⚠ Прошлые настройки недоступны") {
+	if !strings.Contains(ss.status, "⚠ Previous settings unavailable") {
 		t.Errorf("status = %q, want the typed vanished-dub warning", ss.status)
 	}
 }
@@ -197,7 +197,7 @@ func TestResolveLoadingVanishedDubOpensPickerWithWarning(t *testing.T) {
 // returns to the screen the launch came from.
 func TestResolveLoadingEscCancelsToOrigin(t *testing.T) {
 	s := playloadSession(t, "2", false)
-	// The real ⏭ След. is picked from the episode list — the origin
+	// The real ⏭ Next is picked from the episode list — the origin
 	// the loading surface's Esc returns to.
 	s.setState(sessionStateEpisodeList)
 	if _, cmd := s.autoWatchNext(); cmd == nil {
@@ -255,8 +255,8 @@ func TestWatchFromMenuArmedShowsResolveLoading(t *testing.T) {
 	if ss2.state != sessionStateResolveLoading {
 		t.Fatalf("state = %v, want sessionStateResolveLoading", ss2.state)
 	}
-	if view := ss2.View().Content; strings.Contains(view, "Выберите поток") {
-		t.Errorf("the picker flashed on the ▶ Смотреть path:\n%s", view)
+	if view := ss2.View().Content; strings.Contains(view, "Pick a stream") {
+		t.Errorf("the picker flashed on the ▶ Watch path:\n%s", view)
 	}
 	if cmd == nil {
 		t.Fatal("missing resolve command")
@@ -287,7 +287,7 @@ func TestResolveLoadingBufferedComposition(t *testing.T) {
 	if ss.state != sessionStateBuffering {
 		t.Fatalf("state after buffered settle = %v, want sessionStateBuffering", ss.state)
 	}
-	if view := ss.View().Content; strings.Contains(view, "Загрузка потоков…") {
+	if view := ss.View().Content; strings.Contains(view, "Resolving streams…") {
 		t.Errorf("the loading surface must be gone at buffering:\n%s", view)
 	}
 }
@@ -328,7 +328,7 @@ func TestSecondUnscopedResolveClearsStaleRows(t *testing.T) {
 	}
 
 	// Round 2 on the next episode: the stale rows must be gone from
-	// the resolve frame — only the «Ищу потоки…» loading row renders.
+	// the resolve frame — only the «Looking for streams…» loading row renders.
 	s.currentIdx = 1
 	scr2, cmd2 := ss.beginStreamResolve("")
 	ss2 := scr2.(*sessionScreen)
@@ -336,7 +336,7 @@ func TestSecondUnscopedResolveClearsStaleRows(t *testing.T) {
 	if strings.Contains(view, "1080p") {
 		t.Errorf("the previous round's rows render during round 2:\n%s", view)
 	}
-	if !strings.Contains(view, "Ищу потоки…") {
+	if !strings.Contains(view, "Looking for streams…") {
 		t.Errorf("the resolve frame must show the loading row:\n%s", view)
 	}
 	if cmd2 == nil {

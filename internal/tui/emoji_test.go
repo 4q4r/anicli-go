@@ -5,11 +5,11 @@ package tui
 // tests walk every screen's menu and pin the emoji discipline:
 //  1. within a screen, no two rows share a leading emoji;
 //  2. across screens, an emoji maps to exactly ONE action id — the
-//     same action may repeat (▶ Смотреть, ⏭/⏮, 🔢, 🚪 Выход are
+//     same action may repeat (▶ Watch, ⏭/⏮, 🔢, 🚪 Exit are
 //     consistent by design), but one emoji meaning two different
 //     actions breaks the muscle-memory navigation.
 //
-// Labels without a leading emoji (quality rows, «Статус», raw dub
+// Labels without a leading emoji (quality rows, «Status», raw dub
 // keys…) map to "" and are exempt. History rows carry bracketed
 // badges, not emojis, and are not part of the emoji system.
 
@@ -89,7 +89,7 @@ func resumedSessionForEmojiTests(t *testing.T) *sessionScreen {
 
 // TestSessionMenuEmojisUnique: the action menu shows no duplicated
 // emoji — fresh AND resumed (the resumed menu adds «Перепривязать»,
-// which shared 🔄 with «Обновить источники» until PR74).
+// which shared 🔄 with «Refresh sources» until PR74).
 func TestSessionMenuEmojisUnique(t *testing.T) {
 	fresh := newSessionForTests(t)
 	assertNoDuplicateEmoji(t, "session/fresh", fresh.list.Menu().Items)
@@ -103,11 +103,11 @@ func TestSessionMenuEmojisUnique(t *testing.T) {
 	for _, c := range resumed.list.Menu().Items {
 		labels[c.ID] = c.Label
 	}
-	if got := labels["rebind"]; got != "🔗 Перепривязать" {
-		t.Fatalf("rebind label = %q, want 🔗 Перепривязать", got)
+	if got := labels["rebind"]; got != "🔗 Rebind" {
+		t.Fatalf("rebind label = %q, want 🔗 Rebind", got)
 	}
-	if got := labels["refresh"]; got != "🔄 Обновить источники" {
-		t.Fatalf("refresh label = %q, want 🔄 Обновить источники", got)
+	if got := labels["refresh"]; got != "🔄 Refresh sources" {
+		t.Fatalf("refresh label = %q, want 🔄 Refresh sources", got)
 	}
 }
 
@@ -132,9 +132,9 @@ func TestAuxMenusEmojisUnique(t *testing.T) {
 	s.buildModeList()
 	assertNoDuplicateEmoji(t, "session/mode", s.modeList.Menu().Items)
 	s.state = sessionStateFormat
-	s.formatList = NewPinList(NewMenu("Формат просмотра:", "", []Choice{
-		{ID: "stream", Label: "Потоковый", Value: "stream"},
-		{ID: "buffer", Label: "Буферный", Value: "buffer"},
+	s.formatList = NewPinList(NewMenu("Watch format:", "", []Choice{
+		{ID: "stream", Label: "Streaming", Value: "stream"},
+		{ID: "buffer", Label: "Buffered", Value: "buffer"},
 	}...), defaultListHeight)
 	assertNoDuplicateEmoji(t, "session/format", s.formatList.Menu().Items)
 

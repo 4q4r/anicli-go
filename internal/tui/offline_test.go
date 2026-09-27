@@ -40,7 +40,7 @@ func TestOfflineTitlesList(t *testing.T) {
 	deps := &Deps{Offline: &fakeOffline{titles: offlineFixture()}}
 	list := NewOfflineTitles(deps)
 	v := list.View().Content
-	if !strings.Contains(v, "Ванпанчмен") || !strings.Contains(v, "2 сер.") || !strings.Contains(v, "3 лок.") {
+	if !strings.Contains(v, "Ванпанчмен") || !strings.Contains(v, "2 ep.") || !strings.Contains(v, "3 local") {
 		t.Fatalf("offline list must show counts:\n%s", v)
 	}
 }
@@ -50,7 +50,7 @@ func TestOfflineEmptyLibrary(t *testing.T) {
 	deps := &Deps{Offline: &fakeOffline{}}
 	list := NewOfflineTitles(deps)
 	v := list.View().Content
-	if !strings.Contains(v, "Нет скачанных тайтлов") {
+	if !strings.Contains(v, "No downloaded titles") {
 		t.Fatalf("empty offline library must render its empty state:\n%s", v)
 	}
 }
@@ -65,7 +65,7 @@ func TestOfflineSession(t *testing.T) {
 
 	t.Run("episodes listed with variant counts", func(t *testing.T) {
 		v := s.View().Content
-		if !strings.Contains(v, "Эп. 1") || !strings.Contains(v, "2") {
+		if !strings.Contains(v, "Ep. 1") || !strings.Contains(v, "2") {
 			t.Fatalf("episode list with variant counts missing:\n%s", v)
 		}
 	})
@@ -77,7 +77,7 @@ func TestOfflineSession(t *testing.T) {
 		if ss.current != "1" {
 			t.Fatalf("pick must set current episode, got %q", ss.current)
 		}
-		// ▶ Смотреть on the action menu.
+		// ▶ Watch on the action menu.
 		idx := -1
 		for i, c := range ss.list.Menu().Items {
 			if c.ID == "watch" {
@@ -187,7 +187,7 @@ func TestOfflineWatchDispatchesPlayback(t *testing.T) {
 	}
 	next, _ = next.Update(dm)
 	ss = next.(*offlineSession)
-	if !contains(ss.status, "Воспроизведение завершено") {
+	if !contains(ss.status, "Playback finished") {
 		t.Fatalf("settle must reach the status line, got %q", ss.status)
 	}
 	if len(pb.played) != 1 {
@@ -201,7 +201,7 @@ func TestOfflineWatchDispatchesPlayback(t *testing.T) {
 	}
 }
 
-// TestOfflineVariantPickerFlow (C4): «Сменить локальный поток» opens
+// TestOfflineVariantPickerFlow (C4): «Switch local stream» opens
 // a real picker; Enter switches the local variant and returns to the
 // menu; Esc cancels the picker without leaving the session.
 func TestOfflineVariantPickerFlow(t *testing.T) {

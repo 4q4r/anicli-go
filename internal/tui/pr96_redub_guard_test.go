@@ -4,7 +4,7 @@ package tui
 // empty settle carrier and a dub key with no resolved streams must
 // degrade to clean no-ops with status notes (or the unscoped resolve
 // fallback) — never a panic. The owner hit the recovered
-// «invalid memory address … источник: session» on this screen family.
+// «invalid memory address … source: session» on this screen family.
 
 import (
 	"strings"
@@ -62,7 +62,7 @@ func TestPR96RedubSettleEmptyEntriesNoPanic(t *testing.T) {
 	if got := len(ss.redubList.Menu().Items); got != 1 {
 		t.Fatalf("empty settle must build the Back-only menu, got %d rows", got)
 	}
-	if !ss.statusVisible() || !strings.Contains(ss.status, "не найден") {
+	if !ss.statusVisible() || !strings.Contains(ss.status, "No dubs found") {
 		t.Fatalf("empty settle must stamp the status note, got %q (visible=%v)",
 			ss.status, ss.statusVisible())
 	}
@@ -87,7 +87,7 @@ func TestPR96ScopedSettleEmptyEntriesFallsBackToUnscoped(t *testing.T) {
 	if ss.resolveGen != gen+1 {
 		t.Fatalf("resolveGen = %d, want a fresh round (%d)", ss.resolveGen, gen+1)
 	}
-	if v := ss.View().Content; !strings.Contains(v, "Ищу потоки") {
+	if v := ss.View().Content; !strings.Contains(v, "Looking for streams") {
 		t.Fatalf("unscoped fallback must render the resolving surface:\n%s", v)
 	}
 }

@@ -2,7 +2,7 @@
 
 package tui
 
-// PR84 live probe: the ⏭ След. auto-launch on a real two-episode
+// PR84 live probe: the ⏭ Next auto-launch on a real two-episode
 // title. Captures the DISTINCT loading surface frame during the real
 // scoped resolve (never the picker's title), lets the settle launch
 // mpv, and pastes the frames.
@@ -108,7 +108,7 @@ func TestLivePR84NextEpisodeLoadingSurface(t *testing.T) {
 	}
 
 	// 2. Remember the pair (the PR63 shape) and jump to the second
-	// episode — the ⏭ След. position — from the episode list.
+	// episode — the ⏭ Next position — from the episode list.
 	session.videoDub, session.audioDub = dub, dub
 	for i, candidate := range session.order {
 		if candidate == session.order[1] {
@@ -125,7 +125,7 @@ func TestLivePR84NextEpisodeLoadingSurface(t *testing.T) {
 	}
 	session = ss
 
-	// 3. ⏭ След. with the real command pump: hydration (when tier-1)
+	// 3. ⏭ Next with the real command pump: hydration (when tier-1)
 	// then the scoped resolve — the state can pass through several
 	// steps inside one Update chain, so the loading frame is sampled
 	// after EVERY step.
@@ -147,7 +147,7 @@ func TestLivePR84NextEpisodeLoadingSurface(t *testing.T) {
 		}
 		if cmd == nil {
 			// A settle landed back on a menu/list state: continue the
-			// ⏭ След. flow with a fresh autoWatchNext.
+			// ⏭ Next flow with a fresh autoWatchNext.
 			var scr Screen
 			scr, cmd = session.autoWatchNext()
 			if s, ok := scr.(*sessionScreen); ok {
@@ -174,10 +174,10 @@ func TestLivePR84NextEpisodeLoadingSurface(t *testing.T) {
 	if !sawLoading {
 		t.Fatalf("the loading surface never rendered (final state=%v)", session.state)
 	}
-	if strings.Contains(loadingFrame, "Выберите поток") || strings.Contains(loadingFrame, "Ищу потоки…") {
+	if strings.Contains(loadingFrame, "Pick a stream") || strings.Contains(loadingFrame, "Looking for streams…") {
 		t.Errorf("the picker flashed during the resolve:\n%s", loadingFrame)
 	}
-	if !strings.Contains(loadingFrame, "Эп. "+session.resolveEp) || !strings.Contains(loadingFrame, session.resolveDub) {
+	if !strings.Contains(loadingFrame, "Ep. "+session.resolveEp) || !strings.Contains(loadingFrame, session.resolveDub) {
 		t.Errorf("the loading frame must carry the ep/dub context:\n%s", loadingFrame)
 	}
 	t.Logf("LOADING FRAME:\n%s", loadingFrame)

@@ -19,6 +19,10 @@
 # [general] Общие пути
 # ------------------------------------------
 [general]
+# Язык интерфейса / UI language: "en", "ru", или файл
+# ~/.config/anicli/locales/<lang>.toml (см. locales/README.md).
+locale = "en"
+
 # Каталог данных (база, загрузки, кэш).
 # Пусто = автоматически: $ANICLI_DATA > $XDG_DATA_HOME/anicli > ~/.local/share/anicli
 # data_dir = "/var/lib/anicli"
@@ -81,6 +85,26 @@ enabled = false
 # Поля ниже заполняются автоматически командой auth; access-токен живёт
 # сутки и продлевается автоматически (refresh за 5 минут до истечения
 # или после 401), новые токены сохраняются в этот же файл.
+# access_token = "..."
+# refresh_token = "..."
+# token_expires_at = 0
+# client_id = "..."
+# client_secret = "..."
+
+# ------------------------------------------
+# [mal] Интеграция с MyAnimeList
+# ------------------------------------------
+[mal]
+# Включить модуль (opt-in; Shikimori и MyAnimeList могут быть
+# авторизованы одновременно — синхронизация идёт в оба трекера).
+enabled = false
+
+# OAuth2 authorization-code flow с PKCE. Создайте приложение на
+# https://myanimelist.net/en/apiproxy (App type: web; redirect_uri
+# вида http://127.0.0.1:port/callback) и выполните:
+#   anicli mal auth --client-id XXX --client-secret YYY
+# Поля ниже заполняются командой auth автоматически; access-токен
+# продлевается автоматически (за 5 минут до истечения или после 401).
 # access_token = "..."
 # refresh_token = "..."
 # token_expires_at = 0

@@ -1,174 +1,435 @@
+# 📺 AniCLI-Go
+
 <div align="center">
 
-<!-- TODO: замените на реальный GIF/скриншот TUI после первого релиза -->
-<img src="https://placehold.co/800x250/1e1e2e/cdd6f4?text=anicli-go+TUI+preview" width="800" alt="preview">
+**Terminal anime media center**
 
-## anicli-go
-
-Порт [anicli-py](../anicli-py) на Go: единый бинарник — TUI, HTTP-API и общий core на 11 аниме-источниках
+A Go port of `anicli-py`: search 30 live sources, stream or download through mpv, sync
+progress with Shikimori, and skip openings automatically — one static binary with a TUI
+and an HTTP API sharing the same core.
 
 [![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
-[![Tests](https://img.shields.io/badge/tests-815%2B-green?style=for-the-badge)](Makefile)
-[![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
+[![Bubbletea](https://img.shields.io/badge/Bubbletea-v2-FF5F8F?style=for-the-badge)](https://github.com/charmbracelet/bubbletea)
+[![Lipgloss](https://img.shields.io/badge/Lipgloss-v2-C084FC?style=for-the-badge)](https://github.com/charmbracelet/lipgloss)
+[![Torrent](https://img.shields.io/badge/BitTorrent-anacrolix%201.61-DC382D?style=for-the-badge)](https://github.com/anacrolix/torrent)
+[![SQLite](https://img.shields.io/badge/SQLite-modernc--003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://gitlab.com/cznic/sqlite)
+[![mpv](https://img.shields.io/badge/Player-mpv-663399?style=for-the-badge)](https://mpv.io/)
+
+[![chi](https://img.shields.io/badge/chi-v5-2A9D8F?style=flat-square)](https://github.com/go-chi/chi)
+[![cobra](https://img.shields.io/badge/cobra-1.10-3776AB?style=flat-square)](https://github.com/spf13/cobra)
+[![tls-client](https://img.shields.io/badge/tls--client-fingerprinted-8A2BE2?style=flat-square)](https://github.com/bogdanfinn/tls-client)
+[![chromedp](https://img.shields.io/badge/chromedp-CF%20ladder-E67E22?style=flat-square)](https://github.com/chromedp/chromedp)
+[![goreleaser](https://img.shields.io/badge/goreleaser-5%20targets-00B4D8?style=flat-square)](https://goreleaser.com/)
+[![Runtime](https://img.shields.io/badge/Runtime-Distroless-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/GoogleContainerTools/distroless)
+[![Tests](https://img.shields.io/badge/tests-1500%2B-green?style=flat-square)](Makefile)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+
+[Architecture](#-system-architecture) · [Quick Start](#-quick-start) · [Provider Roster](#-provider-roster) · [Configuration](#-configuration) · [Testing](#-testing)
 
 </div>
 
 ---
 
-## 📑 Содержание
+## 📑 Table of Contents
 
-- [О проекте](#-о-проекте)
-- [Возможности](#-возможности)
-- [Карта модулей](#-карта-модулей)
-- [Установка](#-установка)
-- [Быстрый старт](#-быстрый-старт)
-- [Конфигурация](#-конфигурация)
-- [Источники](#-источники)
-- [Разработка](#-разработка)
-- [Лицензия](#-лицензия)
-
----
-
-## 📜 О проекте
-
-**anicli-go** — консольный медиа-центр для просмотра аниме: поиск, воспроизведение через mpv,
-загрузка серий, синхронизация со Shikimori и умные пропуски опенингов/эндингов.
-
-Порт замороженного Python-оригинала (`anicli-py`) 1:1 — с сохранением wire-форматов API,
-схемы БД и поведенческих нюансов. Ключевые отличия от предшественника:
-
-| | anicli-py | anicli-go |
-|---|---|---|
-| Распространение | Poetry-окружение | один статический бинарник (~15 МБ) |
-| ML-группировка | ONNX MiniLM | локальная семантическая группировка без нейросети |
-| HTTP-клиент | httpx | tls-client (отпечаток Chrome 150) |
-| БД | SQLAlchemy + alembic | pure-Go SQLite (modernc), та же схема |
-| Пропуски | ML + API | API (AniSkip v2 + AnimeSkip) + IntroSkipper |
+- [System Architecture](#-system-architecture)
+- [Project Structure](#-project-structure)
+- [Core Modules](#-core-modules)
+- [Search Pipeline](#-search-pipeline)
+- [Providers](#-providers)
+- [Torrent Engine](#-torrent-engine)
+- [Player & Skips](#-player--skips)
+- [API Surface](#-api-surface)
+- [Configuration](#-configuration)
+- [Security](#-security)
+- [Quick Start](#-quick-start)
+- [Local Development](#-local-development)
+- [Testing](#-testing)
+- [Provider Roster](#-provider-roster)
+- [License](#-license)
 
 ---
 
-## ✨ Возможности
-
-<details open>
-<summary><b>🔍 Мульти-источник</b></summary>
-
-| Функция | Описание |
-|---------|----------|
-| **Поиск** | Параллельный fan-out по 12 источникам с ограничением параллелизма |
-| **Группировка** | Семантическое объединение дублей между источниками |
-| **Потоки** | Извлечение прямых ссылок (HLS/MP4) из 9 типов плееров |
-
-</details>
-
-<details>
-<summary><b>🖥️ Два интерфейса, один core</b></summary>
-
-TUI (bubbletea v2) для терминала и HTTP-API (chi) для веб-морды — оба работают через
-одни и те же сервисы: провайдеры, хранилище, shikimori-клиент, менеджер загрузок.
-
-</details>
-
-<details>
-<summary><b>⏭️ Пропуски опенингов</b></summary>
-
-AniSkip v2 + AnimeSkip (GraphQL) опрашиваются параллельно и умно склеиваются
-(слияние по типу, приоритет провайдера); локальный IntroSkipper (ffmpeg) —
-fallback для собственных файлов. Результат — FFMETADATA-главы для mpv.
-
-</details>
-
-<details>
-<summary><b>⬇️ Загрузка серий</b></summary>
-
-Фоновый менеджер с ограниченной конкурентностью, ffmpeg-склейка видео+аудио,
-атомарная запись файлов и офлайн-индекс (`.anicli_offline_index.json`) библиотеки.
-
-</details>
-
----
-
-## 🧭 Карта модулей
+## 🗺️ System Architecture
 
 ```mermaid
-graph TD
-    subgraph interfaces["Интерфейсы"]
-        TUI["TUI (bubbletea v2)<br/>internal/tui"]
-        CLI["cli (cobra)<br/>internal/cli"]
-        API["HTTP-API (chi)<br/>internal/api — 20 эндпоинтов"]
+flowchart TB
+    subgraph Faces["Two faces, one core"]
+        TUI["TUI — Bubbletea v2\ninternal/tui"]
+        API["HTTP API — chi, 20 routes\ninternal/api"]
+        CLI["CLI — cobra\nanicli · serve · doctor · cf · shikimori"]
     end
 
-    subgraph core["Общий core"]
-        REG["Реестр провайдеров<br/>internal/providers"]
-        SHIKI["Shikimori-клиент<br/>internal/shikimori"]
-        SKIP["Менеджер пропусков<br/>internal/skip"]
-        DL["Загрузки + офлайн-индекс<br/>internal/download"]
-        ST["SQLite-хранилище<br/>internal/storage"]
-        META["Метаданные<br/>internal/metadata"]
+    subgraph Core["Shared core"]
+        REG["Provider registry\ninternal/providers — 30 factories"]
+        SHIKI["Shikimori client\ncookie + OAuth2"]
+        META["Name variants\ncap 16 (internal/metadata)"]
+        SKIP["Skip manager\ninternal/skip"]
+        DL["Downloads + offline index\ninternal/download"]
+        ST[("SQLite (modernc)\nsame schema as anicli-py")]
+        CF["Cloudflare ladder\ninternal/cfbrowser"]
     end
 
-    subgraph sources["Источники — 30 провайдеров"]
-        P1[anilibria]
-        P2[animevost]
-        P3[anilib]
-        P4[animego]
-        P5[gogoanime]
-        P6[kickassanime]
-        P7[anizone]
-        P8[sameband]
-        P9[kodik]
-        P10[anidub]
-        P11[animedia]
-        P12[shiza]
-        P13[yummy]
-        P14[hdrezka]
-        P15[anistar]
-        P16[anifilm]
-        P17[animemobi]
-        P18[anitokyo]
-        P19[animiku]
-        P20[anikado]
-        P21[animevib]
-        P22[animeheaven]
-        P23[anikoto]
-        P24[anilibria-torrent]
-        P25[animetosho]
-        P26[tokyotosho]
-        P27[rutor]
-        P28[anirena]
-        P29[subsplease]
-        P30[anipub]
+    subgraph Stream["Stream providers — 24"]
+        RU["RU catalogs ×18"]
+        EN["EN catalogs ×6"]
+        EXT["Extractor factory\ninternal/extractors — 10 players"]
     end
 
-    EXT["Извлекатели плееров (10)<br/>internal/extractors"]
+    subgraph BitTorrent["Torrent subsystem"]
+        TP["Torrent search providers — 6"]
+        ENG["ONE shared lazy engine\ninternal/torrent (anacrolix)"]
+        SRV["Loopback HTTP server\nRange + readahead"]
+    end
 
-    TUI --> REG & SHIKI & SKIP & DL & ST
+    MPV["mpv"]
+
+    TUI --> REG & SHIKI & SKIP & DL & ST & ENG
     API --> REG & SHIKI & ST
     CLI --> TUI & API
-    REG --> P1 & P2 & P3 & P4 & P5 & P6 & P7 & P8 & P9 & P10 & P11 & P12 & P13 & P14 & P15 & P16 & P17 & P18 & P19 & P20 & P21 & P22 & P23 & P24 & P25 & P26 & P27 & P28 & P29 & P30
-    P3 & P4 & P5 & P9 & P10 & P11 & P12 & P13 & P15 & P16 & P17 & P18 & P19 & P20 & P21 & P22 & P23 --> EXT
-    SKIP --> ST
-    DL --> SKIP
+    REG --> RU & EN & TP
+    RU & EN --> EXT
+    TP --> ENG
+    ENG --> SRV
+    SRV --> MPV
+    TUI -->|"direct HLS/MP4"| MPV
+    SKIP -->|"chapters file"| MPV
+    SHIKI -->|"autocomplete + all-names"| Shiki[(Shikimori API)]
+    SKIP -->|"AniSkip v2 · AnimeSkip"| SkipAPI[(Skip APIs)]
+    RU & EN & TP --> Sites[(Live sources)]
+```
+
+Request flow:
+
+1. A query enters through the TUI search screen or `GET /api/v1/search`.
+2. With Shikimori enabled the query is enriched: autocomplete → the top-ranked card →
+   every name on the card (russian, original, english[], japanese[], synonyms[]) plus
+   metadata aliases → a variant pool capped at 16, original query first.
+3. Variants route by provider content language (ru → Cyrillic index, ja/en → Latin) and
+   fan out to all registered providers with bounded parallelism and a 30 s per-provider
+   budget.
+4. Failures stay local: a timed-out, geo-blocked, or captcha-walled provider degrades
+   only its own row — results from healthy providers still surface.
+5. Cross-source duplicates merge into one group; picking a group hydrates the
+   episode × dub matrix and binds the title to Shikimori.
+6. Playing resolves streams fresh on every launch (resolve caching is forbidden),
+   unboxes player embeds through the extractor factory, and launches mpv with the
+   source's headers; the skip manager writes FFMETADATA chapters.
+7. Torrent results ride the single shared engine: metadata arrives via trackers or DHT,
+   and playback streams over a loopback HTTP server into the same mpv path.
+
+---
+
+## 📂 Project Structure
+
+```text
+anicli-go/
+├── cmd/
+│   ├── anicli/                single binary entry point (cobra root)
+│   └── parity/                live provider probe + G1 gate + smoke
+├── internal/
+│   ├── api/                   HTTP API face — chi, 20 routes, token auth
+│   ├── buffered/              sequential playback buffering
+│   ├── cfbrowser/             stealth-Chromium Cloudflare challenge ladder
+│   ├── cli/                   cobra command tree (serve, doctor, cf, shikimori)
+│   ├── config/                settings.toml loading + env overrides
+│   ├── contracts/             provider/episode/stream interfaces
+│   ├── crypto/                AES-CBC + HMAC token primitives
+│   ├── download/              bounded background downloader + offline index
+│   ├── extractors/            10 player extractors (kodik, sibnet, blogger, …)
+│   ├── loadtest/              SLO load suite (build tag `load`)
+│   ├── metadata/              alias aggregation + query variants (cap 16)
+│   ├── netclient/             tls-client wrapper — fingerprint, proxy, watchdog
+│   ├── player/                mpv argv builder + process lifecycle
+│   ├── providers/             30 source providers + registry + TorrentBase
+│   ├── regression/            API contract golden files (all 20 endpoints)
+│   ├── rules/                 dub-stream filter rules
+│   ├── shikimori/             Shikimori API client (cookie + OAuth2)
+│   ├── skip/                  AniSkip v2 / AnimeSkip / IntroSkipper
+│   ├── storage/               SQLite repositories (pure-Go driver)
+│   ├── torrent/               shared engine wrapper + loopback stream server
+│   └── tui/                   Bubbletea v2 screens
+├── settings.example.toml      fully commented settings template
+├── Dockerfile                 distroless runtime image
+├── .goreleaser.yaml           5-target release matrix (CGO off)
+├── THIRD-PARTY-NOTICES.md     dependency license inventory
+└── .sdd/ledger.md             build history — PRs, protocol dossiers, rulings
 ```
 
 ---
 
-## 🚀 Установка
+## 🧩 Core Modules
 
-### Готовые бинарники (goreleaser)
+| Module | Purpose | Key details |
+| :-- | :-- | :-- |
+| `tui` | Terminal face — session state machine | root menu → lists / downloads / DB / health screens, live search settle counter |
+| `api` | HTTP face — 20 routes under `/api/v1` | HMAC-signed access tokens, pbkdf2 users, `X-Trace-Id` correlation |
+| `providers` | Source registry — 30 factories in pinned order | one `tls-client` per provider (own cookie jar, tagged errors), `SearchDelegator` stats |
+| `extractors` | Player embeds → direct streams | kodik, sibnet, aniboom, alloha, aksor, dood, gogoplay, streamtape, blogger, cdnvideohub |
+| `torrent` | BitTorrent streaming | anacrolix engine wrapper, multilink ingest, loopback HTTP with `Range` |
+| `shikimori` | Tracker sync | cookie + OAuth2 (auto-refresh), autocomplete, full name card |
+| `mal` | MyAnimeList tracker sync | OAuth2 + PKCE (`plain`), auto-refresh, `my_list_status` CRUD |
+| `metadata` | Query expansion | anilist/kitsu/anisearch/anidb aliases merged with the Shikimori card, cap 16 |
+| `skip` | Opening/ending detection | `aniskip → anime_skip → intro_skipper` chain, FFMETADATA chapters |
+| `download` | Offline library | bounded concurrency, ffmpeg mux, `.anicli_offline_index.json` |
+| `storage` | SQLite persistence | same schema as anicli-py, pure-Go driver, no CGO |
+| `player` | mpv integration | argv ported verbatim, per-source headers, chapters cleanup |
+| `cfbrowser` | Cloudflare bypass | stealth Chromium auto-download, Ed25519-verified updates, solve on demand |
+| `netclient` | Shared HTTP plumbing | Chrome-fingerprint TLS, silent-connection watchdog, global proxy |
 
-Скачайте архив со [страницы релизов](../../releases), распакуйте и положите `anicli` в `$PATH`:
+---
 
-| Система | Архив |
-|---------|-------|
-| Linux (x86_64) | `anicli_X.Y.Z_linux_amd64.tar.gz` |
-| Linux (ARM64) | `anicli_X.Y.Z_linux_arm64.tar.gz` |
-| Windows (x86_64) | `anicli_X.Y.Z_windows_amd64.zip` |
-| macOS (Intel) | `anicli_X.Y.Z_darwin_amd64.tar.gz` |
-| macOS (Apple Silicon) | `anicli_X.Y.Z_darwin_arm64.tar.gz` |
+## 🔎 Search Pipeline
 
-Контрольные суммы — в `checksums.txt` рядом с релизом.
+The hybrid search is `internal/tui/search.go` (PR24, redesigned in PR97); variant
+expansion lives in `internal/metadata/manager.go`.
 
-### Docker
+- **Enrichment** — Shikimori autocomplete over the original query → the TOP card binds
+  (Shikimori's own relevance rank; the local fuzzy matcher was removed) → `GetAnime(id)`
+  returns the full name inventory: russian, original, english[], japanese[], synonyms[] —
+  5+ names per title.
+- **Variants** — the inventory merges with metadata aliases into a deduplicated pool
+  capped at `maxQueryVariants = 16`, original query first. Any enrichment failure
+  degrades quietly to the previous stage's names, never to zero.
+- **Language routing** — each provider declares a content language (pinned by a roster
+  test): `ru` receives Cyrillic variants, `ja`/`en` receive Latin ones.
+- **Fan-out** — all variants go to every registered provider under
+  `network.max_parallel` with a per-provider `network.search_timeout` budget (30 s
+  default); the TUI renders a live table with a settle counter.
+- **Fail-soft everywhere** — a provider that times out, answers a geo-block, or hits a
+  captcha degrades only its own row (PR94 spirit: a remembered-dub failure falls through
+  to the full merged resolve of the rest, never kills the flow).
+- **Grouping** — cross-source duplicates merge with local semantic grouping; no neural
+  network, unlike the Python original's ONNX MiniLM.
+- **Fresh resolve** — `ResolveStream` results are never cached: every episode launch
+  re-resolves (a deliberate landmine fix from the Python original).
+
+---
+
+## 📡 Providers
+
+`internal/providers/factory.go` lists the provider constructors in the registry order —
+30 factories: 24 stream + 6 torrent. A meta-test pins the roster: exact count, unique
+IDs, pinned order, and fixtures per provider.
+
+- **One HTTP client each** — every provider gets its own `tls-client` instance with a
+  browser-fingerprint profile, a private cookie jar, and provider-tagged errors. No
+  cookie cross-talk.
+- **Declarative exclusion** — `[providers].exclude` skips IDs entirely (no client, no
+  registry slot); `[providers].exclude_streams` filters trash dub streams by regex.
+  Providers that cannot run without user configuration (kodik without a token) are
+  never registered and surface in the disabled set with a red startup notice.
+- **Written from live sites** — most non-ported providers carry a protocol dossier
+  (DLE catalogs, GraphQL, Livewire payloads, newznab feeds, Anubis proof-of-work,
+  statically unpacked AES/CBC player bundles — no JavaScript executed).
+- **Extractor factory** — player embeds unbox through 10 shared extractors; provider
+  code never parses a player page that a factory extractor already covers.
+- **Cloudflare ladder** — every client carries the CF retry ladder (always on since
+  PR80); re-challenging hosts escalate to the stealth-Chromium solver on demand.
+
+The live health gate is `make parity` (see [Provider Roster](#-provider-roster)).
+
+---
+
+## 🌊 Torrent Engine
+
+`internal/torrent` wraps `github.com/anacrolix/torrent` — pure Go, CGO-free, uTP
+fallback — behind one shared lazy engine. The registry builds it once when
+`[torrent] enabled = true`, injects it into every torrent provider via `SetEngine`, and
+owns its teardown; the TUI reuses the same engine. Nothing networked starts until a
+release is actually opened.
+
+- **Multilink ingestion** — magnets (hex and base32 btih infohashes), direct `.torrent`
+  URLs, and raw metainfo bytes all ingest through one path. Ingestion validates by
+  content (`metainfo.Load`): anything serving bencode is accepted; an HTML park page
+  fails as a typed error. A zero infohash is rejected before it can panic the library.
+- **Preflight** — torrent search providers fetch `.torrent` bytes at search time
+  (bounded ≤8-wide, 10 s per URL) and drop dead links before surfacing; survivors'
+  bytes are handed to the engine via `IngestMetaInfo` under the original link, so the
+  later ingest is a dedupe hit with no double fetch.
+- **Trackers** — static `[torrent].trackers` plus `[torrent].tracker_lists` (external
+  plain-text lists fetched once per engine start through the common network client,
+  deduped, health-checked in a bounded pool; dead announce URLs are dropped with a
+  logged reason). Trackers are attached to every torrent so metadata arrives via
+  announces instead of slow DHT-only discovery.
+- **Port fallback** — if `[torrent].port` (default 42069) is busy, the engine listens
+  on a random free port with a loud WARN; outbound traffic (DHT, peers, announces)
+  works from any port. `port = 0` always picks ephemeral.
+- **Playback** — a loopback HTTP server serves files with `Content-Length` + `Range`
+  (416-correct) over the engine's on-demand reader with `readahead_mb` (default 32),
+  so mpv can seek. Torrent playback enters the same player path as provider streams.
+- **Release parsing** — names parse into resolution (2160…360), source (BDRip/WEB-DL/…),
+  codec, group, and episode ranges; files map to episodes for the standard play flow.
+- **Ethics** — `no_upload = false` by default (seeding back after watching); set it to
+  `true` for leech-only operation.
+
+---
+
+## ▶️ Player & Skips
+
+`internal/player` builds the mpv argv — a verbatim port of the Python original,
+option order included: 2 GiB demuxer cache, 16 MiB stream buffer, `--hwdec=auto-safe`,
+network timeout, `--force-media-title`, per-source HTTP headers (the Referer some CDNs
+require), and `--audio-file` when video and audio come from separate URLs.
+
+The skip manager (`internal/skip`) resolves intro/ending chapters through the configured
+`providers_order` chain — default `["aniskip", "anime_skip", "intro_skipper"]`:
+
+- **AniSkip v2 + AnimeSkip** are queried in parallel and merged smartly (by skip type,
+  provider priority);
+- **IntroSkipper** is the local ffprobe/ffmpeg heuristic fallback for owned files;
+- the result becomes an FFMETADATA chapters file passed to mpv as `--chapters-file`
+  and deleted when the player exits.
+
+Downloads (`internal/download`) run as a bounded background queue with ffmpeg muxing
+and an offline index (`.anicli_offline_index.json`) the TUI's downloads screen reads.
+
+---
+
+## 🔌 API Surface
+
+`internal/api` serves 20 routes under `/api/v1` (chi router):
+
+| Method | Path | Purpose |
+| :-- | :-- | :-- |
+| `GET` | `/api/v1/health` | Readiness probe |
+| `POST` | `/api/v1/auth/login` | Password login → access + refresh tokens |
+| `POST` | `/api/v1/auth/refresh` | Rotate the session |
+| `POST` | `/api/v1/auth/logout` | Invalidate the session |
+| `GET` | `/api/v1/auth/me` | Current user |
+| `GET` | `/api/v1/providers` | Registry status + stats |
+| `GET` | `/api/v1/history` | Watch history (paginated) |
+| `GET` | `/api/v1/history/{anime_id}` | One title's history |
+| `PATCH` | `/api/v1/history/{anime_id}` | Update history entry |
+| `GET` | `/api/v1/history/{anime_id}/episodes` | Episode list with progress |
+| `GET` | `/api/v1/history/{anime_id}/progress` | Resume position |
+| `PATCH` | `/api/v1/history/{anime_id}/progress` | Save progress |
+| `GET` | `/api/v1/library` | Shikimori-bound library |
+| `POST` | `/api/v1/library/bind` | Bind a title to Shikimori |
+| `GET` | `/api/v1/search` | Fan-out search |
+| `GET` | `/api/v1/releases/calendar` | Release calendar |
+| `GET` | `/api/v1/home/feed` | Aggregated home feed |
+| `GET` | `/api/v1/episodes` | Episode × dub matrix |
+| `POST` | `/api/v1/streams/resolve` | Fresh stream resolution |
+| `GET` | `/api/v1/shikimori/anime/{anime_id}/page` | Shikimori title page |
+
+Auth is token-based: HMAC-SHA256-signed access tokens (15 min TTL) with rotating
+refresh sessions (720 h) against `[web.users]` pbkdf2-hashed credentials. The server
+binds `127.0.0.1:8765` by default and stamps every response with `X-Trace-Id`. API
+contract goldens for all 20 endpoints live in `internal/regression`.
+
+---
+
+## ⚙️ Configuration
+
+Resolution order: `--config` flag → `$ANICLI_CONFIG` →
+`$XDG_CONFIG_HOME/anicli/settings.toml` → `~/.config/anicli/settings.toml`.
+A missing file is not an error — defaults are built in. Environment variables override
+file values:
+
+| Variable | Purpose |
+| :-- | :-- |
+| `ANICLI_PROXY_URL` | proxy (http/https/socks5) for all source traffic |
+| `ANICLI_SHIKIMORI_SESSION` | `_kawai_session` cookie |
+| `ANICLI_API_AUTH_SECRET` | API token signing key |
+| `ANICLI_KODIK_TOKEN` | Kodik API token |
+| `ANICLI_DB_URL` | SQLite database path |
+| `ANICLI_DATA` | data directory |
+
+Key sections of `settings.example.toml`:
+
+```toml
+[network]
+connect_timeout = "10s"   # also the silent-connection budget
+request_timeout = "30s"
+search_timeout = "30s"    # per-provider fan-out budget
+max_parallel = 4
+proxy_url = ""            # global route for every source request
+
+[api]
+enabled = false           # HTTP API face
+bind = "127.0.0.1:8765"   # loopback only by default
+token_ttl = "15m"
+
+[shikimori]
+enabled = false           # cookie or OAuth2 (`anicli shikimori auth`)
+
+[mal]
+enabled = false           # OAuth2 + PKCE (`anicli mal auth`); syncs alongside Shikimori
+
+[skip]
+providers_order = ["aniskip", "anime_skip", "intro_skipper"]
+
+[torrent]
+enabled = true            # lazy: nothing networked until a release opens
+port = 42069              # busy port -> ephemeral fallback + WARN
+no_upload = false
+readahead_mb = 32
+trackers = ["udp://tracker.opentrackr.org:1337/announce"]
+tracker_lists = ["https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt"]
+
+[cf]
+channel = "auto"          # free base; pro upgrades when `anicli cf login` key is valid
+solve_timeout = "90s"
+browser_idle_timeout = "15s"
+
+[providers]
+exclude = []              # provider IDs to skip entirely
+exclude_streams = []      # dub-name regexes to drop
+
+[providers.kodik]
+# token = "..."           # source stays disabled (typed) without it
+```
+
+Slow torrent metadata is a tracker problem: without announce URLs, magnets fall back to
+DHT-only discovery that rarely fits the wait budget. Point `trackers` (or the whole
+`tracker_lists` list) at healthy announce URLs — the engine health-checks them and
+attaches only live ones to every torrent.
+
+---
+
+## 🔒 Security
+
+- **No secrets in the repository** — real tokens ride environment variables; examples
+  use placeholders. `[web.users]` stores pbkdf2-hashed passwords only.
+- **Loopback-first API** — `[api].bind` defaults to `127.0.0.1:8765`; exposure is an
+  explicit configuration act. Tokens are HMAC-SHA256-signed with short access TTLs and
+  rotating refresh sessions.
+- **Distroless runtime** — the Docker image is `gcr.io/distroless/static-debian12`:
+  no shell, no package manager, running as `nonroot:nonroot`.
+- **Bounded CF bypass** — the stealth browser runs only during a solve (`solve_timeout`
+  90 s) and shuts down after idle (15 s) instead of staying resident; auto-updates
+  verify Ed25519-signed manifests; `CLOAKBROWSER_AUTO_UPDATE=false` disables them.
+- **Explicit proxy boundaries** — `network.proxy_url` routes source traffic; `[cf].proxy`
+  routes only stealth-browser downloads/updates; `[torrent].proxy` routes engine HTTP
+  traffic (peer and UDP-tracker traffic stays direct — a library limitation, documented).
+- **Torrent hygiene** — port fallback warns loudly with the real port; tracker lists
+  fail open (static trackers keep working when a list download fails).
+- **License hygiene** — `THIRD-PARTY-NOTICES.md` carries the full direct-dependency
+  inventory (`make notices`), including tls-client's BSD-4-Clause advertising notice.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Environment
+
+```bash
+cp settings.example.toml ~/.config/anicli/settings.toml   # optional — defaults are built in
+```
+
+### 2. Build
+
+Requires Go ≥ 1.27; CGO is not needed (pure-Go SQLite):
+
+```bash
+make build
+go build -o ./anicli ./cmd/anicli
+```
+
+Or grab a release archive (`goreleaser`, 5 targets: linux/amd64+arm64, windows/amd64,
+darwin/amd64+arm64; checksums in `checksums.txt`) and put `anicli` on `$PATH`.
+Docker builds the same binary into a distroless image:
 
 ```bash
 docker build -t anicli:latest .
@@ -177,200 +438,149 @@ docker run --rm -p 8765:8765 \
   anicli:latest serve --config /config/settings.toml
 ```
 
-> Образ distroless: без оболочки, под пользователем `nonroot`.
-
-### Сборка из исходников
+### 3. Run
 
 ```bash
-git clone <repo> && cd anicli-go
-make build            # go build ./...
-go build -o ./anicli ./cmd/anicli
+anicli            # TUI
+anicli serve      # HTTP API face ([api].enabled)
+anicli doctor     # live environment diagnostics (providers, player, paths)
 ```
 
-Требуется Go ≥ 1.27. CGO не нужен (pure-Go SQLite).
+The root menu leads to the catalog lists (search lives there), downloads, DB
+management, and the health screen; disabled providers and unconfigured integrations
+show as red startup notices.
 
----
+### 4. Trackers (Shikimori + MyAnimeList)
 
-## ⚡ Быстрый старт
+Progress syncs to every tracker you authorize — both at once is supported, and
+either one alone works exactly the same:
 
 ```bash
-# 1. Конфиг (не обязателен — дефолты встроены)
-cp settings.example.toml ~/.config/anicli/settings.toml
-
-# 2. TUI — обычный запуск
-anicli
-
-# 3. HTTP-API сервер (api.enabled = true в настройках)
-anicli serve
-
-# 4. Диагностика окружения
-anicli doctor
+anicli shikimori auth     # Shikimori OAuth2 (app: https://shikimori.io/apps)
+anicli mal auth           # MyAnimeList OAuth2 + PKCE
+anicli shikimori status   # per-tracker diagnostics: anicli mal status
 ```
+
+The first TUI launch also offers both trackers on the setup screen (arrow keys,
+Enter).
+
+**MyAnimeList app registration** (one-time, your own account):
+
+1. Sign in at [myanimelist.net](https://myanimelist.net) and open the API panel:
+   <https://myanimelist.net/en/apiproxy> → *Create App*.
+2. Fill **App name** (anything), **App type**: `web`.
+3. **Redirect URI**: `http://127.0.0.1:<port>/callback` — pick any loopback port
+   (e.g. `http://127.0.0.1:8765/callback`). With exactly one registered URI the
+   port may stay random on every run; otherwise pass `--port <port>`.
+4. Run `anicli mal auth --client-id <Client ID> --client-secret <Client Secret>`
+   — the browser opens, you approve, and the tokens land in `[mal]` of
+   `settings.toml` (the access token refreshes automatically; the refresh token
+   lives ~1 month).
+
+Episode progress pushes to Shikimori (`episodes=N`, `planned→watching`) and to
+MyAnimeList (`num_watched_episodes=N`, `plan_to_watch→watching`) at launch. A
+title missing from MyAnimeList is skipped with a typed note; the local history
+database is never touched by either tracker.
 
 ---
 
-## ⚙️ Конфигурация
-
-Файл настроек: `$ANICLI_CONFIG` → `$XDG_CONFIG_HOME/anicli/settings.toml` →
-`~/.config/anicli/settings.toml`. Секреты можно задавать переменными окружения
-(они сильнее файла):
-
-| Переменная | Назначение |
-|------------|------------|
-| `ANICLI_PROXY_URL` | прокси (http/https/socks5) для всех запросов |
-| `ANICLI_SHIKIMORI_SESSION` | cookie-сессия Shikimori |
-| `ANICLI_API_AUTH_SECRET` | секрет подписи токенов API |
-| `ANICLI_KODIK_TOKEN` | имя переменной с токеном Kodik API |
-| `ANICLI_DB_URL` | путь к базе данных |
-| `ANICLI_DATA` | каталог данных |
-
-Полный пример с комментариями — [`settings.example.toml`](settings.example.toml).
-Ключевые секции:
-
-```toml
-[network]
-proxy_url = ""          # или "http://127.0.0.1:10809"
-max_parallel = 4        # предел параллельности fan-out поиска
-
-[api]
-enabled = true          # включить HTTP-API
-bind = "127.0.0.1:8765" # только loopback по умолчанию
-
-[shikimori]
-enabled = false         # интеграция с трекером
-
-[torrent]
-trackers = [            # свои announce-URL (udp/http/https/ws/wss) к каждому торренту
-    "udp://tracker.opentrackr.org:1337/announce",
-]
-tracker_lists = [       # внешние списки трекеров: один GET на старте движка, парсинг,
-    "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
-]                       # дедуп и общая проверка здоровья вместе с trackers
-
-[download]
-max_concurrency = 2     # одновременные фоновые загрузки
-
-[cf]
-                        # PR80: параметр enabled удалён — обход Cloudflare
-                        # всегда включён; стелс-Chromium скачивается
-                        # автоматически при первом запуске.
-channel = "auto"        # auto (по умолчанию): free-база, pro-апгрейд при действующем
-                        # ключе (anicli cf login), несовместимый pro громко пропускается;
-                        # free: pro не трогается даже с ключом; pro: всегда
-                        # лицензионный канал
-proxy = ""              # прокси ТОЛЬКО для скачиваний/обновлений CloakBrowser (PR80):
-                        # загрузка браузера, free/pro-каналы, лицензия, проверки
-                        # обновлений; пусто = прямое соединение; схемы http/https/socks5/socks5h.
-                        # ГРАНИЦЫ: не касается страниц стелс-браузера и трафика источников —
-                        # те ходят через network.proxy_url
-
-[torrent]
-enabled = true          # подсистема торрентов (animetosho/…)
-trackers = ["udp://tracker.opentrackr.org:1337/announce"]  # см. ниже
-```
-
-**Медленно тянутся метаданные торрентов?** Настройте `[torrent] trackers` —
-это прямое лекарство: без трекеров магниты animetosho и других
-торрент-фидов ищут пиры только
-через DHT, что часто не успевает в бюджет ожидания. Одной строкой (список
-ngosang/trackerslist):
-
-```toml
-[torrent]
-trackers = ["udp://tracker.opentrackr.org:1337/announce", "udp://open.demonii.com:1337/announce", "udp://tracker.torrent.eu.org:451/announce"]
-```
-
-Движок проверяет здоровье трекеров и подставляет только живые — к каждому
-торренту (магниты animetosho, .torrent-ссылки, metainfo), поэтому
-метаданные приходят через анонсы, а не DHT. Ещё проще — не перечислять
-трекеры вручную, а отдать готовый список целиком: `tracker_lists` (см.
-пример конфига выше) скачивает его при старте движка и заливает в тот же
-пул с той же проверкой здоровья.
-
-**Порт занят? Движок не падает.** Если `[torrent] port` (по умолчанию
-42069) занят — второй запущенной копией anicli или любым другим
-приложением, — движок автоматически слушает случайный свободный порт
-(fallback на ephemeral) и пишет громкий WARN в лог с реально занятым
-портом; трекеры получают этот порт в анонсах. Исходящие соединения
-(DHT, пиры, анонсы) работают с любого порта — ограничивается только
-ёмкость входящих пиров. Явно задайте `port = 0`, чтобы всегда слушать
-случайный порт.
-
-
----
-
-## 📡 Источники
-
-| Провайдер | Сайт | Тип | Статус |
-|-----------|------|-----|--------|
-| anilibria | aniliberty.top | видео+аудио | ✅ живой (перебазирован на новый API в PR37); поисковая выдача и часть релизов фильтруются по IP региона — из таких сетей нужен `network.proxy_url` |
-| animevost | api.animevost.org | видео | ✅ живой |
-| anilib | api.cdnlibs.org | видео+аудио | ✅ живой |
-| animego | animego.one | видео | ✅ живой |
-| gogoanime | gogoanime3.co | видео | ⚠️ зеркала часто меняются |
-| kickassanime | kaa.lt | видео (англ. субтитры) | ✅ живой (PR58); не порт — JSON API без документов, восстановлен по живому сайту: fsearch → карточка → постраничные серии → серверы на krussdomi HLS-краю; анонимный; из заблокированных сетей нужен `network.proxy_url` |
-| anizone | anizone.to | видео (англ. субтитры, суб-онли) | ✅ живой (PR59); не порт — написан по живому сайту (рецепт Anivexa-API, перепроверен 2026-09-18): Livewire-пейлоады, пагинация серий через /livewire/update, HLS через vidstackPlayer; анонимный; из заблокированных сетей нужен `network.proxy_url` |
-| sameband | sameband.studio | видео | ⚠️ нестабильный |
-| kodik | kodik-api.com | видео | ⚠️ нужен API-токен; старый домен kodakapi.com умер (NXDOMAIN) |
-| anidub | online.anidub.com | видео (рус. дубляж) | ✅ живой; не порт — написан по живому сайту (PR22) |
-| animedia | amd.online | видео (рус. озвучки) | ✅ живой (PR56); не порт — старый JSON API animedia.online мёртв, написан по живому DLE-сайту: поиск формой сайта, серии/озвучки из kodik-блоков страницы; стримы через общий kodik-экстрактор; ru-индекс (латиница не ищется), часть тайтлов отдана через rutube — типизированная ошибка |
-| shiza | shizaproject.com | видео (рус. озвучки, субтитры) | ✅ живой (PR57); не порт — Nuxt-SPA, написан по живому GraphQL API (публичный, анонимный): поиск по RU-названию и ромадзи, серии из kodik/sibnet-эмбедов через общие экстракторы; torrent-раздел мёртв (0 сидов) и не регистрируется |
-| yummy | site.yummyani.me (API: api.yani.tv) | видео (рус. озвучки и субтитры, до 4K) | ✅ живой (PR68); порт референсной библиотеки anicli-api (source/yummy_anime.py), перепроверен живым 2026-09-19: документированный JSON API (каталог, серии одним вызовом со всеми озвучками), анонимный; плееры kodik/sibnet/alloha/aksor через общие экстракторы, CDNVideoHub-цепочка (iframe → JS-константы → плейлист → vkId) — в провайдере; RU-индекс ищет по одному токену («черная лагуна» не находит «Пираты «Чёрной лагуны»», smoke-запрос объявлен); SSR-зеркало yummyanime.in мертво (410) |
-| hdrezka | rezka-ua.tv (зеркало семейства, [providers.hdrezka] base_url перекрывает) | видео (рус. озвучки, до 1080) | ✅ живой (PR72); порт замороженного anicli-api + чистый Go-решатель антибота Anubis 1.25 (PoW sha256); PR72-матрица маршрутов: семейство зеркал гео-фенсит по домену — hdrezka-home.tv с датацентровых выходов держит ссылки на видео (JWT сессии честно пишет geo:"de"), rezka-ua.tv с того же выхода отдаёт полностью, поэтому маршрут по умолчанию — он; из заблокированных сетей нужен `network.proxy_url` (прямой маршрут режется по SNI) |
-| anistar | anistar.org | видео (рус. озвучки, до 720) | ✅ живой (PR77); не порт — написан по живому сайту: DLE-каталог на Windows-1251 (первый некириллически-UTF сайт в ростере — поиск POST-формой в cp1251), серии/озвучки из JS-массива p2p-плеера /test/player2/, стримы — прямые HLS/MP4 на an-media.org с обязательным Referer; анонимный; news- и manga-карточки поиска отфильтрованы |
-| anifilm | anifilm.pro | видео (рус. озвучки) + торрент-раздачи | ✅ живой (PR91); не порт — кастомный движок (WebyTech, Yii+Vue), НЕ DLE: поиск GET-формой /releases?title=, серии из плейлиста /releases/api:online:{id}:{service} (kodik-first), стримы через kodik-эмбеды общим экстрактором (vInfo-плеер 2026-09); анонимный; из заблокированных сетей нужен `network.proxy_url` (зарубежный хостинг, прямой маршрут режется по SNI); торрент-раздел (прямые .torrent) — кандидат на расширение TorrentBase, в стрим-провайдер не входит; часть индекса ведёт на удалённые релизы (404 → типизированная ошибка) |
-| animemobi | animemobi.com | видео + DL (.torrent релизов) | ✅ живой (PR92); не порт — написан по живому сайту: мобильный DLE-каталог на UTF-8, анонимный, без проверок; поиск POST-формой (do=search), серии — по одной ссылке a.onlinevideo на эпизод (kodikplayer.com /seria/; старые тайтлы — цельносезонные /season/- и /video/-ссылки на aniqit.com), озвучка — из «Озвучка:» релиза (одна на релиз), стримы через общий kodik-экстрактор; RU-индекс ищет по фрагментам составных названий, общий RU-промпт «черная лагуна» мимо (склонения) — smoke-запрос объявлен; торрент-раздел (do=download → .torrent на зеркале animemobi.top, трекер tr.animemobi.ru) вне стримового контракта — задокументирован в animemobi.go |
-| anitokyo | anitokyo.tv | видео (рус. озвучки и субтитры) | ✅ живой (PR100); не порт — написан по живому сайту (2026-09-25): DLE-каталог на UTF-8 за Cloudflare без проверок, анонимный; поиск POST-формой (do=search), карточки article.story.shortstory (/anime/, /ongoing/, /ova/, /movie/ — играбельные; /hentai/ отфильтрован); серии и озвучки — из JSON-блоба RalodePlayer.init на странице релиза (одна выборка даёт ВСЕ пары озвучка×серия — у Дандадана ТВ-1 60 озвучек × 12 серий), стрим-ссылки — обёртки /video.php?id=N&cat=K самого сайта, scraping которых даёт kodik (codetype 110) или sibnet (codetype 13) — оба через общие экстракторы; анонсы («Анонс») без блоба — типизированная ошибка; RU-индекс, общий RU-промпт «черная лагуна» мимо (тайтла нет в каталоге) — smoke-запрос объявлен; из сетей, где прямой маршрут до сайта не отвечает, нужен `network.proxy_url` |
-| animiku | beta.animiku.tokyo | видео (рус. озвучки и субтитры; сайт рекламирует категории 4K/FHD) | ✅ живой (PR101); не порт — написан по живому сайту: DLE под кастомным шаблоном с мостом mrdeath/aaparser к kodik-стеку, анонимный на всех путях; поиск GET-формой (do=search&subaction=search), серии/озвучки одним ответом AJAX-моста (POST engine/ajax/controller.php?mod=anime_grabber&module=kodik_playlist_ajax, news_id+action=load_player; GET отвечает пустым телом): строка переводчиков = озвучки, сетка b-simple_episode__item = пары (эпизод, озвучка) с protocol-relative kodikplayer.com-ссылками, у фильмов/OVA ссылка на самом переводчике (kodik_translates_alt); матрица озвучка↔эпизод разреженная; стримы через общий kodik-экстрактор; заявленные 4K/FHD-плееры (AniLiberty/AniLib.me) — рантайм-резолверы по названию через API anilibria.top, детерминированных эмбедов нет — задокументированы в animiku.go, вне стримового контракта; RU-индекс, общий RU-промпт «черная лагуна» попадает (4 строки) — smoke-запрос не объявлен |
-| anikado | anikado.net | видео (рус. озвучки, субтитры) | ✅ живой (PR102); не порт — написан по живому сайту (перепроверен 2026-09-25): DLE-каталог на UTF-8, анонимный (аккаунт только для закладок), прямой маршрут без JS-проверок; поиск POST-формой /index.php?do=search, серии — серверные анкеры на странице тайтла (до 52+, без пагинации), озвучки — таблица b-translator__item на КАЖДОЙ странице эпизода (fan-out ограничен network.max_parallel, паттерн kickassanime), фильмы — kodik /video/-эмбед прямо во вкладке плеера тайтла; стримы через общий kodik-экстрактор, хост эмбедов kodik.info нормализуется на взаимозаменяемое зеркало kodikplayer.com (тот же /seria/-путь отвечает 200 с хеш-согласованной страницей плеера); у тайтла ТРИ вкладки плеера — vkg (клиентская гидрация агрегатором mali, содержимое дублирует kodik) и tomion (404 вне iframe-контекста) анонимно не разрешаемы — задокументированные стены; RU-индекс, общий RU-промпт «черная лагуна» находит (2 тайтла) — smoke-запрос не объявлен |
-| animevib | www.animevib.ru | видео (рус. озвучки и субтитры) | ✅ живой (PR103); не порт — написан по живому сайту (2026-09-25): DLE-каталог (НЕ WordPress — параметр ?s= DLE молча игнорирует, реальный поиск — GET-форма /index.php?do=search, RU и латиница оба ищутся), анонимный; каждый релиз несёт ОДИН kodik-плеер (iframe.player-shar): страница /serial/-эмбеда перечисляет все озвучки (до ~48 команд, у каждой свой серийный hash) и посерийные seria-hash'и — провайдер мержит таблицу (серия × озвучка), стримы через общий kodik-экстрактор по синтезированным /seria/-ссылкам; /video/-эмбеды (фильмы) = одна серия без имени озвучки; рекламный плеер stloadi.live из второй вкладки не выбирается; общий смок «черная лагуна» мимо — smoke-запрос объявлен («дандадан»); бюджет параллельных запросов по озвучкам — network.max_parallel |
-| animeheaven | animeheaven.me | видео (англ. субтитры, суб-онли, прямые MP4) | ✅ живой (PR105); не порт — написан по живому сайту + семейству скраперов AniVault (SH0MIK/jsmat0m Anivault-Scraper), перепроверен 2026-09-25: БЕЗ Cloudflare (референс тоже обходится без FlareSolverr), анонимный; поиск — /fastsearch.php?xhr=1 (id карточки = query-часть href /anime.php?<id>), серии — анкеры gateh/gatea на странице тайтла (ключ серии = аргумент gateh/gatea; живая разметка ставит пробел после скобки — регэксп референса больше не матчит, наш терпит оба вида), сортировка по возрастанию; стрим — GET /gate.php с Cookie: key=<ключ серии> (stateless, холодная банка) → прямые MP4 в <video><source>, берётся ПЕРВЫЙ /video.mp4-источник (rk-край, HTTP 206 с Range; ct/ck-хосты с &error — фолбэки onerror, прямой ответ 404); селектора качества у сайта нет — метка 720 по tkhd захваченного файла (928x720); latin-индекс (NamePrefLatin), общий смок «black lagoon» попадает — smoke-запрос не объявлен |
-| anikoto | anikototv.to | видео (англ. озвучка и субтитры) | ✅ живой (PR104); не порт — написан по живому сайту (2026-09-25): HiAnime/Zoro-подобный клон (платформенное семейство anikoto.net по документации AniVault-Scraper и PyPI-загрузчика anikoto), анонимный, прямой маршрут; поиск — GET /filter?keyword= (30 карточек на страницу), серии — AJAX /ajax/episode/list/{id} в JSON-конверте {"status":N,"result":"<html>"}, озвучки — группы SUB/DUB списка серверов /ajax/server/list (Vidstream-2/HD-1/HD-2), гидрация ленивая (паттерн kickassanime); стримы — цепочка megaplay: /ajax/server?get= отдаёт страницу плеера, провайдер СТАТИЧЕСКИ распаковывает обфусцированный e1-player бандл (XOR-таблица строк по известному префиксу — без исполнения JS), дешифрует AES-256-CBC blob getSources и HMAC-подписывает CDN-ссылку (мастер-плейлист 1080/720/480); /api/search с сайта — приманка (отвечает ошибочным конвертом на любой параметр); skip_data (интро/аутро) резолвер отдаёт, но в контракте стрима слота нет — вне скоупа; EN-индекс — NamePreference LATIN объявлен, общие промпты «test»+«naruto» находят (28 и 26 совпадений) — smoke-запрос не объявлен |
-| anipub | anipub.xyz | видео (англ. озвучки и субтитры) | ✅ живой (PR107); не порт — написан по открытому API и бэкенд-исходнику самого сайта (github.com/AnimePub/AniPub, перепроверен живым 2026-09-25): Express+Mongo каталог, анонимный на всех путях (validkey-мидлварь /api/info вызывает next() без ключа — ветка отказа закомментирована); ВАЖНО: api.anipub.xyz — статический GitHub Pages (там «API вместо JSON» из разведки — его 404-страница), реальный API — на apex-домене (www 301-ит туда); поиск GET /api/searchAll/<query> (консистентная форма {currentPage, AniData}, пустой ответ {"found":false}), серии и стрим-ссылки — GET /v1/api/details/<id>: массив ep со ссылками «src=…» на собственные страницы плеера /video/<n>/<sub\|dub> сайта, каждая оборачивает megaplay.buzz-стрим; разрешение стрима: страница плеера → data-id стрим-страницы → same-origin /stream/getSourcesNew?id=…&type=<sub\|dub>&s=bcdn → расшифровка enc-полезной нагрузки (AES-256-CBC, статические ключ/IV из megaplay newclient.min.js) → master.m3u8 — без общих экстракторов; Sub и Dub выдаются на каждую серию (переключатель changeStreamType самого сайта); CDN megaplay отдаёт 403 на воспроизведение без Referer стрим-origin — он едет в источнике; EN-индекс (поиск по латинскому Name), общий RU-промпт мимо — smoke-запрос объявлен («cowboy bebop»); «дандадан» в каталоге нет |
-| anilibria-torrent | aniliberty.top | торрент-поиск (русская озвучка) | ✅ живой (PR37, новый API); поиск релизов → торренты релиза, магниты с трекерами AniLibria; стрим через подсистему [torrent]; из сетей с IP-фильтрацией контента нужен `network.proxy_url` |
-| animetosho | feed.animetosho.org | торрент-поиск (англ. переводы, BD-батчи) | ✅ живой (PR38), анонимный newznab-фид; магнит из infohash, фолбэк — прямой .torrent; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url`; идёт миграция домена на animetosho.xyz — следите за редиректами фида |
-| tokyotosho | www.tokyo-tosho.net | торрент-поиск (аниме, старейший трекер) | ✅ живой (PR38), анонимный поисковый RSS (`rss.php?terms=…`); прямые .torrent-ссылки; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
-| rutor | rutor.info (зеркала: rutor.is, rutor.org) | торрент-поиск (RU-каталог: аниме/кино/ТВ, до 4K) | ✅ живой (PR87); не порт — написан по живому сайту по зрелому рецепту Jackett (rutor.yml), перепроверен 2026-09-23: HTML-поиск (`/search/0/0/100/0/<запрос>/`), RU-запросы основные (е/ё равнозначны), анонимный — поиск и .torrent (`d.rutor.info/download/{id}`) без регистрации, сиды/пиры на странице; стрим через подсистему [torrent]; семейство зеркал ротируется — при блокировке основного меняется маршрут сети |
-| anirena | www.anirena.com | торрент-поиск (JA/мультиязычные релизы) | ✅ живой (PR88), анонимный RSS-поиск (`/rss?q=…`); в `<enclosure>` — прямой .torrent с сайта; задокументированный `?category=` сервер игнорирует — Anime-скоуп фильтруется на клиенте по полю Category; сидов в фиде нет — мёртвые отсекает только предфлайт байт; стрим через подсистему [torrent]; из заблокированных сетей нужен `network.proxy_url` |
-| subsplease | subsplease.org | торрент-поиск (EN-сезонка, батчи всего тайтла) | ✅ живой (PR89), анонимный JSON API (`/api/?f=search`, `/api/?f=show&sid=…`); трекер-богатые магниты (base32 btih — движок принимает), батчи back-каталога через sid-хоп страницы тайтла; RSS-фиды сайта существуют, но только «последние релизы» без параметра запроса — не используются; стрим через подсистему [torrent] |
-
-Не портированы / удалены (мёртвые):
-
-| Источник | Причина |
-|----------|---------|
-| animekai | официально закрыт 2026-05-10; домены NXDOMAIN / parked |
-| anivibe | anivibe.ru не отвечает; бывший .net угнан под ad-farm |
-| sovetromantica | домен sovetromantica.com угнан под казино-фарм, проект заморожен с 2025; удалён в PR22 |
-
-Проверить доступность живых источников: `make parity` (см. ниже).
-
----
-
-## 🛠 Разработка
+## 💻 Local Development
 
 ```bash
-make build          # сборка
-make test           # go test -race -count=1 ./...
-make lint           # golangci-lint run
-make load           # нагрузочные тесты (build tag `load`)
-make parity         # живой G1-гейт: минимум 29/30 провайдеров должны ответить
-make goldens-update # перегенерация золотых файлов контракта API
-make release        # релизные артефакты через goreleaser
-make docker-build   # distroless-образ
+make build           # go build ./...
+make lint            # golangci-lint run
+make goldens-update  # regenerate API contract goldens (review the diff!)
+make parity          # live G1 gate against all 30 providers
+make load            # SLO load suite
+make build-matrix    # CGO_ENABLED=0 cross-compile of every goreleaser target
+make notices         # dependency inventory for THIRD-PARTY-NOTICES.md
+make release         # goreleaser release artifacts
+make docker-build    # distroless image (local tag)
 ```
-
-### Контроль качества
-
-| Слой | Механизм |
-|------|----------|
-| Контракт API | золотые файлы всех 20 эндпоинтов (`internal/regression`) |
-| Инварианты TUI | таблица регрессии I1–I4 |
-| Ростер провайдеров | мета-тест: ровно 28, уникальны, в закреплённом порядке, у каждого фикстуры |
-| Нагрузка | SLO-тесты за build-тегом `load`: p99 < 250 мс, ошибки < 0.1% |
-| Живые сайты | `cmd/parity` — capture-инструмент паритета |
 
 ---
 
-## 📄 Лицензия
+## ✅ Testing
+
+The full gate (every PR in this repository landed green on exactly this set):
+
+```bash
+gofmt -l .
+go vet ./...
+go vet -tags live ./...
+golangci-lint run
+go test -race -count=1 ./...
+```
+
+Quality layers beyond the unit suite:
+
+```bash
+make load             # SLO tests behind the `load` build tag: p99 < 250 ms, errors < 0.1%
+make parity           # live G1 gate: at least 29/30 providers must answer
+make goldens-update   # API contract goldens — all 20 endpoints (internal/regression)
+make build-matrix     # platform-portability regression (no platform-only APIs)
+```
+
+`make load` runs without `-race` so latency SLOs stay wall-clock honest; the same paths
+have a separate race-safety invocation documented in the `Makefile`.
+
+---
+
+## 🌍 Provider Roster
+
+Registration order from `internal/providers/factory.go`. Statuses reflect the last
+live verification recorded in `.sdd/ledger.md`.
+
+| Provider | Site | Lang | Type | Status |
+| :-- | :-- | :-- | :-- | :-- |
+| anilibria | aniliberty.top | ru | video+audio | ✅ live (rebased onto the new API); per-title IP filtering → `network.proxy_url` |
+| animevost | api.animevost.org | ru | video | ✅ live |
+| anilib | api.cdnlibs.org | ru | video+audio | ✅ live |
+| animego | animego.one | ru | video | ✅ live |
+| gogoanime | gogoanime3.co | ja | video | ⚠️ mirrors rotate; blogger embeds via extractor |
+| kickassanime | kaa.lt | ja | video (EN subs) | ✅ live; JSON API written from the live site; fan-out dub hydration |
+| anizone | anizone.to | ja | video (EN subs) | ✅ live; sub-only; Livewire payloads + vidstackPlayer HLS |
+| sameband | sameband.studio | ru | video | ⚠️ unstable |
+| kodik | kodik-api.com | ru | video | ⚠️ API token required; tokenless → typed disable |
+| anidub | online.anidub.com | ru | video (RU dub) | ✅ live; written from the live site |
+| animedia | amd.online | ru | video (RU dubs) | ✅ live; DLE catalog → kodik embeds |
+| shiza | shizaproject.com | ru | video (RU dubs+subs) | ✅ live; public GraphQL; kodik/sibnet embeds |
+| yummy | site.yummyani.me | ru | video (RU, up to 4K) | ✅ live; documented JSON API; CDNVideoHub chain |
+| hdrezka | rezka-ua.tv (family mirror; `[providers.hdrezka].base_url` re-points) | ru | video (RU dubs, ≤1080) | ✅ live; pure-Go Anubis PoW solver; family geo-fences per domain |
+| anistar | anistar.org | ru | video (RU dubs, ≤720) | ✅ live; Windows-1251 DLE; direct HLS/MP4 with site Referer |
+| anifilm | anifilm.pro | ru | video (RU dubs) + torrents | ✅ live; custom Yii+Vue engine (not DLE); kodik-first playlists |
+| animemobi | animemobi.com | ru | video + DL | ✅ live; mobile DLE; per-episode kodik embeds |
+| anitokyo | anitokyo.tv | ru | video (RU dubs+subs) | ✅ live; RalodePlayer JSON blob hydrates every dub × episode in one fetch |
+| animiku | beta.animiku.tokyo | ru | video (RU dubs+subs) | ✅ live; aaparser AJAX bridge → kodik embeds |
+| anikado | anikado.net | ru | video (RU dubs+subs) | ✅ live; per-episode dub tables (fan-out bounded by `max_parallel`) |
+| animevib | www.animevib.ru | ru | video (RU dubs+subs) | ✅ live; one kodik player per release, merged dub × episode table |
+| animeheaven | animeheaven.me | ja | video (EN subs, direct MP4) | ✅ live; no Cloudflare; anonymous |
+| anikoto | anikototv.to | en | video (EN dub+subs) | ✅ live; HiAnime-style clone; megaplay bundle statically unpacked (XOR + AES + HMAC) |
+| anipub | anipub.xyz | en | video (EN dub+subs) | ✅ live; open Express+Mongo API; `getSourcesNew` AES decrypt → master.m3u8 |
+| anilibria-torrent | aniliberty.top | ru | torrent search | ✅ live; release → torrents; AniLibria announce trackers |
+| animetosho | feed.animetosho.org | ja | torrent search | ✅ live; newznab; infohash magnets with `.torrent` fallback + preflight |
+| tokyotosho | www.tokyo-tosho.net | ja | torrent search | ✅ live; search RSS; direct `.torrent` links; Anime filter client-side + preflight |
+| rutor | rutor.info | ru | torrent search (RU catalog, ≤4K) | ✅ live; Jackett-derived recipe; fully anonymous |
+| anirena | www.anirena.com | ja | torrent search (JA/multi) | ✅ live; RSS search; `<enclosure>` `.torrent`; category filter client-side |
+| subsplease | subsplease.org | ja | torrent search (EN season) | ✅ live; JSON API; tracker-rich magnets; batch back-catalog via show-page hop |
+
+Torrent search providers stream through the `[torrent]` subsystem; disabling `[torrent]`
+automatically disables them. Several sources are region-gated or SNI-blocked from some
+networks — `network.proxy_url` is the documented remedy.
+
+Removed / dead sources (kept for the record):
+
+| Source | Reason |
+| :-- | :-- |
+| animekai | shut down 2026-05-10; domains NXDOMAIN / parked |
+| anivibe | host unresponsive; former `.net` domain hijacked by an ad farm |
+| sovetromantica | domain hijacked into a casino farm; project frozen since 2025 |
+
+Probe everything live: `make parity` — `parity all` exits non-zero when fewer than 29
+of the 30 registered providers answer.
+
+---
+
+## 📄 License
 
 [MIT](LICENSE) © 2026 An0nX

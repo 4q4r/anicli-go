@@ -3,7 +3,7 @@
 package tui
 
 // LIVE probe for PR111 (always-fresh stream resolution + the fixed
-// «🔄 Обновить источники»). Excluded from the hermetic default suite
+// «🔄 Refresh sources»). Excluded from the hermetic default suite
 // by the `live` build tag. Run manually:
 //
 //	go test -tags live -run TestLivePR111FreshResolve -count=1 -v ./internal/tui/

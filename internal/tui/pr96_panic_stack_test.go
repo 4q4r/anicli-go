@@ -3,8 +3,8 @@ package tui
 // PR96 panic diagnosability: the recovery wrappers capture debug.Stack
 // alongside the panic message into the file logger (the full stack),
 // while the user-facing error screen shows only the brief one-liner
-// («panic: <msg> — детали в логе»). Evidence surface for the owner's
-// stackless «источник: session» report: the next panic must be fully
+// («panic: <msg> — details are in the log»). Evidence surface for the owner's
+// stackless «source: session» report: the next panic must be fully
 // attributable from ~/tmp/anicli-tui.log alone.
 
 import (
@@ -40,7 +40,7 @@ func TestPR96ScreenPanicStackCaptured(t *testing.T) {
 		t.Fatalf("panic must surface the error screen, got %q", top.ID())
 	}
 	view := top.View().Content
-	if !strings.Contains(view, "panic: boom") || !strings.Contains(view, "детали в логе") {
+	if !strings.Contains(view, "panic: boom") || !strings.Contains(view, "details are in the log") {
 		t.Fatalf("error screen must show the brief one-liner, got:\n%s", view)
 	}
 	if strings.Contains(view, "tui: recovered panic") {
@@ -85,7 +85,7 @@ func TestPR96CommandPanicStackCaptured(t *testing.T) {
 	if top.ID() != errorScreenID {
 		t.Fatalf("panic errMsg must surface the error screen, got %q", top.ID())
 	}
-	if v := top.View().Content; !strings.Contains(v, "детали в логе") {
+	if v := top.View().Content; !strings.Contains(v, "details are in the log") {
 		t.Fatalf("error screen must show the brief one-liner:\n%s", v)
 	}
 	logged := buf.String()

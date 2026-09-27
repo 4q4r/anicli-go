@@ -344,6 +344,15 @@ func TestUpdateMyListStatusOmitsZeroFields(t *testing.T) {
 	if len(f) != 0 {
 		t.Errorf("form = %v, want empty (nothing specified)", f)
 	}
+
+	// The rewatching flag rides only when set.
+	if err := c.UpdateMyListStatus(context.Background(), 7, ListInput{Status: "watching", IsRewatching: true}); err != nil {
+		t.Fatalf("UpdateMyListStatus(rewatching): %v", err)
+	}
+	f = rec.forms[1]
+	if f.Get("is_rewatching") != "true" {
+		t.Errorf("is_rewatching = %q, want true", f.Get("is_rewatching"))
+	}
 }
 
 // TestClientDegradesAfterFailedRefresh pins: a rejected token while the

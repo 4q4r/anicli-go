@@ -334,6 +334,9 @@ func (c *Client) persistTokens(what string) {
 type ListInput struct {
 	Status             string
 	NumWatchedEpisodes int
+	// IsRewatching rides the is_rewatching flag; false omits the field
+	// (absent = no change upstream).
+	IsRewatching bool
 }
 
 // UpdateMyListStatus PUTs the status form for one anime. MAL updates
@@ -345,6 +348,9 @@ func (c *Client) UpdateMyListStatus(ctx context.Context, animeID int64, in ListI
 	}
 	if in.NumWatchedEpisodes > 0 {
 		form.Set("num_watched_episodes", fmt.Sprintf("%d", in.NumWatchedEpisodes))
+	}
+	if in.IsRewatching {
+		form.Set("is_rewatching", "true")
 	}
 	_, err := c.apiCall(ctx, http.MethodPut,
 		fmt.Sprintf("%s/v2/anime/%d/my_list_status", c.apiBase, animeID), form)

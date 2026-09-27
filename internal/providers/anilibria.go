@@ -18,6 +18,13 @@ import (
 // some releases (and their search entries) are geo-hidden for certain
 // regions; from such networks `network.proxy_url` is required (same
 // convention as the torrent providers, PR36).
+//
+// Streaming quality ceiling is 1080p, by the API's own design — the
+// v1 OpenAPI schema and the aniliberty.top player bundles define only
+// hls_480/hls_720/hls_1080, and no release ever emits hls_2160 (live
+// sweep, PR110). 4K on AniLibria exists only as torrent releases
+// (quality enum up to "8k"); those are served by the separate
+// anilibria-torrent provider, which passes the "4k" badge through.
 const (
 	// AniLibriaAPIBase is the JSON API root (aniliberty.top).
 	AniLibriaAPIBase = "https://aniliberty.top/api/v1"

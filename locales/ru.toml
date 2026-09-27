@@ -260,3 +260,33 @@
 "shiki.setup_warning" = "⚠ Shikimori не настроен — синхронизация списка отключена"
 "shiki.setup_pick_method" = "Выберите способ авторизации:"
 "shiki.setup_hint" = "enter — выбрать · esc/ctrl+c — выход (авторизация обязательна)"
+
+# ------------------------------------------
+# Трекер MyAnimeList (PR112)
+# ------------------------------------------
+"mal.auth_required" = "MyAnimeList: нет авторизации — прогресс не отправлен"
+"mal.sync_success" = "MyAnimeList: прогресс синхронизирован (эп {ep})"
+"mal.sync_failed" = "MyAnimeList: ошибка синхронизации ({err})"
+"mal.not_on_mal" = "MyAnimeList: тайтл не найден на MyAnimeList — прогресс не отправлен"
+"mal.oauth_title" = "🔐 MyAnimeList OAuth2"
+"mal.oauth_client_id_prompt" = "client_id приложения (создайте приложение на https://myanimelist.net/en/apiproxy):\n\n"
+"mal.oauth_client_secret_prompt" = "client_secret приложения:\n\n"
+"mal.oauth_open_url" = "Откройте в браузере и разрешите доступ:\n\n"
+"mal.oauth_waiting" = "⏳ Ожидание ответа из браузера (до 5 минут)…"
+"mal.oauth_saving" = "⏳ Сохранение токенов и проверка…"
+"mal.oauth_done" = "✓ OAuth2 токены сохранены в settings.toml (продление автоматическое)"
+"mal.settings_save_failed" = "✗ Не удалось сохранить настройки: {err}"
+"mal.oauth_start_failed" = "✗ OAuth2 не удалось начать: {err}"
+"mal.oauth_finish_failed" = "✗ OAuth2 не завершён: {err}"
+"mal.verify_failed" = "⚠ Проверка не удалась: {err}"
+"mal.user_name" = "Пользователь MyAnimeList: {name}"
+"mal.user_id" = "Пользователь MyAnimeList: id {id}"
+"mal.setup_choice" = "🔐 MyAnimeList (OAuth2)"
+
+# Меню настройки трекеров (PR112): выбор сервиса.
+"setup.pick_provider" = "Выберите трекер для авторизации:"
+"setup.shiki_choice" = "Shikimori"
+"setup.mal_choice" = "MyAnimeList"
+"setup.auth_ok" = "✓ авторизован"
+"setup.auth_no" = "○ не авторизован"
+"setup.hint" = "enter — выбрать · esc/ctrl+c — выход (авторизация Shikimori обязательна)"

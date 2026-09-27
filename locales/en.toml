@@ -259,3 +259,33 @@
 "shiki.setup_warning" = "⚠ Shikimori is not configured — list sync is disabled"
 "shiki.setup_pick_method" = "Pick an authorization method:"
 "shiki.setup_hint" = "enter — select · esc/ctrl+c — exit (authorization is required)"
+
+# ------------------------------------------
+# MyAnimeList tracker (PR112)
+# ------------------------------------------
+"mal.auth_required" = "MyAnimeList: not authorized — progress not sent"
+"mal.sync_success" = "MyAnimeList: progress synchronized (ep {ep})"
+"mal.sync_failed" = "MyAnimeList: sync error ({err})"
+"mal.not_on_mal" = "MyAnimeList: title not found on MyAnimeList — progress not sent"
+"mal.oauth_title" = "🔐 MyAnimeList OAuth2"
+"mal.oauth_client_id_prompt" = "the app's client_id (register the app at https://myanimelist.net/en/apiproxy):\n\n"
+"mal.oauth_client_secret_prompt" = "the app's client_secret:\n\n"
+"mal.oauth_open_url" = "Open this URL in your browser and grant access:\n\n"
+"mal.oauth_waiting" = "⏳ Waiting for the browser response (up to 5 minutes)…"
+"mal.oauth_saving" = "⏳ Saving tokens and verifying…"
+"mal.oauth_done" = "✓ OAuth2 tokens saved to settings.toml (renewal is automatic)"
+"mal.settings_save_failed" = "✗ Failed to save settings: {err}"
+"mal.oauth_start_failed" = "✗ Failed to start OAuth2: {err}"
+"mal.oauth_finish_failed" = "✗ OAuth2 not completed: {err}"
+"mal.verify_failed" = "⚠ Verification failed: {err}"
+"mal.user_name" = "MyAnimeList user: {name}"
+"mal.user_id" = "MyAnimeList user: id {id}"
+"mal.setup_choice" = "🔐 MyAnimeList (OAuth2)"
+
+# Tracker setup menu (PR112): the provider pick.
+"setup.pick_provider" = "Pick a tracker to authorize:"
+"setup.shiki_choice" = "Shikimori"
+"setup.mal_choice" = "MyAnimeList"
+"setup.auth_ok" = "✓ authorized"
+"setup.auth_no" = "○ not authorized"
+"setup.hint" = "enter — select · esc/ctrl+c — exit (Shikimori authorization is required)"

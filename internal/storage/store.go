@@ -39,6 +39,8 @@ type Store struct {
 	ProviderStats *ProviderStatRepo
 	// AuthSessions is the api_auth_session repository (API token auth).
 	AuthSessions *AuthSessionRepo
+	// MALMap is the shikimori_id -> myanimelist_id mapping cache (PR112).
+	MALMap *MALMapRepo
 }
 
 // buildDSN converts a filesystem path (or ":memory:") into a
@@ -85,6 +87,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	st.AutoRules = &AutoRuleRepo{db: db}
 	st.ProviderStats = &ProviderStatRepo{db: db}
 	st.AuthSessions = &AuthSessionRepo{db: db}
+	st.MALMap = &MALMapRepo{db: db}
 	return st, nil
 }
 

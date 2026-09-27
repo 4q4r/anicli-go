@@ -1,6 +1,11 @@
 package shikimori
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"net/url"
+	"strconv"
+	"strings"
+)
 
 // Wire types of the Shikimori API (v1 animes endpoints + v2 user_rates),
 // ported from the frozen Python original's dict shapes plus the
@@ -71,6 +76,63 @@ type Anime struct {
 	Staff      []StaffMember  `json:"staff,omitempty"`
 	Related    []RelatedEntry `json:"related,omitempty"`
 	Similar    []Anime        `json:"similar,omitempty"`
+	// MAL mapping carriers (PR112): different API generations expose
+	// the MyAnimeList id under different names, plus the external links
+	// array carries the myanimelist.net/anime/<id>/<slug> URL. All are
+	// optional; MALID() arbitrates.
+	MalID         int64          `json:"mal_id,omitempty"`
+	MyAnimeListID int64          `json:"myanimelist_id,omitempty"`
+	Links         []ExternalLink `json:"links,omitempty"`
+}
+
+// ExternalLink is one entry of the anime card's links array: an
+// external site URL plus its kind tag ("myanimelist", "anime_db", …).
+type ExternalLink struct {
+	ID   int64  `json:"id,omitempty"`
+	URL  string `json:"url"`
+	Kind string `json:"kind,omitempty"`
+}
+
+// MALID extracts the MyAnimeList id from the anime card: the direct
+// fields first (mal_id, then myanimelist_id), then the links array's
+// myanimelist.net/anime/<id> URL. 0 when the title carries no mapping
+// (not on MAL) — the sync layer skips the MAL push with a typed note.
+func (a *Anime) MALID() int64 {
+	if a.MalID > 0 {
+		return a.MalID
+	}
+	if a.MyAnimeListID > 0 {
+		return a.MyAnimeListID
+	}
+	for _, link := range a.Links {
+		if !strings.Contains(link.URL, "myanimelist.net") || !strings.Contains(link.URL, "/anime/") {
+			continue
+		}
+		if id := parseMALAnimeURL(link.URL); id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
+// parseMALAnimeURL reads the numeric anime id out of a
+// myanimelist.net/anime/<id>/<slug> URL; 0 when the path does not
+// match.
+func parseMALAnimeURL(rawURL string) int64 {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return 0
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	// .../anime/<id>[/<slug>]
+	if len(parts) < 2 || parts[0] != "anime" {
+		return 0
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }
 
 // PosterURL renders the absolute poster URL for the anime from the

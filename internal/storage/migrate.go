@@ -21,6 +21,7 @@ type Migration struct {
 // build starts fresh; data import is a later, separate feature.
 var migrations = []Migration{
 	{Version: 1, Name: "initial schema", SQL: schemaV1},
+	{Version: 2, Name: "anime mal id map", SQL: schemaV2},
 }
 
 // migrate applies pending migrations to the store's database.

@@ -139,3 +139,14 @@ CREATE TABLE provider_search_stat (
 	last_used_at   TEXT NOT NULL
 );
 `
+
+// schemaV2 adds the shikimori_id -> myanimelist_id mapping cache
+// (PR112). An independent table: the history schema is untouched (owner
+// ruling — «Списки кстати удалять не придется»).
+const schemaV2 = `
+CREATE TABLE anime_mal_map (
+	shikimori_id INTEGER PRIMARY KEY,
+	mal_id       INTEGER NOT NULL,
+	updated_at   TEXT NOT NULL
+);
+`

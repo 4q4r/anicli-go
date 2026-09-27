@@ -17,6 +17,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.41.0

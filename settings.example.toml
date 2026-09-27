@@ -19,6 +19,10 @@
 # [general] Общие пути
 # ------------------------------------------
 [general]
+# Язык интерфейса / UI language: "en", "ru", или файл
+# ~/.config/anicli/locales/<lang>.toml (см. locales/README.md).
+locale = "en"
+
 # Каталог данных (база, загрузки, кэш).
 # Пусто = автоматически: $ANICLI_DATA > $XDG_DATA_HOME/anicli > ~/.local/share/anicli
 # data_dir = "/var/lib/anicli"

@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"log/slog"
+
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // initialStack builds the opening screen stack: when Shikimori is
@@ -40,6 +42,13 @@ func shikiSyncNeeded(deps *Deps) bool {
 func Run(ctx context.Context, deps *Deps, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
+	}
+	// PR110 dependency injection: the CLI builds the locale bundle from
+	// [general] locale and hands it over via Deps; Run installs exactly
+	// what it was given before the first screen renders. nil keeps the
+	// i18n package default (embedded en).
+	if deps != nil && deps.I18n != nil {
+		i18n.SetBundle(deps.I18n)
 	}
 	stack := initialStack(deps)
 	app := NewApp(stack[0], deps, log, stack[1:]...)

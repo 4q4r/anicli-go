@@ -52,11 +52,16 @@ const (
 	DefaultBind = "127.0.0.1:8765"
 )
 
-// General holds process-wide paths.
+// General holds process-wide paths and the interface locale.
 type General struct {
 	// DataDir overrides the data directory; empty means auto-resolve via
 	// DataDir() ($ANICLI_DATA > $XDG_DATA_HOME/anicli > ~/.local/share/anicli).
 	DataDir string `toml:"data_dir"`
+	// Locale picks the interface language at startup (PR110): a bundled
+	// table ("en", "ru") or a community-contributed table dropped into
+	// ~/.config/anicli/locales/<locale>.toml. Empty means "en"; an
+	// unknown locale fails loud at startup (i18n.Init).
+	Locale string `toml:"locale"`
 }
 
 // Network configures the shared HTTP client.
@@ -299,6 +304,7 @@ func Default() Settings {
 	return Settings{
 		General: General{
 			DataDir: "",
+			Locale:  "en",
 		},
 		Network: Network{
 			ConnectTimeout: 10 * time.Second,

@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 )
 
@@ -397,6 +398,12 @@ type Deps struct {
 	// the progress callback receives live updates for the sync screen.
 	// nil means no sync capability — the sync screen is skipped.
 	SyncFull func(ctx context.Context, progress func(shikimori.SyncProgress)) (*shikimori.SyncResult, error)
+	// I18n is the locale bundle built by the CLI at startup from
+	// [general] locale (PR110). Run installs it as the process-wide
+	// table before the first screen renders; nil keeps the i18n
+	// package default (embedded en). The dependency direction is
+	// tui → i18n: this package never imports tui from i18n.
+	I18n *i18n.Bundle
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

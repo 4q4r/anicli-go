@@ -282,12 +282,37 @@ type ProvidersKodik struct {
 	Token string `toml:"token"`
 }
 
+// MAL configures the MyAnimeList tracker integration (PR112). One
+// credential path: the OAuth2 authorization-code flow with PKCE
+// (`anicli mal auth` / the TUI setup screen). Shikimori and MAL are
+// independent sections: both trackers may be authenticated at the same
+// time and sync in parallel.
+type MAL struct {
+	// Enabled gates the whole integration (opt-in, mirrors
+	// [shikimori] enabled).
+	Enabled bool `toml:"enabled"`
+	// AccessToken is the OAuth2 bearer token (api.myanimelist.net).
+	AccessToken string `toml:"access_token"`
+	// RefreshToken redeems a fresh access token (MAL refresh tokens
+	// live one month; the client refreshes within the last five
+	// minutes or after a 401).
+	RefreshToken string `toml:"refresh_token"`
+	// TokenExpiresAt is the unix timestamp when AccessToken expires.
+	TokenExpiresAt int64 `toml:"token_expires_at"`
+	// ClientID and ClientSecret are the OAuth2 application credentials
+	// (https://myanimelist.net/en/apiproxy); needed for the code
+	// exchange and every refresh.
+	ClientID     string `toml:"client_id"`
+	ClientSecret string `toml:"client_secret"`
+}
+
 // Settings is the full configuration surface.
 type Settings struct {
 	General   General   `toml:"general"`
 	Network   Network   `toml:"network"`
 	Player    Player    `toml:"player"`
 	Shikimori Shikimori `toml:"shikimori"`
+	MAL       MAL       `toml:"mal"`
 	Skip      Skip      `toml:"skip"`
 	Download  Download  `toml:"download"`
 	API       API       `toml:"api"`
@@ -327,6 +352,9 @@ func Default() Settings {
 			TokenExpiresAt: 0,
 			ClientID:       "",
 			ClientSecret:   "",
+		},
+		MAL: MAL{
+			Enabled: false, // opt-in: the user authenticates explicitly
 		},
 		Skip: Skip{
 			ProvidersOrder:      []string{"aniskip", "anime_skip", "intro_skipper"},

@@ -92,6 +92,26 @@ enabled = false
 # client_secret = "..."
 
 # ------------------------------------------
+# [mal] Интеграция с MyAnimeList
+# ------------------------------------------
+[mal]
+# Включить модуль (opt-in; Shikimori и MyAnimeList могут быть
+# авторизованы одновременно — синхронизация идёт в оба трекера).
+enabled = false
+
+# OAuth2 authorization-code flow с PKCE. Создайте приложение на
+# https://myanimelist.net/en/apiproxy (App type: web; redirect_uri
+# вида http://127.0.0.1:port/callback) и выполните:
+#   anicli mal auth --client-id XXX --client-secret YYY
+# Поля ниже заполняются командой auth автоматически; access-токен
+# продлевается автоматически (за 5 минут до истечения или после 401).
+# access_token = "..."
+# refresh_token = "..."
+# token_expires_at = 0
+# client_id = "..."
+# client_secret = "..."
+
+# ------------------------------------------
 # [skip] Пропуск заставок
 # Порядок провайдеров и точечные выключатели.
 # ------------------------------------------

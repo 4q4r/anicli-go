@@ -1,0 +1,12 @@
+# AniCLI interface translations — English (source of truth).
+#
+# Flat table: every line is "dotted.key" = "value". Keys are grouped by
+# screen with a namespace prefix (menu.*, search.*, session.*, …).
+# {placeholders} in values are substituted at render time by the code;
+# keep them verbatim (rename only when the code changes too).
+#
+# Contribution guide: locales/README.md.
+
+"menu.watch" = "▶ Watch"
+"menu.exit" = "🚪 Exit"
+"search.found" = "Found: {found} · No results/errors: {failed}"

@@ -105,6 +105,28 @@ func writeTOML(t *testing.T, content string) string {
 	return path
 }
 
+// TestLocaleConfigKnob covers the i18n startup knob: [general] locale
+// defaults to "en" and parses from the settings file (PR110).
+func TestLocaleConfigKnob(t *testing.T) {
+	t.Parallel()
+
+	if got := Default().General.Locale; got != "en" {
+		t.Errorf("Default().General.Locale = %q, want %q", got, "en")
+	}
+
+	path := writeTOML(t, `
+[general]
+locale = "ru"
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.General.Locale != "ru" {
+		t.Errorf("General.Locale = %q, want %q", got.General.Locale, "ru")
+	}
+}
+
 func TestLoadFileOverrides(t *testing.T) {
 	t.Parallel()
 

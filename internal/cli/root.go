@@ -20,6 +20,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/api"
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/shikimori"
@@ -163,12 +164,20 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	tuiLog := newTUILogger()
 	defer tuiLog.Close()
 
+	// PR110: pick the interface language once, before any screen
+	// renders. Fail loud on an unknown locale or a malformed table —
+	// the same contract as the settings file itself.
+	if err := i18n.Init(settings.General.Locale); err != nil {
+		return fmt.Errorf("init locale %q: %w", settings.General.Locale, err)
+	}
+
 	real, err := tui.NewRealDeps(*settings, store,
 		tui.WithShikiPersister(shikiTokenPersister(settingsPath)),
 		tui.WithLogger(tuiLog.Logger))
 	if err != nil {
 		return fmt.Errorf("build tui services: %w", err)
 	}
+	real.Deps.I18n = i18n.Active()
 	defer real.Close()
 	// PR26: the first-run Shikimori setup gate — the TUI gets the
 	// config snapshot and the persistence/verification/OAuth seams.

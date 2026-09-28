@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -176,6 +177,38 @@ type ShikimoriService interface {
 	// the all-names binding reads the complete name inventory
 	// (english/japanese/synonyms) off it.
 	GetAnime(ctx context.Context, shikimoriID int64) (*shikimori.Anime, error)
+}
+
+// SeasonalRow is one calendar row of the seasonal screen (PR114),
+// source-neutral: the Shikimori adapter fills EpisodesAired from the
+// ongoing counter and the weekday from next_episode_at; the MAL
+// fallback fills the weekday from the broadcast object (its wire has
+// no aired count).
+type SeasonalRow struct {
+	// ID is the stable row identity for cursor restore
+	// (source-prefixed: "16498", "mal:5114").
+	ID string
+	// Title is the display title AND the catalog-search query seed
+	// (russian preferred — the provider roster is RU-first).
+	Title string
+	// EpisodesAired is the aired episode count.
+	EpisodesAired int
+	// Episodes is the planned total; 0 = unknown/TBA.
+	Episodes int
+	// Score is the pre-formatted score string; "" = unscored.
+	Score string
+	// Weekday/HasWeekday carry the broadcast day.
+	Weekday    time.Weekday
+	HasWeekday bool
+}
+
+// SeasonalService backs «📅 Сезон» (PR114).
+type SeasonalService interface {
+	// Season returns one season's anime for the calendar. ongoingOnly
+	// scopes the list to currently-airing titles (the current-season
+	// calendar); browsed seasons pass false so their released and
+	// announced titles stay visible.
+	Season(ctx context.Context, year int, season string, ongoingOnly bool) ([]SeasonalRow, error)
 }
 
 // DownloadTask is one episode download submitted by «Скачать серии».

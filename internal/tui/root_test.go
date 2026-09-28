@@ -12,9 +12,9 @@ import (
 func newTestDeps() *Deps { return &Deps{} }
 
 // TestRootMenuContents: the root menu shows its entries (PR40 removes
-// the PR35 «🧲 Торренты» entry; PR113 adds the «▶ Продолжить» row
-// AFTER the four feature items). Root shows NO «Назад» row: «🚪 Exit»
-// takes its place as the pinned BOTTOM row (PR24).
+// the PR35 «🧲 Торренты» entry; PR113 adds «▶ Продолжить» and PR114
+// adds «📅 Сезон» after the four feature items). Root shows NO «Назад»
+// row: «🚪 Exit» takes its place as the pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
@@ -24,6 +24,7 @@ func TestRootMenuContents(t *testing.T) {
 		"🗄️ Database management",
 		"🛠 Check",
 		"▶ Continue: —",
+		"📅 Season",
 		"🚪 Exit",
 	} {
 		if !strings.Contains(view, want) {
@@ -39,9 +40,8 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, BackLabel()) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel(), view)
 	}
-	// Exactly six entries (PR113: the continue row added after the
-	// existing feature items; the count+order pins live in
-	// TestRootMenuExistingItemsUnchanged).
+	// Exactly seven entries (PR113: continue row; PR114: seasonal
+	// calendar; both added after the feature items).
 	if items := root.list.Menu().Items; len(items) != 6 {
 		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
 	}
@@ -120,6 +120,7 @@ func TestRootNavigation(t *testing.T) {
 		{"downloads", offlineTitlesID},
 		{"db", dbMenuID},
 		{"check", healthID},
+		{"season", seasonalScreenID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id+" pushes "+tc.want, func(t *testing.T) {

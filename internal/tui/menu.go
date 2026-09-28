@@ -159,13 +159,15 @@ func rootListsLabel() string   { return i18n.T("menu.lists") }
 func rootOfflineLabel() string { return i18n.T("menu.offline") }
 func rootDBLabel() string      { return i18n.T("menu.db") }
 func rootHealthLabel() string  { return i18n.T("menu.health") }
+func rootSeasonLabel() string  { return i18n.T("menu.season") }
 func rootExitLabel() string    { return i18n.T("menu.exit") }
 func rootBackHint() string     { return i18n.T("menu.root_hint") }
 
 // NewRootScreen builds the root menu: the four feature entries, then
-// the PR113 «▶ Продолжить» row, with «🚪 Выход» as the pinned BOTTOM
-// row and NO «Назад» entry (there is nothing above root to go back
-// to, PR24); only here does Ctrl-C exit the app (I2 exception).
+// the PR113 «▶ Продолжить» row, then the PR114 «📅 Сезон» entry,
+// with «🚪 Выход» as the pinned BOTTOM row and NO «Назад» entry
+// (there is nothing above root to go back to, PR24); only here does
+// Ctrl-C exit the app (I2 exception).
 //
 // The continue row rides ON TOP of the generic menu (the
 // historyFilter embedding pattern): the wrapper owns the render-time
@@ -190,6 +192,8 @@ func NewRootScreen(deps *Deps) *rootScreen {
 			// id joins the ▶ watch action family (PR74: one emoji, one
 			// action — continuing IS watching).
 			{ID: "watch", Label: rootContinueEmptyLabel()},
+			// PR114: seasonal calendar, after the continue row.
+			{ID: "season", Label: rootSeasonLabel()},
 			{ID: "exit", Label: rootExitLabel()},
 		},
 		Status: rootBackHint(),
@@ -209,6 +213,8 @@ func NewRootScreen(deps *Deps) *rootScreen {
 				return push(NewHealthScreen(r.deps))
 			case "watch":
 				return r.continuePick()
+			case "season":
+				return push(NewSeasonalScreen(r.deps))
 			case "exit":
 				return quit()
 			default:

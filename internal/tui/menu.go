@@ -157,13 +157,15 @@ func rootListsLabel() string   { return i18n.T("menu.lists") }
 func rootOfflineLabel() string { return i18n.T("menu.offline") }
 func rootDBLabel() string      { return i18n.T("menu.db") }
 func rootHealthLabel() string  { return i18n.T("menu.health") }
+func rootSeasonLabel() string  { return i18n.T("menu.season") }
 func rootExitLabel() string    { return i18n.T("menu.exit") }
 func rootBackHint() string     { return i18n.T("menu.root_hint") }
 
-// NewRootScreen builds the root menu: five entries with «🚪 Выход» as
+// NewRootScreen builds the root menu: six entries with «🚪 Выход» as
 // the pinned BOTTOM row and NO «Назад» entry (there is nothing above
 // root to go back to, PR24); only here does Ctrl-C exit the app (I2
-// exception).
+// exception). «📅 Сезон» sits after the existing entries (PR114,
+// non-disruptive order).
 func NewRootScreen(deps *Deps) *MenuScreen {
 	return NewMenuScreen(MenuScreenConfig{
 		ID:      rootScreenID,
@@ -175,6 +177,7 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 			{ID: "downloads", Label: rootOfflineLabel()},
 			{ID: "db", Label: rootDBLabel()},
 			{ID: "check", Label: rootHealthLabel()},
+			{ID: "season", Label: rootSeasonLabel()},
 			{ID: "exit", Label: rootExitLabel()},
 		},
 		Status: rootBackHint(),
@@ -192,6 +195,8 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 				return push(NewDBMenu(deps))
 			case "check":
 				return push(NewHealthScreen(deps))
+			case "season":
+				return push(NewSeasonalScreen(deps))
 			case "exit":
 				return quit()
 			default:

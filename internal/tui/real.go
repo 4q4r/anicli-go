@@ -184,6 +184,9 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	}
 	real.mal = mal.New(settings.MAL, mal.APIBaseURL, mal.OAuthBaseURL, malNet,
 		mal.WithTokenPersister(o.malPersister), mal.WithLogger(logf(o.logger)))
+	// PR114: the seasonal calendar service — Shikimori public reads
+	// first, MAL as the authenticated fallback.
+	deps.Seasonal = newRealSeasonal(real.shiki, real.mal, logf(o.logger))
 	syncLog := logf(o.logger)
 	deps.ProgressSync = syncr.NewDispatcher(
 		deps.History,

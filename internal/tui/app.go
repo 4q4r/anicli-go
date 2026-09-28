@@ -357,6 +357,9 @@ type Deps struct {
 	Database DatabaseService
 	Health   HealthService
 	Shiki    ShikimoriService
+	// Seasonal backs «📅 Сезон» (PR114): the seasonal calendar. nil
+	// makes the screen surface its honest unavailability note.
+	Seasonal SeasonalService
 	Download DownloadService
 	// Buffered powers «Формат: [буферный]» (PR43 C); nil makes the
 	// buffered toggle unavailable with an honest status note.

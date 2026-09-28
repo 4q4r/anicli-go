@@ -11,10 +11,11 @@ import (
 // until a flow actually calls one).
 func newTestDeps() *Deps { return &Deps{} }
 
-// TestRootMenuContents: the root menu shows the five RU entries (PR40
+// TestRootMenuContents: the root menu shows the six RU entries (PR40
 // removes the PR35 «🧲 Торренты» entry — torrent providers superseded
-// it). Root shows NO «Назад» row: «🚪 Exit» takes its place as the
-// pinned BOTTOM row (PR24).
+// it; PR114 adds «📅 Season» after Check, non-disruptive). Root shows
+// NO «Назад» row: «🚪 Exit» takes its place as the pinned BOTTOM row
+// (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
@@ -23,6 +24,7 @@ func TestRootMenuContents(t *testing.T) {
 		"📂 Downloads",
 		"🗄️ Database management",
 		"🛠 Check",
+		"📅 Season",
 		"🚪 Exit",
 	} {
 		if !strings.Contains(view, want) {
@@ -38,9 +40,9 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, BackLabel()) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel(), view)
 	}
-	// Exactly five entries (PR40: the torrents entry removed again).
-	if items := root.list.Menu().Items; len(items) != 5 {
-		t.Fatalf("root menu must hold 5 items, got %d: %+v", len(items), items)
+	// Exactly six entries (PR114: the seasonal calendar added).
+	if items := root.list.Menu().Items; len(items) != 6 {
+		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Exit")
@@ -117,6 +119,7 @@ func TestRootNavigation(t *testing.T) {
 		{"downloads", offlineTitlesID},
 		{"db", dbMenuID},
 		{"check", healthID},
+		{"season", seasonalScreenID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id+" pushes "+tc.want, func(t *testing.T) {

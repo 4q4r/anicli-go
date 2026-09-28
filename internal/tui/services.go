@@ -93,6 +93,11 @@ type PlayRequest struct {
 	Headers      map[string]string
 	ExtraMPVOpts []string
 	ChaptersFile string
+	// AnimeTitle and EpisodeNum feed the optional Discord Rich
+	// Presence (PR115): the clean title and episode of the watched
+	// anime (Title itself is the decorated mpv window title).
+	AnimeTitle string
+	EpisodeNum string
 }
 
 // HistoryService reads and writes viewing progress.

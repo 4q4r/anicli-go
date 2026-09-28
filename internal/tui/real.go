@@ -20,6 +20,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/discord"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/mal"
@@ -51,6 +52,9 @@ type RealDeps struct {
 	// buffered is the PR43 buffered-watch downloader; Close sweeps its
 	// active temp dirs.
 	buffered *buffered.Downloader
+	// presence is the optional Discord Rich Presence client (PR115);
+	// Close stops its worker (clearing a showing presence).
+	presence *discord.Client
 }
 
 // RealOption customizes the production wiring of NewRealDeps.
@@ -151,6 +155,15 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	real.downloadBridge = dlService
 	manager := download.NewManager(settings.Download.MaxConcurrency, real.runDownload)
 	dlService.manager = manager
+	// PR115: the optional Discord Rich Presence publisher — an inert
+	// no-op client unless [discord] enabled it, so the playback seam
+	// never nil-checks. It logs to the file sink like the rest of the
+	// subsystems.
+	presence := discord.New(discord.Options{
+		Enabled:     settings.Discord.Enabled,
+		ClientID:    settings.Discord.ClientID,
+		ShowEpisode: settings.Discord.ShowEpisode,
+	}, logf(o.logger))
 	// PR35/PR36: the torrent engine is fully lazy (client + listeners
 	// on the first link) and is the registry's ONE shared client — the
 	// torrent search providers (anilibria-torrent, animetosho,
@@ -160,7 +173,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	deps := &Deps{
 		Search:   &realSearch{registry: registry},
 		Episode:  &realEpisode{registry: registry},
-		Playback: &realPlayback{player: real.player, skips: real.skips, log: logf(o.logger)},
+		Playback: &realPlayback{player: real.player, skips: real.skips, presence: presence, log: logf(o.logger)},
 		History:  &realHistory{store: store},
 		Offline:  &realOffline{settings: settings},
 		Database: &realDatabase{store: store},
@@ -200,7 +213,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	).SyncEpisodeProgress
 	return &RealDeps{
 		Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet,
-		registry: registry, buffered: real.buffered,
+		registry: registry, buffered: real.buffered, presence: presence,
 	}, nil
 }
 
@@ -216,7 +229,8 @@ func (m realMetadata) SearchAlternativeTitles(ctx context.Context, query string)
 // Close releases the background resources. The netclient needs no
 // teardown (it owns no goroutines), so only the download manager, the
 // buffered temp dirs, the registry (CF bypass stack + shared torrent
-// engine) and the store are settled.
+// engine), the Discord presence worker (PR115; clears a showing
+// presence first) and the store are settled.
 func (r *RealDeps) Close() {
 	if r.Downloads != nil {
 		_ = r.Downloads.Close()
@@ -226,6 +240,9 @@ func (r *RealDeps) Close() {
 	}
 	if r.registry != nil {
 		_ = r.registry.Close()
+	}
+	if r.presence != nil {
+		r.presence.Close()
 	}
 }
 
@@ -348,9 +365,18 @@ func (s *realEpisode) HydrateDubs(ctx context.Context, providerID string, episod
 
 // --- PlaybackService ---
 
+// presenceSink is the Discord Rich Presence seam (PR115): the launch
+// announces the watched episode, the exit clears it. *discord.Client
+// satisfies it; tests inject a recorder, and nil disables it.
+type presenceSink interface {
+	SetActivity(title, episode string)
+	Clear()
+}
+
 type realPlayback struct {
-	player *player.Player
-	skips  *skip.Manager
+	player   *player.Player
+	skips    *skip.Manager
+	presence presenceSink
 	// log is the file diagnostics sink (PR61: every aniskip fetch —
 	// found, missed or failed — is logged); nil degrades to discard.
 	log *slog.Logger
@@ -421,6 +447,14 @@ func (s *realPlayback) ResolveSkips(ctx context.Context, shikimoriID int64, epis
 }
 
 func (s *realPlayback) Play(ctx context.Context, req PlayRequest) error {
+	// PR115: the mpv launch announces the episode to Discord Rich
+	// Presence and the exit (any path — natural exit, cancellation or
+	// launch failure) clears it. Non-blocking by contract, so this
+	// can never stall playback.
+	if s.presence != nil {
+		s.presence.SetActivity(req.AnimeTitle, req.EpisodeNum)
+		defer s.presence.Clear()
+	}
 	return s.player.Play(ctx, player.Request{
 		URL:          req.URL,
 		AudioURL:     req.AudioURL,

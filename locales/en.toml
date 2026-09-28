@@ -318,3 +318,8 @@
 "seasonal.row_noscore" = "{title}  [{eps}]"
 "seasonal.header_hint" = "This is a group header — pick a title below it"
 "seasonal.unavailable" = "Seasonal calendar unavailable: no data source"
+# Discord Rich Presence (PR115)
+# ------------------------------------------
+"discord.state" = "Watching anime"
+"discord.details" = "{title} — ep. {ep}"
+"discord.details_plain" = "{title}"

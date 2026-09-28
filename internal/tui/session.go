@@ -1744,6 +1744,8 @@ func (s *sessionScreen) doPlayBuffered(handle buffered.Handle, quality string) t
 		Title:        title,
 		ExtraMPVOpts: nil,
 		ChaptersFile: chapters,
+		AnimeTitle:   BestDisplayTitle(s.group),
+		EpisodeNum:   ep.Num,
 	})
 	if err != nil {
 		return playedMsg{err: err}
@@ -2203,6 +2205,8 @@ func (s *sessionScreen) doPlay() tea.Msg {
 		Headers:      video.Headers,
 		ExtraMPVOpts: video.ExtraMPVOpts,
 		ChaptersFile: chapters,
+		AnimeTitle:   BestDisplayTitle(s.group),
+		EpisodeNum:   ep.Num,
 	})
 	if err != nil {
 		return playedMsg{err: err}

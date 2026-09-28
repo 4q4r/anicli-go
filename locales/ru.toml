@@ -319,3 +319,8 @@
 "seasonal.row_noscore" = "{title}  [{eps}]"
 "seasonal.header_hint" = "Это заголовок группы — выберите тайтл под ним"
 "seasonal.unavailable" = "Сезонный календарь недоступен: нет источника данных"
+# Discord Rich Presence (PR115)
+# ------------------------------------------
+"discord.state" = "Смотрю аниме"
+"discord.details" = "{title} — эп. {ep}"
+"discord.details_plain" = "{title}"

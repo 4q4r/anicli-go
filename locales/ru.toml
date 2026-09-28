@@ -35,6 +35,9 @@
 
 # ---- корневое меню / навигация ----
 "menu.app_title" = "AniCLI — аниме в терминале"
+"menu.continue" = "▶ Продолжить: {title} — эп. {ep}"
+"menu.continue_empty" = "▶ Продолжить: —"
+"menu.continue_hint_empty" = "История пуста"
 "menu.lists" = "📜 Списки"
 "menu.offline" = "📂 Скачанное"
 "menu.db" = "🗄️ Управление БД"

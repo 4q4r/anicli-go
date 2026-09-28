@@ -11,10 +11,10 @@ import (
 // until a flow actually calls one).
 func newTestDeps() *Deps { return &Deps{} }
 
-// TestRootMenuContents: the root menu shows the five RU entries (PR40
-// removes the PR35 «🧲 Торренты» entry — torrent providers superseded
-// it). Root shows NO «Назад» row: «🚪 Exit» takes its place as the
-// pinned BOTTOM row (PR24).
+// TestRootMenuContents: the root menu shows its entries (PR40 removes
+// the PR35 «🧲 Торренты» entry; PR113 adds the «▶ Продолжить» row
+// AFTER the four feature items). Root shows NO «Назад» row: «🚪 Exit»
+// takes its place as the pinned BOTTOM row (PR24).
 func TestRootMenuContents(t *testing.T) {
 	root := NewRootScreen(newTestDeps())
 	view := root.View().Content
@@ -23,6 +23,7 @@ func TestRootMenuContents(t *testing.T) {
 		"📂 Downloads",
 		"🗄️ Database management",
 		"🛠 Check",
+		"▶ Continue: —",
 		"🚪 Exit",
 	} {
 		if !strings.Contains(view, want) {
@@ -38,9 +39,11 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, BackLabel()) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel(), view)
 	}
-	// Exactly five entries (PR40: the torrents entry removed again).
-	if items := root.list.Menu().Items; len(items) != 5 {
-		t.Fatalf("root menu must hold 5 items, got %d: %+v", len(items), items)
+	// Exactly six entries (PR113: the continue row added after the
+	// existing feature items; the count+order pins live in
+	// TestRootMenuExistingItemsUnchanged).
+	if items := root.list.Menu().Items; len(items) != 6 {
+		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Exit")
@@ -63,11 +66,11 @@ func TestRootExitIsLastItem(t *testing.T) {
 // TestRootExitAndInterrupts: I2 root exception — Выход quits, Ctrl-C
 // quits, Esc stays.
 func TestRootExitAndInterrupts(t *testing.T) {
-	newRoot := func() *MenuScreen { return NewRootScreen(newTestDeps()) }
+	newRoot := func() *rootScreen { return NewRootScreen(newTestDeps()) }
 
 	t.Run("enter on Выход quits", func(t *testing.T) {
 		root := newRoot()
-		idx := indexOfChoice(root, "exit")
+		idx := indexOfChoice(root.MenuScreen, "exit")
 		root.list.Jump(idx)
 		_, cmd := root.Update(enter())
 		if !isQuitCmd(cmd) {
@@ -121,7 +124,7 @@ func TestRootNavigation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.id+" pushes "+tc.want, func(t *testing.T) {
 			root := NewRootScreen(newTestDeps())
-			idx := indexOfChoice(root, tc.id)
+			idx := indexOfChoice(root.MenuScreen, tc.id)
 			root.list.Jump(idx)
 			_, cmd := root.Update(enter())
 			if cmd == nil {

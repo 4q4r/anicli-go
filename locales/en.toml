@@ -34,6 +34,9 @@
 
 # ---- root menu / navigation ----------------------------------------------
 "menu.app_title" = "AniCLI — anime in the terminal"
+"menu.continue" = "▶ Continue: {title} — ep. {ep}"
+"menu.continue_empty" = "▶ Continue: —"
+"menu.continue_hint_empty" = "History is empty"
 "menu.lists" = "📜 Lists"
 "menu.offline" = "📂 Downloads"
 "menu.db" = "🗄️ Database management"

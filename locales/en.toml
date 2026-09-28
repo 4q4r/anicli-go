@@ -289,3 +289,10 @@
 "setup.auth_ok" = "✓ authorized"
 "setup.auth_no" = "○ not authorized"
 "setup.hint" = "enter — select · esc/ctrl+c — exit (Shikimori authorization is required)"
+
+# ------------------------------------------
+# Discord Rich Presence (PR115)
+# ------------------------------------------
+"discord.state" = "Watching anime"
+"discord.details" = "{title} — ep. {ep}"
+"discord.details_plain" = "{title}"

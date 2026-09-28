@@ -326,8 +326,10 @@ func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	deps := s.deps
 	return s, safeCmd(offlineSessionID, func() tea.Msg {
 		return offlinePlayedMsg{err: deps.Playback.Play(context.Background(), PlayRequest{
-			URL:   m.path,
-			Title: m.title,
+			URL:        m.path,
+			Title:      m.title,
+			AnimeTitle: s.title.Name,
+			EpisodeNum: s.current,
 		})}
 	})
 }

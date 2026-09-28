@@ -638,3 +638,56 @@ func TestLoadCFWithoutEnabledKeyStillLoads(t *testing.T) {
 		t.Errorf("BrowserIdleTimeout = %v, want 10s", got.CF.BrowserIdleTimeout)
 	}
 }
+
+// --- [discord] (PR115) ---
+
+// TestDiscordDefaults: the integration ships opt-in (disabled) with
+// episode display on and no client id.
+func TestDiscordDefaults(t *testing.T) {
+	t.Parallel()
+
+	d := Default().Discord
+	if d.Enabled {
+		t.Error("discord.enabled must default to false (opt-in)")
+	}
+	if d.ClientID != "" {
+		t.Errorf("discord.client_id default = %q, want empty", d.ClientID)
+	}
+	if !d.ShowEpisode {
+		t.Error("discord.show_episode must default to true")
+	}
+}
+
+// TestDiscordEnabledRequiresClientID: an enabled integration without
+// an application id cannot work — fail loud at startup, not as a
+// silent no-presence mystery mid-playback.
+func TestDiscordEnabledRequiresClientID(t *testing.T) {
+	t.Parallel()
+
+	s := Default()
+	s.Discord.Enabled = true
+	s.Discord.ClientID = ""
+	if err := s.Validate(); err == nil {
+		t.Fatal("enabled [discord] without client_id must fail validation")
+	} else if !strings.Contains(err.Error(), "discord.client_id") {
+		t.Fatalf("validation error must name the key: %v", err)
+	}
+}
+
+// TestDiscordSectionParses: the file surface decodes into Settings.
+func TestDiscordSectionParses(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	body := "[discord]\nenabled = true\nclient_id = \"123456789012345678\"\nshow_episode = false\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !s.Discord.Enabled || s.Discord.ClientID != "123456789012345678" || s.Discord.ShowEpisode {
+		t.Fatalf("parsed [discord] = %+v", s.Discord)
+	}
+}

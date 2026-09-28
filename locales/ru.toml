@@ -290,3 +290,10 @@
 "setup.auth_ok" = "✓ авторизован"
 "setup.auth_no" = "○ не авторизован"
 "setup.hint" = "enter — выбрать · esc/ctrl+c — выход (авторизация Shikimori обязательна)"
+
+# ------------------------------------------
+# Discord Rich Presence (PR115)
+# ------------------------------------------
+"discord.state" = "Смотрю аниме"
+"discord.details" = "{title} — эп. {ep}"
+"discord.details_plain" = "{title}"

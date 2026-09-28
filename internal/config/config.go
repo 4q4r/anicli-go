@@ -306,6 +306,21 @@ type MAL struct {
 	ClientSecret string `toml:"client_secret"`
 }
 
+// Discord configures the optional Rich Presence integration (PR115):
+// playback announces the watched title and episode to the local
+// Discord client over its IPC pipe. Opt-in: the owner creates a
+// Discord application and pastes its id here; everything stays inert
+// (no pipe probing, no goroutine) while disabled.
+type Discord struct {
+	// Enabled turns the integration on (default false).
+	Enabled bool `toml:"enabled"`
+	// ClientID is the Discord application id
+	// (discord.com/developers/applications). Required when enabled.
+	ClientID string `toml:"client_id"`
+	// ShowEpisode includes the episode number in the presence text.
+	ShowEpisode bool `toml:"show_episode"`
+}
+
 // Settings is the full configuration surface.
 type Settings struct {
 	General   General   `toml:"general"`
@@ -320,6 +335,7 @@ type Settings struct {
 	Providers Providers `toml:"providers"`
 	Torrent   Torrent   `toml:"torrent"`
 	CF        CF        `toml:"cf"`
+	Discord   Discord   `toml:"discord"`
 }
 
 // Default returns the built-in settings: user-tuned timeout values carried
@@ -387,6 +403,11 @@ func Default() Settings {
 			UpdateInterval:     30 * time.Minute,
 			Channel:            "auto",
 			Proxy:              "", // download/update traffic only; empty = direct
+		},
+		Discord: Discord{
+			Enabled:     false, // opt-in (owner ruling)
+			ClientID:    "",
+			ShowEpisode: true,
 		},
 	}
 }
@@ -582,6 +603,13 @@ func (s *Settings) Validate() error {
 		// selects auto downstream.
 	default:
 		return fmt.Errorf("cf.channel %q: unknown channel (want auto, free or pro)", s.CF.Channel)
+	}
+	// PR115: an enabled Rich Presence without an application id can
+	// never show anything — fail at startup (same fail-loud contract
+	// as api.enabled without a signing secret) instead of leaving the
+	// user wondering why no presence appears.
+	if s.Discord.Enabled && strings.TrimSpace(s.Discord.ClientID) == "" {
+		return fmt.Errorf("discord.enabled requires discord.client_id (create an application at https://discord.com/developers/applications)")
 	}
 	return nil
 }

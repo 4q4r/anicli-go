@@ -148,7 +148,7 @@ func TestRootMenuContinueRowRendering(t *testing.T) {
 func TestRootMenuExistingItemsUnchanged(t *testing.T) {
 	root := NewRootScreen(&Deps{})
 	items := root.list.Menu().Items
-	wantIDs := []string{"lists", "downloads", "db", "check", "watch", "exit"}
+	wantIDs := []string{"lists", "downloads", "db", "check", "watch", "season", "exit"}
 	if len(items) != len(wantIDs) {
 		t.Fatalf("root menu must hold %d items, got %d: %+v", len(wantIDs), len(items), items)
 	}

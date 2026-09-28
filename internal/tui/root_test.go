@@ -42,8 +42,8 @@ func TestRootMenuContents(t *testing.T) {
 	}
 	// Exactly seven entries (PR113: continue row; PR114: seasonal
 	// calendar; both added after the feature items).
-	if items := root.list.Menu().Items; len(items) != 6 {
-		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
+	if items := root.list.Menu().Items; len(items) != 7 {
+		t.Fatalf("root menu must hold 7 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Exit")

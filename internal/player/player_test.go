@@ -128,6 +128,7 @@ func TestBuildArgsOnlineGolden(t *testing.T) {
 		"--network-timeout=30",
 		"--stream-buffer-size=16MiB",
 		"--hwdec=auto-safe",
+		"--save-position-on-quit",
 		"--audio-file=https://cdn.example/audio.m3u8",
 		"--force-media-title=Anime - 1 [1080p]",
 		"--chapters-file=/tmp/chapters.ffmetadata",
@@ -146,6 +147,22 @@ func TestBuildArgsOnlineGolden(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("argv mismatch:\n got:  %v\nwant:  %v", got, want)
 	}
+}
+
+// TestBuildArgsSavesPositionOnQuit (PR113): every mpv launch carries
+// --save-position-on-quit so mpv writes its watch-later file on exit
+// and replays of the same episode resume from the saved position —
+// the exact placement is pinned by the golden tests.
+func TestBuildArgsSavesPositionOnQuit(t *testing.T) {
+	t.Parallel()
+
+	got := BuildArgs(Request{URL: "https://cdn.example/ep.m3u8"}, Options{Bin: "mpv"})
+	for _, arg := range got {
+		if arg == "--save-position-on-quit" {
+			return
+		}
+	}
+	t.Fatalf("argv must contain --save-position-on-quit, got %v", got)
 }
 
 // TestBuildArgsOfflineGolden pins the offline argv: local file, no
@@ -167,6 +184,7 @@ func TestBuildArgsOfflineGolden(t *testing.T) {
 		"--network-timeout=30",
 		"--stream-buffer-size=16MiB",
 		"--hwdec=auto-safe",
+		"--save-position-on-quit",
 		"--force-media-title=[Dub RU - Dub EN] Anime - 1 [OFFLINE]",
 		"--osd-level=1",
 		"--osd-duration=2500",

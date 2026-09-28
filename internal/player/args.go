@@ -77,6 +77,10 @@ func BuildArgs(req Request, opts Options) []string {
 	if opts.Profile != "" {
 		parts = append(parts, "--profile="+opts.Profile)
 	}
+	// PR113: mpv writes its watch-later file on quit, so replaying
+	// the same episode resumes from the saved position natively —
+	// no position tracking on the Go side.
+	parts = append(parts, "--save-position-on-quit")
 	if req.AudioURL != "" && req.AudioURL != req.URL {
 		parts = append(parts, "--audio-file="+req.AudioURL)
 	}

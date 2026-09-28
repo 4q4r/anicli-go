@@ -686,7 +686,7 @@ func (s *shikiMethodScreen) View() tea.View {
 // newRootAfterAuth builds the root menu with the Shikimori notice
 // stripped: the user just completed authentication, so the startup
 // warning is stale and must not render on the root screen.
-func newRootAfterAuth(deps *Deps) *MenuScreen {
+func newRootAfterAuth(deps *Deps) *rootScreen {
 	filtered := make([]string, 0, len(deps.StartupNotices))
 	for _, n := range deps.StartupNotices {
 		if strings.Contains(n, "Shikimori") {

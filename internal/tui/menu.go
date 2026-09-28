@@ -3,7 +3,9 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/i18n"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // defaultListHeight is the fallback body height before the first
@@ -160,12 +162,20 @@ func rootHealthLabel() string  { return i18n.T("menu.health") }
 func rootExitLabel() string    { return i18n.T("menu.exit") }
 func rootBackHint() string     { return i18n.T("menu.root_hint") }
 
-// NewRootScreen builds the root menu: five entries with «🚪 Выход» as
-// the pinned BOTTOM row and NO «Назад» entry (there is nothing above
-// root to go back to, PR24); only here does Ctrl-C exit the app (I2
-// exception).
-func NewRootScreen(deps *Deps) *MenuScreen {
-	return NewMenuScreen(MenuScreenConfig{
+// NewRootScreen builds the root menu: the four feature entries, then
+// the PR113 «▶ Продолжить» row, with «🚪 Выход» as the pinned BOTTOM
+// row and NO «Назад» entry (there is nothing above root to go back
+// to, PR24); only here does Ctrl-C exit the app (I2 exception).
+//
+// The continue row rides ON TOP of the generic menu (the
+// historyFilter embedding pattern): the wrapper owns the render-time
+// label refresh and the pick, the embedded MenuScreen keeps the §5
+// rendering and navigation unchanged.
+//
+//nolint:revive // internal screen type; tests assert on the concrete struct (NewSessionScreen pattern)
+func NewRootScreen(deps *Deps) *rootScreen {
+	r := &rootScreen{deps: deps}
+	r.MenuScreen = NewMenuScreen(MenuScreenConfig{
 		ID:      rootScreenID,
 		Title:   i18n.T("menu.app_title"),
 		Root:    true,
@@ -175,6 +185,11 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 			{ID: "downloads", Label: rootOfflineLabel()},
 			{ID: "db", Label: rootDBLabel()},
 			{ID: "check", Label: rootHealthLabel()},
+			// PR113: appended AFTER the feature entries — nothing above
+			// moves and «Выход» keeps the pinned bottom slot (I1). The
+			// id joins the ▶ watch action family (PR74: one emoji, one
+			// action — continuing IS watching).
+			{ID: "watch", Label: rootContinueEmptyLabel()},
 			{ID: "exit", Label: rootExitLabel()},
 		},
 		Status: rootBackHint(),
@@ -185,13 +200,15 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 				// "stay" (I2: never an app exit).
 				return nil
 			case "lists":
-				return push(NewHistoryFilter(deps))
+				return push(NewHistoryFilter(r.deps))
 			case "downloads":
-				return push(NewOfflineTitles(deps))
+				return push(NewOfflineTitles(r.deps))
 			case "db":
-				return push(NewDBMenu(deps))
+				return push(NewDBMenu(r.deps))
 			case "check":
-				return push(NewHealthScreen(deps))
+				return push(NewHealthScreen(r.deps))
+			case "watch":
+				return r.continuePick()
 			case "exit":
 				return quit()
 			default:
@@ -199,4 +216,107 @@ func NewRootScreen(deps *Deps) *MenuScreen {
 			}
 		},
 	})
+	r.refreshContinue()
+	return r
+}
+
+// rootContinueEmptyLabel is the dim dash placeholder of the continue
+// row (PR110: resolved through i18n at construction time — package
+// vars would freeze the pre-Init default).
+func rootContinueEmptyLabel() string { return i18n.T("menu.continue_empty") }
+
+// rootScreen wraps the root MenuScreen with the PR113 continue row.
+// The row's label and actionability are computed at RENDER time from
+// the history service: popToRoot reuses this screen instance, so a
+// construction-time label would go stale the moment the user watches
+// something and returns.
+type rootScreen struct {
+	*MenuScreen
+	deps *Deps
+	// hint is the transient status line answering a no-op pick on the
+	// dim row (empty history, PR41 B2 — a disabled row never acts
+	// silently); any next key press clears it.
+	hint string
+}
+
+// latestRecord loads the most recently updated history row — the
+// history service lists rows newest-first, so items[0] IS the
+// "most recently played" record across all anime. nil when the store
+// is absent, unreadable or empty.
+func (r *rootScreen) latestRecord() *storage.AnimeProgress {
+	items, err := loadHistory(r.deps)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	return &items[0]
+}
+
+// refreshContinue re-renders the «Продолжить» row from the newest
+// history record: the label and the dim/non-actionable state.
+func (r *rootScreen) refreshContinue() {
+	for i := range r.list.Menu().Items {
+		if r.list.Menu().Items[i].ID != "watch" {
+			continue
+		}
+		rec := r.latestRecord()
+		r.list.Menu().Items[i].Label = ContinueLabel(rec)
+		r.list.Menu().Items[i].Disabled = rec == nil
+		return
+	}
+}
+
+// continuePick resolves Enter on the «Продолжить» row: nothing to
+// continue answers with the transient hint; a record without a
+// usable source takes the manual history flow's rebind path; a bound
+// record pushes the resumed session — the same screen the manual flow
+// pushes, restored onto the labeled episode, one keypress earlier.
+func (r *rootScreen) continuePick() tea.Cmd {
+	rec := r.latestRecord()
+	if rec == nil {
+		r.hint = i18n.T("menu.continue_hint_empty")
+		return nil
+	}
+	if rec.NeedsCorrection || rec.SourceID == "" || rec.SourceURL == "" {
+		return push(newRebindProgress(r.deps, rec))
+	}
+	target := *rec
+	target.CurrentEpisode = ContinueTarget(*rec)
+	primary := contracts.SearchResult{
+		Title:    derefStr(rec.BoundTitle, rec.Title),
+		URL:      rec.SourceURL,
+		SourceID: rec.SourceID,
+	}
+	if rec.Poster != nil {
+		primary.Poster = *rec.Poster
+	}
+	return push(newResumedSession(r.deps, primary, []contracts.SearchResult{primary}, target))
+}
+
+// Update implements Screen: any key press retires the transient hint
+// (the pick below may re-arm it within the same update), then the
+// wrapped menu handles the key; the wrapper identity stays on the
+// stack (the historyFilter pattern).
+func (r *rootScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	if _, isKey := msg.(tea.KeyPressMsg); isKey {
+		r.hint = ""
+	}
+	next, cmd := r.MenuScreen.Update(msg)
+	if next == Screen(r.MenuScreen) {
+		return r, cmd
+	}
+	return next, cmd
+}
+
+// View implements Screen: the continue row refreshes first so the
+// label always tracks the history store; the transient hint replaces
+// the status line while it lives.
+func (r *rootScreen) View() tea.View {
+	r.refreshContinue()
+	base := r.status
+	if r.hint != "" {
+		r.status = r.hint
+	}
+	v := r.MenuScreen.View()
+	r.status = base
+	return v
 }

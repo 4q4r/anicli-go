@@ -557,6 +557,14 @@ func (e *Engine) startClientLocked() error {
 
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = dir
+	// PR113b: the library's own diagnostics (tracker announces, DHT,
+	// webseed preflight WARNs) must ride the wired file logger, never
+	// slog.Default — a stderr write inside the alt-screen TUI corrupts
+	// the display (the PR85 cfbrowser seam, same class; the owner saw
+	// «webseed URL does not end with / …» leak under the provider
+	// check table). WithTorrentLogger already routes e.log to the file
+	// logger in the real TUI; this hands the LIBRARY the same sink.
+	cfg.Slogger = e.log
 	cfg.DefaultStorage = storage.NewFile(dir)
 	cfg.ListenPort = e.cfg.Port
 	cfg.NoUpload = e.cfg.NoUpload

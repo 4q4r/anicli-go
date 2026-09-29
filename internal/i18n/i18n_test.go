@@ -175,16 +175,20 @@ func TestInitInstallsBundleForT(t *testing.T) {
 	}
 }
 
-// TestInitEmptyLocaleMeansEN covers the hand-edited empty value: it must
-// degrade to the default, not fail loud.
-func TestInitEmptyLocaleMeansEN(t *testing.T) {
+// TestInitEmptyLocaleMeansRU covers the hand-edited empty value: it
+// must degrade to the default locale ("ru" as of PR113b — the original
+// app is Russian), not fail loud.
+func TestInitEmptyLocaleMeansRU(t *testing.T) {
 	t.Cleanup(resetInstalled)
 	resetInstalled()
 	if err := Init(""); err != nil {
 		t.Fatalf("Init(\"\") failed: %v", err)
 	}
-	if got := T("menu.watch"); got != "▶ Watch" {
-		t.Fatalf("T(menu.watch) after Init(\"\") = %q, want the en value", got)
+	if got := T("menu.watch"); got != "▶ Смотреть" {
+		t.Fatalf("T(menu.watch) after Init(\"\") = %q, want the ru value", got)
+	}
+	if Active() == nil || Active().Locale() != "ru" {
+		t.Fatalf("Active() after Init(\"\") = %+v, want a bundle with locale ru", Active())
 	}
 }
 

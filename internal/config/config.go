@@ -59,7 +59,7 @@ type General struct {
 	DataDir string `toml:"data_dir"`
 	// Locale picks the interface language at startup (PR110): a bundled
 	// table ("en", "ru") or a community-contributed table dropped into
-	// ~/.config/anicli/locales/<locale>.toml. Empty means "en"; an
+	// ~/.config/anicli/locales/<locale>.toml. Empty means "ru"; an
 	// unknown locale fails loud at startup (i18n.Init).
 	Locale string `toml:"locale"`
 }
@@ -345,7 +345,10 @@ func Default() Settings {
 	return Settings{
 		General: General{
 			DataDir: "",
-			Locale:  "en",
+			// PR113b: the original app is Russian — "ru" is the
+			// default locale (settings.example.toml and the i18n
+			// Init fallback agree).
+			Locale: "ru",
 		},
 		Network: Network{
 			ConnectTimeout: 10 * time.Second,

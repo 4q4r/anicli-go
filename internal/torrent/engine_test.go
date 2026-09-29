@@ -69,6 +69,94 @@ func newTestEngine(t *testing.T, enabled bool) *Engine {
 	return eng
 }
 
+// recordHandler is an in-memory slog sink: the wired file-logger
+// stand-in for tests asserting WHERE a log record lands.
+type recordHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordHandler) WithGroup(string) slog.Handler      { return h }
+
+// contains reports whether any captured record carries msg.
+func (h *recordHandler) contains(msg string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message == msg {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLibraryLogsRouteToWiredSink pins the PR113b defect-3 contract:
+// the anacrolix library's own diagnostics (here: the webseed
+// non-conforming-URL WARN) must land in the engine's WIRED logger —
+// never on slog.Default/stderr, where they corrupt the alt-screen TUI
+// (the PR85 cfbrowser seam, same class). The library routes everything
+// through ClientConfig.Slogger; regression = the record missing from
+// the wired sink. A live stderr capture would prove nothing: the
+// anacrolix log.Default binds os.Stderr at package init.
+func TestLibraryLogsRouteToWiredSink(t *testing.T) {
+	t.Parallel()
+
+	sink := &recordHandler{}
+	eng := newTestEngine(t, true)
+	eng.log = slog.New(sink)
+
+	// A directory-form metainfo (multi-file info → IsDir) with a
+	// webseed URL lacking the trailing slash — the exact shape that
+	// fires the library's «webseed URL does not end with / and torrent
+	// is a directory» WARN in webseed.Client.SetInfo (anacrolix
+	// v1.61), synchronously inside AddMetaInfo. Built from a real
+	// on-disk directory so piece hashes stay consistent (the library
+	// validates piece count against file lengths).
+	payloadDir := filepath.Join(t.TempDir(), "webseed dir torrent")
+	if err := os.MkdirAll(payloadDir, 0o750); err != nil {
+		t.Fatalf("mkdir payload dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(payloadDir, "a.bin"), []byte("webseed payload"), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	var info metainfo.Info
+	info.PieceLength = 32 * 1024
+	info.Name = "webseed dir torrent"
+	if err := info.BuildFromFilePath(payloadDir); err != nil {
+		t.Fatalf("build metainfo info: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("test setup: the built info must be directory-form (IsDir)")
+	}
+	infoBytes, err := bencode.Marshal(info)
+	if err != nil {
+		t.Fatalf("marshal info: %v", err)
+	}
+	mi := &metainfo.MetaInfo{
+		InfoBytes: infoBytes,
+		UrlList:   []string{"http://webseed.example/no-slash"},
+	}
+
+	if _, err := eng.AddMetaInfo(mi); err != nil {
+		t.Fatalf("AddMetaInfo: %v", err)
+	}
+
+	const warn = "webseed URL does not end with / and torrent is a directory"
+	if !sink.contains(warn) {
+		t.Fatalf("the library webseed WARN must land in the wired sink, got %d records", len(sink.records))
+	}
+}
+
 // TestNewOfflineEngineForTests pins the exported test-only
 // constructor: it must produce an engine with every external
 // discovery channel stripped, so provider-package tests never egress

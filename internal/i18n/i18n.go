@@ -12,7 +12,8 @@
 //   - requesting a locale with neither a bundled nor a user table is a
 //     fail-loud startup error naming the locale and searched paths;
 //   - the locale is chosen once at startup from [general] locale in
-//     settings.toml (default "en") and installed process-wide via Init;
+//     settings.toml (default "ru", PR113b — the original app is
+//     Russian) and installed process-wide via Init;
 //   - T() before Init() (tests, miswired callers) resolves from the
 //     embedded en table — hermetic degradation, never a panic.
 //
@@ -232,11 +233,11 @@ var lazyEN sync.Once
 // Init loads the bundled tables plus the user locales directory for
 // locale and installs the result process-wide. Called once at startup
 // from the CLI layer; unknown locales and malformed tables fail loud.
-// An empty locale means the default ("en") — a hand-edited empty value
-// must not brick the startup.
+// An empty locale means the default ("ru", PR113b — the original app
+// is Russian) — a hand-edited empty value must not brick the startup.
 func Init(locale string) error {
 	if locale == "" {
-		locale = "en"
+		locale = "ru"
 	}
 	b, err := Load(anicli.Locales, userLocalesDir(), locale)
 	if err != nil {

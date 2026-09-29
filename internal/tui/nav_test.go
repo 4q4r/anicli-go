@@ -211,3 +211,8 @@ func ctrlC() tea.KeyPressMsg {
 
 // enter builds the Enter key press.
 func enter() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
+
+// continueKey is the PR113b root-only hotkey firing the «Продолжить»
+// header row (the row lives above the menu, outside the cursor
+// domain, so Enter cannot reach it).
+func continueKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'c'} }

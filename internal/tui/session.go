@@ -1294,6 +1294,16 @@ func (s *sessionScreen) handleDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.videoDub != "" && s.audioDub == "" {
 		s.audioDub = s.videoDub
 	}
+	// PR113 fix: a fresh session can reach the audio prompt WITHOUT a
+	// video resolve — the remembered video dub short-circuits the
+	// merged list (proceedWatch's remembered-dub case), so pickedVideo
+	// is still empty here and a direct launch played
+	// «(no stream selected)». Resolve the remembered video dub first:
+	// the scoped settle auto-launches (the PR84 fast path), and a dub
+	// the rotation dropped falls through to the merged picker.
+	if s.pickedVideo.URL == "" && s.videoDub != "" {
+		return s.beginStreamResolve(s.videoDub)
+	}
 	return s.launchPlayback()
 }
 

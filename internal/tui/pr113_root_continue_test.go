@@ -98,6 +98,8 @@ func TestContinueLabel(t *testing.T) {
 
 // TestRootMenuContinueRowRendering: the row renders dim-empty without
 // history and with the latest record's title+episode with history.
+// PR113b: the row is a special header ABOVE the menu (never a menu
+// item), so the assertions are on the rendered view only.
 func TestRootMenuContinueRowRendering(t *testing.T) {
 	t.Run("no history renders the dim dash row", func(t *testing.T) {
 		root := NewRootScreen(&Deps{})
@@ -105,12 +107,8 @@ func TestRootMenuContinueRowRendering(t *testing.T) {
 		if !strings.Contains(view, "▶ Continue: —") {
 			t.Fatalf("root view must contain the empty continue row, got:\n%s", view)
 		}
-		idx := indexOfChoice(root.MenuScreen, "watch")
-		if idx < 0 {
-			t.Fatalf("root menu must carry the continue (watch) row")
-		}
-		if !root.list.Menu().Items[idx].Disabled {
-			t.Fatalf("the continue row must be disabled without history")
+		if indexOfChoice(root.MenuScreen, "watch") >= 0 {
+			t.Fatalf("the continue row must NOT be a menu item (PR113b header row)")
 		}
 	})
 
@@ -123,9 +121,6 @@ func TestRootMenuContinueRowRendering(t *testing.T) {
 		view := root.View().Content
 		if !strings.Contains(view, "▶ Continue: Anime X — ep. 4") {
 			t.Fatalf("root view must contain the continue row with title+episode, got:\n%s", view)
-		}
-		if root.list.Menu().Items[indexOfChoice(root.MenuScreen, "watch")].Disabled {
-			t.Fatalf("the continue row must be actionable with history")
 		}
 	})
 
@@ -141,14 +136,59 @@ func TestRootMenuContinueRowRendering(t *testing.T) {
 	})
 }
 
-// TestRootMenuExistingItemsUnchanged: PR113 must not displace the
-// existing entries — the four feature rows keep their indices, the
-// continue row slots in after them and «Выход» stays the pinned LAST
-// row (I1).
+// TestRootContinueHeaderAboveMenuWithSeparator pins the PR113b layout:
+// the continue row is the FIRST rendered line below the title, a full
+// horizontal line separates it from the menu list, and the feature
+// items follow below the line (owner mock: a special top row, visually
+// separated like the pinned «Выход» row at the bottom).
+func TestRootContinueHeaderAboveMenuWithSeparator(t *testing.T) {
+	deps := &Deps{History: &fakeHistory{items: []storage.AnimeProgress{{
+		ID: 7, Title: "Anime X", CurrentEpisode: "3",
+		SourceID: "animego", SourceURL: "u1",
+	}}}}
+	root := NewRootScreen(deps)
+	root.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	view := root.View().Content
+
+	contIdx := strings.Index(view, "▶ Continue: Anime X — ep. 4")
+	listsIdx := strings.Index(view, "📜 Lists")
+	sepIdx := strings.Index(view, strings.Repeat("─", 60))
+	if contIdx < 0 || listsIdx < 0 || sepIdx < 0 {
+		t.Fatalf("view must contain the continue row, the separator line and the menu, got:\n%s", view)
+	}
+	if !(contIdx < sepIdx && sepIdx < listsIdx) {
+		t.Fatalf("order must be continue row → separator → menu list, got:\n%s", view)
+	}
+	// The line sits between header and list only — the pinned «Выход»
+	// row below keeps its own pre-existing separator.
+	if strings.Count(view, strings.Repeat("─", 60)) != 1 {
+		t.Fatalf("exactly one width-wide separator expected, got:\n%s", view)
+	}
+}
+
+// TestRootContinueHeaderTracksTerminalWidth pins the PR98-style width
+// contract: the header separator re-renders against the actual window
+// width — a line wider than the terminal would wrap and corrupt
+// bubbletea's cursor tracking.
+func TestRootContinueHeaderTracksTerminalWidth(t *testing.T) {
+	root := NewRootScreen(&Deps{})
+	if view := root.View().Content; !strings.Contains(view, strings.Repeat("─", 40)) {
+		t.Fatalf("before any resize the separator uses the 40-column fallback, got:\n%s", view)
+	}
+	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if view := root.View().Content; !strings.Contains(view, strings.Repeat("─", 100)) {
+		t.Fatalf("after WindowSizeMsg(100) the separator must be 100 columns, got:\n%s", view)
+	}
+}
+
+// TestRootMenuExistingItemsUnchanged: PR113b must not displace the
+// existing entries — the continue row LEFT the menu (it is the header
+// above it now), the feature rows keep their relative order and
+// «Выход» stays the pinned LAST row (I1).
 func TestRootMenuExistingItemsUnchanged(t *testing.T) {
 	root := NewRootScreen(&Deps{})
 	items := root.list.Menu().Items
-	wantIDs := []string{"lists", "downloads", "db", "check", "watch", "season", "exit"}
+	wantIDs := []string{"lists", "downloads", "db", "check", "season", "exit"}
 	if len(items) != len(wantIDs) {
 		t.Fatalf("root menu must hold %d items, got %d: %+v", len(wantIDs), len(items), items)
 	}
@@ -160,18 +200,21 @@ func TestRootMenuExistingItemsUnchanged(t *testing.T) {
 	if last := items[len(items)-1]; last.ID != "exit" {
 		t.Fatalf("«Выход» must remain the trailing pinned row, got %+v", last)
 	}
+	if indexOfChoice(root.MenuScreen, "watch") >= 0 {
+		t.Fatalf("«Продолжить» must not be a MenuScreen item (PR113b header row)")
+	}
 }
 
-// TestRootContinueEnterNoHistoryNoOp: Enter on the dim row is a no-op
-// answering with the «History is empty» hint; the hint clears on the
-// next key press.
+// TestRootContinueEnterNoHistoryNoOp: the continue hotkey (c, PR113b —
+// the row is the header above the menu, outside the cursor domain) on
+// the dim row is a no-op answering with the «History is empty» hint;
+// the hint clears on the next key press.
 func TestRootContinueEnterNoHistoryNoOp(t *testing.T) {
 	root := NewRootScreen(&Deps{})
-	root.list.Jump(indexOfChoice(root.MenuScreen, "watch"))
 
-	next, cmd := root.Update(enter())
+	next, cmd := root.Update(continueKey())
 	if cmd != nil {
-		t.Fatalf("Enter on the empty continue row must not navigate, got %v", cmd)
+		t.Fatalf("the continue hotkey on the empty row must not navigate, got %v", cmd)
 	}
 	if next.ID() != rootScreenID {
 		t.Fatalf("the root screen must stay, got %q", next.ID())
@@ -187,9 +230,9 @@ func TestRootContinueEnterNoHistoryNoOp(t *testing.T) {
 	}
 }
 
-// TestRootContinueEnterPushesSessionAtTargetEpisode: Enter on the
-// actionable row pushes the resumed session — the same screen manual
-// history navigation lands on — restored onto the LABELED episode.
+// TestRootContinueEnterPushesSessionAtTargetEpisode: the continue
+// hotkey pushes the resumed session — the same screen manual history
+// navigation lands on — restored onto the LABELED episode.
 func TestRootContinueEnterPushesSessionAtTargetEpisode(t *testing.T) {
 	deps := &Deps{
 		History: &fakeHistory{items: []storage.AnimeProgress{{
@@ -199,9 +242,8 @@ func TestRootContinueEnterPushesSessionAtTargetEpisode(t *testing.T) {
 		Episode: &fakeEpisode{episodes: testEpisodeSet()},
 	}
 	root := NewRootScreen(deps)
-	root.list.Jump(indexOfChoice(root.MenuScreen, "watch"))
 
-	_, cmd := root.Update(enter())
+	_, cmd := root.Update(continueKey())
 	if cmd == nil {
 		t.Fatalf("Enter on the continue row must schedule navigation")
 	}
@@ -237,9 +279,8 @@ func TestRootContinueUnboundRecordRoutesToRebind(t *testing.T) {
 		ID: 7, Title: "Anime X", CurrentEpisode: "2", NeedsCorrection: true,
 	}}}}
 	root := NewRootScreen(deps)
-	root.list.Jump(indexOfChoice(root.MenuScreen, "watch"))
 
-	_, cmd := root.Update(enter())
+	_, cmd := root.Update(continueKey())
 	if cmd == nil {
 		t.Fatalf("Enter must schedule navigation")
 	}

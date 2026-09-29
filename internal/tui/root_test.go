@@ -40,10 +40,11 @@ func TestRootMenuContents(t *testing.T) {
 	if strings.Contains(view, BackLabel()) {
 		t.Fatalf("root view must NOT contain the Back row %q (Выход replaces it), got:\n%s", BackLabel(), view)
 	}
-	// Exactly seven entries (PR113: continue row; PR114: seasonal
-	// calendar; both added after the feature items).
-	if items := root.list.Menu().Items; len(items) != 7 {
-		t.Fatalf("root menu must hold 7 items, got %d: %+v", len(items), items)
+	// Exactly six entries (PR113b: the «Продолжить» row left the menu
+	// — it renders as the special header above the list, followed by a
+	// separator line; PR114's «Сезон» stays after the feature items).
+	if items := root.list.Menu().Items; len(items) != 6 {
+		t.Fatalf("root menu must hold 6 items, got %d: %+v", len(items), items)
 	}
 	// Выход is the LAST item, rendered below every other entry.
 	exitIdx := strings.LastIndex(view, "🚪 Exit")

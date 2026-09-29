@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -55,6 +57,11 @@ type MenuScreen struct {
 	list    *PinList
 	onPick  PickHandler
 	notices []string
+	// header is an optional pre-rendered block (the PR113b root
+	// «Продолжить» row + separator line) rendered between the notices
+	// and the list. The root wrapper recomputes it at render time —
+	// the same render-time-fresh pattern as the continue label.
+	header string
 }
 
 // NewMenuScreen builds the screen from cfg.
@@ -131,6 +138,8 @@ func (m *MenuScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 // additionally renders the red startup notices (disabled providers,
 // unconfigured Shikimori) between the title and the list — they live
 // INSIDE the TUI because pre-alt-screen terminal output is invisible.
+// The optional header block (PR113b root continue row + separator)
+// renders between the notices and the list.
 func (m *MenuScreen) View() tea.View {
 	var b []byte
 	b = append(b, theme.Title.Render(m.title)...)
@@ -141,6 +150,9 @@ func (m *MenuScreen) View() tea.View {
 			b = append(b, '\n')
 		}
 		b = append(b, '\n')
+	}
+	if m.header != "" {
+		b = append(b, m.header...)
 	}
 	b = append(b, m.list.Render()...)
 	if m.status != "" {
@@ -164,10 +176,16 @@ func rootExitLabel() string    { return i18n.T("menu.exit") }
 func rootBackHint() string     { return i18n.T("menu.root_hint") }
 
 // NewRootScreen builds the root menu: the four feature entries, then
-// the PR113 «▶ Продолжить» row, then the PR114 «📅 Сезон» entry,
-// with «🚪 Выход» as the pinned BOTTOM row and NO «Назад» entry
-// (there is nothing above root to go back to, PR24); only here does
-// Ctrl-C exit the app (I2 exception).
+// the PR114 «📅 Сезон» entry, with «🚪 Выход» as the pinned BOTTOM row
+// and NO «Назад» entry (there is nothing above root to go back to,
+// PR24); only here does Ctrl-C exit the app (I2 exception).
+//
+// PR113b: the PR113 «▶ Продолжить» row is NOT a menu item anymore —
+// it renders as the special header row ABOVE the list, separated from
+// the feature entries by a horizontal line (the owner mock mirrors the
+// pinned-«Выход» separator at the bottom), so no regular entry ever
+// shifts position. The row activates through the root-only `c` hotkey
+// (it lives outside the cursor domain — see rootScreen.continuePick).
 //
 // The continue row rides ON TOP of the generic menu (the
 // historyFilter embedding pattern): the wrapper owns the render-time
@@ -187,12 +205,7 @@ func NewRootScreen(deps *Deps) *rootScreen {
 			{ID: "downloads", Label: rootOfflineLabel()},
 			{ID: "db", Label: rootDBLabel()},
 			{ID: "check", Label: rootHealthLabel()},
-			// PR113: appended AFTER the feature entries — nothing above
-			// moves and «Выход» keeps the pinned bottom slot (I1). The
-			// id joins the ▶ watch action family (PR74: one emoji, one
-			// action — continuing IS watching).
-			{ID: "watch", Label: rootContinueEmptyLabel()},
-			// PR114: seasonal calendar, after the continue row.
+			// PR114: seasonal calendar, after the feature entries.
 			{ID: "season", Label: rootSeasonLabel()},
 			{ID: "exit", Label: rootExitLabel()},
 		},
@@ -211,8 +224,6 @@ func NewRootScreen(deps *Deps) *rootScreen {
 				return push(NewDBMenu(r.deps))
 			case "check":
 				return push(NewHealthScreen(r.deps))
-			case "watch":
-				return r.continuePick()
 			case "season":
 				return push(NewSeasonalScreen(r.deps))
 			case "exit":
@@ -222,20 +233,20 @@ func NewRootScreen(deps *Deps) *rootScreen {
 			}
 		},
 	})
-	r.refreshContinue()
 	return r
 }
-
-// rootContinueEmptyLabel is the dim dash placeholder of the continue
-// row (PR110: resolved through i18n at construction time — package
-// vars would freeze the pre-Init default).
-func rootContinueEmptyLabel() string { return i18n.T("menu.continue_empty") }
 
 // rootScreen wraps the root MenuScreen with the PR113 continue row.
 // The row's label and actionability are computed at RENDER time from
 // the history service: popToRoot reuses this screen instance, so a
 // construction-time label would go stale the moment the user watches
 // something and returns.
+//
+// PR113b: the row is the special header ABOVE the menu list (never a
+// menu item — the regular entries keep their positions), separated by
+// a horizontal line, and fires through the root-only `c` hotkey: the
+// cursor domain holds only the menu items, so Enter cannot reach the
+// header.
 type rootScreen struct {
 	*MenuScreen
 	deps *Deps
@@ -243,7 +254,16 @@ type rootScreen struct {
 	// dim row (empty history, PR41 B2 — a disabled row never acts
 	// silently); any next key press clears it.
 	hint string
+	// width is the last known terminal width (PR98 pattern): the
+	// header separator re-renders against it — a line wider than the
+	// terminal would wrap and corrupt bubbletea's cursor tracking.
+	width int
 }
+
+// rootHeaderFallbackWidth is the separator width before the first
+// WindowSizeMsg arrives — the same fixed width the PinList's pinned
+// row separator has always used.
+const rootHeaderFallbackWidth = 40
 
 // latestRecord loads the most recently updated history row — the
 // history service lists rows newest-first, so items[0] IS the
@@ -257,22 +277,28 @@ func (r *rootScreen) latestRecord() *storage.AnimeProgress {
 	return &items[0]
 }
 
-// refreshContinue re-renders the «Продолжить» row from the newest
-// history record: the label and the dim/non-actionable state.
-func (r *rootScreen) refreshContinue() {
-	for i := range r.list.Menu().Items {
-		if r.list.Menu().Items[i].ID != "watch" {
-			continue
-		}
-		rec := r.latestRecord()
-		r.list.Menu().Items[i].Label = ContinueLabel(rec)
-		r.list.Menu().Items[i].Disabled = rec == nil
-		return
+// rootContinueHeader renders the PR113b header block: the «Продолжить»
+// row (cursor never points at it — it is outside the menu cursor
+// domain) followed by the width-wide separator line. Disabled (dim)
+// without history; the separator clamps to the tracked terminal width
+// so it can never wrap (a wrapping header line corrupts bubbletea's
+// cursor tracking).
+func (r *rootScreen) rootContinueHeader() string {
+	rec := r.latestRecord()
+	row := renderRow(Choice{
+		ID:       "watch",
+		Label:    ContinueLabel(rec),
+		Disabled: rec == nil,
+	}, 0, -1, "")
+	width := r.width
+	if width <= 0 {
+		width = rootHeaderFallbackWidth
 	}
+	return row + theme.Separator.Render(strings.Repeat("─", width)) + "\n"
 }
 
-// continuePick resolves Enter on the «Продолжить» row: nothing to
-// continue answers with the transient hint; a record without a
+// continuePick resolves the continue hotkey: nothing to continue
+// answers with the transient hint; a record without a
 // usable source takes the manual history flow's rebind path; a bound
 // record pushes the resumed session — the same screen the manual flow
 // pushes, restored onto the labeled episode, one keypress earlier.
@@ -298,13 +324,20 @@ func (r *rootScreen) continuePick() tea.Cmd {
 	return push(newResumedSession(r.deps, primary, []contracts.SearchResult{primary}, target))
 }
 
-// Update implements Screen: any key press retires the transient hint
-// (the pick below may re-arm it within the same update), then the
-// wrapped menu handles the key; the wrapper identity stays on the
-// stack (the historyFilter pattern).
+// Update implements Screen: the window width updates the separator
+// budget, any other key press retires the transient hint (the pick
+// below may re-arm it within the same update), the `c` hotkey fires
+// the continue header, then the wrapped menu handles the key; the
+// wrapper identity stays on the stack (the historyFilter pattern).
 func (r *rootScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
-	if _, isKey := msg.(tea.KeyPressMsg); isKey {
+	if size, isSize := msg.(tea.WindowSizeMsg); isSize {
+		r.width = size.Width
+	}
+	if key, isKey := msg.(tea.KeyPressMsg); isKey {
 		r.hint = ""
+		if key.Code == 'c' && key.Mod == 0 { //nolint:exhaustive // root-only hotkey; 0 = no modifier
+			return r, r.continuePick()
+		}
 	}
 	next, cmd := r.MenuScreen.Update(msg)
 	if next == Screen(r.MenuScreen) {
@@ -313,11 +346,11 @@ func (r *rootScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return next, cmd
 }
 
-// View implements Screen: the continue row refreshes first so the
-// label always tracks the history store; the transient hint replaces
-// the status line while it lives.
+// View implements Screen: the header block (continue row + separator)
+// refreshes first so the label always tracks the history store; the
+// transient hint replaces the status line while it lives.
 func (r *rootScreen) View() tea.View {
-	r.refreshContinue()
+	r.header = r.rootContinueHeader()
 	base := r.status
 	if r.hint != "" {
 		r.status = r.hint

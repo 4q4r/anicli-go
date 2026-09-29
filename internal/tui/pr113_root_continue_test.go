@@ -156,7 +156,7 @@ func TestRootContinueHeaderAboveMenuWithSeparator(t *testing.T) {
 	if contIdx < 0 || listsIdx < 0 || sepIdx < 0 {
 		t.Fatalf("view must contain the continue row, the separator line and the menu, got:\n%s", view)
 	}
-	if !(contIdx < sepIdx && sepIdx < listsIdx) {
+	if contIdx >= sepIdx || sepIdx >= listsIdx {
 		t.Fatalf("order must be continue row → separator → menu list, got:\n%s", view)
 	}
 	// The line sits between header and list only — the pinned «Выход»

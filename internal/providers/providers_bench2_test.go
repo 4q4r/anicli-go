@@ -34,12 +34,13 @@ func benchRouter(b *testing.B, fallback []byte, routes map[string][]byte) *httpt
 
 // --- animevost ---
 
-// BenchmarkAnimevostSearchJSON — animevost POST /search decode.
+// BenchmarkAnimevostSearchJSON — animevost POST /search decode (the
+// Lua script, the PR119 migration's animedia benchmark pattern).
 func BenchmarkAnimevostSearchJSON(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "animevost_search.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnimevost(srv.URL, nil)
+	p := luaProvider(b, "animevost", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "black lagoon")
@@ -55,7 +56,7 @@ func BenchmarkAnimevostGetEpisodes(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "animevost_playlist.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnimevost(srv.URL, nil)
+	p := luaProvider(b, "animevost", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		eps, err := p.GetEpisodes(ctx, "326")

@@ -78,6 +78,12 @@ func (b Base) SourceType() contracts.SourceType { return b.sourceType }
 // TUI derive from it via dubLangTag — not from a per-dub field.
 func (b Base) ContentLanguage() string { return b.contentLang }
 
+// formContentType marks a request body as form-encoded (the header
+// PostForm used to set; kept explicit for Do-based calls). Shared by
+// the providers that hand-build POST bodies (kodik, sameband; lived in
+// animevost.go until the PR119 Lua migration).
+var formContentType = map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
+
 // pythonStr ports Python's str() over a JSON number field: the wire
 // literal is preserved ("1" stays "1", "1.5" stays "1.5"), and a missing
 // field yields "None" exactly like str(None) on a JSON null (this is

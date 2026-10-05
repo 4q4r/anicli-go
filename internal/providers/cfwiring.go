@@ -53,7 +53,6 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 // targets `anicli cf solve` opens the browser against.
 var baseURLs = map[string]string{
 	"anilibria": AniLibriaAPIBase,
-	"animevost": AnimeVostBase,
 	"anilib":    AnilibAPIBase,
 	"animego":   AnimeGoBase,
 	"gogoanime": GogoAnimeBase,

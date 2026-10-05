@@ -137,9 +137,15 @@ func TestFactoryLuaExcludedIsGone(t *testing.T) {
 
 // TestFactoryLuaDisabledConfig pins the kill switch: [providers.lua]
 // enabled = false leaves the compiled Go factories alone. The four
+<<<<<<< HEAD
 // migrated slots (anitokyo, animedia, animevib, anilibria) are EMPTY
 // in this mode: they live only in the bundled Lua scripts since
 // PR116/PR120.
+=======
+// migrated slots (anitokyo, animedia, animevib, animevost) are EMPTY
+// in this mode: they live only in the bundled Lua scripts (PR116,
+// PR119).
+>>>>>>> feat/119-animevost-lua
 func TestFactoryLuaDisabledConfig(t *testing.T) {
 	dir := luaXDG(t)
 	writeLuaScript(t, dir, "userscript", "")
@@ -160,9 +166,15 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 		if id == "userscript" {
 			t.Fatal("userscript registered with [providers.lua] disabled")
 		}
+<<<<<<< HEAD
 		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria"} {
 			if id == migrated {
 				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR120)", migrated)
+=======
+		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "animevost"} {
+			if id == migrated {
+				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119)", migrated)
+>>>>>>> feat/119-animevost-lua
 			}
 		}
 	}

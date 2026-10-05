@@ -157,6 +157,12 @@ func transportErrorKind(err error) string {
 		return "provider_403"
 	case errors.Is(err, contracts.ErrGeoBlocked):
 		return "geo_blocked"
+	case errors.Is(err, contracts.ErrNotFound):
+		// The typed miss (netclient maps HTTP 404 here): the animevost
+		// live API answers search misses this way — the marker keeps
+		// the sentinel re-attachment, so a Lua provider's miss is
+		// errors.Is(ErrNotFound) exactly like the compiled ones.
+		return "not_found"
 	case errors.Is(err, contracts.ErrProviderTimeout):
 		return "timeout"
 	default:

@@ -68,6 +68,10 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"anitokyo": "дандадан",
 		"animedia": "врата штейна",
 		"animevib": "дандадан",
+		// animevost (PR119): the API answers through the configured
+		// proxy (the direct route does not resolve on the
+		// characterization network) — run with ANICLI_LUA_LIVE_PROXY.
+		"animevost": "naruto",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

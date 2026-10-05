@@ -54,7 +54,6 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 var baseURLs = map[string]string{
 	"anilibria": AniLibriaAPIBase,
 	"animevost": AnimeVostBase,
-	"anilib":    AnilibAPIBase,
 	"animego":   AnimeGoBase,
 	"gogoanime": GogoAnimeBase,
 	"sameband":  SameBandBase,

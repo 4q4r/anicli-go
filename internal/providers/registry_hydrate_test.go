@@ -69,6 +69,11 @@ func TestRegistryForwardsDubsHydrator(t *testing.T) {
 // TestLiveRegistryExposesHydrationCapability builds the REAL registry
 // (construction only — no network calls) and asserts the wrapper stack
 // of the lazily-hydrating providers answers the capability assertion.
+// PR122: anilib is served by the bundled Lua script — its hydration
+// runs eagerly inside episodes() (the release-dub-keys model) and its
+// resolve self-hydrates server-side, so the Go DubsHydrator surface
+// no longer applies to it (the registry's no-op fallback covers the
+// «Обновить источники» recovery; see contracts/provider.go).
 func TestLiveRegistryExposesHydrationCapability(t *testing.T) {
 	cfg := config.Default()
 	reg, err := NewRegistry(cfg, nil)
@@ -77,7 +82,7 @@ func TestLiveRegistryExposesHydrationCapability(t *testing.T) {
 	}
 	defer func() { _ = reg.Close() }()
 
-	for _, id := range []string{"anilib", "animego", "gogoanime"} {
+	for _, id := range []string{"animego", "gogoanime"} {
 		p, ok := reg.Get(id)
 		if !ok {
 			t.Fatalf("provider %q missing", id)

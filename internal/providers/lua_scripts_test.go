@@ -2,6 +2,7 @@ package providers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -26,6 +27,7 @@ var luaProductionBases = map[string]string{
 	"anitokyo": "https://anitokyo.tv",
 	"animedia": "https://amd.online",
 	"animevib": "https://www.animevib.ru",
+	"anilib":   "https://api.cdnlibs.org/api",
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts
@@ -41,6 +43,14 @@ func luaStateJSON(pageURL, num string) (string, error) {
 // luaProvider loads the bundled script for id with its base_url
 // pointed at testURL.
 func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
+	t.Helper()
+	return luaProviderWithLogger(t, id, testURL, nil)
+}
+
+// luaProviderWithLogger loads the bundled script with an explicit
+// engine logger (the construction-time injection the registry threads
+// for production providers — the Lua equivalent of the Base seam).
+func luaProviderWithLogger(t testing.TB, id, testURL string, log *slog.Logger) contracts.Provider {
 	t.Helper()
 
 	production, known := luaProductionBases[id]
@@ -73,7 +83,7 @@ func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
 	}
 	cfg.HTTP = client
 
-	p, err := lua.LoadProviderBytes(cfg, nil, id, []byte(src))
+	p, err := lua.LoadProviderBytes(cfg, log, id, []byte(src))
 	if err != nil {
 		t.Fatalf("load lua script %q: %v", id, err)
 	}

@@ -28,7 +28,7 @@ func TestAnilibGetEpisodesAppliesReleaseDubList(t *testing.T) {
 			_, _ = w.Write(fixture(t, "anilib_episodes.json"))
 		}
 	})
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "16488--bleach-sennen-kessen-hen")
 	if err != nil {
@@ -58,15 +58,16 @@ func TestAnilibGetEpisodesAppliesReleaseDubList(t *testing.T) {
 	}
 }
 
-// TestAnilibResolveStreamSelfHydrates: resolving an episode whose dub
-// links were never fetched hydrates that ONE episode internally, then
+// TestAnilibResolveStreamSelfHydrates: resolving a dub whose links were
+// never fetched hydrates the episode server-side (the fresh-sandbox
+// contract: streams() always re-fetches /episodes/{raw_id}), then
 // resolves — no bulk, and the caller needs no pre-pass.
 func TestAnilibResolveStreamSelfHydrates(t *testing.T) {
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "anilib_episode_players.json"))
 	})
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	episode := contracts.Episode{
 		Num:   "1",

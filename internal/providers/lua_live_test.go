@@ -68,6 +68,7 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"anitokyo": "дандадан",
 		"animedia": "врата штейна",
 		"animevib": "дандадан",
+		"anilib":   "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

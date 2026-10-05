@@ -59,6 +59,17 @@ func amdSortNumeric(values []string) {
 	}
 }
 
+// firstNonEmpty returns the first non-empty argument, or "". PR122:
+// relocated from the deleted anilib.go — kodik's dub naming shares it.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // keys lists a string-map's keys sorted (test diagnostics).
 func keys(m map[string][]string) []string {
 	out := make([]string, 0, len(m))

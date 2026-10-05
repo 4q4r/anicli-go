@@ -21,10 +21,10 @@ return {
 }
 `
 
-// TestRegistryWithLuaDiscovery: a conforming user script in the XDG
-// providers tree registers alongside the built-ins; the registry
-// serves it like any compiled provider.
-func TestRegistryWithLuaDiscovery(t *testing.T) {
+// TestRegistryLuaUserScriptRegisters (PR116, config-driven): a
+// conforming user script in the XDG providers tree registers at the
+// roster tail; the registry serves it like any compiled provider.
+func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	dir := filepath.Join(xdg, "anicli", "providers", "myprov")
@@ -35,8 +35,11 @@ func TestRegistryWithLuaDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cfg := config.Default()
+	cfg.Providers.Kodik.Token = "test-token" // keep the roster intact (PR24)
+
 	log, buf := luaTestLogger(t)
-	reg, err := NewRegistry(config.Settings{}, nil, WithLuaDiscovery(), WithProviderLogger(log))
+	reg, err := NewRegistry(cfg, nil, WithProviderLogger(log))
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -49,10 +52,11 @@ func TestRegistryWithLuaDiscovery(t *testing.T) {
 	}
 }
 
-// TestRegistryLuaDuplicateIDSkipped: a Lua shadow of a built-in never
-// replaces it — Register rejects the duplicate and the startup logs
-// the skip.
-func TestRegistryLuaDuplicateIDSkipped(t *testing.T) {
+// TestRegistryLuaShadowReplacesGo pins the PR116 shadow rule (it
+// superseded PR111's "Go always wins"): a user script with a built-in
+// id REPLACES the compiled provider, and the registry's capability
+// probe proves which implementation serves the id.
+func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	dir := filepath.Join(xdg, "anicli", "providers", "animego")
@@ -62,6 +66,7 @@ func TestRegistryLuaDuplicateIDSkipped(t *testing.T) {
 	shadow := `
 	return {
 		id = "animego",
+		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
 		streams = function(episode_url, dub) return { dub_name = dub, links = {} } end,
@@ -71,20 +76,23 @@ func TestRegistryLuaDuplicateIDSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cfg := config.Default()
+	cfg.Providers.Kodik.Token = "test-token"
+
 	log, buf := luaTestLogger(t)
-	reg, err := NewRegistry(config.Settings{}, nil, WithLuaDiscovery(), WithProviderLogger(log))
+	reg, err := NewRegistry(cfg, nil, WithProviderLogger(log))
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	p, ok := reg.Get("animego")
+	_, ok := reg.Get("animego")
 	if !ok {
-		t.Fatal("the built-in animego must stay registered")
+		t.Fatal("the shadowed animego must stay registered (as the Lua script)")
 	}
-	if p.ID() != "animego" {
-		t.Fatalf("unexpected provider %q", p.ID())
+	if got := reg.ContentLanguage("animego"); got != "lua-probe" {
+		t.Fatalf("animego ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
-	if !strings.Contains(buf.String(), "not registered") && !strings.Contains(buf.String(), "skipped") {
-		t.Fatalf("the duplicate skip must be logged, got: %s", buf.String())
+	if !strings.Contains(buf.String(), "shadowed by its lua script") {
+		t.Fatalf("the shadow must be logged, got: %s", buf.String())
 	}
 }
 

@@ -96,6 +96,40 @@ base_url = "https://rezka-mirror.example"
 	}
 }
 
+// TestProvidersLuaDefaults pins the [providers.lua] defaults (PR116):
+// the Lua provider subsystem ships ENABLED (the bundled Lua providers
+// are roster members — off would silently drop three providers) with
+// no extra scan dir.
+func TestProvidersLuaDefaults(t *testing.T) {
+	got := Default()
+	if !got.Providers.Lua.Enabled {
+		t.Error("Providers.Lua.Enabled = false, want true (bundled Lua providers are roster members)")
+	}
+	if got.Providers.Lua.Dir != "" {
+		t.Errorf("Providers.Lua.Dir = %q, want empty (no extra scan dir by default)", got.Providers.Lua.Dir)
+	}
+}
+
+// TestProvidersLuaFromFile: [providers.lua] enabled/dir flip the Lua
+// provider subsystem off or point it at an extra script directory.
+func TestProvidersLuaFromFile(t *testing.T) {
+	path := writeTOML(t, `
+[providers.lua]
+enabled = false
+dir = "/tmp/more-providers"
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Providers.Lua.Enabled {
+		t.Error("Providers.Lua.Enabled = true, want file value false")
+	}
+	if got.Providers.Lua.Dir != "/tmp/more-providers" {
+		t.Errorf("Providers.Lua.Dir = %q, want file value", got.Providers.Lua.Dir)
+	}
+}
+
 func writeTOML(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "settings.toml")

@@ -174,12 +174,13 @@ func BenchmarkAnidubGetEpisodesHTML(b *testing.B) {
 
 // --- animedia ---
 
-// BenchmarkAniMediaSearchHTML — animedia HTML search parse.
+// BenchmarkAniMediaSearchHTML — animedia HTML search parse (the Lua
+// script's search leg; PR116 harness).
 func BenchmarkAniMediaSearchHTML(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "animedia_search.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAniMedia(srv.URL, benchClient(b, "animedia"))
+	p := luaProvider(b, "animedia", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "one piece")

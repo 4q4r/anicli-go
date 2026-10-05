@@ -30,6 +30,33 @@ func ProvidersDir() (dir string, ok bool) {
 	return filepath.Join(base, "anicli", "providers"), true
 }
 
+// ScanDir reads one provider script directory into raw sources: every
+// <dir>/<id>/main.lua becomes a Source (Dir carries the origin for
+// diagnostics). A missing or unreadable dir scans to nothing — a
+// plain no-op, never an error. The factory (PR116) assembles the
+// bundled sources, the config dir and this user dir into the
+// precedence-ordered list LoadSources consumes.
+func ScanDir(dir string) []Source {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []Source
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		main := filepath.Join(dir, id, "main.lua")
+		src, err := os.ReadFile(main) // #nosec G304 -- reading the user's own provider scripts is this package's purpose
+		if err != nil {
+			continue // no main.lua — not a provider directory
+		}
+		out = append(out, Source{ID: id, Src: string(src), Dir: dir})
+	}
+	return out
+}
+
 // Discover scans <user config>/anicli/providers/<id>/main.lua and
 // loads every conforming script into a sandboxed Provider. Failures
 // (missing id match, incomplete contract, syntax, budget overrun)
@@ -50,31 +77,17 @@ func Discover(cfg Config, log *slog.Logger) ([]*Provider, []DiscoveryError) {
 	if !ok {
 		return provs, skips
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		// No providers tree (or unreadable): a plain no-op.
-		return provs, skips
-	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		id := entry.Name()
-		main := filepath.Join(dir, id, "main.lua")
-		src, err := os.ReadFile(main) // #nosec G304 -- reading the user's own provider scripts is this package's purpose
+	for _, src := range ScanDir(dir) {
+		p, err := LoadProviderBytes(cfg, log, src.ID, []byte(src.Src))
 		if err != nil {
-			continue // no main.lua — not a provider directory
-		}
-		p, err := LoadProviderBytes(cfg, log, id, src)
-		if err != nil {
-			skips = append(skips, DiscoveryError{Dir: id, Err: err})
+			skips = append(skips, DiscoveryError{Dir: src.ID, Err: err})
 			log.Warn("lua: provider script skipped",
-				"provider", id, "error", err.Error())
+				"provider", src.ID, "error", err.Error())
 			continue
 		}
 		provs = append(provs, p)
-		log.Info("lua: provider discovered", "provider", id)
+		log.Info("lua: provider discovered", "provider", src.ID)
 	}
 	return provs, skips
 }

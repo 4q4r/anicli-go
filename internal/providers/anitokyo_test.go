@@ -13,13 +13,11 @@ import (
 )
 
 // Live-capture provenance: every anitokyo fixture below is a verbatim
-// capture of anitokyo.tv taken 2026-09-25 (anonymous guest requests, the
-// roster's default desktop User-Agent, direct connection — the site is a
-// UTF-8 DataLife Engine install behind a pass-through Cloudflare front; no
-// challenge on any probed path). The search fixtures ride the DLE
-// full-search POST (do=search&subaction=search); the release fixtures
-// cover the RalodePlayer shapes: a 60-dub TV series, a 3-dub movie
-// (video.php cat=2) and an announcement page with no player data at all.
+// capture of anitokyo.tv taken 2026-09-25 (anonymous guest requests).
+// PR116: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anitokyo/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to.
 
 // TestAniTokyoSearch pins the catalog search against the real captured
 // «дандадан» answer: DLE full-search rows (article.story.shortstory) in
@@ -29,7 +27,7 @@ func TestAniTokyoSearch(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_search_dandadan.html")
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 	results, err := p.Search(context.Background(), "дандадан")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -41,15 +39,15 @@ func TestAniTokyoSearch(t *testing.T) {
 	want := []contracts.SearchResult{
 		{
 			Title: "Дандадан [ТВ-3] / Dandadan 3rd Season",
-			URL:   AniTokyoBase + "/anime/9800-dandadan-tv-3-dandadan-3rd-season.html",
+			URL:   "https://anitokyo.tv/anime/9800-dandadan-tv-3-dandadan-3rd-season.html",
 		},
 		{
 			Title: "Дандадан [ТВ-2] / Dandadan 2nd Season",
-			URL:   AniTokyoBase + "/anime/9328-dandadan-tv-2-dandadan-2nd-season.html",
+			URL:   "https://anitokyo.tv/anime/9328-dandadan-tv-2-dandadan-2nd-season.html",
 		},
 		{
 			Title: "Дандадан [ТВ-1] / Dandadan [TV-1]",
-			URL:   AniTokyoBase + "/anime/8681-dandadan-tv-1-dandadan-tv-1.html",
+			URL:   "https://anitokyo.tv/anime/8681-dandadan-tv-1-dandadan-tv-1.html",
 		},
 	}
 	wantPosters := []string{
@@ -82,7 +80,7 @@ func TestAniTokyoSearchOVASection(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_search_ova.html")
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 	results, err := p.Search(context.Background(), "твоё имя")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -93,20 +91,19 @@ func TestAniTokyoSearchOVASection(t *testing.T) {
 	if results[0].Title != "Если я назову твое имя / Kimi no Na o Yobeba" {
 		t.Errorf("Title = %q", results[0].Title)
 	}
-	if results[0].URL != AniTokyoBase+"/ova/3847-esli-ja-nazovu-tvoe-imja-kimi-no-na-o-yobeba.html" {
+	if results[0].URL != "https://anitokyo.tv/ova/3847-esli-ja-nazovu-tvoe-imja-kimi-no-na-o-yobeba.html" {
 		t.Errorf("URL = %q, want the captured /ova/ release", results[0].URL)
 	}
 }
 
 // TestAniTokyoSearchMiss pins the zero-result answer (the shared smoke
-// probe «черная лагуна» captured live: Black Lagoon is not on anitokyo.tv,
-// the search page renders with zero shortstory cards) — an empty result
-// list, not an error (animemobi/anistar precedent).
+// probe «черная лагуна» captured live) — an empty result list, not an
+// error (animemobi/anistar precedent).
 func TestAniTokyoSearchMiss(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_search_miss.html")
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 	results, err := p.Search(context.Background(), "черная лагуна")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -135,7 +132,7 @@ func TestAniTokyoSearchSendsDLEForm(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 	if _, err := p.Search(context.Background(), "дандадан"); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -157,7 +154,7 @@ func TestAniTokyoGetEpisodesTV(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_anime_tv.html")
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/8681-dandadan-tv-1-dandadan-tv-1.html")
 	if err != nil {
@@ -177,12 +174,17 @@ func TestAniTokyoGetEpisodesTV(t *testing.T) {
 		t.Fatalf("episode 1 dubs = %d, want 60 (live capture)", len(first.RawEmbeds))
 	}
 	ref, ok := first.RawEmbeds["AnimeVost"]
-	if !ok || len(ref) != 1 || ref[0] != AniTokyoBase+"/video.php?id=445222&cat=1" {
-		t.Errorf("AnimeVost ref = %v, want [%s]", ref, AniTokyoBase+"/video.php?id=445222&cat=1")
+	if !ok || len(ref) != 1 || ref[0] != srv.URL+"/video.php?id=445222&cat=1" {
+		t.Errorf("AnimeVost ref = %v, want [%s]", ref, srv.URL+"/video.php?id=445222&cat=1")
 	}
 	ref, ok = first.RawEmbeds["Субтитры „Sibnet“"]
-	if !ok || len(ref) != 1 || ref[0] != AniTokyoBase+"/video.php?id=453886&cat=1" {
-		t.Errorf("sibnet dub ref = %v, want [%s]", ref, AniTokyoBase+"/video.php?id=453886&cat=1")
+	if !ok || len(ref) != 1 || ref[0] != srv.URL+"/video.php?id=453886&cat=1" {
+		t.Errorf("sibnet dub ref = %v, want [%s]", ref, srv.URL+"/video.php?id=453886&cat=1")
+	}
+	// The raw_id state carrier must round-trip as JSON the streams
+	// call can decode.
+	if !strings.Contains(first.RawID, `"n":"1"`) || !strings.Contains(first.RawID, `"u"`) {
+		t.Errorf("first.RawID = %q, want the {n,u} state JSON", first.RawID)
 	}
 }
 
@@ -193,7 +195,7 @@ func TestAniTokyoGetEpisodesMovie(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_anime_movie.html")
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/movie/10143-mastera-mecha-onlajn-bezotvetnaja-babochka-sword-art-online-unanswered-butterfly.html")
 	if err != nil {
@@ -213,19 +215,20 @@ func TestAniTokyoGetEpisodesMovie(t *testing.T) {
 			t.Errorf("RawEmbeds[%q] = %v, want one video.php ref", dub, ref)
 		}
 	}
-	if got := ep.RawEmbeds["FumoDub"][0]; got != AniTokyoBase+"/video.php?id=559459&cat=2" {
+	if got := ep.RawEmbeds["FumoDub"][0]; got != srv.URL+"/video.php?id=559459&cat=2" {
 		t.Errorf("FumoDub ref = %q, want the captured cat=2 URL", got)
 	}
 }
 
 // TestAniTokyoGetEpisodesNoPlayer pins the typed miss: an announcement
 // («Анонс») page carries no RalodePlayer data at all — that is
-// contracts.ErrNotFound, not an empty success.
+// contracts.ErrNotFound (the anicli.fail("not_found") flow), not an
+// empty success.
 func TestAniTokyoGetEpisodesNoPlayer(t *testing.T) {
 	t.Parallel()
 
 	srv := serveFixture(t, "anitokyo_anime_anons.html")
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/9800-dandadan-tv-3-dandadan-3rd-season.html")
 	if err == nil {
 		t.Fatal("error = nil, want the typed not-found")
@@ -240,34 +243,15 @@ func TestAniTokyoGetEpisodesNoPlayer(t *testing.T) {
 func TestAniTokyoSearchTransportError(t *testing.T) {
 	t.Parallel()
 
-	p := newAniTokyo("http://"+newDeadListener(t).Addr().String(), testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", "http://"+newDeadListener(t).Addr().String())
 	if _, err := p.Search(context.Background(), "дандадан"); err == nil {
 		t.Fatal("error = nil, want the transport failure")
 	}
 }
 
-// TestAniTokyoEmbedSrcScrape pins the video.php wrapper scrape against the
-// two real captures: codetype-110 wrappers embed a protocol-relative kodik
-// player, codetype-13 wrappers a sibnet shell page.
-func TestAniTokyoEmbedSrcScrape(t *testing.T) {
-	t.Parallel()
-
-	kodik := anitokyoEmbedSrc(fixture(t, "anitokyo_video_kodik.html"))
-	if kodik != "//kodikplayer.com/seria/1340414/e8652ad443b3ceb2057d17f8aa0b35d7/720p" {
-		t.Errorf("kodik wrapper src = %q, want the captured protocol-relative kodik embed", kodik)
-	}
-	sibnet := anitokyoEmbedSrc(fixture(t, "anitokyo_video_sibnet.html"))
-	if sibnet != "https://video.sibnet.ru/shell.php?videoid=5700645" {
-		t.Errorf("sibnet wrapper src = %q, want the captured sibnet shell URL", sibnet)
-	}
-	if src := anitokyoEmbedSrc([]byte("<html><body>no player here</body></html>")); src != "" {
-		t.Errorf("playerless page src = %q, want empty", src)
-	}
-}
-
 // TestAniTokyoResolveStreamKodikRoundTrip covers the resolve branch: the
-// video.php wrapper scrape feeds the shared extractor factory (the kodik
-// extractor Matches the wrapper's embed host) and yields typed sources.
+// video.php wrapper scrape feeds the shared extractor factory (through
+// anicli.extract) and yields typed sources.
 func TestAniTokyoResolveStreamKodikRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -280,13 +264,27 @@ func TestAniTokyoResolveStreamKodikRoundTrip(t *testing.T) {
 			_, _ = fmt.Fprint(w, `<html><body><iframe src="/kodik/seria/1340414/e8652ad443b3ceb2057d17f8aa0b35d7/720p" allowfullscreen></iframe></body></html>`)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/anime/") {
+			// The release page re-parse (the fresh-sandbox streams()
+			// re-fetches state.u): the (1, AnimeVost) row pointing at
+			// the wrapper above.
+			_, _ = fmt.Fprint(w, `<html><script>RalodePlayer.init({"A":{"name":"AnimeVost","items":{"1":{"aname":"1 серия","lssort":"1","scode":"<iframe src=\"/video.php?id=445222&cat=1\">"}}}},{})</script></html>`)
+			return
+		}
 		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
+	// raw_id state: the release page (served by the same fixture
+	// server's default handler re-parses) plus the episode num.
+	rawID, err := luaStateJSON(srv.URL+"/anime/8681-dandadan-tv-1-dandadan-tv-1.html", "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
 	episode := contracts.Episode{
-		Num: "1",
+		Num:   "1",
+		RawID: rawID,
 		RawEmbeds: map[string][]string{
 			"AnimeVost": {srv.URL + "/video.php?id=445222&cat=1"},
 		},
@@ -309,13 +307,22 @@ func TestAniTokyoResolveStreamKodikRoundTrip(t *testing.T) {
 func TestAniTokyoResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
+	srv := serveFixture(t, "anitokyo_anime_tv.html")
+	p := luaProvider(t, "anitokyo", srv.URL)
+
+	rawID, err := luaStateJSON(srv.URL+"/anime/8681-dandadan-tv-1-dandadan-tv-1.html", "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
 	episode := contracts.Episode{
-		Num:       "1",
-		RawEmbeds: map[string][]string{"AnimeVost": {AniTokyoBase + "/video.php?id=1&cat=1"}},
+		Num:   "1",
+		RawID: rawID,
+		RawEmbeds: map[string][]string{
+			"AnimeVost": {srv.URL + "/video.php?id=1&cat=1"},
+		},
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "NoSuchDub")
+	_, err = p.ResolveStream(context.Background(), episode, "NoSuchDub")
 	if err == nil {
 		t.Fatal("error = nil, want the typed not-found")
 	}
@@ -330,24 +337,41 @@ func TestAniTokyoResolveStreamUnknownDub(t *testing.T) {
 func TestAniTokyoResolveStreamWrapperless(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "<html><body>ad shell, no iframe</body></html>")
+	var call int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		switch r.URL.Path {
+		case "/video.php":
+			_, _ = fmt.Fprint(w, "<html><body>ad shell, no iframe</body></html>")
+		default:
+			// the release page re-parse: a minimal valid blob with a
+			// dub whose wrapper is the shell above
+			_, _ = fmt.Fprint(w, `<html><script>RalodePlayer.init({"A":{"name":"AnimeVost","items":{"1":{"aname":"1 серия","lssort":"1","scode":"<iframe src=\"/video.php?id=1&cat=1\">"}}}},{})</script></html>`)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAniTokyo(srv.URL, testClient(t, "anitokyo"))
+	p := luaProvider(t, "anitokyo", srv.URL)
+	rawID, err := luaStateJSON(srv.URL+"/anime/test.html", "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
 	episode := contracts.Episode{
-		Num:       "1",
-		RawEmbeds: map[string][]string{"AnimeVost": {srv.URL + "/video.php?id=1&cat=1"}},
+		Num:   "1",
+		RawID: rawID,
+		RawEmbeds: map[string][]string{
+			"AnimeVost": {srv.URL + "/video.php?id=1&cat=1"},
+		},
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "AnimeVost")
+	_, err = p.ResolveStream(context.Background(), episode, "AnimeVost")
 	if err == nil {
 		t.Fatal("error = nil, want the typed extract failure")
 	}
 	if !isExtractFailedErr(err) {
 		t.Errorf("error = %v, want contracts.ErrExtractFailed class", err)
 	}
+	_ = call
 }
 
 // TestAniTokyoProviderMeta pins the identity block: RU content language,
@@ -356,28 +380,36 @@ func TestAniTokyoResolveStreamWrapperless(t *testing.T) {
 func TestAniTokyoProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
-	if p.ID() != "anitokyo" || p.Name() != "AniTokyo" || p.BaseURL() != AniTokyoBase {
+	p := luaProviderAtProduction(t, "anitokyo")
+	if p.ID() != "anitokyo" || p.Name() != "AniTokyo" || p.BaseURL() != "https://anitokyo.tv" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok || lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %v, want ru", lc)
 	}
 }
 
 // TestAniTokyoNamePreferenceRU pins the search routing (PR42 semantics):
 // anitokyo.tv's DLE index matches the Cyrillic titles («дандадан» verified
-// live 2026-09-25) — the provider stays in the RU group and must NOT
-// declare the latin-only preference (animemobi/anistar precedent).
+// live 2026-09-25) — the provider must NOT declare the latin preference
+// (animemobi/anistar precedent). The composite adapter exposes
+// NamePreferenceProvider to every capability-declaring script, so the
+// assertion is the REGISTRY value: NamePrefDefault (the PR116
+// zero-value equivalence).
 func TestAniTokyoNamePreferenceRU(t *testing.T) {
 	t.Parallel()
 
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
-	if _, declares := any(p).(contracts.NamePreferenceProvider); declares {
-		t.Error("anitokyo must stay in the RU group (no latin preference declaration)")
+	p := luaProviderAtProduction(t, "anitokyo")
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the capability adapter must stay assertions-stable")
+	}
+	if got := np.NamePreference(); got != contracts.NamePrefDefault {
+		t.Errorf("NamePreference = %v, want NamePrefDefault (the RU group)", got)
 	}
 }
 
@@ -388,17 +420,16 @@ func TestAniTokyoNamePreferenceRU(t *testing.T) {
 func TestAniTokyoSmokeQueryDeclared(t *testing.T) {
 	t.Parallel()
 
-	p := newAniTokyo(AniTokyoBase, testClient(t, "anitokyo"))
-	if _, ok := any(p).(contracts.SmokeQueryProvider); !ok {
+	p := luaProviderAtProduction(t, "anitokyo")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
 		t.Fatal("anitokyo must declare contracts.SmokeQueryProvider (the shared RU probe misses)")
 	}
-	if got := p.SmokeQuery(); got != "дандадан" {
+	if got := sq.SmokeQuery(); got != "дандадан" {
 		t.Errorf("SmokeQuery = %q, want «дандадан»", got)
 	}
 }
 
 // isExtractFailedErr reports whether err carries the
 // contracts.ErrExtractFailed sentinel through the provider wrapper.
-func isExtractFailedErr(err error) bool {
-	return errors.Is(err, contracts.ErrExtractFailed)
-}
+func isExtractFailedErr(err error) bool { return errors.Is(err, contracts.ErrExtractFailed) }

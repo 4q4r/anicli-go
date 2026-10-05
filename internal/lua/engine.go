@@ -86,6 +86,11 @@ type Engine struct {
 
 	stdOnce sync.Once
 	stdHTTP *http.Client
+
+	// fbOnce/fbClient build the fallback netclient for anicli.extract
+	// when no transport is wired (sdk_ext.go).
+	fbOnce   sync.Once
+	fbClient *netclient.Client
 }
 
 // stdClient is the fallback transport when no netclient is wired:

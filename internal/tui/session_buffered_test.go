@@ -487,3 +487,28 @@ func confirmAudioStar(t *testing.T, s *sessionScreen) tea.Cmd {
 	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return cmd
 }
+
+// TestBufferedProgressLineRendersOnce (PR118): the buffering surface
+// owns its status render — the trailing shared status block must not
+// stack a second copy of the same line. Reproduces the owner frame:
+// «Буферизация: 30% (сегмент 73/237)» drawn twice, stacked.
+func TestBufferedProgressLineRendersOnce(t *testing.T) {
+	s, _, _, _ := newBufferedSession(t)
+	s.pickedVideo = contracts.VideoSource{URL: "https://cdn.example/ep1.mp4"}
+
+	scr, _ := s.startBuffered()
+	ss := scr.(*sessionScreen)
+	if ss.state != sessionStateBuffering {
+		t.Fatalf("state = %v, want sessionStateBuffering", ss.state)
+	}
+
+	// A mid-download progress tick (the owner's screenshot frame).
+	p := buffered.Progress{SegmentsDone: 73, SegmentsTotal: 237}
+	if _, cmd := ss.Update(bufferedProgressMsg{gen: ss.bufferGen, p: p}); cmd == nil {
+		t.Fatal("the progress pump must re-arm")
+	}
+	want := formatBufferedProgress(p)
+	if n := strings.Count(ss.View().Content, want); n != 1 {
+		t.Errorf("buffered progress line rendered %d times, want exactly 1:\n%s", n, ss.View().Content)
+	}
+}

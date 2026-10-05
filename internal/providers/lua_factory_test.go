@@ -136,11 +136,11 @@ func TestFactoryLuaExcludedIsGone(t *testing.T) {
 }
 
 // TestFactoryLuaDisabledConfig pins the kill switch: [providers.lua]
-// enabled = false leaves the compiled Go factories alone. The ten
+// enabled = false leaves the compiled Go factories alone. The eleven
 // migrated slots (anitokyo, animedia, animevib since PR116;
 // anilibria PR120; animevost PR119; anilib PR122; yummy PR123;
-// animego PR124; shiza PR125; animeheaven PR126) are EMPTY in this
-// mode: they live only in the bundled Lua scripts.
+// animego PR124; shiza PR125; animeheaven PR126; anikoto PR127) are
+// EMPTY in this mode: they live only in the bundled Lua scripts.
 func TestFactoryLuaDisabledConfig(t *testing.T) {
 	dir := luaXDG(t)
 	writeLuaScript(t, dir, "userscript", "")
@@ -154,16 +154,16 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 		t.Fatalf("All: %v", err)
 	}
 	ids := rosterIDs(bare)
-	if len(ids) != 20 {
-		t.Fatalf("All() = %d providers, want 20 (the Go factories; the ten migrated providers are Lua-only)", len(ids))
+	if len(ids) != 19 {
+		t.Fatalf("All() = %d providers, want 19 (the Go factories; the eleven migrated providers are Lua-only)", len(ids))
 	}
 	for _, id := range ids {
 		if id == "userscript" {
 			t.Fatal("userscript registered with [providers.lua] disabled")
 		}
-		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven"} {
+		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven", "anikoto"} {
 			if id == migrated {
-				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126)", migrated)
+				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126/PR127)", migrated)
 			}
 		}
 	}

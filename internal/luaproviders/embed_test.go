@@ -11,7 +11,7 @@ import (
 // pin as they land (PR116 wave: anitokyo, animedia, animevib;
 // PR120: anilibria; PR122: anilib; PR125: shiza (which also completed
 // the animevost/yummy entries the earlier migrations had missed);
-// PR126: animeheaven).
+// PR126: animeheaven; PR127: anikoto).
 func TestSourcesShape(t *testing.T) {
 	srcs := Sources()
 	seen := map[string]bool{}
@@ -32,7 +32,7 @@ func TestSourcesShape(t *testing.T) {
 	if !sort.SliceIsSorted(ids, func(i, j int) bool { return ids[i] < ids[j] }) {
 		t.Errorf("sources not sorted: %v", ids)
 	}
-	for _, want := range []string{"anilib", "anilibria", "animeheaven", "anitokyo", "animedia", "animevib", "animevost", "animego", "shiza", "yummy"} {
+	for _, want := range []string{"anilib", "anilibria", "animeheaven", "anitokyo", "animedia", "animevib", "animevost", "animego", "anikoto", "shiza", "yummy"} {
 		if !seen[want] {
 			t.Errorf("bundled scripts missing the migrated provider %q (have %v)", want, ids)
 		}

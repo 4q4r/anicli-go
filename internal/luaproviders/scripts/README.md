@@ -14,6 +14,7 @@ user directory can override a bundled script by id without a rebuild
 id (Lua shadows Go, PR116).
 
 Scripts program against the `anicli` SDK (internal/lua/sdk.go): http
-(get/get_json/get_batch/post/query_escape), json, html, regexp,
-base64, time, log, extract — the shared Go extractor factory — plus
-the sandbox budgets (timeouts, body caps, no io/os/debug).
+(get/get_json/get_batch/post/query_escape), json, html, regexp, base64
+(std + url variants), crypto (aes_cbc_decrypt/hmac_sha256 — PR127),
+time, log, extract — the shared Go extractor factory — plus the
+sandbox budgets (timeouts, body caps, no io/os/debug).

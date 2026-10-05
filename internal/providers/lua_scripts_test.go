@@ -48,6 +48,11 @@ var luaProductionBases = map[string][]string{
 	// anime.php, gate.php) hangs off the one base_url literal, and the
 	// Referer derives from it.
 	"animeheaven": {"https://animeheaven.me"},
+	// anikoto (PR127): the catalog root only. The megaplay embed origin
+	// is never a literal — the script takes the embed URL from the
+	// stream resolver's answer (the fixtures rewrite it to the test
+	// server at serve time).
+	"anikoto": {"https://anikototv.to"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

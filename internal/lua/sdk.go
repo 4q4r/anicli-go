@@ -76,6 +76,10 @@ func (e *Engine) openSDK(ls *lua.LState) {
 
 	mod.RawSetString("version", lua.LString(SDKVersion))
 
+	// The PR127 crypto primitives (the megaplay chain's AES/HMAC
+	// legs) plus the base64 URL-safe variants.
+	openSDKCrypto(ls, mod)
+
 	// fail raises a typed provider failure: fail(kind, message) with
 	// kind one of not_found|extract_failed|invalid_input. The VM
 	// error's message carries the anicli:<kind>: marker; the adapter's

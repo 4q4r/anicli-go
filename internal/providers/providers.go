@@ -10,7 +10,6 @@
 package providers
 
 import (
-	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -82,18 +81,6 @@ func (b Base) ContentLanguage() string { return b.contentLang }
 // the providers that hand-build POST bodies (kodik, sameband; lived in
 // animevost.go until the PR119 Lua migration).
 var formContentType = map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
-
-// pythonStr ports Python's str() over a JSON number field: the wire
-// literal is preserved ("1" stays "1", "1.5" stays "1.5"), and a missing
-// field yields "None" exactly like str(None) on a JSON null (this was
-// load-bearing for anilib, whose Lua script renders the same "None"
-// numbering; animevost/anilibria/yummy keep the Go shape).
-func pythonStr(n json.Number) string {
-	if n == "" {
-		return "None"
-	}
-	return n.String()
-}
 
 // pyQuote ports urllib.parse.quote with its default safe="/" set:
 // every byte outside the URL-unreserved set (and "/") is percent-

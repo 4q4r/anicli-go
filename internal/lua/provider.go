@@ -38,6 +38,12 @@ type Provider struct {
 	baseURL    string
 	sourceType contracts.SourceType
 	src        string
+
+	// Optional capability declarations (caps.go): Adapt wraps the
+	// provider for the ones the script actually declared.
+	contentLang string
+	smokeQuery  string
+	namePref    contracts.NamePreference
 }
 
 // Compile-time proof of the consumer-side contract.
@@ -113,6 +119,26 @@ func (e *Engine) LoadProvider(dirID, src string) (*Provider, error) {
 		}
 		p.sourceType = st
 	}
+	if lang, present, err := vld.optStr(tbl, "content_lang", "provider"); err != nil {
+		return nil, loadErrf("%v", err)
+	} else if present {
+		p.contentLang = lang
+	}
+	if query, present, err := vld.optStr(tbl, "smoke_query", "provider"); err != nil {
+		return nil, loadErrf("%v", err)
+	} else if present {
+		p.smokeQuery = query
+	}
+	if pref, present, err := vld.optStr(tbl, "name_preference", "provider"); err != nil {
+		return nil, loadErrf("%v", err)
+	} else if present {
+		switch pref {
+		case "latin":
+			p.namePref = contracts.NamePrefLatin
+		default:
+			return nil, loadErrf("provider %q: name_preference %q is not one of latin", dirID, pref)
+		}
+	}
 
 	return p, nil
 }
@@ -129,6 +155,17 @@ func (p *Provider) BaseURL() string { return p.baseURL }
 // SourceType reports the catalog-wide content assessment the script
 // declares via capabilities.
 func (p *Provider) SourceType() contracts.SourceType { return p.sourceType }
+
+// SetLogger re-routes the engine diagnostics (script print, SDK logs)
+// to log — the registry's logger seam (PR62 #4: TUI file sink, never
+// stderr in alt-screen). The promoted method also serves the
+// capability adapters wrapping the provider.
+func (p *Provider) SetLogger(log *slog.Logger) {
+	if log == nil {
+		return
+	}
+	p.engine.log = log
+}
 
 // Search calls the script's search(query) and validates the result
 // array into contracts.SearchResult values.
@@ -223,8 +260,11 @@ func (p *Provider) runChunk(ls *lua.LState, ctx context.Context, op string) erro
 // classifyVMError maps VM failures onto the consumer taxonomy: caller
 // cancellation stays context.Canceled (the fan-out is aborting on
 // purpose), deadline exhaustion becomes the typed
-// contracts.ErrProviderTimeout, everything else carries the provider
-// id, the operation and the script traceback verbatim.
+// contracts.ErrProviderTimeout, the anicli.fail markers re-attach
+// their contracts sentinel INSIDE a ProviderError (PR116 — the typed
+// walls are consumer-visible exactly like the compiled providers'
+// contracts.WrapProvider walls) and everything else carries the
+// provider id, the operation and the script traceback verbatim.
 func (p *Provider) classifyVMError(ctx context.Context, op string, err error) error {
 	msg := err.Error()
 	switch {
@@ -232,9 +272,13 @@ func (p *Provider) classifyVMError(ctx context.Context, op string, err error) er
 		return context.Canceled
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded"):
 		return fmt.Errorf(`provider %q %s: %w: %s`, p.id, op, contracts.ErrProviderTimeout, msg)
-	default:
-		return fmt.Errorf(`provider %q %s: %w`, p.id, op, err)
 	}
+	for marker, sentinel := range sdkErrorKinds {
+		if strings.Contains(msg, "anicli:"+marker+":") {
+			return contracts.WrapProvider(p.id, op, 0, fmt.Errorf("%w: %s", sentinel, msg))
+		}
+	}
+	return fmt.Errorf(`provider %q %s: %w`, p.id, op, err)
 }
 
 // decodeSearch validates the search(query) return: an array of

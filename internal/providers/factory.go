@@ -8,6 +8,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/lua"
+	"github.com/an0nx/anicli-go/internal/luaproviders"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
@@ -18,26 +19,33 @@ import (
 // receives the full settings plus the shared CF manager (always built
 // since PR80; nil only for callers that skip NewManager): wave-2
 // providers consume per-provider configuration (kodik's API token).
+//
+// luaOnly entries (PR116) are served by the bundled Lua script of the
+// same id — the Go constructor is GONE (the script replaced it) and
+// the entry only PINS THE ROSTER SLOT: when [providers.lua] is enabled
+// and the script loads, the Lua provider takes the slot; otherwise the
+// slot drops (the script's load skip is logged by the loader).
 var allFactories = []struct {
-	id    string
-	build func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
+	id      string
+	luaOnly bool
+	build   func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
 }{
-	{"anilibria", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anilibria", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilibria(AniLibriaAPIBase, AniLibriaHost, http)
 	}},
-	{"animevost", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animevost", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimevost(AnimeVostBase, http)
 	}},
-	{"anilib", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anilib", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilib(AnilibAPIBase, http)
 	}},
-	{"animego", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animego", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimego(AnimeGoBase, http)
 	}},
-	{"gogoanime", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"gogoanime", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},
-	{"kickassanime", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"kickassanime", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
 	}},
 	// anizone (PR59): the anizone.to sub-only stream source — the first
@@ -46,31 +54,29 @@ var allFactories = []struct {
 	// 2026-09-18. Livewire HTML payloads, /livewire/update episode
 	// pagination and vidstackPlayer HLS on the watch page; no
 	// credentials.
-	{"anizone", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anizone", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniZone(AniZoneBase, http)
 	}},
-	{"sameband", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"sameband", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSameBand(SameBandBase, http)
 	}},
-	{"kodik", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
 	}},
-	{"anidub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anidub", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnidub(AnidubBase, http)
 	}},
-	// animedia (PR56): the amd.online DLE site (the animedia.online
-	// JSON v3 API is dead). Written against the live site, not ported;
-	// no credentials — DLE search form POST in, kodik embeds out
-	// (resolved through the shared extractor factory).
-	{"animedia", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniMedia(AniMediaBase, http)
-	}},
+	// animedia (PR56 → PR116): the amd.online DLE site migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animedia/main.lua) — the second
+	// Go→Lua provider migration. luaOnly pins the roster slot.
+	{"animedia", true, nil},
 	// shiza (PR57): the shizaproject.com GraphQL on the anidub stream
 	// plumbing — anonymous catalog search, kodik/sibnet embeds through
 	// the shared extractor factory. No credentials; its torrent
 	// entries are dead (0 seeders, see shiza.go) so no torrent
 	// sibling is registered.
-	{"shiza", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"shiza", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newShiza(ShizaBase, http)
 	}},
 	// yummy (PR68): the YummyAnime REST API (api.yani.tv behind
@@ -79,7 +85,7 @@ var allFactories = []struct {
 	// live 2026-09-19. No credentials and no per-provider settings;
 	// cfg.Network.UserAgent rides on the CVH video sources (okcdn ties
 	// playback to the extraction UA).
-	{"yummy", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"yummy", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newYummy(YummySiteBase, YummyAPIBase, yummyCDNVideoHubBase, cfg.Network.UserAgent, http)
 	}},
 	// hdrezka (PR69): the RU rezka catalog's anime section — port of
@@ -94,7 +100,7 @@ var allFactories = []struct {
 	// hdrezka's own CDN resolves to HLS/mp4. From ISP-blocked networks
 	// network.proxy_url routes it (foreign hosting, SNI-blocked direct
 	// route — verified killed mid-TLS on a RU-intercepted network).
-	{"hdrezka", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"hdrezka", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		base := cfg.Providers.HDRezka.BaseURL
 		if base == "" {
 			base = HDRezkaBase
@@ -107,7 +113,7 @@ var allFactories = []struct {
 	// from the live site, not ported; no credentials. The p2p player
 	// page exposes direct per-quality HLS/MP4 links behind a media_id;
 	// the an-media edge requires the site Referer on playback.
-	{"anistar", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anistar", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniStar(AniStarBase, http)
 	}},
 	// anifilm (PR91): the anifilm.pro RU stream+torrent catalog — a
@@ -117,7 +123,7 @@ var allFactories = []struct {
 	// wrapping kodik embeds (shared extractor). The per-release
 	// .torrent downloads are a TorrentBase extension candidate,
 	// deliberately out of scope here.
-	{"anifilm", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anifilm", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniFilm(AniFilmBase, http)
 	}},
 	// animemobi (PR92): the animemobi.com RU mobile catalog (DLE, UTF-8,
@@ -126,19 +132,15 @@ var allFactories = []struct {
 	// kodik extractor); the release pages additionally carry per-release
 	// .torrent downloads (documented in animemobi.go, out of the stream
 	// contract). No frozen Python original; written from the live site.
-	{"animemobi", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animemobi", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeMobi(AnimeMobiBase, http)
 	}},
-	// anitokyo (PR100): the anitokyo.tv RU DLE catalog with its
-	// RalodePlayer module — the release page embeds ONE JSON blob with
-	// every (dub, episode) pair (60-dub seasons hydrate from a single
-	// fetch); stream refs are the site's own /video.php wrappers scraping
-	// to kodik/sibnet embeds (shared extractor factory). Written from the
-	// live site (2026-09-25); anonymous on every leg; no credentials, no
-	// per-provider settings.
-	{"anitokyo", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniTokyo(AniTokyoBase, http)
-	}},
+	// anitokyo (PR100 → PR116): the anitokyo.tv RU DLE catalog with
+	// its RalodePlayer module migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anitokyo/main.lua) — the first
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the id.
+	{"anitokyo", true, nil},
 	// animiku (PR101): the beta.animiku.tokyo RU catalog (DLE under a
 	// custom template, UTF-8, anonymous; live-verified 2026-09-25) —
 	// search GET form in, the mrdeath/aaparser player bridge
@@ -149,7 +151,7 @@ var allFactories = []struct {
 	// (anilibria.top API by title) with no deterministic embed URLs —
 	// documented in animiku.go, out of the stream contract. No frozen
 	// Python original; written from the live site.
-	{"animiku", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animiku", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimiku(AniMikuBase, http)
 	}},
 	// anikado (PR102): the anikado.net RU catalog (DLE, UTF-8,
@@ -163,22 +165,14 @@ var allFactories = []struct {
 	// walls. kodik.info embed hosts normalize onto the interchangeable
 	// kodikplayer.com mirror (live-verified 2026-09-25). No frozen
 	// Python original; written from the live site.
-	{"anikado", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anikado", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniKado(AniKadoBase, http, cfg.Network.MaxParallel)
 	}},
-	// animevib (PR103): the www.animevib.ru RU catalog — a DLE site
-	// (the controller's WordPress intel was wrong: DLE's ?s= is
-	// silently ignored; the real search is the index.php GET form).
-	// Written from the live site (2026-09-25); no credentials. Every
-	// post embeds ONE kodik player whose serial page lists the dub
-	// teams (per-translation serial pages) and per-episode seria
-	// hashes — the provider merges the (episode × dub) table and
-	// resolves the synthesized seria embeds through the shared kodik
-	// extractor. The per-translation fetch budget rides
-	// cfg.Network.MaxParallel (the kickassanime pattern).
-	{"animevib", func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimeVib(AnimeVibBase, http, cfg.Network.MaxParallel)
-	}},
+	// animevib (PR103 → PR116): the www.animevib.ru RU DLE catalog
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animevib/main.lua) — the third
+	// Go→Lua provider migration. luaOnly pins the roster slot.
+	{"animevib", true, nil},
 	// animeheaven (PR105): the animeheaven.me EN sub-only catalog —
 	// direct-MP4 sources, the roster's first latin stream provider
 	// since anizone. Written against the live site plus the AniVault
@@ -191,7 +185,7 @@ var allFactories = []struct {
 	// → direct mp4 <source>s, first /video.mp4 source wins (the
 	// site's onerror-fallback CDNs 404 when hit directly). No
 	// credentials, no per-provider settings.
-	{"animeheaven", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animeheaven", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeHeaven(AnimeHeavenBase, http)
 	}},
 	// anikoto (PR104): the anikototv.to EN catalog — a HiAnime/Zoro-style
@@ -204,7 +198,7 @@ var allFactories = []struct {
 	// enc decrypt, HMAC-signed CDN URL — without executing any JavaScript.
 	// The controller's /api/search lead is a decoy: the site answers every
 	// parameter with the error envelope.
-	{"anikoto", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anikoto", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniKoto(AniKotoBase, http)
 	}},
 	// anipub (PR107): the anipub.xyz EN catalog — an open Express+Mongo
@@ -221,7 +215,7 @@ var allFactories = []struct {
 	// episode (the site's own changeStreamType toggle); the megaplay
 	// CDN 403s playback without the stream-origin Referer, so it rides
 	// on the source.
-	{"anipub", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anipub", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniPub(AniPubBase, http)
 	}},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
@@ -229,21 +223,21 @@ var allFactories = []struct {
 	// search endpoint with the anilibria stream provider and expands
 	// each hit into its torrent list; no credentials, engine injected
 	// by NewRegistry when [torrent] is enabled.
-	{"anilibria-torrent", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anilibria-torrent", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilibriaTorrent(AniLibriaAPIBase, http, nil)
 	}},
 	// animetosho (PR38): the animetosho.org newznab search on the same
 	// TorrentBase plumbing — hex-infohash magnets, .torrent enclosure
 	// fallback; no credentials, engine injected by NewRegistry when
 	// [torrent] is enabled.
-	{"animetosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"animetosho", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeTosho(AnimeToshoFeedBase, http, nil)
 	}},
 	// tokyotosho (PR38): the tokyo-tosho.net search RSS on the same
 	// TorrentBase plumbing — direct .torrent <link> URLs; no
 	// credentials, engine injected by NewRegistry when [torrent] is
 	// enabled.
-	{"tokyotosho", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"tokyotosho", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newTokyoTosho(TokyoToshoBase, http, nil)
 	}},
 	// rutor (PR87): the rutor.info public tracker's HTML search on the
@@ -252,7 +246,7 @@ var allFactories = []struct {
 	// live 2026-09-23). Fully anonymous (search and .torrent
 	// downloads); the engine is injected by NewRegistry when
 	// [torrent] is enabled.
-	{"rutor", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"rutor", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newRutor(RutorBase, http, nil)
 	}},
 	// anirena (PR88): the anirena.com search RSS on the same
@@ -261,7 +255,7 @@ var allFactories = []struct {
 	// enforced client-side (the documented ?category= filter is
 	// ignored server-side, live-verified 2026-09-23); no credentials,
 	// engine injected by NewRegistry when [torrent] is enabled.
-	{"anirena", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"anirena", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniRena(AniRenaBase, http, nil)
 	}},
 	// subsplease (PR89): the subsplease.org JSON API on the same
@@ -270,7 +264,7 @@ var allFactories = []struct {
 	// endpoint is the API) with tracker-rich magnet links and the
 	// show-page sid hop for batch back-catalog; no credentials, engine
 	// injected by NewRegistry when [torrent] is enabled.
-	{"subsplease", func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
+	{"subsplease", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSubsPlease(SubsPleaseBase, http, nil)
 	}},
 }
@@ -287,10 +281,6 @@ type registryOptions struct {
 	// cfBrowserLogger is the cfbrowser diagnostics sink (PR85); nil
 	// degrades to discard inside cfbrowser — never stderr.
 	cfBrowserLogger *slog.Logger
-	// luaDiscovery enables the user Lua provider scan (PR111):
-	// ~/.config/anicli/providers/<id>/main.lua loaded into the
-	// sandboxed engine and registered alongside the built-ins.
-	luaDiscovery bool
 }
 
 // RegistryOption customizes NewRegistry.
@@ -301,15 +291,6 @@ type RegistryOption func(*registryOptions)
 // alt-screen); a nil logger keeps the engine default.
 func WithTorrentLogger(log *slog.Logger) RegistryOption {
 	return func(o *registryOptions) { o.torrentLogger = log }
-}
-
-// WithLuaDiscovery enables auto-discovery of user Lua providers
-// (PR111): every ~/.config/anicli/providers/<id>/main.lua conforming
-// to the provider contract registers alongside the built-ins. A
-// duplicate id (a Lua shadow of a built-in) and a non-conforming
-// script are logged and skipped — never fatal to startup.
-func WithLuaDiscovery() RegistryOption {
-	return func(o *registryOptions) { o.luaDiscovery = true }
 }
 
 // WithCFBrowserLogger routes the CF-bypass stack's diagnostics (the
@@ -351,22 +332,117 @@ func all(cfg config.Settings, extra []netclient.Option) ([]contracts.Provider, e
 // without a token) are skipped the same way and returned in the
 // disabled set (PR24).
 func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager) ([]contracts.Provider, error) {
-	out, _, err := allWithCFDisabled(cfg, extra, cf)
+	out, _, err := allWithCFDisabled(cfg, extra, cf, slog.Default())
 	return out, err
 }
 
+// luaScriptSources assembles the Lua provider script sources in
+// LoadSources precedence order (PR116): the bundled embeds first
+// (lowest precedence), then [providers.lua].dir, then the user
+// config dir (highest — a user script overrides a bundled one by id
+// without a rebuild). Missing dirs scan to nothing.
+func luaScriptSources(cfg config.Settings) []lua.Source {
+	out := make([]lua.Source, 0)
+	out = append(out, luaproviders.Sources()...)
+	if cfg.Providers.Lua.Dir != "" {
+		out = append(out, lua.ScanDir(cfg.Providers.Lua.Dir)...)
+	}
+	if dir, ok := lua.ProvidersDir(); ok {
+		out = append(out, lua.ScanDir(dir)...)
+	}
+	return out
+}
+
+// luaProviders builds the Lua provider set for cfg: the assembled
+// script sources loaded through the sandboxed engine, each provider
+// wired to its OWN netclient (the compiled providers' transport
+// isolation). The [providers].exclude list applies to Lua ids the
+// same way it applies to the Go factories. Returns the providers by
+// id plus their assembly order (tail-append order for non-shadowing
+// ids). A broken script is a skip inside LoadSources — never an
+// error; a client build failure IS an error (the Go factories'
+// fail-loud transport contract).
+func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[string]bool, log *slog.Logger) (map[string]contracts.Provider, []string, error) {
+	if !cfg.Providers.Lua.Enabled {
+		return nil, nil, nil
+	}
+
+	// First occurrence of an id wins the precedence; only winners
+	// get a transport.
+	seen := map[string]bool{}
+	ordered := make([]lua.Source, 0)
+	for _, src := range luaScriptSources(cfg) {
+		if seen[src.ID] || excluded[src.ID] {
+			continue
+		}
+		seen[src.ID] = true
+		ordered = append(ordered, src)
+	}
+
+	clients := make(map[string]*netclient.Client, len(ordered))
+	for _, src := range ordered {
+		opts := append([]netclient.Option{netclient.WithProvider(src.ID)}, extra...)
+		client, err := netclient.New(cfg.Network, opts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build lua provider %s client: %w", src.ID, err)
+		}
+		clients[src.ID] = client
+	}
+
+	provs, _ := lua.LoadSources(lua.DefaultConfig(), log, ordered, func(id string) *netclient.Client {
+		return clients[id]
+	})
+	byID := make(map[string]contracts.Provider, len(provs))
+	order := make([]string, 0, len(provs))
+	for _, p := range provs {
+		byID[p.ID()] = p
+		order = append(order, p.ID())
+	}
+	return byID, order, nil
+}
+
 // allWithCFDisabled is allWithCF that also returns the
-// unconfigured-provider set for registry bookkeeping.
-func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager) ([]contracts.Provider, []DisabledProvider, error) {
+// unconfigured-provider set for registry bookkeeping. log receives
+// the assembly diagnostics (exclusions, Lua shadows, script skips) —
+// NewRegistry threads the configured provider sink, the direct
+// constructors keep slog.Default (the startup-lines precedent).
+func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Manager, log *slog.Logger) ([]contracts.Provider, []DisabledProvider, error) {
 	excluded := make(map[string]bool, len(cfg.Providers.Exclude))
 	for _, id := range cfg.Providers.Exclude {
 		excluded[id] = true
 	}
 	disabledMap := unconfiguredIDs(cfg)
-	out := make([]contracts.Provider, 0, len(allFactories))
+
+	// PR116: the Lua provider set shadows the compiled Go factories
+	// by id — the script takes the Go slot in roster order, a
+	// non-shadowing id appends at the roster tail.
+	luaByID, luaOrder, err := luaProviders(cfg, extra, excluded, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	luaPending := make(map[string]bool, len(luaOrder))
+	for _, id := range luaOrder {
+		luaPending[id] = true
+	}
+
+	out := make([]contracts.Provider, 0, len(allFactories)+len(luaOrder))
 	for _, factory := range allFactories {
 		if excluded[factory.id] {
-			slog.Info("provider excluded: " + factory.id)
+			log.Info("provider excluded: " + factory.id)
+			continue
+		}
+		if lp, shadow := luaByID[factory.id]; shadow {
+			delete(luaPending, factory.id)
+			if !factory.luaOnly {
+				log.Info("provider " + factory.id + " shadowed by its lua script")
+			}
+			out = append(out, lp)
+			continue
+		}
+		if factory.luaOnly {
+			// The Lua-only slot with no loaded script: the loader
+			// logged the skip (or [providers.lua] is off) — the slot
+			// drops, never faked with a Go fallback.
 			continue
 		}
 		if d, off := disabledMap[factory.id]; off {
@@ -382,8 +458,21 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 		}
 		out = append(out, factory.build(client, cfg, cf))
 	}
+	// Non-shadowing Lua providers append at the roster tail, in
+	// assembly order.
+	for _, id := range luaOrder {
+		if luaPending[id] {
+			out = append(out, luaByID[id])
+		}
+	}
+	// A Lua script serving a normally-unconfigured id (a user kodik
+	// with its own token handling) un-disables that id: the notice
+	// must not fire for a provider that IS active.
 	disabled := make([]DisabledProvider, 0, len(disabledMap))
 	for _, d := range disabledMap {
+		if _, active := luaByID[d.ID]; active {
+			continue
+		}
 		disabled = append(disabled, d)
 	}
 	sortDisabled(disabled)
@@ -429,7 +518,22 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 	if err != nil {
 		return nil, err
 	}
-	bare, disabled, err := allWithCFDisabled(cfg, cfOpts, cfMgr)
+	// PR62 #4: every provider carrying the Base logger seam gets the
+	// configured sink (SetLogger probe, the SetEngine pattern); nil
+	// degrades to discard inside the provider — never stderr.
+	providerLog := o.providerLogger
+	if providerLog == nil {
+		providerLog = discardLogger
+	}
+	// The STARTUP assembly lines (exclusions, Lua shadows, script
+	// skips) are pre-alt-screen output: they keep slog.Default when
+	// no provider sink was configured — silent exclusion must never
+	// regress (TestNewRegistryLogsExcludedProviders).
+	assemblyLog := o.providerLogger
+	if assemblyLog == nil {
+		assemblyLog = slog.Default()
+	}
+	bare, disabled, err := allWithCFDisabled(cfg, cfOpts, cfMgr, assemblyLog)
 	if err != nil {
 		return nil, err
 	}
@@ -439,13 +543,6 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 		if err := reg.wireTorrentEngine(cfg, bare, o.torrentLogger); err != nil {
 			return nil, err
 		}
-	}
-	// PR62 #4: every provider carrying the Base logger seam gets the
-	// configured sink (SetLogger probe, the SetEngine pattern); nil
-	// degrades to discard inside the provider — never stderr.
-	providerLog := o.providerLogger
-	if providerLog == nil {
-		providerLog = discardLogger
 	}
 	for _, p := range bare {
 		if se, ok := p.(interface{ SetLogger(*slog.Logger) }); ok {
@@ -460,21 +557,10 @@ func NewRegistry(cfg config.Settings, stats *storage.ProviderStatRepo, opts ...R
 			return nil, err
 		}
 	}
-	// PR111: user Lua providers, discovered after the built-ins so a
-	// script can never shadow a compiled provider (Register rejects
-	// duplicate ids; the skip is logged, not fatal).
-	if o.luaDiscovery {
-		luaLog := providerLog
-		provs, skips := lua.Discover(lua.DefaultConfig(), luaLog)
-		for _, p := range provs {
-			if err := reg.Register(p); err != nil {
-				luaLog.Warn("lua: provider not registered", "provider", p.ID(), "error", err.Error())
-			}
-		}
-		for _, skip := range skips {
-			luaLog.Warn("lua: provider script skipped", "provider", skip.Dir, "error", skip.Err.Error())
-		}
-	}
+	// PR116: the Lua providers are part of `bare` already (assembled
+	// in allWithCFDisabled, shadowing the Go factories by id) — the
+	// SetLogger loop above routes their engine diagnostics to the
+	// configured sink through the promoted lua.Provider.SetLogger.
 	reg.disabled = disabled
 	reg.cfClose = cfClose
 	reg.cfMgr = cfMgr

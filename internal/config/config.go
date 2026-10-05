@@ -166,6 +166,25 @@ type Providers struct {
 	Kodik ProvidersKodik `toml:"kodik"`
 	// HDRezka configures the hdrezka source route (PR72).
 	HDRezka ProvidersHDRezka `toml:"hdrezka"`
+	// Lua configures the Lua provider subsystem (PR116): the bundled
+	// scripts plus the user script directories.
+	Lua ProvidersLua `toml:"lua"`
+}
+
+// ProvidersLua carries the Lua provider subsystem settings (PR116).
+// Enabled covers BOTH the bundled scripts and the discovered user
+// scripts: flipping it off returns the roster to the compiled Go
+// factories alone. Dir points at ONE extra scan directory beyond the
+// default ~/.config/anicli/providers (repo checkouts, shared script
+// pools); empty means the user config dir only.
+type ProvidersLua struct {
+	// Enabled turns the Lua provider subsystem on. Default true by
+	// design ruling (the bundled Lua providers are roster members —
+	// a default off would silently drop three providers).
+	Enabled bool `toml:"enabled"`
+	// Dir is an extra provider script directory scanned in addition
+	// to ~/.config/anicli/providers; empty means no extra dir.
+	Dir string `toml:"dir"`
 }
 
 // ProvidersHDRezka carries the hdrezka mirror route override (PR72).
@@ -411,6 +430,12 @@ func Default() Settings {
 			Enabled:     false, // opt-in (owner ruling)
 			ClientID:    "",
 			ShowEpisode: true,
+		},
+		Providers: Providers{
+			Lua: ProvidersLua{
+				Enabled: true, // bundled Lua providers are roster members (PR116)
+				Dir:     "",
+			},
 		},
 	}
 }

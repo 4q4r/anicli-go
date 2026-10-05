@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"io"
+
 	"net/http"
 	"net/url"
 	"regexp"
-	"strings"
 	"time"
 
-	"github.com/an0nx/anicli-go/internal/netclient"
-	"github.com/yuin/gopher-lua"
+	"github.com/an0nx/anicli-go/internal/contracts"
+	lua "github.com/yuin/gopher-lua"
 )
 
 // openSDK registers the global `anicli` module — the batteries-included
@@ -23,12 +22,17 @@ func (e *Engine) openSDK(ls *lua.LState) {
 
 	httpTbl := ls.NewTable()
 	ls.SetFuncs(httpTbl, map[string]lua.LGFunction{
-		"get":          e.sdkHTTPGet,
+		"get":          e.sdkHTTPGetWithOpts,
 		"get_json":     e.sdkHTTPGetJSON,
+		"get_batch":    e.sdkHTTPGetBatch,
 		"post":         e.sdkHTTPPost,
 		"query_escape": e.sdkQueryEscape,
 	})
 	mod.RawSetString("http", httpTbl)
+
+	// extract resolves embed URLs through the shared Go extractor
+	// factory (the same loop the compiled providers use).
+	mod.RawSetString("extract", ls.NewFunction(e.sdkExtract))
 
 	jsonTbl := ls.NewTable()
 	ls.SetFuncs(jsonTbl, map[string]lua.LGFunction{
@@ -72,78 +76,52 @@ func (e *Engine) openSDK(ls *lua.LState) {
 
 	mod.RawSetString("version", lua.LString(SDKVersion))
 
+	// fail raises a typed provider failure: fail(kind, message) with
+	// kind one of not_found|extract_failed|invalid_input. The VM
+	// error's message carries the anicli:<kind>: marker; the adapter's
+	// classification (provider.go) re-attaches the matching contracts
+	// sentinel so consumer errors.Is branches work identically for
+	// Lua providers (PR116).
+	mod.RawSetString("fail", ls.NewFunction(e.sdkFail))
+
 	ls.SetGlobal("anicli", mod)
 }
 
+// sdkErrorKinds maps the script-facing failure kinds onto the
+// contracts sentinels the adapter classification wraps. The three
+// script kinds (anicli.fail) plus the transport classes the SDK HTTP
+// layer raises under markers itself (transportErrorKind).
+var sdkErrorKinds = map[string]error{
+	"not_found":      contracts.ErrNotFound,
+	"extract_failed": contracts.ErrExtractFailed,
+	"invalid_input":  contracts.ErrInvalidInput,
+	"provider_403":   contracts.ErrProvider403,
+	"geo_blocked":    contracts.ErrGeoBlocked,
+	"timeout":        contracts.ErrProviderTimeout,
+}
+
+// sdkFail implements anicli.fail(kind, message).
+func (e *Engine) sdkFail(ls *lua.LState) int {
+	kind := ls.CheckString(1)
+	if _, known := sdkErrorKinds[kind]; !known {
+		ls.RaiseError("anicli.fail: unknown kind %q (want not_found|extract_failed|invalid_input)", kind)
+		return 0
+	}
+	msg := ls.CheckString(2)
+	ls.RaiseError("anicli:%s:%s", kind, msg)
+	return 0
+}
+
 // sdkHTTP runs one HTTP request with the VM's context and the engine's
-// transport, capping the body before it can reach a script.
+// transport, capping the body before it can reach a script. The
+// transport/error branches live in httpDo (sdk_ext.go) — shared with
+// http.get / http.get_batch.
 func (e *Engine) sdkHTTP(ls *lua.LState, method, rawURL, body, contentType string) *lua.LTable {
 	ctx := ls.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	var (
-		status  int
-		headers map[string]string
-		resp    []byte
-		err     error
-	)
-	if e.cfg.HTTP != nil {
-		hdrs := map[string]string{}
-		if contentType != "" {
-			hdrs["Content-Type"] = contentType
-		}
-		req := netclient.Request{
-			Method:  method,
-			URL:     rawURL,
-			Headers: hdrs,
-			Body:    strings.NewReader(body),
-			Op:      "lua",
-		}
-		nr, doErr := e.cfg.HTTP.Do(ctx, req)
-		if doErr != nil {
-			err = doErr
-		} else {
-			status, headers, resp = nr.StatusCode, flattenHeaders(nr.Header), nr.Body
-		}
-	} else {
-		var req *http.Request
-		req, err = http.NewRequestWithContext(ctx, method, rawURL, strings.NewReader(body))
-		if err == nil {
-			if contentType != "" {
-				req.Header.Set("Content-Type", contentType)
-			}
-			hc := e.stdClient()
-			var rs *http.Response
-			rs, err = hc.Do(req)
-			if err == nil {
-				defer func() { _ = rs.Body.Close() }()
-				status = rs.StatusCode
-				headers = flattenHeaders(rs.Header)
-				resp, err = io.ReadAll(io.LimitReader(rs.Body, e.cfg.BodyLimit+1))
-			}
-		}
-	}
-	if err != nil {
-		ls.RaiseError("http %s %s: %v", method, rawURL, err)
-		return nil
-	}
-	if int64(len(resp)) > e.cfg.BodyLimit {
-		ls.RaiseError("http %s %s: response body %d bytes exceeds the sandbox cap of %d bytes",
-			method, rawURL, len(resp), e.cfg.BodyLimit)
-		return nil
-	}
-
-	out := ls.NewTable()
-	out.RawSetString("status", lua.LNumber(status))
-	hdrTbl := ls.NewTable()
-	for k, v := range headers {
-		hdrTbl.RawSetString(k, lua.LString(v))
-	}
-	out.RawSetString("headers", hdrTbl)
-	out.RawSetString("body", lua.LString(resp))
-	return out
+	return e.luaResponseTable(ls, e.httpDo(ctx, method, rawURL, body, contentType, nil), method+" "+rawURL)
 }
 
 func flattenHeaders(h http.Header) map[string]string {
@@ -154,12 +132,6 @@ func flattenHeaders(h http.Header) map[string]string {
 		}
 	}
 	return out
-}
-
-func (e *Engine) sdkHTTPGet(ls *lua.LState) int {
-	url := ls.CheckString(1)
-	ls.Push(e.sdkHTTP(ls, http.MethodGet, url, "", ""))
-	return 1
 }
 
 func (e *Engine) sdkHTTPGetJSON(ls *lua.LState) int {

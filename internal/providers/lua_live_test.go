@@ -18,6 +18,7 @@ package providers
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,7 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"anitokyo": "дандадан",
 		"animedia": "врата штейна",
 		"animevib": "дандадан",
+		"yummy":    "лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
@@ -108,11 +110,24 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 
 			// Resolve the FIRST dub of the first episode: a typed wall
 			// (anons pages, airing titles) is an acceptable live
-			// outcome only if named — a silent empty never is.
-			var dub string
-			for name := range episodes[0].RawEmbeds {
-				dub = name
-				break
+			// outcome only if named — a silent empty never is. A dub
+			// carrying an iframeCVH embed takes precedence — it drives
+			// the provider's dedicated player chain (yummy), the leg
+			// the shared extractor factory does NOT cover.
+			var dub, cvhDub string
+			for name, links := range episodes[0].RawEmbeds {
+				if dub == "" {
+					dub = name
+				}
+				for _, link := range links {
+					if strings.Contains(link, "/iframeCVH.html?") {
+						cvhDub = name
+						break
+					}
+				}
+			}
+			if cvhDub != "" {
+				dub = cvhDub
 			}
 			stream, err := p.ResolveStream(ctx, episodes[0], dub)
 			if err != nil {

@@ -79,15 +79,14 @@ var allFactories = []struct {
 	{"shiza", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newShiza(ShizaBase, http)
 	}},
-	// yummy (PR68): the YummyAnime REST API (api.yani.tv behind
+	// yummy (PR68 → PR123): the YummyAnime REST API (api.yani.tv behind
 	// site.yummyani.me) — the first provider ported from the vypivshiy
 	// anicli-api reference library (source/yummy_anime.py), verified
-	// live 2026-09-19. No credentials and no per-provider settings;
-	// cfg.Network.UserAgent rides on the CVH video sources (okcdn ties
-	// playback to the extraction UA).
-	{"yummy", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newYummy(YummySiteBase, YummyAPIBase, yummyCDNVideoHubBase, cfg.Network.UserAgent, http)
-	}},
+	// live 2026-09-19, migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/yummy/main.lua) — the fourth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the id.
+	{"yummy", true, nil},
 	// hdrezka (PR69): the RU rezka catalog's anime section — port of
 	// the frozen anicli-api hdrezka source, PLUS a pure-Go Anubis
 	// proof-of-work gate solver the site fronts every path with (see

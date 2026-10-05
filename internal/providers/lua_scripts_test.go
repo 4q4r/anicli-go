@@ -19,13 +19,16 @@ import (
 // contracts.Provider surface consumers use.
 
 // luaProductionBases maps each bundled script to the production
-// base_url literal it pins (the harness rewrites exactly this
-// literal; expectations keep the production domain because the
-// fixture pages carry it).
-var luaProductionBases = map[string]string{
-	"anitokyo": "https://anitokyo.tv",
-	"animedia": "https://amd.online",
-	"animevib": "https://www.animevib.ru",
+// base_url literals it pins (the harness rewrites exactly these
+// literals; expectations keep the production domain because the
+// fixture pages carry it). Multi-entry lists cover scripts with more
+// than one fetched host — yummy's API base AND its CDNVideoHub player
+// API base both route to the fixture server.
+var luaProductionBases = map[string][]string{
+	"anitokyo": {"https://anitokyo.tv"},
+	"animedia": {"https://amd.online"},
+	"animevib": {"https://www.animevib.ru"},
+	"yummy":    {"https://api.yani.tv", "https://plapi.cdnvideohub.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts
@@ -38,12 +41,12 @@ func luaStateJSON(pageURL, num string) (string, error) {
 	return string(b), nil
 }
 
-// luaProvider loads the bundled script for id with its base_url
-// pointed at testURL.
+// luaProvider loads the bundled script for id with every pinned
+// production base literal pointed at testURL.
 func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
 	t.Helper()
 
-	production, known := luaProductionBases[id]
+	productions, known := luaProductionBases[id]
 	if !known {
 		t.Fatalf("no production base pinned for lua script %q", id)
 	}
@@ -57,10 +60,12 @@ func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
 	if src == "" {
 		t.Fatalf("no bundled lua script %q", id)
 	}
-	if !strings.Contains(src, production) {
-		t.Fatalf("script %q does not pin its production base %q", id, production)
+	for _, production := range productions {
+		if !strings.Contains(src, production) {
+			t.Fatalf("script %q does not pin its production base %q", id, production)
+		}
+		src = strings.Replace(src, production, testURL, 1)
 	}
-	src = strings.Replace(src, production, testURL, 1)
 
 	// Production-shaped transport: the factory wires every Lua
 	// provider to its own netclient (status mapping, cookie jar,
@@ -80,8 +85,9 @@ func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
 	return p.Adapt()
 }
 
-// luaProviderAtProduction loads the script unmodified (meta tests).
+// luaProviderAtProduction loads the script unmodified (meta tests):
+// the first pinned literal is the identity base.
 func luaProviderAtProduction(t testing.TB, id string) contracts.Provider {
 	t.Helper()
-	return luaProvider(t, id, luaProductionBases[id])
+	return luaProvider(t, id, luaProductionBases[id][0])
 }

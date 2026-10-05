@@ -4,88 +4,97 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// yummyTestUA is the playback User-Agent wired into the test provider:
-// the CVH (okcdn) resolve must echo the extraction UA on the video
-// sources (anicli-api player/cdnvideohub.py: the CDN ties a playback
-// session to the UA that fetched the links).
-const yummyTestUA = "TestUA/1.0 (yummy provider test)"
-
-// testYummy builds the provider against one httptest fixture server
-// standing in for the api.yani.tv base, the ru.yummyani.me iframe host
-// AND the plapi.cdnvideohub.com player API (every URL the provider
-// contacts is server-relative).
-func testYummy(t *testing.T, handle func(w http.ResponseWriter, r *http.Request)) (*Yummy, *recordedRequest) {
-	t.Helper()
-	srv, rec := fixtureServer(t, handle)
-	return newYummy(YummySiteBase, srv.URL, srv.URL, yummyTestUA, testClient(t, "yummy")), rec
-}
+// PR123: the YummyAnime provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/yummy/main.lua) — the fourth Go→Lua
+// migration. These tests pin the script through the same
+// contracts.Provider surface and the same fixtures the compiled Go
+// implementation was held to. The fresh-sandbox state contract adapts
+// one pin: streams(raw_id, dub) receives only RawID, so raw_id carries
+// the {a, n} state JSON and the resolve leg re-fetches /anime/{id}/videos
+// (the animedia precedent).
+//
+// The harness rewrites BOTH production literals the script fetches —
+// api.yani.tv and plapi.cdnvideohub.com — at the fixture server; the
+// declared base_url stays site.yummyani.me (identity only, never
+// fetched). yummyanime.in, the historical SSR fallback, is dead
+// (HTTP 410, live-reverified 2026-10-05): the API surface is the only
+// live one, exactly as the Go provider documented.
 
 // yummyJSON writes a JSON envelope with the JSON content type.
 func yummyJSON(w http.ResponseWriter, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
+	//nolint:gosec // G705: test-only fixture writer; bodies are static
+	// captures or the httptest server's own host echoed back.
 	_, _ = w.Write(body)
 }
 
+// luaYummy loads the bundled yummy script against one fixture server
+// standing in for both the api.yani.tv base and the CDNVideoHub
+// player API base (the Go tests wired srv.URL into both too).
+func luaYummy(t *testing.T, handle func(w http.ResponseWriter, r *http.Request)) (contracts.Provider, *recordedRequest) {
+	t.Helper()
+
+	srv, rec := fixtureServer(t, handle)
+	return luaProvider(t, "yummy", srv.URL), rec
+}
+
 // TestYummyMeta pins the service-level identity: registration identity,
-// BOTH content semantics (RU voice-overs over present video), the RU
-// content language and the declared smoke query. The provider
-// deliberately does NOT declare NamePreference — the RU index is the
-// default query routing.
+// site base, source type and the RU content language.
 func TestYummyMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newYummy(YummySiteBase, "https://api.yani.tv", yummyCDNVideoHubBase, yummyTestUA, testClient(t, "yummy"))
+	p := luaProviderAtProduction(t, "yummy")
 	if p.ID() != "yummy" || p.Name() != "YummyAnime" {
 		t.Errorf("identity = %q/%q, want yummy/YummyAnime", p.ID(), p.Name())
 	}
 	if p.BaseURL() != "https://site.yummyani.me" {
-		t.Errorf("BaseURL = %q, want the site root", p.BaseURL())
+		t.Errorf("BaseURL = %q, want https://site.yummyani.me", p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	if lc := p.(interface{ ContentLanguage() string }); lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru", lc.ContentLanguage())
 	}
 }
 
-// Compile-time capability pins: declaring the smoke query fails the
-// build if the implementation drops it; NOT declaring NamePreference is
-// equally enforced — a latin-only declaration would be a visible type
-// change.
-var _ contracts.SmokeQueryProvider = (*Yummy)(nil)
-
 // TestYummySmokeQuery pins the declared probe (PR68): the shared RU
 // probe «черная лагуна» cannot reach «Пираты «Чёрной лагуны»» — the
-// index matches single tokens, so it returns 20 unrelated «чёрная*»
-// titles (verified live 2026-09-19). The substring probe «лагуна»
-// surfaces the target at rank 1.
+// index matches single tokens and returns 20 unrelated «чёрная*»
+// titles for it — while the substring «лагуна» surfaces the target at
+// rank 1. The declared query gets no RU/latin fallback (the PR51
+// declared-probe precedent).
 func TestYummySmokeQuery(t *testing.T) {
 	t.Parallel()
 
-	p := newYummy(YummySiteBase, "https://api.yani.tv", yummyCDNVideoHubBase, yummyTestUA, testClient(t, "yummy"))
-	if got := p.SmokeQuery(); got != "лагуна" {
+	p := luaProviderAtProduction(t, "yummy")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
+		t.Fatal("yummy must declare contracts.SmokeQueryProvider")
+	}
+	if got := sq.SmokeQuery(); got != "лагуна" {
 		t.Errorf("SmokeQuery = %q, want лагуна", got)
 	}
 }
 
 // TestYummySearch pins the catalog search against the real captured
 // response (testdata/yummy_search.json, GET api.yani.tv/anime with
-// q=лагуна, captured live 2026-09-19): request path, query form,
-// Accept header, and the result fields — the id-as-URL contract
-// (animevost precedent), the absolutized protocol-relative poster.
+// q=лагуна, captured live 2026-09-19; the endpoint live-reverified
+// 2026-10-05): request path, query form, Accept header, and the result
+// fields — the id-as-URL contract (animevost precedent), the
+// absolutized protocol-relative poster.
 func TestYummySearch(t *testing.T) {
 	t.Parallel()
 
-	p, rec := testYummy(t, func(w http.ResponseWriter, _ *http.Request) {
+	p, rec := luaYummy(t, func(w http.ResponseWriter, _ *http.Request) {
 		yummyJSON(w, fixture(t, "yummy_search.json"))
 	})
 
@@ -131,7 +140,7 @@ func TestYummySearch(t *testing.T) {
 func TestYummySearchMiss(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testYummy(t, func(w http.ResponseWriter, _ *http.Request) {
+	p, _ := luaYummy(t, func(w http.ResponseWriter, _ *http.Request) {
 		yummyJSON(w, fixture(t, "yummy_search_miss.json"))
 	})
 
@@ -152,7 +161,7 @@ func TestYummySearchMiss(t *testing.T) {
 func TestYummySearchErrorEnvelope(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testYummy(t, func(w http.ResponseWriter, _ *http.Request) {
+	p, _ := luaYummy(t, func(w http.ResponseWriter, _ *http.Request) {
 		yummyJSON(w, fixture(t, "yummy_error_envelope.json"))
 	})
 
@@ -174,11 +183,12 @@ func TestYummySearchErrorEnvelope(t *testing.T) {
 // bare numbers ("01".."12" and "1".."9" — the wire's own wart). The
 // canonical int identity of upstream's ordinal=int(num) merges them
 // into 12 episodes; dub names key RawEmbeds; protocol-relative iframe
-// URLs are absolutized.
+// URLs are absolutized. RawID carries the {a,n} resolve-state JSON
+// (the fresh-sandbox streams() contract).
 func TestYummyGetEpisodes(t *testing.T) {
 	t.Parallel()
 
-	p, rec := testYummy(t, func(w http.ResponseWriter, r *http.Request) {
+	p, rec := luaYummy(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/anime/1080/videos" {
 			t.Errorf("request path = %q, want /anime/1080/videos", r.URL.Path)
 		}
@@ -209,8 +219,8 @@ func TestYummyGetEpisodes(t *testing.T) {
 		if ep.Title != "" {
 			t.Errorf("episodes[%d].Title = %q, want empty (the API carries no episode titles)", i, ep.Title)
 		}
-		if ep.RawID != ep.Num {
-			t.Errorf("episodes[%d].RawID = %q, want %q", i, ep.RawID, ep.Num)
+		if !strings.Contains(ep.RawID, `"n":"`+strconv.Itoa(i+1)+`"`) || !strings.Contains(ep.RawID, `"a":"1080"`) {
+			t.Errorf("episodes[%d].RawID = %q, want the {a,n} state JSON", i, ep.RawID)
 		}
 	}
 
@@ -258,8 +268,6 @@ func TestYummyGetEpisodes(t *testing.T) {
 	}
 }
 
-// itoa removed: strconv.Itoa covers the episode-order assertion.
-
 // TestYummyGetEpisodesUnknownID pins the typed miss: a nonexistent id
 // answers HTTP 200 {"response":[]} (live-verified) — surfaced as
 // ErrNotFound instead of a silent empty list (animevost precedent:
@@ -267,7 +275,7 @@ func TestYummyGetEpisodes(t *testing.T) {
 func TestYummyGetEpisodesUnknownID(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testYummy(t, func(w http.ResponseWriter, _ *http.Request) {
+	p, _ := luaYummy(t, func(w http.ResponseWriter, _ *http.Request) {
 		yummyJSON(w, fixture(t, "yummy_search_miss.json"))
 	})
 
@@ -281,15 +289,32 @@ func TestYummyGetEpisodesUnknownID(t *testing.T) {
 }
 
 // yummyCVHWorld serves the four-stage CVH chain from the real captures:
-// iframe page → route-chunk JS → plapi playlist → plapi video. Every
-// stage records its path/query so the tests pin the exact wire calls.
-func yummyCVHWorld(t *testing.T) (*Yummy, string, *[]string) {
+// iframe page → route-chunk JS → plapi playlist → plapi video, plus
+// the /anime/889/videos state leg the fresh-sandbox resolve re-fetches
+// (the Lua streams() contract: raw_id carries {a, n} and the listing
+// is re-grouped; the host-swapped state payload keeps the chain
+// hermetic). Every stage records its path/query so the tests pin the
+// exact wire calls.
+func yummyCVHWorld(t *testing.T) (contracts.Provider, string, *[]string) {
+	t.Helper()
+	return yummyCVHWorldState(t,
+		"Озвучка MC Entertainment",
+		"/iframeCVH.html?dubbing_code=MC+Entertaiment&anime_id=889&episode=1&dubbing=%D0%9E%D0%B7%D0%B2%D1%83%D1%87%D0%BA%D0%B0+MC+Entertaiment")
+}
+
+// yummyCVHWorldState is yummyCVHWorld with the state leg's dub and
+// embed parametrized (the no-candidate test swaps in a studio the
+// playlist has no video for).
+func yummyCVHWorldState(t *testing.T, stateDub, stateIframe string) (contracts.Provider, string, *[]string) {
 	t.Helper()
 
 	var calls []string
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.URL.Path+"?"+r.URL.RawQuery)
+		host := "http://" + r.Host
 		switch {
+		case r.URL.Path == "/anime/889/videos":
+			yummyJSON(w, yummyCVHStateJSON(t, host, stateDub, stateIframe))
 		case r.URL.Path == "/iframeCVH.html":
 			_, _ = w.Write(fixture(t, "yummy_cvh_iframe.html"))
 		case strings.HasPrefix(r.URL.Path, "/assets/src-routes-catalog-item-"):
@@ -303,17 +328,28 @@ func yummyCVHWorld(t *testing.T) (*Yummy, string, *[]string) {
 			http.NotFound(w, r)
 		}
 	})
-	p := newYummy(YummySiteBase, srv.URL, srv.URL, yummyTestUA, testClient(t, "yummy"))
+	p := luaProvider(t, "yummy", srv.URL)
 	return p, srv.URL, &calls
+}
+
+// yummyCVHStateJSON builds the one-row /anime/889/videos payload the
+// resolve leg re-fetches: the dub's embed host-swapped to the fixture
+// server (the live payload's shape, one triple).
+func yummyCVHStateJSON(t *testing.T, host, dub, iframe string) []byte {
+	t.Helper()
+
+	payload := `{"response":[{"number":"1","data":{"dubbing":"` + dub + `"},"iframe_url":"` + host + iframe + `"}]}`
+	return []byte(payload)
 }
 
 // yummyCVHEpisode builds the resolve input: the same iframe URL shape
 // the live /anime/1080/videos payload carries, host-swapped to the
-// fixture server.
+// fixture server. RawID carries the {a,n} state JSON the episode
+// listing produced.
 func yummyCVHEpisode(host string) contracts.Episode {
 	return contracts.Episode{
 		Num:   "1",
-		RawID: "1",
+		RawID: `{"a":"889","n":"1"}`,
 		RawEmbeds: map[string][]string{
 			"Озвучка MC Entertainment": {
 				host + "/iframeCVH.html?dubbing_code=MC+Entertaiment&anime_id=889&episode=1&dubbing=%D0%9E%D0%B7%D0%B2%D1%83%D1%87%D0%BA%D0%B0+MC+Entertaiment",
@@ -329,7 +365,9 @@ func yummyCVHEpisode(host string) contracts.Episode {
 // queried with pub/aggr/anime_id and filtered by episode+voiceStudio
 // ("MC Entertaiment" — the + in the query decodes to a space), and the
 // vkId fetch maps mpeg* qualities with hls/dash pinned to the max
-// quality. The okcdn UA-echo header rides on every source.
+// quality. The okcdn UA-echo header rides on every source — the
+// config-default UA the netclient itself sends (the script pins the
+// same constant; the animevost precedent).
 func TestYummyResolveStreamCVH(t *testing.T) {
 	t.Parallel()
 
@@ -372,6 +410,7 @@ func TestYummyResolveStreamCVH(t *testing.T) {
 	if len(stream.Links) != len(wantTypes) {
 		t.Fatalf("links = %d entries (%v), want %d", len(stream.Links), stream.Links, len(wantTypes))
 	}
+	wantUA := config.Default().Network.UserAgent
 	for q, wantType := range wantTypes {
 		src, ok := stream.Links[q]
 		if !ok {
@@ -387,8 +426,8 @@ func TestYummyResolveStreamCVH(t *testing.T) {
 		if src.URL == "" {
 			t.Errorf("quality %s carries an empty URL", q)
 		}
-		if got := src.Headers["User-Agent"]; got != yummyTestUA {
-			t.Errorf("quality %s UA = %q, want the extraction UA %q (okcdn ties playback to it)", q, got, yummyTestUA)
+		if got := src.Headers["User-Agent"]; got != wantUA {
+			t.Errorf("quality %s UA = %q, want the extraction UA %q (okcdn ties playback to it)", q, got, wantUA)
 		}
 	}
 	if strings.Contains(stream.Links["4096"].URL, "video.m3u8") {
@@ -406,7 +445,9 @@ func TestYummyResolveStreamCVH(t *testing.T) {
 func TestYummyResolveStreamCVHNoCandidate(t *testing.T) {
 	t.Parallel()
 
-	p, host, _ := yummyCVHWorld(t)
+	p, host, _ := yummyCVHWorldState(t,
+		"Озвучка Ghost Studio",
+		"/iframeCVH.html?dubbing_code=Ghost+Studio&anime_id=889&episode=1&dubbing=%D0%9E%D0%B7%D0%B2%D1%83%D1%87%D0%BA%D0%B0+Ghost+Studio")
 
 	episode := yummyCVHEpisode(host)
 	episode.RawEmbeds = map[string][]string{
@@ -430,10 +471,13 @@ func TestYummyResolveStreamCVHNoCandidate(t *testing.T) {
 func TestYummyResolveStreamCVHShapeError(t *testing.T) {
 	t.Parallel()
 
-	var calls []string
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.URL.Path)
+		host := "http://" + r.Host
 		switch {
+		case r.URL.Path == "/anime/889/videos":
+			yummyJSON(w, yummyCVHStateJSON(t, host,
+				"Озвучка MC Entertainment",
+				"/iframeCVH.html?dubbing_code=MC+Entertaiment&anime_id=889&episode=1&dubbing=%D0%9E%D0%B7%D0%B2%D1%83%D1%87%D0%BA%D0%B0+MC+Entertaiment"))
 		case r.URL.Path == "/iframeCVH.html":
 			_, _ = w.Write(fixture(t, "yummy_cvh_iframe.html"))
 		case strings.HasPrefix(r.URL.Path, "/assets/"):
@@ -443,7 +487,7 @@ func TestYummyResolveStreamCVHShapeError(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	p := newYummy(YummySiteBase, srv.URL, srv.URL, yummyTestUA, testClient(t, "yummy"))
+	p := luaProvider(t, "yummy", srv.URL)
 
 	_, err := p.ResolveStream(context.Background(), yummyCVHEpisode(srv.URL), "Озвучка MC Entertainment")
 	if err == nil {
@@ -452,27 +496,34 @@ func TestYummyResolveStreamCVHShapeError(t *testing.T) {
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Errorf("error = %v, want ErrExtractFailed", err)
 	}
+	if !strings.Contains(err.Error(), "cdnvideohub") {
+		t.Errorf("error = %v, want the cdnvideohub chain named", err)
+	}
 }
 
 // TestYummyResolveStreamKodikRoundTrip pins the non-CVH delegation:
 // links that are not iframeCVH iframes run through the shared
-// extractor factory (the anilib kodik round-trip shape) — here the
-// kodik branch, the workhorse dub player of the yummy catalog.
+// extractor factory via anicli.extract (the anilib kodik round-trip
+// shape) — here the kodik branch, the workhorse dub player of the
+// yummy catalog.
 func TestYummyResolveStreamKodikRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+		host := "http://" + r.Host
 		switch r.URL.Path {
+		case "/anime/889/videos":
+			yummyJSON(w, yummyCVHStateJSON(t, host,
+				"Озвучка SHIZA Project", "/kodik/serial/54336/abc/720p"))
 		case "/ftor":
-			_, _ = w.Write([]byte(`{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`))
+			yummyJSON(w, []byte(`{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`))
 		default:
 			_, _ = w.Write([]byte(`<html><script>var hash = "h123"; var id = "456";</script></html>`))
 		}
-	}))
-	t.Cleanup(srv.Close)
-
-	p := newYummy(YummySiteBase, "https://api.yani.tv", yummyCDNVideoHubBase, yummyTestUA, testClient(t, "yummy"))
+	})
+	p := luaProvider(t, "yummy", srv.URL)
 	episode := contracts.Episode{
+		RawID: `{"a":"889","n":"1"}`,
 		RawEmbeds: map[string][]string{
 			"Озвучка SHIZA Project": {srv.URL + "/kodik/serial/54336/abc/720p"},
 		},

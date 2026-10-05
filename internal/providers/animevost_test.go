@@ -352,9 +352,9 @@ func TestAnimevostNamePreferenceLatin(t *testing.T) {
 // bundled script (the meta tests resolve against the real domain).
 func productionBase(t testing.TB, id string) string {
 	t.Helper()
-	base, known := luaProductionBases[id]
+	bases, known := luaProductionBases[id]
 	if !known {
 		t.Fatalf("no production base pinned for lua script %q", id)
 	}
-	return base
+	return bases[0]
 }

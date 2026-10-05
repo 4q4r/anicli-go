@@ -2952,7 +2952,7 @@ func (s *sessionScreen) View() tea.View {
 	default:
 		body = s.list.Render()
 	}
-	if s.statusVisible() && s.state != sessionStatePlaying {
+	if s.statusVisible() && s.state != sessionStatePlaying && s.state != sessionStateBuffering {
 		body += "\n" + theme.StatusLine.Render(s.status)
 	}
 	return tea.NewView(body)

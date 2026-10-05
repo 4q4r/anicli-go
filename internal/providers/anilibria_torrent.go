@@ -36,6 +36,26 @@ import (
 // latency while every practical query still yields torrent results.
 const AniLibriaTorrentSearchReleaseLimit = 6
 
+// AniLibriaAPIBase is the aniliberty.top JSON API root (the third
+// domain generation; the old anilibria.top /api/v3 routes are dead).
+// It moved here from the compiled stream provider anilibria.go when
+// the PR120 Lua migration deleted that file — the torrent provider
+// (and the `anicli cf solve` target map) still ride the same API.
+const AniLibriaAPIBase = "https://aniliberty.top/api/v1"
+
+// anilibriaSearchItem mirrors the fields the release-search parse
+// consumes from /app/search/releases (id/name.main/alias; unknown
+// fields are ignored). Moved here from the deleted compiled stream
+// provider — the torrent search shares the same endpoint and row
+// shape (PR120).
+type anilibriaSearchItem struct {
+	ID    json.Number `json:"id"`
+	Alias string      `json:"alias"`
+	Name  struct {
+		Main string `json:"main"`
+	} `json:"name"`
+}
+
 // AniLibriaTorrent is the aniliberty.top torrent provider over the
 // shared Base identity and TorrentBase engine plumbing.
 type AniLibriaTorrent struct {

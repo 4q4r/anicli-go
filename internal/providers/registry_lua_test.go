@@ -59,13 +59,16 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	dir := filepath.Join(xdg, "anicli", "providers", "animego")
+	// gogoanime (PR124): the shadow sample must be a COMPILED factory —
+	// the Lua-only slots (anitokyo, …, animego) have no Go provider to
+	// shadow-log anymore.
+	dir := filepath.Join(xdg, "anicli", "providers", "gogoanime")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	shadow := `
 	return {
-		id = "animego",
+		id = "gogoanime",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
@@ -84,12 +87,12 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("animego")
+	_, ok := reg.Get("gogoanime")
 	if !ok {
-		t.Fatal("the shadowed animego must stay registered (as the Lua script)")
+		t.Fatal("the shadowed gogoanime must stay registered (as the Lua script)")
 	}
-	if got := reg.ContentLanguage("animego"); got != "lua-probe" {
-		t.Fatalf("animego ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("gogoanime"); got != "lua-probe" {
+		t.Fatalf("gogoanime ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "shadowed by its lua script") {
 		t.Fatalf("the shadow must be logged, got: %s", buf.String())

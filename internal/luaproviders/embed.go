@@ -3,8 +3,9 @@
 // scripts/<id>/main.lua compiled into the binary so the Lua-backed
 // roster members ship without a user setup step.
 //
-// The factory assembles Sources() FIRST in its LoadSources precedence
-// list (bundled → [providers.lua].dir → the user config dir): a user
+// The factory assembles the user-dir sources AHEAD of Sources() in
+// its LoadSources precedence list (first occurrence wins: the user
+// config dir → [providers.lua].dir → the bundled embeds), so a user
 // script with the same id overrides a bundled one without a rebuild,
 // and a bundled script shadows the compiled Go factory with the same
 // id (Lua shadows Go). See internal/lua/loader.go for the loading

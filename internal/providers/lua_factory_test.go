@@ -136,9 +136,10 @@ func TestFactoryLuaExcludedIsGone(t *testing.T) {
 }
 
 // TestFactoryLuaDisabledConfig pins the kill switch: [providers.lua]
-// enabled = false leaves the compiled Go factories alone. The three
-// migrated slots (anitokyo, animedia, animevib) are EMPTY in this
-// mode: they live only in the bundled Lua scripts since PR116.
+// enabled = false leaves the compiled Go factories alone. The four
+// migrated slots (anitokyo, animedia, animevib, anilibria) are EMPTY
+// in this mode: they live only in the bundled Lua scripts since
+// PR116/PR120.
 func TestFactoryLuaDisabledConfig(t *testing.T) {
 	dir := luaXDG(t)
 	writeLuaScript(t, dir, "userscript", "")
@@ -152,16 +153,16 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 		t.Fatalf("All: %v", err)
 	}
 	ids := rosterIDs(bare)
-	if len(ids) != 27 {
-		t.Fatalf("All() = %d providers, want 27 (the Go factories; the three migrated providers are Lua-only)", len(ids))
+	if len(ids) != 26 {
+		t.Fatalf("All() = %d providers, want 26 (the Go factories; the four migrated providers are Lua-only)", len(ids))
 	}
 	for _, id := range ids {
 		if id == "userscript" {
 			t.Fatal("userscript registered with [providers.lua] disabled")
 		}
-		for _, migrated := range []string{"anitokyo", "animedia", "animevib"} {
+		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria"} {
 			if id == migrated {
-				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116)", migrated)
+				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR120)", migrated)
 			}
 		}
 	}
@@ -169,11 +170,15 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 
 // TestFactoryLuaBrokenScriptIsolated pins startup survival: a broken
 // script is a skip; the roster (including the sibling good script)
-// builds and the Go shadow target stays ACTIVE (a broken shadow must
+// builds and the Go-served target stays ACTIVE (a broken shadow must
 // not silently kill the compiled provider — fail loud in the log,
-// never fake an absence).
+// never fake an absence). The anilibria leg pins the Lua-pinned slot's
+// contract: a broken user OVERRIDE of a bundled script swallows the
+// bundled fallback (the dedup keeps first occurrence) and the slot
+// drops — the user's replacement intent, failed loud, never faked.
 func TestFactoryLuaBrokenScriptIsolated(t *testing.T) {
 	dir := luaXDG(t)
+	writeLuaScript(t, dir, "animevost", "\tthis is not valid lua =\n")
 	writeLuaScript(t, dir, "anilibria", "\tthis is not valid lua =\n")
 	writeLuaScript(t, dir, "goodscript", "")
 
@@ -185,11 +190,16 @@ func TestFactoryLuaBrokenScriptIsolated(t *testing.T) {
 		t.Fatalf("All: %v (a broken user script must never fail startup)", err)
 	}
 	ids := rosterIDs(bare)
-	if len(ids) != 31 {
-		t.Fatalf("All() = %d providers (%v), want 31 (30 Go — the broken shadow lost — + goodscript)", len(ids), ids)
+	if len(ids) != 30 {
+		t.Fatalf("All() = %d providers (%v), want 30 (29 Go + goodscript: the broken animevost shadow lost to Go, the broken anilibria override dropped its Lua-pinned slot)", len(ids), ids)
 	}
-	if ids[0] != "anilibria" {
-		t.Errorf("roster[0] = %q, want the GO anilibria (broken Lua shadow skipped)", ids[0])
+	if ids[0] != "animevost" {
+		t.Errorf("roster[0] = %q, want the GO animevost (broken Lua shadow skipped)", ids[0])
+	}
+	for _, id := range ids {
+		if id == "anilibria" {
+			t.Errorf("anilibria registered despite its broken user override (the Lua-pinned slot must drop, not fall back silently): %v", ids)
+		}
 	}
 	if ids[len(ids)-1] != "goodscript" {
 		t.Errorf("roster tail = %q, want goodscript", ids[len(ids)-1])

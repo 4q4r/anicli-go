@@ -23,9 +23,10 @@ import (
 // literal; expectations keep the production domain because the
 // fixture pages carry it).
 var luaProductionBases = map[string]string{
-	"anitokyo": "https://anitokyo.tv",
-	"animedia": "https://amd.online",
-	"animevib": "https://www.animevib.ru",
+	"anilibria": "https://aniliberty.top",
+	"anitokyo":  "https://anitokyo.tv",
+	"animedia":  "https://amd.online",
+	"animevib":  "https://www.animevib.ru",
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts
@@ -41,6 +42,13 @@ func luaStateJSON(pageURL, num string) (string, error) {
 // luaProvider loads the bundled script for id with its base_url
 // pointed at testURL.
 func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
+	t.Helper()
+	return luaProviderWithNet(t, id, testURL, config.Default().Network)
+}
+
+// luaProviderWithNet is luaProvider with a caller-supplied network
+// config (the transport-failure tests need the short-timeout ladder).
+func luaProviderWithNet(t testing.TB, id, testURL string, ncfg config.Network) contracts.Provider {
 	t.Helper()
 
 	production, known := luaProductionBases[id]
@@ -67,7 +75,8 @@ func luaProvider(t testing.TB, id, testURL string) contracts.Provider {
 	// fingerprint) — the harness mirrors that so pins like the 403
 	// mapping hold.
 	cfg := lua.DefaultConfig()
-	client, err := netclient.New(config.Default().Network, netclient.WithProvider(id))
+	ncfg.ProxyURL = ""
+	client, err := netclient.New(ncfg, netclient.WithProvider(id))
 	if err != nil {
 		t.Fatalf("netclient for %q: %v", id, err)
 	}

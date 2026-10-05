@@ -30,9 +30,13 @@ var allFactories = []struct {
 	luaOnly bool
 	build   func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
 }{
-	{"anilibria", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnilibria(AniLibriaAPIBase, AniLibriaHost, http)
-	}},
+	// anilibria (PR37 → PR120): the aniliberty.top RU catalog rebased
+	// onto the new Laravel API in PR37, migrated to the BUNDLED LUA
+	// SCRIPT (internal/luaproviders/scripts/anilibria/main.lua) — the
+	// fourth Go→Lua provider migration. luaOnly pins the roster slot;
+	// the script serves the id (the API's per-requester quality
+	// tiering and the 1080p ceiling live in the script header).
+	{"anilibria", true, nil},
 	{"animevost", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimevost(AnimeVostBase, http)
 	}},
@@ -337,19 +341,23 @@ func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Mana
 }
 
 // luaScriptSources assembles the Lua provider script sources in
-// LoadSources precedence order (PR116): the bundled embeds first
-// (lowest precedence), then [providers.lua].dir, then the user
-// config dir (highest — a user script overrides a bundled one by id
-// without a rebuild). Missing dirs scan to nothing.
+// LoadSources precedence order (PR116, order fixed in PR120): the
+// user config dir first (highest precedence), then [providers.lua].dir,
+// then the bundled embeds — LoadSources keeps the FIRST occurrence of
+// an id, so this order is what makes a user script override a bundled
+// one without a rebuild (the documented shadowing contract; the
+// PR116 bundled-first assembly silently inverted it — exposed and
+// fixed when anilibria joined the bundled roster in PR120). Missing
+// dirs scan to nothing.
 func luaScriptSources(cfg config.Settings) []lua.Source {
 	out := make([]lua.Source, 0)
-	out = append(out, luaproviders.Sources()...)
-	if cfg.Providers.Lua.Dir != "" {
-		out = append(out, lua.ScanDir(cfg.Providers.Lua.Dir)...)
-	}
 	if dir, ok := lua.ProvidersDir(); ok {
 		out = append(out, lua.ScanDir(dir)...)
 	}
+	if cfg.Providers.Lua.Dir != "" {
+		out = append(out, lua.ScanDir(cfg.Providers.Lua.Dir)...)
+	}
+	out = append(out, luaproviders.Sources()...)
 	return out
 }
 

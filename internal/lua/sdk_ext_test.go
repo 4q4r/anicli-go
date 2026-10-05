@@ -4,9 +4,49 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
+
+// TestSDKHTTPNotFoundRaisesTypedMarker pins the typed-miss contract the
+// animevost port (the first provider whose live API answers misses with
+// HTTP 404) rides: a netclient 404 — classified contracts.ErrNotFound by
+// the transport's status map — must raise under the anicli:not_found:
+// marker so classifyVMError re-attaches the sentinel for consumers
+// (errors.Is branches hold for Lua providers like they do for the
+// compiled ones). Before the mapping the marker was lost and the miss
+// degraded to an untyped transport error.
+func TestSDKHTTPNotFoundRaisesTypedMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":"Ничего не найдено"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	log, _ := testLogger(t)
+	cfg := DefaultConfig()
+	cfg.Timeout = 2 * time.Second
+	client, err := netclient.New(config.Default().Network)
+	if err != nil {
+		t.Fatalf("netclient: %v", err)
+	}
+	cfg.HTTP = client
+	e := NewEngine(cfg, log)
+
+	_, evalErr := evalSDK(t, e, fmt.Sprintf(`anicli.http.get(%q)`, srv.URL+"/search"))
+	if evalErr == nil {
+		t.Fatal("error = nil, want the typed 404 failure")
+	}
+	if !strings.Contains(evalErr.Error(), "anicli:not_found:") {
+		t.Fatalf("error = %v, want the anicli:not_found: marker (the typed-miss contract)", evalErr)
+	}
+}
 
 // The PR116 SDK extensions: http.get opts (custom headers),
 // http.get_batch (bounded-parallel fan-out with per-URL soft failure)

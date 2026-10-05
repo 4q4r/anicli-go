@@ -33,9 +33,16 @@ var allFactories = []struct {
 	{"anilibria", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilibria(AniLibriaAPIBase, AniLibriaHost, http)
 	}},
-	{"animevost", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimevost(AnimeVostBase, http)
-	}},
+	// animevost (PR46 → PR119): the api.animevost.org JSON API (the
+	// anicli-py animevost.py port) migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animevost/main.lua) — the fourth
+	// Go→Lua provider migration. luaOnly pins the roster slot. Live
+	// 2026-10-05: the cert expired 2026-09-20 was renewed and the
+	// Chrome_150 uTLS tarpit that forced the compiled provider's
+	// scoped plain-Go transport (PR46) is gone — the shared netclient
+	// answers through the configured proxy; the Go transport escape
+	// hatch died with the file.
+	{"animevost", true, nil},
 	{"anilib", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnilib(AnilibAPIBase, http)
 	}},

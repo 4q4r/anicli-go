@@ -1,7 +1,39 @@
 package providers
 
+// Fixture provenance: animego_search.html, animego_anime.html,
+// animego_player_series.json, animego_player_film.json and
+// animego_videos.json are VERBATIM live captures from animego.me taken
+// on 2026-09-18 (the PR48 probe):
+//
+//	GET /search/anime?q=lagoon                          -> 200 (3 grid items, one titleless)
+//	GET /anime/piraty-chernoy-laguny-2115               -> 200 (loader → /player/2115)
+//	GET /player/2115                                    -> 200 (carousel + episode-one provider buttons)
+//	GET /player/videos/27784                            -> 200 (one episode's provider buttons)
+//
+// PR124: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/animego/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to. Contract shifts
+// forced by the fresh-sandbox Lua adapter (the anilib/animevost
+// precedent), documented here rather than hidden:
+//
+//   - the PR44 tier-1 dub-list distribution moved INTO the script's
+//     episodes() (episode one keeps its real links, the rest carry the
+//     release's dub keys with empty lists — the pins are verbatim);
+//   - streams(raw_id, dub) ALWAYS re-fetches /player/videos/{raw_id}
+//     (the fresh-sandbox state contract: raw_id is the bare episode
+//     id) — the Go FetchDubs short-circuit on pre-existing embeds is
+//     structural in the adapter, so the always-fresh refetch is what
+//     the hydration pins assert;
+//   - the resolve pins drive the real hydration route: the direct-
+//     fallback pin serves an ABSOLUTE direct-media URL through the
+//     real parse (the protocol-relative "//" prefixing is pinned at
+//     the parse level), and the extractor-miss pin rides the typed
+//     extract failure through the same marker classification.
+
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,21 +45,43 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// animegoServer serves the two-request flow of GetEpisodes: the anime
-// page, then the /player/{id} JSON fragment.
-func animegoServer(t *testing.T, animePage, playerBody string, playerStatus int) (*httptest.Server, *recordedRequest) {
+// animegoEnvelope wraps a player-content HTML fragment in the site's
+// JSON envelope (data.content carries the payload).
+func animegoEnvelope(content string) string {
+	b, err := json.Marshal(map[string]any{
+		"status":  "success",
+		"message": nil,
+		"data":    map[string]any{"content": content},
+	})
+	if err != nil {
+		panic("animegoEnvelope: " + err.Error())
+	}
+	return string(b)
+}
+
+// animegoStubServer routes /player/* requests to playerHandler and
+// everything else to pageHandler, recording each request URI in order.
+func animegoStubServer(t *testing.T, playerHandler, pageHandler func(w http.ResponseWriter, r *http.Request)) (*httptest.Server, func() []string) {
 	t.Helper()
 
-	return fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/player/"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(playerStatus)
-			_, _ = fmt.Fprint(w, playerBody)
-		default:
-			_, _ = fmt.Fprint(w, animePage)
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.RequestURI())
+		mu.Unlock()
+		if strings.HasPrefix(r.URL.Path, "/player/") {
+			playerHandler(w, r)
+			return
 		}
-	})
+		pageHandler(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), paths...)
+	}
 }
 
 func TestAnimegoSearch(t *testing.T) {
@@ -36,7 +90,7 @@ func TestAnimegoSearch(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "animego_search.html"))
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
 	results, err := p.Search(context.Background(), "lagoon")
 	if err != nil {
@@ -56,7 +110,7 @@ func TestAnimegoSearch(t *testing.T) {
 	if results[0].Title != "Пираты «Чёрной лагуны»" {
 		t.Errorf("Title = %q, want the a[title] attribute", results[0].Title)
 	}
-	// The new site emits RELATIVE hrefs; Search must absolutize them
+	// The site emits RELATIVE hrefs; Search must absolutize them
 	// against the provider base so GetEpisodes can fetch the URL.
 	if results[0].URL != srv.URL+"/anime/piraty-chernoy-laguny-2115" {
 		t.Errorf("URL = %q, want the absolutized /anime/piraty-chernoy-laguny-2115", results[0].URL)
@@ -82,7 +136,7 @@ func TestAnimegoSearchSendsSiteHeaders(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html></html>")
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
 	if _, err := p.Search(context.Background(), "q"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -105,48 +159,40 @@ func TestAnimegoSearchSendsSiteHeaders(t *testing.T) {
 func TestAnimegoGetEpisodesSeries(t *testing.T) {
 	t.Parallel()
 
-	// Route-aware stub: the anime page, then /player/{id}. The new
-	// site's player fragment ALREADY carries the first episode's
-	// provider buttons, so the PR44 tier-1 dub-list fetch is free:
-	// exactly two requests cover the release.
-	var mu sync.Mutex
-	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		paths = append(paths, r.URL.RequestURI())
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/player/"):
+	// Route-aware stub: the anime page, then /player/{id}. The site's
+	// player fragment ALREADY carries the first episode's provider
+	// buttons, so the PR44 tier-1 dub-list fetch is free: exactly two
+	// requests cover the release.
+	srv, paths := animegoStubServer(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(fixture(t, "animego_player_series.json"))
-		default:
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write(fixture(t, "animego_anime.html"))
-		}
-	}))
-	t.Cleanup(srv.Close)
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+		})
+	p := luaProvider(t, "animego", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/piraty-chernoy-laguny-2115")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
 	want := []string{"/anime/piraty-chernoy-laguny-2115", "/player/2115"}
-	if len(paths) != len(want) {
-		t.Fatalf("requests = %v, want %v", paths, want)
+	got := paths()
+	if len(got) != len(want) {
+		t.Fatalf("requests = %v, want %v", got, want)
 	}
 	for i := range want {
-		if paths[i] != want[i] {
-			t.Errorf("request[%d] = %q, want %q", i, paths[i], want[i])
+		if got[i] != want[i] {
+			t.Errorf("request[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 
 	if len(episodes) != 2 {
 		t.Fatalf("episodes = %d, want 2", len(episodes))
 	}
-	// New carousel: data-episode-number + data-episode, no per-episode
+	// Carousel: data-episode-number + data-episode, no per-episode
 	// title attribute (the site dropped episode titles).
 	if episodes[0].Num != "1" || episodes[0].RawID != "27779" {
 		t.Errorf("episode 1 = %+v", episodes[0])
@@ -158,11 +204,19 @@ func TestAnimegoGetEpisodesSeries(t *testing.T) {
 		t.Errorf("episode titles = %q/%q, want empty (carousel carries no titles)", episodes[0].Title, episodes[1].Title)
 	}
 	// Episode one keeps the real provider links parsed from the same
-	// fragment (AniBoom + Kodik under the MC Entertainment translation);
-	// episode two carries the release's dub keys with EMPTY lists
-	// (on-demand resolve, PR44 owner model).
-	if links := episodes[0].RawEmbeds["MC Entertainment"]; len(links) != 2 {
-		t.Errorf("episode 1 MC Entertainment links = %v, want the AniBoom+Kodik pair from the fragment", links)
+	// fragment (AniBoom + Kodik under the MC Entertainment translation,
+	// https-prefixed in fragment order); episode two carries the
+	// release's dub keys with EMPTY lists (on-demand resolve, the PR44
+	// owner model the script distributes).
+	mc := episodes[0].RawEmbeds["MC Entertainment"]
+	if len(mc) != 2 {
+		t.Fatalf("episode 1 MC Entertainment links = %v, want the AniBoom+Kodik pair from the fragment", mc)
+	}
+	if !strings.HasPrefix(mc[0], "https://aniboom.one/embed/") {
+		t.Errorf("episode 1 link[0] = %q, want the https-prefixed aniboom embed", mc[0])
+	}
+	if !strings.HasPrefix(mc[1], "https://kodikplayer.com/seria/") {
+		t.Errorf("episode 1 link[1] = %q, want the https-prefixed kodik embed", mc[1])
 	}
 	if links := episodes[1].RawEmbeds["MC Entertainment"]; links == nil || len(links) != 0 {
 		t.Errorf("episode 2 MC Entertainment links = %v, want an empty list", links)
@@ -172,10 +226,15 @@ func TestAnimegoGetEpisodesSeries(t *testing.T) {
 func TestAnimegoGetEpisodesFilmParsesEmbedsInline(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := animegoServer(t,
-		`<div class="player__video" data-controller="anime-player-loader" data-anime-player-loader-url-value="/player/4060"></div>`,
-		string(fixture(t, "animego_player_film.json")), http.StatusOK)
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	srv, _ := animegoStubServer(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture(t, "animego_player_film.json"))
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(w, `<div class="player__video" data-controller="anime-player-loader" data-anime-player-loader-url-value="/player/4060"></div>`)
+		})
+	p := luaProvider(t, "animego", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/utrachennoye-nebesami-4060")
 	if err != nil {
@@ -212,8 +271,15 @@ func TestAnimegoGetEpisodesFilmParsesEmbedsInline(t *testing.T) {
 func TestAnimegoGetEpisodesMissingLoaderReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := animegoServer(t, `<html><body>no loader node here</body></html>`, `{}`, http.StatusOK)
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	srv, _ := animegoStubServer(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{}`)
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(w, `<html><body>no loader node here</body></html>`)
+		})
+	p := luaProvider(t, "animego", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/broken")
 	if err != nil {
@@ -227,10 +293,15 @@ func TestAnimegoGetEpisodesMissingLoaderReturnsEmpty(t *testing.T) {
 func TestAnimegoGetEpisodesMalformedPlayerJSONIsTypedError(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := animegoServer(t,
-		`<div data-anime-player-loader-url-value="/player/7"></div>`,
-		"<html>not json</html>", http.StatusOK)
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	srv, _ := animegoStubServer(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, "<html>not json</html>")
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(w, `<div data-anime-player-loader-url-value="/player/7"></div>`)
+		})
+	p := luaProvider(t, "animego", srv.URL)
 
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
 	if err == nil {
@@ -251,7 +322,7 @@ func TestAnimegoGetEpisodesProvider403(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
 	if !errors.Is(err, contracts.ErrProvider403) {
@@ -259,130 +330,110 @@ func TestAnimegoGetEpisodesProvider403(t *testing.T) {
 	}
 }
 
-func TestAnimegoFetchDubs(t *testing.T) {
+// TestAnimegoStreamsUnknownDubHydratesEmpty drives the hydration route
+// against the real /player/videos capture: streams() re-fetches the
+// episode detail, and a dub the fragment does not name resolves to an
+// empty stream — never an error (the anilib parity rule).
+func TestAnimegoStreamsUnknownDubHydratesEmpty(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "animego_videos.json"))
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
-	episode := &contracts.Episode{Num: "5", RawID: "27784", RawEmbeds: map[string][]string{}}
-	got, err := p.FetchDubs(context.Background(), episode)
-	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-	if got != episode {
-		t.Fatal("FetchDubs must return the same episode pointer")
-	}
-	if rec.Path != "/player/videos/27784" {
-		t.Errorf("request = %s, want /player/videos/27784", rec.Path)
-	}
-
-	embeds := episode.RawEmbeds
-	if len(embeds) != 1 {
-		t.Fatalf("embeds = %v, want 1 translation", embeds)
-	}
-	links := embeds["MC Entertainment"]
-	if len(links) != 2 {
-		t.Fatalf("embeds[MC Entertainment] = %v, want the AniBoom+Kodik pair", links)
-	}
-	if !strings.HasPrefix(links[0], "https://aniboom.one/embed/") {
-		t.Errorf("links[0] = %q, want the https-prefixed aniboom embed", links[0])
-	}
-	if !strings.HasPrefix(links[1], "https://kodikplayer.com/seria/") {
-		t.Errorf("links[1] = %q, want the https-prefixed kodik embed", links[1])
-	}
-}
-
-// TestAnimegoFetchDubsUnknownTranslationFallsBackToUnknown covers a
-// provider button missing data-translation-title: the link lands under
-// "Unknown" instead of being dropped.
-func TestAnimegoFetchDubsUnknownTranslationFallsBackToUnknown(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"status":"success","message":null,"data":{"content":"<button data-anime-player-target=\"provider\" data-player=\"//kodikplayer.com/video/1/abc/720p\"></button>"}}`)
-	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
-
-	episode := &contracts.Episode{Num: "1", RawID: "1", RawEmbeds: map[string][]string{}}
-	if _, err := p.FetchDubs(context.Background(), episode); err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-	if links := episode.RawEmbeds["Unknown"]; len(links) != 1 || links[0] != "https://kodikplayer.com/video/1/abc/720p" {
-		t.Errorf("embeds[Unknown] = %v, want the untitled provider under Unknown (https-prefixed)", episode.RawEmbeds["Unknown"])
-	}
-}
-
-func TestAnimegoFetchDubsSkipsWhenEmbedsPresent(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("FetchDubs must not hit the network when raw embeds exist")
-	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
-
-	episode := &contracts.Episode{
-		RawID:     "27779",
-		RawEmbeds: map[string][]string{"MC Entertainment": {"https://x/y.m3u8"}},
-	}
-	got, err := p.FetchDubs(context.Background(), episode)
-	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-	if got != episode {
-		t.Fatal("FetchDubs must return the same episode pointer")
-	}
-	if got.RawEmbeds["MC Entertainment"][0] != "https://x/y.m3u8" {
-		t.Errorf("existing embeds must survive: %v", got.RawEmbeds)
-	}
-}
-
-func TestAnimegoResolveStreamDirectFallback(t *testing.T) {
-	t.Parallel()
-
-	p := newAnimego(AnimeGoBase, testClient(t, "animego"))
-	episode := contracts.Episode{
-		RawEmbeds: map[string][]string{
-			"MC Entertainment": {"//cdn.example.com/static/film.m3u8"},
-		},
-	}
-
-	stream, err := p.ResolveStream(context.Background(), episode, "MC Entertainment")
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "5", RawID: "27784"}, "NoSuchDub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
+	}
+	if rec.Path != "/player/videos/27784" {
+		t.Errorf("request = %s, want the on-demand /player/videos/27784 hydration", rec.Path)
+	}
+	if len(stream.Links) != 0 {
+		t.Errorf("Links = %v, want empty for a dub the hydration does not name", stream.Links)
+	}
+	if stream.DubName != "NoSuchDub" {
+		t.Errorf("DubName = %q", stream.DubName)
+	}
+}
+
+// TestAnimegoStreamsHydratesAndResolvesDirect covers the named-dub
+// hydration: the /player/videos fragment's provider buttons parse with
+// the same rules as the player fragment (https prefixing, translation
+// grouping) and resolve through the shared extractor factory — a
+// direct media URL takes the suffix fast path with the URL untouched.
+func TestAnimegoStreamsHydratesAndResolvesDirect(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, animegoEnvelope(`<button data-anime-player-target="provider" data-player="//cdn.example.com/static/film.m3u8" data-translation-title="MC Entertainment"></button>`))
+	})
+	p := luaProvider(t, "animego", srv.URL)
+
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "27779"}, "MC Entertainment")
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
+	}
+	if rec.Path != "/player/videos/27779" {
+		t.Errorf("request = %s, want the on-demand /player/videos/27779 hydration", rec.Path)
 	}
 	src, ok := stream.Links["720"]
 	if !ok {
 		t.Fatalf("Links = %v, want the direct 720 fallback", stream.Links)
 	}
-	if src.URL != "//cdn.example.com/static/film.m3u8" {
-		t.Errorf("URL = %q, want the link untouched", src.URL)
+	if src.URL != "https://cdn.example.com/static/film.m3u8" {
+		t.Errorf("URL = %q, want the https-prefixed link untouched by the fallback", src.URL)
 	}
 	if stream.DubName != "MC Entertainment" {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
 }
 
-// TestAnimegoResolveStreamSkippedExtractor covers the typed error for an
-// embed URL whose extractor is deliberately unported (unreachable from
-// the registered providers): the resolve path surfaces the extractor
-// error wrapped in the provider context instead of the old pending
-// marker.
+// TestAnimegoEpisodesUnknownTranslationFallsBackToUnknown covers a
+// provider button missing data-translation-title at the parse level:
+// the link lands under "Unknown" instead of being dropped.
+func TestAnimegoEpisodesUnknownTranslationFallsBackToUnknown(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := animegoStubServer(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, animegoEnvelope(`<button data-anime-player-target="provider" data-player="//kodikplayer.com/video/1/abc/720p"></button>`))
+		},
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(w, `<div data-anime-player-loader-url-value="/player/1"></div>`)
+		})
+	p := luaProvider(t, "animego", srv.URL)
+
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x-1")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(episodes) != 1 {
+		t.Fatalf("episodes = %d, want the single film episode", len(episodes))
+	}
+	links := episodes[0].RawEmbeds["Unknown"]
+	if len(links) != 1 || links[0] != "https://kodikplayer.com/video/1/abc/720p" {
+		t.Errorf("embeds[Unknown] = %v, want the untitled provider under Unknown (https-prefixed)", episodes[0].RawEmbeds["Unknown"])
+	}
+}
+
+// TestAnimegoResolveStreamSkippedExtractor covers the typed error for
+// an embed URL whose extractor is deliberately unported (unreachable
+// from the registered providers): the resolve path surfaces the
+// extractor error wrapped in the provider context with its sentinel.
 func TestAnimegoResolveStreamSkippedExtractor(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimego(AnimeGoBase, testClient(t, "animego"))
-	episode := contracts.Episode{
-		RawEmbeds: map[string][]string{
-			"Studio Band": {"https://csst.online/embed/2"},
-		},
-	}
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, animegoEnvelope(`<button data-anime-player-target="provider" data-player="https://csst.online/embed/2" data-translation-title="Studio Band"></button>`))
+	})
+	p := luaProvider(t, "animego", srv.URL)
 
-	_, err := p.ResolveStream(context.Background(), episode, "Studio Band")
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{RawID: "1"}, "Studio Band")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("error = %v, want ErrExtractFailed", err)
 	}
@@ -395,31 +446,18 @@ func TestAnimegoResolveStreamSkippedExtractor(t *testing.T) {
 	}
 }
 
-func TestAnimegoResolveStreamEmptyDubIsEmpty(t *testing.T) {
-	t.Parallel()
-
-	p := newAnimego(AnimeGoBase, testClient(t, "animego"))
-
-	stream, err := p.ResolveStream(context.Background(), contracts.Episode{RawEmbeds: map[string][]string{}}, "NoSuchDub")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	if len(stream.Links) != 0 {
-		t.Errorf("Links = %v, want empty", stream.Links)
-	}
-}
-
 func TestAnimegoProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimego(AnimeGoBase, testClient(t, "animego"))
-	if p.ID() != "animego" || p.Name() != "AnimeGo" || p.BaseURL() != AnimeGoBase {
+	p := luaProviderAtProduction(t, "animego")
+	if p.ID() != "animego" || p.Name() != "AnimeGo" || p.BaseURL() != "https://animego.me" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if AnimeGoBase != "https://animego.me" {
-		t.Errorf("AnimeGoBase = %q, want the live animego.me base", AnimeGoBase)
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok || lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %v, want ru", lc)
 	}
 }

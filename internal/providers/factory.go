@@ -54,9 +54,16 @@ var allFactories = []struct {
 	// script carries the browser header set, the sequential PR53
 	// contentless preflight and the PR44 release-dub-keys tier-1.
 	{"anilib", true, nil},
-	{"animego", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimego(AnimeGoBase, http)
-	}},
+	// animego (PR48 → PR124): the animego.me RU catalog (the live
+	// continuation of the dead animego.org/.one original; same
+	// /anime/{slug}-{id} scheme, kodik+aniboom player ecosystem)
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animego/main.lua) — the seventh
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script carries the XHR header set and the PR44 release-dub-keys
+	// tier-1 (the anilib.go helper's last Go consumer dies here — the
+	// distribution lives in the script's episodes()).
+	{"animego", true, nil},
 	{"gogoanime", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},

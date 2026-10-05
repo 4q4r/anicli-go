@@ -30,7 +30,7 @@ func TestSourcesShape(t *testing.T) {
 	if !sort.SliceIsSorted(ids, func(i, j int) bool { return ids[i] < ids[j] }) {
 		t.Errorf("sources not sorted: %v", ids)
 	}
-	for _, want := range []string{"anilib", "anilibria", "anitokyo", "animedia", "animevib"} {
+	for _, want := range []string{"anilib", "anilibria", "anitokyo", "animedia", "animevib", "animego"} {
 		if !seen[want] {
 			t.Errorf("bundled scripts missing the migrated provider %q (have %v)", want, ids)
 		}

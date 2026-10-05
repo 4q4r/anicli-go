@@ -75,6 +75,9 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"animevost": "naruto",
 		"anilib":    "черная лагуна",
 		"yummy":     "лагуна",
+		// animego (PR124): the HTML surface answers direct on the
+		// characterization network (the smoke matrix's honest route).
+		"animego": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

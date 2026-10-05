@@ -30,9 +30,13 @@ var allFactories = []struct {
 	luaOnly bool
 	build   func(http *netclient.Client, cfg config.Settings, cf *cfbrowser.Manager) contracts.Provider
 }{
-	{"anilibria", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnilibria(AniLibriaAPIBase, AniLibriaHost, http)
-	}},
+	// anilibria (PR37 → PR120): the aniliberty.top RU catalog rebased
+	// onto the new Laravel API in PR37, migrated to the BUNDLED LUA
+	// SCRIPT (internal/luaproviders/scripts/anilibria/main.lua) — the
+	// fourth Go→Lua provider migration. luaOnly pins the roster slot;
+	// the script serves the id (the API's per-requester quality
+	// tiering and the 1080p ceiling live in the script header).
+	{"anilibria", true, nil},
 	{"animevost", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimevost(AnimeVostBase, http)
 	}},

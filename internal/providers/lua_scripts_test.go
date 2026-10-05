@@ -44,6 +44,10 @@ var luaProductionBases = map[string][]string{
 	// shiza (PR125): the site root — the GraphQL endpoint rides the
 	// same host (the Nuxt PUBLIC_API_URL), the release-page URLs too.
 	"shiza": {"https://shizaproject.com"},
+	// animeheaven (PR126): the site root — every leg (fastsearch,
+	// anime.php, gate.php) hangs off the one base_url literal, and the
+	// Referer derives from it.
+	"animeheaven": {"https://animeheaven.me"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

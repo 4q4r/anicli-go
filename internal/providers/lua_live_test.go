@@ -72,6 +72,7 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// proxy (the direct route does not resolve on the
 		// characterization network) — run with ANICLI_LUA_LIVE_PROXY.
 		"animevost": "naruto",
+		"anilib":    "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

@@ -18,7 +18,10 @@ import (
 
 // TestAnilibDropsLogThroughInjectedLogger (PR62 #4): the contentless
 // drop line rides the provider's injected logger — the TUI's file
-// logger — and never the slog default (stderr).
+// logger — and never the slog default (stderr). PR122: anilib runs as
+// the bundled Lua script; the injection is the construction-time
+// engine logger (what the registry threads — the Lua equivalent of
+// the Base seam), and the script's anicli.log.info routes there.
 func TestAnilibDropsLogThroughInjectedLogger(t *testing.T) {
 	var injected bytes.Buffer
 	base := anilibMuxFixtureServer(t, map[string][]byte{
@@ -31,8 +34,8 @@ func TestAnilibDropsLogThroughInjectedLogger(t *testing.T) {
 		"/episodes?anime_id=5317":  fixture(t, "anilib_episodes.json"),
 		"/episodes/13":             fixture(t, "anilib_episode_players.json"),
 	}, nil)
-	p := newAnilib(base, testClient(t, "anilib"))
-	p.SetLogger(slog.New(slog.NewTextHandler(&injected, nil)))
+	p := luaProviderWithLogger(t, "anilib", base,
+		slog.New(slog.NewTextHandler(&injected, nil)))
 
 	if _, err := p.Search(context.Background(), "black lagoon"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -67,15 +70,15 @@ func TestRegistryWiresProviderLogger(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close() })
 
-	p, ok := reg.Get("anilib")
+	p, ok := reg.Get("animego")
 	if !ok {
-		t.Fatalf("anilib not registered")
+		t.Fatalf("animego not registered")
 	}
-	al, ok := bareProvider(p).(*Anilib)
+	ag, ok := bareProvider(p).(*AnimeGo)
 	if !ok {
-		t.Fatalf("bare anilib expected, got %T", bareProvider(p))
+		t.Fatalf("bare animego expected, got %T", bareProvider(p))
 	}
-	if al.logger == nil {
+	if ag.logger == nil {
 		t.Fatalf("the registry must inject the provider logger into the Base seam")
 	}
 

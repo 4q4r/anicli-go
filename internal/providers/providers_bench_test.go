@@ -180,12 +180,14 @@ var benchSinkRatio float64
 // --- loopback Search benches (full provider parse path, no TLS/site) ---
 
 // BenchmarkAnilibSearch — anilib (anilibria.tv JSON API search card
-// list) over the live Black Lagoon capture.
+// list) over the live Black Lagoon capture. PR122: the bundled Lua
+// script is the production path — the bench drives it (the sequential
+// contentless preflight rides the same stub).
 func BenchmarkAnilibSearch(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anilib_search_black_lagoon.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newAnilib(srv.URL, benchClient(b, "anilib"))
+	p := luaProvider(b, "anilib", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "black lagoon")
@@ -266,7 +268,7 @@ func BenchmarkAnilibGetEpisodes(b *testing.B) {
 		}
 	}))
 	b.Cleanup(srv.Close)
-	p := newAnilib(srv.URL, benchClient(b, "anilib"))
+	p := luaProvider(b, "anilib", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		eps, err := p.GetEpisodes(ctx, "https://anilib.me/ru/anime/1-black-lagoon")

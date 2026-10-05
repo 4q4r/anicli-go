@@ -47,9 +47,13 @@ var allFactories = []struct {
 	// answers through the configured proxy; the Go transport escape
 	// hatch died with the file.
 	{"animevost", true, nil},
-	{"anilib", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnilib(AnilibAPIBase, http)
-	}},
+	// anilib (PR122): the api.cdnlibs.org JSON API migrated to the
+	// BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anilib/main.lua) — the sixth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script carries the browser header set, the sequential PR53
+	// contentless preflight and the PR44 release-dub-keys tier-1.
+	{"anilib", true, nil},
 	{"animego", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimego(AnimeGoBase, http)
 	}},

@@ -13,6 +13,15 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
+// anilib runs as the BUNDLED LUA SCRIPT (PR122:
+// internal/luaproviders/scripts/anilib/main.lua) — these tests pin the
+// script through the same contracts.Provider surface and the same
+// fixture captures the compiled Go implementation was held to. The
+// Lua streams() leg ALWAYS re-fetches the episode detail (the
+// fresh-sandbox state contract: raw_id is the bare episode id) — the
+// resolve pins adapt accordingly, the search/episode pins are
+// verbatim.
+
 func TestAnilibSearch(t *testing.T) {
 	t.Parallel()
 
@@ -51,7 +60,7 @@ func TestAnilibSearch(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	results, err := p.Search(context.Background(), "naruto")
 	if err != nil {
@@ -171,7 +180,7 @@ func TestAnilibSearchFiltersContentlessReleases(t *testing.T) {
 		"/episodes?anime_id=5317":  fixture(t, "anilib_episodes.json"),
 		"/episodes/13":             fixture(t, "anilib_episode_players.json"),
 	}, &paths)
-	p := newAnilib(base, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", base)
 
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
@@ -220,7 +229,7 @@ func TestAnilibSearchPreflightFailureFailsOpen(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
@@ -237,8 +246,8 @@ func TestAnilibSearchQueryUnquoteSemantics(t *testing.T) {
 	// Python sends ("q", unquote(query)) (anilib.py:50): the query is
 	// percent-DECODED first, then re-encoded by the request layer.
 	// unquote leaves a literal "+" untouched, so requests puts q=foo%2Bbar
-	// on the wire. The Go twin of unquote is url.PathUnescape (Query-
-	// Unescape would decode "+" to a space).
+	// on the wire. The script's unquote is the same behavioral twin
+	// (QueryUnescape would decode "+" to a space and diverge).
 	tests := []struct {
 		name  string
 		query string
@@ -254,7 +263,7 @@ func TestAnilibSearchQueryUnquoteSemantics(t *testing.T) {
 			srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprint(w, `{"data": []}`)
 			})
-			p := newAnilib(srv.URL, testClient(t, "anilib"))
+			p := luaProvider(t, "anilib", srv.URL)
 
 			if _, err := p.Search(context.Background(), tt.query); err != nil {
 				t.Fatalf("Search: %v", err)
@@ -277,13 +286,14 @@ func TestAnilibSearchSendsSiteHeaders(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"data": []}`)
 	})
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	if _, err := p.Search(context.Background(), "q"); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 
-	// The load-bearing header set from anilib.py:27-41.
+	// The load-bearing header set from anilib.py:27-41, carried by the
+	// script verbatim on every request (the API 403s without it).
 	for header, want := range map[string]string{
 		"Authority":          "api.cdnlibs.org",
 		"Origin":             "https://animelib.me",
@@ -311,7 +321,7 @@ func TestAnilibSearchHTTPErrorReturnsEmpty(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	results, err := p.Search(context.Background(), "q")
 	if err != nil {
@@ -339,7 +349,7 @@ func TestAnilibGetEpisodes(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
+	p := luaProvider(t, "anilib", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "16488--bleach-sennen-kessen-hen")
 	if err != nil {
@@ -387,60 +397,38 @@ func TestAnilibGetEpisodes(t *testing.T) {
 	}
 }
 
-func TestAnilibFetchDubs(t *testing.T) {
-	t.Parallel()
-
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture(t, "anilib_episode_players.json"))
-	})
-	p := newAnilib(srv.URL, testClient(t, "anilib"))
-
-	episode := contracts.Episode{Num: "1", RawID: "11", RawEmbeds: map[string][]string{}}
-	got, err := p.FetchDubs(context.Background(), &episode)
-	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-	if got != &episode {
-		t.Fatal("FetchDubs must return the same episode pointer")
-	}
-	if rec.Path != "/episodes/11" {
-		t.Errorf("request path = %q, want /episodes/11", rec.Path)
-	}
-
-	embeds := episode.RawEmbeds
-	if len(embeds) != 2 {
-		t.Fatalf("embeds = %v, want 2 dubs", embeds)
-	}
-	internal, ok := embeds["AniLib (AnimeLib)"]
-	if !ok {
-		t.Fatalf("embeds = %v, want key 'AniLib (AnimeLib)' (team + player)", embeds)
-	}
-	if len(internal) != 1 {
-		t.Fatalf("internal embed = %v, want one payload", internal)
-	}
-	if !strings.HasPrefix(internal[0], "internal:") {
-		t.Errorf("internal embed = %q, want internal: prefix", internal[0])
-	}
-	kodik, ok := embeds["Studio Band (Kodik)"]
-	if !ok || len(kodik) != 1 || kodik[0] != "//kodik.info/serial/12345/xyz/720p" {
-		t.Errorf("kodik embed = %v", embeds["Studio Band (Kodik)"])
-	}
+// anilibPlayersJSON builds the /episodes/{id} players detail with a
+// Kodik src pointed at base (the script absolutizes "//"-srcs, so the
+// fixture src rides the stub server, never the live CDN).
+func anilibPlayersJSON(base string) string {
+	return fmt.Sprintf(`{"data":{"players":[
+		{"team":{"name":"AniLib"},"player":"AnimeLib","video":{"quality":[
+			{"href":"bleach/ep1_1080.m3u8","quality":1080},
+			{"href":"bleach/ep1_720.m3u8","quality":720},
+			{"href":"bleach/ep1_default.m3u8"}]}},
+		{"team":{"name":"Studio Band"},"player":"Kodik","src":"%s/kodik/serial/12345/xyz/720p"}]}}`, base)
 }
 
 func TestAnilibResolveStreamInternal(t *testing.T) {
 	t.Parallel()
 
-	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
-	episode := contracts.Episode{
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, anilibPlayersJSON("https://kodik.example"))
+	}))
+	t.Cleanup(srv.Close)
+	p := luaProvider(t, "anilib", srv.URL)
+
+	// The fresh-sandbox contract: streams() re-fetches the episode
+	// detail from the bare raw_id — the episode's cached embeds (if
+	// any) are never trusted (PR111 always-fresh).
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{
 		Num:   "1",
 		RawID: "11",
 		RawEmbeds: map[string][]string{
-			"AniLib (AnimeLib)": {`internal:{"quality":[{"href":"bleach/ep1_1080.m3u8","quality":1080},{"href":"bleach/ep1_720.m3u8","quality":720},{"href":"bleach/ep1_default.m3u8"}]}`},
+			"AniLib (AnimeLib)": {},
 		},
-	}
-
-	stream, err := p.ResolveStream(context.Background(), episode, "AniLib (AnimeLib)")
+	}, "AniLib (AnimeLib)")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -484,22 +472,26 @@ func TestAnilibResolveStreamKodikRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ftor" {
+		switch r.URL.Path {
+		case "/ftor":
 			_, _ = fmt.Fprint(w, `{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`)
-			return
+		case "/episodes/11":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, anilibPlayersJSON(srvURL(t, r)))
+		default:
+			_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
 		}
-		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
-	episode := contracts.Episode{
+	p := luaProvider(t, "anilib", srv.URL)
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{
+		Num:   "1",
+		RawID: "11",
 		RawEmbeds: map[string][]string{
-			"Studio Band (Kodik)": {srv.URL + "/kodik/serial/12345/xyz/720p"},
+			"Studio Band (Kodik)": {},
 		},
-	}
-
-	stream, err := p.ResolveStream(context.Background(), episode, "Studio Band (Kodik)")
+	}, "Studio Band (Kodik)")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -508,20 +500,35 @@ func TestAnilibResolveStreamKodikRoundTrip(t *testing.T) {
 	}
 }
 
+// srvURL recovers the fixture server's base from an incoming request
+// (the kodik src must ride the stub host — see anilibPlayersJSON).
+func srvURL(t *testing.T, r *http.Request) string {
+	t.Helper()
+	return "http://" + r.Host
+}
+
 // TestAnilibResolveStreamProtocolRelativeKodik pins the "//" prefix
 // normalization (anilib.py:161) against a dead endpoint: the absolutized
 // https URL fails transport-side and the extractor-tagged error surfaces.
 func TestAnilibResolveStreamProtocolRelativeKodikFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
-	episode := contracts.Episode{
-		RawEmbeds: map[string][]string{
-			"D (Kodik)": {"//" + newDeadListener(t).Addr().String() + "/kodik/e/9"},
-		},
-	}
+	dead := newDeadListener(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":{"players":[
+			{"team":{"name":"D"},"player":"Kodik","src":"//%s/kodik/e/9"}]}}`, dead.Addr().String())
+	}))
+	t.Cleanup(srv.Close)
 
-	_, err := p.ResolveStream(context.Background(), episode, "D (Kodik)")
+	p := luaProvider(t, "anilib", srv.URL)
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{
+		Num:   "1",
+		RawID: "11",
+		RawEmbeds: map[string][]string{
+			"D (Kodik)": {},
+		},
+	}, "D (Kodik)")
 	if err == nil {
 		t.Fatal("error = nil, want the transport failure of the absolutized https URL")
 	}
@@ -533,14 +540,21 @@ func TestAnilibResolveStreamProtocolRelativeKodikFailsLoud(t *testing.T) {
 func TestAnilibResolveStreamUnknownDubIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
-	episode := contracts.Episode{
-		RawEmbeds: map[string][]string{
-			"AniLib (AnimeLib)": {`internal:{"quality":[]}`},
-		},
-	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, anilibPlayersJSON("https://kodik.example"))
+	}))
+	t.Cleanup(srv.Close)
 
-	stream, err := p.ResolveStream(context.Background(), episode, "NoSuchDub")
+	p := luaProvider(t, "anilib", srv.URL)
+
+	stream, err := p.ResolveStream(context.Background(), contracts.Episode{
+		Num:   "1",
+		RawID: "11",
+		RawEmbeds: map[string][]string{
+			"AniLib (AnimeLib)": {},
+		},
+	}, "NoSuchDub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -552,8 +566,8 @@ func TestAnilibResolveStreamUnknownDubIsEmpty(t *testing.T) {
 func TestAnilibProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnilib(AnilibAPIBase, testClient(t, "anilib"))
-	if p.ID() != "anilib" || p.Name() != "AnimeLib" || p.BaseURL() != AnilibAPIBase {
+	p := luaProviderAtProduction(t, "anilib")
+	if p.ID() != "anilib" || p.Name() != "AnimeLib" || p.BaseURL() != "https://api.cdnlibs.org/api" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {

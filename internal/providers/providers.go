@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -86,38 +85,14 @@ var formContentType = map[string]string{"Content-Type": "application/x-www-form-
 
 // pythonStr ports Python's str() over a JSON number field: the wire
 // literal is preserved ("1" stays "1", "1.5" stays "1.5"), and a missing
-// field yields "None" exactly like str(None) on a JSON null (this is
-// load-bearing for anilib, where episode "number": null sorts as "None"
-// → key 0 in the Python episode sort).
+// field yields "None" exactly like str(None) on a JSON null (this was
+// load-bearing for anilib, whose Lua script renders the same "None"
+// numbering; animevost/anilibria/yummy keep the Go shape).
 func pythonStr(n json.Number) string {
 	if n == "" {
 		return "None"
 	}
 	return n.String()
-}
-
-// pythonFloatKey ports the Python episode sort keys of the form
-//
-//	float(x.num) if x.num.replace('.', '', 1).isdigit() else 0
-//
-// (anicli-py anilib.py:114, sovetromantica.py:82): strip the first dot,
-// require at least one remaining digit rune, else the key is 0.
-func pythonFloatKey(num string) float64 {
-	stripped := strings.Replace(num, ".", "", 1)
-	if stripped == "" {
-		return 0
-	}
-	for _, r := range stripped {
-		if r < '0' || r > '9' {
-			return 0
-		}
-	}
-	f, err := strconv.ParseFloat(num, 64)
-	if err != nil {
-		// Guarded by the digit check above (single dot); kept for safety.
-		return 0
-	}
-	return f
 }
 
 // pyQuote ports urllib.parse.quote with its default safe="/" set:

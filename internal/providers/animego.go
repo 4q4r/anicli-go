@@ -305,6 +305,31 @@ func hasAnyEmbedLinks(embeds map[string][]string) bool {
 	return false
 }
 
+// applyReleaseDubKeys distributes the FIRST episode's dub keys onto
+// every other episode of the release as keys with EMPTY link lists
+// (PR44 owner model: the dub-provider list is release-scoped — one
+// request covers it — while the streams are per-episode and resolve
+// on demand). Episodes already carrying a key keep it untouched.
+// PR122: relocated from the deleted anilib.go — animego is the sole
+// remaining consumer (the anilib Lua script implements the same
+// distribution inside its episodes()).
+func applyReleaseDubKeys(episodes []contracts.Episode) {
+	if len(episodes) == 0 {
+		return
+	}
+	first := episodes[0].RawEmbeds
+	for i := 1; i < len(episodes); i++ {
+		if episodes[i].RawEmbeds == nil {
+			episodes[i].RawEmbeds = map[string][]string{}
+		}
+		for dub := range first {
+			if _, ok := episodes[i].RawEmbeds[dub]; !ok {
+				episodes[i].RawEmbeds[dub] = []string{}
+			}
+		}
+	}
+}
+
 // ResolveStream resolves the embed URLs of the chosen dub through the
 // extractor factory; direct media URLs resolve via the factory
 // fallback.

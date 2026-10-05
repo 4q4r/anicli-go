@@ -36,6 +36,11 @@ var luaProductionBases = map[string][]string{
 	// exactly this one).
 	"animevost": {"https://api.animevost.org/v1"},
 	"yummy":     {"https://api.yani.tv", "https://plapi.cdnvideohub.com"},
+	// animego (PR124): the site root — the literal must stay the
+	// script's FIRST occurrence of the domain (the harness rewrites
+	// exactly this one; the Referer header derives from the base_url
+	// local, never a second literal).
+	"animego": {"https://animego.me"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

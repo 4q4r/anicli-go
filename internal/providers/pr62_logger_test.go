@@ -60,7 +60,11 @@ func TestBaseLoggerSeamNeverDefaults(t *testing.T) {
 }
 
 // TestRegistryWiresProviderLogger (PR62 #4): NewRegistry injects the
-// WithProviderLogger sink into every provider carrying the Base seam.
+// WithProviderLogger sink into every provider carrying the Base seam,
+// and every Lua provider carries the SetLogger seam the same loop
+// probes (the engine's construction-time sink is threaded by
+// LoadSources; the behavioral routing pin is
+// TestAnilibDropsLogThroughInjectedLogger).
 func TestRegistryWiresProviderLogger(t *testing.T) {
 	var buf bytes.Buffer
 	reg, err := NewRegistry(config.Default(), nil, WithProviderLogger(
@@ -74,13 +78,14 @@ func TestRegistryWiresProviderLogger(t *testing.T) {
 	if !ok {
 		t.Fatalf("animego not registered")
 	}
-	ag, ok := bareProvider(p).(*AnimeGo)
+	// PR124: animego runs as the bundled Lua script — the registry
+	// wires the sink through the promoted SetLogger seam (nil-degrades
+	// to discard inside the engine, never stderr).
+	lp, ok := bareProvider(p).(interface{ SetLogger(*slog.Logger) })
 	if !ok {
-		t.Fatalf("bare animego expected, got %T", bareProvider(p))
+		t.Fatalf("the animego lua provider must carry the SetLogger seam, got %T", bareProvider(p))
 	}
-	if ag.logger == nil {
-		t.Fatalf("the registry must inject the provider logger into the Base seam")
-	}
+	lp.SetLogger(nil) // the seam must tolerate the nil degrade path
 
 	tp, ok := reg.Get("tokyotosho")
 	if !ok {

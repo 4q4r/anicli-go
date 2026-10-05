@@ -95,7 +95,8 @@ func TestAnilibResolveStreamSelfHydrates(t *testing.T) {
 // TestAnimegoGetEpisodesAppliesReleaseDubList: the same tier over the
 // /player/{id} fragment — the provider buttons ride the SAME response
 // as the episode carousel, so the release's dub list costs zero extra
-// requests.
+// requests. PR124: animego runs as the bundled Lua script; the tier
+// lives in the script's episodes().
 func TestAnimegoGetEpisodesAppliesReleaseDubList(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -106,7 +107,7 @@ func TestAnimegoGetEpisodesAppliesReleaseDubList(t *testing.T) {
 			_, _ = w.Write(fixture(t, "animego_anime.html"))
 		}
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/piraty-chernoy-laguny-2115")
 	if err != nil {
@@ -141,7 +142,7 @@ func TestAnimegoResolveStreamSelfHydrates(t *testing.T) {
 		// direct .m3u8 player URL tagged with the release dub key.
 		_, _ = w.Write([]byte(`{"status":"success","message":null,"data":{"content":"<button data-anime-player-target=\"provider\" data-player=//cdn.example.com/static/ep.m3u8 data-translation-title=\"MC Entertainment\"></button>"}}`))
 	})
-	p := newAnimego(srv.URL, testClient(t, "animego"))
+	p := luaProvider(t, "animego", srv.URL)
 
 	episode := contracts.Episode{
 		Num:   "2",

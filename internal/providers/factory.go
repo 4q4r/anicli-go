@@ -202,19 +202,24 @@ var allFactories = []struct {
 	{"animeheaven", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimeHeaven(AnimeHeavenBase, http)
 	}},
-	// anikoto (PR104): the anikototv.to EN catalog — a HiAnime/Zoro-style
-	// clone (the anikoto.net platform family documented by the AniVault
-	// Scraper and the PyPI anikoto downloader, live-verified 2026-09-25).
-	// Written from the live site; no credentials: /filter?keyword= HTML
-	// search in, the {"status":N,"result":…} AJAX envelope out (episode
-	// list + SUB/DUB server groups + per-server stream resolver), and the
-	// megaplay embed chain statically unpacked — XOR string table, AES-256-CBC
-	// enc decrypt, HMAC-signed CDN URL — without executing any JavaScript.
-	// The controller's /api/search lead is a decoy: the site answers every
-	// parameter with the error envelope.
-	{"anikoto", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniKoto(AniKotoBase, http)
-	}},
+	// anikoto (PR104 → PR127): the anikototv.to EN catalog — a
+	// HiAnime/Zoro-style clone (the anikoto.net platform family
+	// documented by the AniVault Scraper and the PyPI anikoto
+	// downloader, live-verified 2026-09-25). Written from the live site;
+	// no credentials: /filter?keyword= HTML search in, the
+	// {"status":N,"result":…} AJAX envelope out (episode list + SUB/DUB
+	// server groups + per-server stream resolver), and the megaplay
+	// embed chain statically unpacked — XOR string table, AES-256-CBC
+	// enc decrypt, HMAC-signed CDN URL — without executing any
+	// JavaScript. The controller's /api/search lead is a decoy: the site
+	// answers every parameter with the error envelope. Migrated to the
+	// BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anikoto/main.lua) — the eighth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the id (the crypto legs ride the anicli.crypto SDK
+	// primitives, the XOR unpack and the AJAX shapes the script
+	// header).
+	{"anikoto", true, nil},
 	// anipub (PR107): the anipub.xyz EN catalog — an open Express+Mongo
 	// API (github.com/AnimePub/AniPub, the site's own source; the
 	// api. subdomain is static GitHub Pages, the real API rides the

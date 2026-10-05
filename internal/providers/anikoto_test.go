@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,25 @@ import (
 // resolution-chain tests serve them from a local mux with the
 // megaplay origin rewritten to the test server so the whole chain
 // stays offline.
+//
+// PR127: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anikoto/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to.
+
+// akPlayerKey/akPlayerIV/akPlayerSecret/akPlayerTTL are the megaplay
+// player's crypto material the LIVE bundle unpacks to (the test
+// re-encrypts the enc capture with them; the script's static unpack
+// must derive exactly these from the same captured e1-player bundle
+// for the chain to decrypt — the unit-level param pin now rides the
+// whole chain). Public constants embedded in the site's client
+// script, not credentials.
+const (
+	akPlayerKey    = "i?LMTAx0Q6,:}50U"
+	akPlayerIV     = "W0;27ToaUpl_P%'c"
+	akPlayerSecret = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s" //nolint:gosec // the player bundle's public client constant, not a credential
+	akPlayerTTL    = 90
+)
 
 // akTestServer builds a dedicated mux server (NOT the shared
 // fixtureServer recorder — the resolution chain issues several
@@ -83,7 +103,7 @@ func newAkTestServer(t *testing.T) *akTestServer {
 		// therefore re-encrypts the real capture's payload — same
 		// AES-256-CBC scheme, keyed by the REAL unpacked player
 		// parameters — with the file URL pointed at the loopback; the
-		// provider's decrypt/sign legs exercise real crypto either way.
+		// script's decrypt/sign legs exercise real crypto either way.
 		var payload map[string]any
 		if err := json.Unmarshal(fixture(t, "anikoto_getsources.json"), &payload); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -128,11 +148,18 @@ func (s *akTestServer) count() int {
 	return len(s.reqs)
 }
 
+// akProvider loads the bundled anikoto script against the test server
+// (the Lua harness rewrites the production base literal).
+func akProvider(t *testing.T, srv *akTestServer) contracts.Provider {
+	t.Helper()
+	return luaProvider(t, "anikoto", srv.URL)
+}
+
 func TestAniKotoSearch(t *testing.T) {
 	t.Parallel()
 
 	srv := newAkTestServer(t)
-	p := newAniKoto(srv.URL, testClient(t, "anikoto"))
+	p := akProvider(t, srv)
 
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
@@ -160,8 +187,9 @@ func TestAniKotoSearch(t *testing.T) {
 	}
 	// The card links point at /watch/{slug}/ep-1; the provider
 	// canonicalizes onto the bare watch slug so GetEpisodes can fetch
-	// it directly.
-	if first.URL != AniKotoBase+"/watch/black-lagoon-the-second-barrage-omdia" {
+	// it directly (the fixture hrefs carry the production domain —
+	// expectations keep it verbatim).
+	if first.URL != "https://anikototv.to/watch/black-lagoon-the-second-barrage-omdia" {
 		t.Errorf("URL = %q, want the ep-suffix-stripped watch slug", first.URL)
 	}
 	if first.SourceID != "anikoto" {
@@ -181,7 +209,7 @@ func TestAniKotoSearchMiss(t *testing.T) {
 	mux.HandleFunc("/filter", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`<!DOCTYPE html><html><body><div id="list-items" class="ani items"></div></body></html>`))
 	})
-	p := newAniKoto(muxHost(t, mux), testClient(t, "anikoto"))
+	p := luaProvider(t, "anikoto", muxHost(t, mux))
 
 	results, err := p.Search(context.Background(), "zzzz")
 	if err != nil {
@@ -196,7 +224,7 @@ func TestAniKotoGetEpisodes(t *testing.T) {
 	t.Parallel()
 
 	srv := newAkTestServer(t)
-	p := newAniKoto(srv.URL, testClient(t, "anikoto"))
+	p := akProvider(t, srv)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/watch/black-lagoon-the-second-barrage-omdia/ep-1")
 	if err != nil {
@@ -240,45 +268,51 @@ func TestAniKotoGetEpisodes(t *testing.T) {
 	if episodes[0].Num != "1" {
 		t.Errorf("Num = %q, want 1", episodes[0].Num)
 	}
+	if episodes[0].Title != "The Vampire Twins Comen" {
+		t.Errorf("Title = %q, want the li[title] text", episodes[0].Title)
+	}
 	// RawID composes "{ep data-id}:{data-ids}" — both halves present.
 	if !strings.Contains(episodes[0].RawID, "23918:") {
 		t.Errorf("RawID = %q, want the ep data-id prefix 23918:", episodes[0].RawID)
 	}
-	// The dub list hydrates lazily (DubsHydrator): episodes arrive
-	// with empty embeds.
-	if len(episodes[0].RawEmbeds) != 0 {
-		t.Errorf("RawEmbeds = %v, want empty (lazy hydration)", episodes[0].RawEmbeds)
-	}
 }
 
-func TestAniKotoFetchDubs(t *testing.T) {
+// TestAniKotoEpisodeDubs pins the dub hydration. The Lua contract has
+// no DubsHydrator capability — the script hydrates the server groups
+// EAGERLY per episode (the yummy/animedia precedent), so every episode
+// surfaces its SUB/DUB server link-ids straight from the listing.
+func TestAniKotoEpisodeDubs(t *testing.T) {
 	t.Parallel()
 
 	srv := newAkTestServer(t)
-	p := newAniKoto(srv.URL, testClient(t, "anikoto"))
+	p := akProvider(t, srv)
 
-	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
-	hydrated, err := p.FetchDubs(context.Background(), &ep)
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/watch/black-lagoon-the-second-barrage-omdia/ep-1")
 	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
+		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	req := srv.last()
-	if req.Path != "/ajax/server/list" {
-		t.Errorf("path = %q, want /ajax/server/list", req.Path)
+	var serversReq *akRecordedRequest
+	for i := range srv.reqs {
+		if srv.reqs[i].Path == "/ajax/server/list" {
+			serversReq = &srv.reqs[i]
+		}
 	}
-	if req.Header.Get("X-Requested-With") != "XMLHttpRequest" {
-		t.Errorf("X-Requested-With = %q", req.Header.Get("X-Requested-With"))
+	if serversReq == nil {
+		t.Fatal("the ajax server list was never fetched")
+	}
+	if serversReq.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+		t.Errorf("X-Requested-With = %q", serversReq.Header.Get("X-Requested-With"))
 	}
 
 	// The site's own audio axis: one SUB group and one DUB group, each
 	// with the fixture's four servers (Vidstream-2, Vidstream-1 beta,
-	// HD-1, HD-2) — the values are the per-server link-ids
-	// ResolveStream consumes.
+	// HD-1, HD-2) — the values are the per-server link-ids the
+	// resolver consumes.
 	for _, dub := range []string{"SUB", "DUB"} {
-		links, ok := hydrated.RawEmbeds[dub]
+		links, ok := episodes[0].RawEmbeds[dub]
 		if !ok {
-			t.Fatalf("RawEmbeds missing %q: %v", dub, hydrated.RawEmbeds)
+			t.Fatalf("RawEmbeds missing %q: %v", dub, episodes[0].RawEmbeds)
 		}
 		if len(links) != 4 {
 			t.Errorf("RawEmbeds[%q] = %d links, want 4 servers", dub, len(links))
@@ -286,28 +320,18 @@ func TestAniKotoFetchDubs(t *testing.T) {
 	}
 }
 
-func TestAniKotoFetchDubsBadRawID(t *testing.T) {
-	t.Parallel()
-
-	p := newAniKoto(AniKotoBase, testClient(t, "anikoto"))
-	_, err := p.FetchDubs(context.Background(), &contracts.Episode{Num: "1", RawID: "no-colon-here"})
-	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Errorf("err = %v, want ErrInvalidInput", err)
-	}
-}
-
 func TestAniKotoResolveStream(t *testing.T) {
 	t.Parallel()
 
 	srv := newAkTestServer(t)
-	p := newAniKoto(srv.URL, testClient(t, "anikoto"))
+	p := akProvider(t, srv)
 
-	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
-	if _, err := p.FetchDubs(context.Background(), &ep); err != nil {
-		t.Fatalf("FetchDubs: %v", err)
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/watch/black-lagoon-the-second-barrage-omdia/ep-1")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	stream, err := p.ResolveStream(context.Background(), ep, "SUB")
+	stream, err := p.ResolveStream(context.Background(), episodes[0], "SUB")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -363,32 +387,80 @@ func TestAniKotoResolveStream(t *testing.T) {
 		t.Errorf("DubName = %q, want SUB", stream.DubName)
 	}
 
-	// The manifest request must carry the HMAC token: a signing
-	// regression to plain passthrough must fail the chain, not just
-	// the unit-level format pin.
+	// The manifest request must carry the HMAC token, and the token
+	// must have the player's exact shape: b64url("{expires}|{h1}/{h2}")
+	// . b64url(HMAC-SHA256) — a signing regression to plain passthrough
+	// must fail here, and a malformed message dies the decode.
+	token := akManifestToken(t, srv)
+	msgB64, sigB64, ok := strings.Cut(token, ".")
+	if !ok || msgB64 == "" || sigB64 == "" {
+		t.Fatalf("token = %q, want msg.sig base64url halves", token)
+	}
+	msg, err := base64.RawURLEncoding.DecodeString(msgB64)
+	if err != nil {
+		t.Fatalf("token message %q does not base64url-decode: %v", msgB64, err)
+	}
+	const (
+		h1 = "577bcc914f9e55d5e4e4f82f9f00e7d4"
+		h2 = "0c06a5a3738e876160b5db4319d5d12a"
+	)
+	if !strings.HasPrefix(string(msg), "1") || !strings.HasSuffix(string(msg), "|"+h1+"/"+h2) {
+		t.Errorf("token message = %q, want \"{expires}|%s/%s\"", msg, h1, h2)
+	}
+	expires, err := strconv.ParseInt(string(msg[:strings.IndexByte(string(msg), '|')]), 10, 64)
+	if err != nil {
+		t.Fatalf("token message %q carries no numeric expiry", msg)
+	}
+	if now := time.Now().Unix(); expires < now || expires > now+int64(akPlayerTTL)+5 {
+		t.Errorf("token expiry %d outside [now, now+%d]", expires, akPlayerTTL)
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(sigB64); err != nil {
+		t.Errorf("token signature %q does not base64url-decode: %v", sigB64, err)
+	}
+}
+
+// akManifestToken extracts the token= query value of the recorded
+// master.m3u8 request (the signing regression detector).
+func akManifestToken(t *testing.T, srv *akTestServer) string {
+	t.Helper()
 	for _, req := range srv.reqs {
 		if strings.HasPrefix(req.Path, "/anime/577bcc914f9e55d5e4e4f82f9f00e7d4/") {
-			if !strings.Contains(req.Query, "token=") {
-				t.Errorf("master.m3u8 query = %q, want the HMAC token", req.Query)
+			const marker = "token="
+			at := strings.Index(req.Query, marker)
+			if at < 0 {
+				t.Fatalf("master.m3u8 query = %q, want the HMAC token", req.Query)
 			}
-			return
+			return req.Query[at+len(marker):]
 		}
 	}
 	t.Fatal("the master.m3u8 request was never recorded")
+	return ""
 }
 
 func TestAniKotoResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
 	srv := newAkTestServer(t)
-	p := newAniKoto(srv.URL, testClient(t, "anikoto"))
+	p := akProvider(t, srv)
 
-	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
-	if _, err := p.FetchDubs(context.Background(), &ep); err != nil {
-		t.Fatalf("FetchDubs: %v", err)
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/watch/black-lagoon-the-second-barrage-omdia/ep-1")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	_, err := p.ResolveStream(context.Background(), ep, "Дубляж")
+	_, err = p.ResolveStream(context.Background(), episodes[0], "Дубляж")
+	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
+		t.Errorf("err = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestAniKotoResolveStreamBadRawID(t *testing.T) {
+	t.Parallel()
+
+	// A RawID without the {ep-id}:{data-ids} shape is a caller bug —
+	// typed invalid input, no fetch.
+	p := akProvider(t, newAkTestServer(t))
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "no-colon-here"}, "SUB")
 	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
 		t.Errorf("err = %v, want ErrInvalidInput", err)
 	}
@@ -407,13 +479,9 @@ func TestAniKotoResolveStreamAllServersDead(t *testing.T) {
 	mux.HandleFunc("/ajax/server", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"status":500,"result":"Bad request"}`))
 	})
-	p := newAniKoto(muxHost(t, mux), testClient(t, "anikoto"))
+	p := luaProvider(t, "anikoto", muxHost(t, mux))
 
 	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
-	if _, err := p.FetchDubs(context.Background(), &ep); err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-
 	_, err := p.ResolveStream(context.Background(), ep, "SUB")
 	if err == nil {
 		t.Fatal("err = nil, want the all-servers-dead failure")
@@ -438,7 +506,7 @@ func TestAniKotoAjaxEnvelopeError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":500,"result":"Bad request"}`))
 	})
 	host := muxHost(t, mux)
-	p := newAniKoto(host, testClient(t, "anikoto"))
+	p := luaProvider(t, "anikoto", host)
 
 	_, err := p.GetEpisodes(context.Background(), host+"/watch/x")
 	if err == nil {
@@ -452,143 +520,64 @@ func TestAniKotoAjaxEnvelopeError(t *testing.T) {
 	}
 }
 
-func TestAniKotoUnpackShortPayloadTypedError(t *testing.T) {
+func TestAniKotoHostileBundleTypedError(t *testing.T) {
 	t.Parallel()
 
-	// A hostile/rotated bundle can match all three wrapper regexes yet
-	// carry a payload shorter than the known plaintext prefix: the
-	// unpack must fail TYPED, never index out of range (the reviewer
-	// reproduced a SIGSEGV here on a 2-byte payload).
-	script := `let o;return eval("W})(\"ab\")");`
-	_, err := akUnpackPlayerStrings(script)
+	// A hostile/rotated bundle can match the wrapper shape yet carry a
+	// payload shorter than the known plaintext prefix: the unpack must
+	// fail TYPED inside the chain, never panic (the reviewer reproduced
+	// a SIGSEGV on a 2-byte payload against the Go implementation). The
+	// fixture legs rewrite the megaplay origin onto the mux so the
+	// chain reaches the bundle on the loopback.
+	mux := http.NewServeMux()
+	rewriteTo := ""
+	serve := func(name string) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			body := string(fixture(t, name))
+			body = strings.ReplaceAll(body, "https://megaplay.buzz", rewriteTo)
+			body = strings.ReplaceAll(body, `https:\/\/megaplay.buzz`, strings.ReplaceAll(rewriteTo, "/", `\/`))
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	mux.HandleFunc("/ajax/server/list", serve("anikoto_servers.json"))
+	mux.HandleFunc("/ajax/server", serve("anikoto_stream.json"))
+	mux.HandleFunc("/stream/s-2/5731/sub", serve("anikoto_megaplay.html"))
+	mux.HandleFunc("/lib/e1-player.min.js", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`let o;return eval("W})(\"ab\")");`))
+	})
+	host := muxHost(t, mux)
+	rewriteTo = host // handlers read it only once requests fly
+	p := luaProvider(t, "anikoto", host)
+
+	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
+	_, err := p.ResolveStream(context.Background(), ep, "SUB")
 	if err == nil {
-		t.Fatal("err = nil, want the short-payload failure")
+		t.Fatal("err = nil, want the hostile-bundle failure")
 	}
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Errorf("err = %v, want ErrExtractFailed", err)
 	}
-	if !strings.Contains(err.Error(), "too short") || !strings.Contains(err.Error(), "2") {
-		t.Errorf("err = %v, want the offending length quoted", err)
-	}
-}
-
-func TestAniKotoPlayerParameters(t *testing.T) {
-	t.Parallel()
-
-	// The REAL obfuscated player bundle (97KB capture): the static
-	// unpack must recover the exact AES key/IV/secret the live chain
-	// used, without ever executing JavaScript.
-	script := string(fixture(t, "anikoto_e1player.js"))
-	params, err := akPlayerParameters(script)
-	if err != nil {
-		t.Fatalf("akPlayerParameters: %v", err)
-	}
-	if params.key != "i?LMTAx0Q6,:}50U" {
-		t.Errorf("key = %q, want the live-captured AES key", params.key)
-	}
-	if params.iv != "W0;27ToaUpl_P%'c" {
-		t.Errorf("iv = %q, want the live-captured AES IV", params.iv)
-	}
-	if params.secret != "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s" {
-		t.Errorf("secret = %q, want the live-captured HMAC secret", params.secret)
-	}
-	if params.ttl != 90 {
-		t.Errorf("ttl = %d, want 90", params.ttl)
-	}
-}
-
-func TestAniKotoDecryptSource(t *testing.T) {
-	t.Parallel()
-
-	// The REAL enc blob of the capture decrypts with the REAL player
-	// parameters to the real master-manifest URL.
-	script := string(fixture(t, "anikoto_e1player.js"))
-	params, err := akPlayerParameters(script)
-	if err != nil {
-		t.Fatalf("akPlayerParameters: %v", err)
-	}
-
-	var payload struct {
-		Enc string `json:"enc"`
-	}
-	if err := json.Unmarshal(fixture(t, "anikoto_getsources.json"), &payload); err != nil {
-		t.Fatalf("getsources fixture: %v", err)
-	}
-
-	file, err := akDecryptSource(payload.Enc, params.key, params.iv)
-	if err != nil {
-		t.Fatalf("akDecryptSource: %v", err)
-	}
-	if file != "https://fetch.nexabloom.top/anime/577bcc914f9e55d5e4e4f82f9f00e7d4/0c06a5a3738e876160b5db4319d5d12a/master.m3u8" {
-		t.Errorf("file = %q, want the live master-manifest URL", file)
-	}
-}
-
-func TestAniKotoSignedURL(t *testing.T) {
-	t.Parallel()
-
-	// The HMAC signing key captured live from the player bundle — a
-	// public constant embedded in the site's client script, not a
-	// credential.
-	const (
-		hmacKey = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"
-		raw     = "https://fetch.nexabloom.top/anime/577bcc914f9e55d5e4e4f82f9f00e7d4/0c06a5a3738e876160b5db4319d5d12a/master.m3u8"
-	)
-	now := time.Unix(1758800000, 0)
-	signed := akSignedURL(raw, hmacKey, 90, now)
-
-	// Token shape: b64url("{expires}|{h1}/{h2}").b64url(hmac) appended
-	// with the right separator; the message timestamps at now+ttl.
-	if !strings.HasPrefix(signed, raw+"?token=") {
-		t.Fatalf("signed = %q, want the raw URL + ?token=", signed)
-	}
-	token := strings.TrimPrefix(signed, raw+"?token=")
-	msgB64, sigB64, ok := strings.Cut(token, ".")
-	if !ok {
-		t.Fatalf("token = %q, want msg.sig", token)
-	}
-	if msgB64 != akTokenMessageB64("1758800090|577bcc914f9e55d5e4e4f82f9f00e7d4/0c06a5a3738e876160b5db4319d5d12a") {
-		t.Errorf("token message mismatch for expires=1758800090")
-	}
-	// The signature runs over the RAW message bytes (the player signs
-	// the message, not its base64 form).
-	if sigB64 != akTokenSignatureB64(hmacKey, "1758800090|577bcc914f9e55d5e4e4f82f9f00e7d4/0c06a5a3738e876160b5db4319d5d12a") {
-		t.Errorf("token signature mismatch")
-	}
-
-	// A URL already carrying a token passes through untouched.
-	already := raw + "?token=abc"
-	if got := akSignedURL(already, hmacKey, 90, now); got != already {
-		t.Errorf("signed = %q, want the pre-tokened URL verbatim", got)
-	}
-	// A URL without the two 32-hex path segments cannot be signed —
-	// returned unchanged (the CDN would reject it; the caller sees the
-	// original).
-	noHex := "https://fetch.nexabloom.top/anime/plain/master.m3u8"
-	if got := akSignedURL(noHex, hmacKey, 90, now); got != noHex {
-		t.Errorf("signed = %q, want the un-signable URL verbatim", got)
+	if !strings.Contains(err.Error(), "too short") {
+		t.Errorf("err = %v, want the short-payload wall quoted", err)
 	}
 }
 
 // akTestEncBlob encrypts file the way the live megaplay player does:
-// AES-256-CBC over `{"file":…}` with the REAL player parameters
-// (unpacked from the captured bundle), PKCS7-padded, URL-safe base64 —
-// the exact inverse of akDecryptSource.
+// AES-256-CBC over `{"file":…}` with the REAL player parameters, PKCS7
+// padded, URL-safe base64 — the exact inverse of the script's decrypt
+// leg (whose static unpack must derive the same parameters from the
+// same captured bundle for the chain to work).
 func akTestEncBlob(t *testing.T, file string) string {
 	t.Helper()
-	params, err := akPlayerParameters(string(fixture(t, "anikoto_e1player.js")))
-	if err != nil {
-		t.Fatalf("player parameters: %v", err)
-	}
 
 	plaintext, err := json.Marshal(map[string]string{"file": file})
 	if err != nil {
 		t.Fatal(err)
 	}
 	kb := make([]byte, 32)
-	copy(kb, params.key)
+	copy(kb, akPlayerKey)
 	ib := make([]byte, 16)
-	copy(ib, params.iv)
+	copy(ib, akPlayerIV)
 
 	pad := 16 - len(plaintext)%16
 	padded := make([]byte, len(plaintext)+pad)
@@ -609,14 +598,20 @@ func akTestEncBlob(t *testing.T, file string) string {
 func TestAniKotoNamePreference(t *testing.T) {
 	t.Parallel()
 
-	p := newAniKoto(AniKotoBase, testClient(t, "anikoto"))
-	if got := p.NamePreference(); got != contracts.NamePrefLatin {
+	p := akProvider(t, newAkTestServer(t))
+	pref, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatalf("the anikoto lua provider lost the NamePreference surface (%T)", p)
+	}
+	if got := pref.NamePreference(); got != contracts.NamePrefLatin {
 		t.Errorf("NamePreference = %v, want NamePrefLatin (EN-only index)", got)
 	}
 }
 
-// akFixtureEpisodeRawID extracts episode 1's provider RawID from the
-// real episodes fixture the same way GetEpisodes composes it.
+// akFixtureEpisodeRawID extracts episode 1's RawID from the real
+// episodes fixture the way the script composes it ({data-id}:
+// {data-ids}) — the fixture-driven tests need the shape without the
+// provider round-trip.
 func akFixtureEpisodeRawID(t *testing.T) string {
 	t.Helper()
 	var env struct {
@@ -625,11 +620,31 @@ func akFixtureEpisodeRawID(t *testing.T) string {
 	if err := json.Unmarshal(fixture(t, "anikoto_episodes.json"), &env); err != nil {
 		t.Fatalf("episodes fixture: %v", err)
 	}
-	id, ids, ok := akFirstEpisodeRef(env.Result)
-	if !ok {
-		t.Fatal("fixture carries no episode anchor")
+	epID, ids := akFixtureFirstAnchor(t, env.Result)
+	return epID + ":" + ids
+}
+
+// akFixtureFirstAnchor pulls data-id/data-ids off the first
+// li[data-html] anchor of the episodes result HTML.
+func akFixtureFirstAnchor(t *testing.T, html string) (epID, ids string) {
+	t.Helper()
+	const anchor = `data-id="23918" data-num="1"`
+	at := strings.Index(html, anchor)
+	if at < 0 {
+		t.Fatalf("episodes fixture carries no episode-1 anchor")
 	}
-	return id + ":" + ids
+	seg := html[at:]
+	const idsKey = `data-ids="`
+	idsAt := strings.Index(seg, idsKey)
+	if idsAt < 0 {
+		t.Fatalf("episode-1 anchor carries no data-ids")
+	}
+	seg = seg[idsAt+len(idsKey):]
+	end := strings.Index(seg, `"`)
+	if end < 0 {
+		t.Fatalf("episode-1 data-ids never closes")
+	}
+	return "23918", seg[:end]
 }
 
 func akContainsPath(paths []string, want string) bool {

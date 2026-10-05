@@ -75,6 +75,10 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"animevost": "naruto",
 		"anilib":    "черная лагуна",
 		"yummy":     "лагуна",
+		// anikoto (PR127): the EN catalog rides the proxy too (the
+		// direct route tarpits on the characterization network — the
+		// compiled provider's route note verbatim).
+		"anikoto": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

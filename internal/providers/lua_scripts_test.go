@@ -36,6 +36,11 @@ var luaProductionBases = map[string][]string{
 	// exactly this one).
 	"animevost": {"https://api.animevost.org/v1"},
 	"yummy":     {"https://api.yani.tv", "https://plapi.cdnvideohub.com"},
+	// anikoto (PR127): the catalog root only. The megaplay embed origin
+	// is never a literal — the script takes the embed URL from the
+	// stream resolver's answer (the fixtures rewrite it to the test
+	// server at serve time).
+	"anikoto": {"https://anikototv.to"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

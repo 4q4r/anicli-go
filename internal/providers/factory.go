@@ -39,7 +39,7 @@ var allFactories = []struct {
 	{"anilibria", true, nil},
 	// animevost (PR46 → PR119): the api.animevost.org JSON API (the
 	// anicli-py animevost.py port) migrated to the BUNDLED LUA SCRIPT
-	// (internal/luaproviders/scripts/animevost/main.lua) — the fourth
+	// (internal/luaproviders/scripts/animevost/main.lua) — the fifth
 	// Go→Lua provider migration. luaOnly pins the roster slot. Live
 	// 2026-10-05: the cert expired 2026-09-20 was renewed and the
 	// Chrome_150 uTLS tarpit that forced the compiled provider's

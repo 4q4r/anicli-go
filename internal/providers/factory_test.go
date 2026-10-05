@@ -33,7 +33,7 @@ func TestAllRosterComplete(t *testing.T) {
 		"sameband", "kodik",
 		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi", "anitokyo",
-		"animevost", "animiku", "anikado", "animevib",
+		"animiku", "anikado", "animevib",
 		"animeheaven", "anikoto", "anipub",
 		"anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}
@@ -115,7 +115,7 @@ func TestNewRegistryWrapsEveryProvider(t *testing.T) {
 		"sameband", "kodik",
 		"anidub", "animedia", "shiza", "yummy", "hdrezka", "anistar",
 		"anifilm", "animemobi", "anitokyo",
-		"animevost", "animiku", "anikado", "animevib",
+		"animiku", "anikado", "animevib",
 		"animeheaven", "anikoto", "anipub",
 		"anilibria-torrent", "animetosho", "tokyotosho", "rutor", "anirena", "subsplease",
 	}

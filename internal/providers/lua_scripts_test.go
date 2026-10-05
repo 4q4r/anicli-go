@@ -27,9 +27,6 @@ var luaProductionBases = map[string]string{
 	"anitokyo":  "https://anitokyo.tv",
 	"animedia":  "https://amd.online",
 	"animevib":  "https://www.animevib.ru",
-	"anitokyo": "https://anitokyo.tv",
-	"animedia": "https://amd.online",
-	"animevib": "https://www.animevib.ru",
 	// animevost (PR119): the JSON API root — the literal must stay the
 	// script's FIRST occurrence of the domain (the harness rewrites
 	// exactly this one).

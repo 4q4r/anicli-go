@@ -37,12 +37,6 @@ var allFactories = []struct {
 	// the script serves the id (the API's per-requester quality
 	// tiering and the 1080p ceiling live in the script header).
 	{"anilibria", true, nil},
-	{"animevost", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimevost(AnimeVostBase, http)
-	}},
-	{"anilibria", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnilibria(AniLibriaAPIBase, AniLibriaHost, http)
-	}},
 	// animevost (PR46 → PR119): the api.animevost.org JSON API (the
 	// anicli-py animevost.py port) migrated to the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/animevost/main.lua) — the fourth

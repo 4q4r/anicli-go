@@ -93,14 +93,16 @@ var allFactories = []struct {
 	// (internal/luaproviders/scripts/animedia/main.lua) — the second
 	// Go→Lua provider migration. luaOnly pins the roster slot.
 	{"animedia", true, nil},
-	// shiza (PR57): the shizaproject.com GraphQL on the anidub stream
-	// plumbing — anonymous catalog search, kodik/sibnet embeds through
-	// the shared extractor factory. No credentials; its torrent
-	// entries are dead (0 seeders, see shiza.go) so no torrent
-	// sibling is registered.
-	{"shiza", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newShiza(ShizaBase, http)
-	}},
+	// shiza (PR57 → PR125): the shizaproject.com GraphQL catalog
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/shiza/main.lua) — the eighth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the id: anonymous catalog search, kodik/sibnet
+	// embeds resolved through the shared extractor factory
+	// (anicli.extract). No credentials; its torrent entries are dead
+	// (0 seeders, see the script header) so no torrent sibling is
+	// registered.
+	{"shiza", true, nil},
 	// yummy (PR68 → PR123): the YummyAnime REST API (api.yani.tv behind
 	// site.yummyani.me) — the first provider ported from the vypivshiy
 	// anicli-api reference library (source/yummy_anime.py), verified

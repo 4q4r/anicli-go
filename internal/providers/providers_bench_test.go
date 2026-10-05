@@ -216,15 +216,16 @@ func BenchmarkAniZoneSearch(b *testing.B) {
 	}
 }
 
-// BenchmarkShizaSearch — shiza.info GraphQL search decode.
+// BenchmarkShizaSearch — shiza GraphQL search decode. PR125: the
+// bundled Lua script is the production path — the bench drives it.
 func BenchmarkShizaSearch(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "shiza_search.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newShiza(srv.URL, benchClient(b, "shiza"))
+	p := luaProvider(b, "shiza", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
-		results, err := p.Search(ctx, "black lagoon")
+		results, err := p.Search(ctx, "черная лагуна")
 		if err != nil {
 			b.Fatalf("shiza search: %v", err)
 		}
@@ -239,7 +240,7 @@ func BenchmarkShizaGetEpisodes(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "shiza_release.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newShiza(srv.URL, benchClient(b, "shiza"))
+	p := luaProvider(b, "shiza", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		eps, err := p.GetEpisodes(ctx, srv.URL+"/releases/black-lagoon-tv")

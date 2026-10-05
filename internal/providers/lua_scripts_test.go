@@ -41,6 +41,9 @@ var luaProductionBases = map[string][]string{
 	// exactly this one; the Referer header derives from the base_url
 	// local, never a second literal).
 	"animego": {"https://animego.me"},
+	// shiza (PR125): the site root — the GraphQL endpoint rides the
+	// same host (the Nuxt PUBLIC_API_URL), the release-page URLs too.
+	"shiza": {"https://shizaproject.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

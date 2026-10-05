@@ -36,6 +36,10 @@ var luaProductionBases = map[string][]string{
 	// exactly this one).
 	"animevost": {"https://api.animevost.org/v1"},
 	"yummy":     {"https://api.yani.tv", "https://plapi.cdnvideohub.com"},
+	// animeheaven (PR126): the site root — every leg (fastsearch,
+	// anime.php, gate.php) hangs off the one base_url literal, and the
+	// Referer derives from it.
+	"animeheaven": {"https://animeheaven.me"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

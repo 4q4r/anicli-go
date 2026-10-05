@@ -187,21 +187,12 @@ var allFactories = []struct {
 	// (internal/luaproviders/scripts/animevib/main.lua) — the third
 	// Go→Lua provider migration. luaOnly pins the roster slot.
 	{"animevib", true, nil},
-	// animeheaven (PR105): the animeheaven.me EN sub-only catalog —
-	// direct-MP4 sources, the roster's first latin stream provider
-	// since anizone. Written against the live site plus the AniVault
-	// scraper family (SH0MIK/Anivault-Scraper, jsmat0m/Anivault-Scraper),
-	// live-verified 2026-09-25; anonymous, NOT behind Cloudflare (the
-	// reference skips FlareSolverr too): /fastsearch.php anchor cards
-	// (id = href query part), /anime.php gateh/gatea episode keys
-	// (the live markup's space-after-paren breaks the reference
-	// regex — ours tolerates it), /gate.php with Cookie: key=<ep key>
-	// → direct mp4 <source>s, first /video.mp4 source wins (the
-	// site's onerror-fallback CDNs 404 when hit directly). No
-	// credentials, no per-provider settings.
-	{"animeheaven", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimeHeaven(AnimeHeavenBase, http)
-	}},
+	// animeheaven (PR105 → PR126): the animeheaven.me EN sub-only
+	// catalog migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animeheaven/main.lua) — direct-MP4
+	// sources (no extract leg), the roster's first latin stream
+	// provider since anizone. luaOnly pins the roster slot.
+	{"animeheaven", true, nil},
 	// anikoto (PR104): the anikototv.to EN catalog — a HiAnime/Zoro-style
 	// clone (the anikoto.net platform family documented by the AniVault
 	// Scraper and the PyPI anikoto downloader, live-verified 2026-09-25).

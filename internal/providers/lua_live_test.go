@@ -75,6 +75,9 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"animevost": "naruto",
 		"anilib":    "черная лагуна",
 		"yummy":     "лагуна",
+		// animeheaven (PR126): the latin index answers the shared EN
+		// probe (verified live 2026-10-05: 3 «black lagoon» cards).
+		"animeheaven": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

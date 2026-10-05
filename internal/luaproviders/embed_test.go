@@ -8,7 +8,8 @@ import (
 // TestSourcesShape pins the embed contract: every entry carries the
 // "bundled" origin label, unique ids, sorted deterministically (the
 // load-precedence order's bundled segment). The migrated roster ids
-// pin as they land (PR116 wave: anitokyo, animedia, animevib).
+// pin as they land (PR116 wave: anitokyo, animedia, animevib;
+// PR120: anilibria).
 func TestSourcesShape(t *testing.T) {
 	srcs := Sources()
 	seen := map[string]bool{}
@@ -29,7 +30,7 @@ func TestSourcesShape(t *testing.T) {
 	if !sort.SliceIsSorted(ids, func(i, j int) bool { return ids[i] < ids[j] }) {
 		t.Errorf("sources not sorted: %v", ids)
 	}
-	for _, want := range []string{"anitokyo", "animedia", "animevib"} {
+	for _, want := range []string{"anilibria", "anitokyo", "animedia", "animevib"} {
 		if !seen[want] {
 			t.Errorf("bundled scripts missing the migrated provider %q (have %v)", want, ids)
 		}

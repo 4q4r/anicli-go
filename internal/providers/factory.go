@@ -337,19 +337,23 @@ func allWithCF(cfg config.Settings, extra []netclient.Option, cf *cfbrowser.Mana
 }
 
 // luaScriptSources assembles the Lua provider script sources in
-// LoadSources precedence order (PR116): the bundled embeds first
-// (lowest precedence), then [providers.lua].dir, then the user
-// config dir (highest — a user script overrides a bundled one by id
-// without a rebuild). Missing dirs scan to nothing.
+// LoadSources precedence order (PR116, order fixed in PR120): the
+// user config dir first (highest precedence), then [providers.lua].dir,
+// then the bundled embeds — LoadSources keeps the FIRST occurrence of
+// an id, so this order is what makes a user script override a bundled
+// one without a rebuild (the documented shadowing contract; the
+// PR116 bundled-first assembly silently inverted it — exposed and
+// fixed when anilibria joined the bundled roster in PR120). Missing
+// dirs scan to nothing.
 func luaScriptSources(cfg config.Settings) []lua.Source {
 	out := make([]lua.Source, 0)
-	out = append(out, luaproviders.Sources()...)
-	if cfg.Providers.Lua.Dir != "" {
-		out = append(out, lua.ScanDir(cfg.Providers.Lua.Dir)...)
-	}
 	if dir, ok := lua.ProvidersDir(); ok {
 		out = append(out, lua.ScanDir(dir)...)
 	}
+	if cfg.Providers.Lua.Dir != "" {
+		out = append(out, lua.ScanDir(cfg.Providers.Lua.Dir)...)
+	}
+	out = append(out, luaproviders.Sources()...)
 	return out
 }
 

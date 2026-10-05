@@ -25,9 +25,11 @@ type Source struct {
 type HTTPFor func(id string) *netclient.Client
 
 // LoadSources loads and validates provider scripts in the caller's
-// precedence order (bundled first, then the user directories): the
-// FIRST occurrence of an id wins and later duplicates become skips —
-// the same-shadowing rule the factory applies against the Go roster.
+// precedence order (highest-precedence caller first — the factory
+// passes the user config dir, then [providers.lua].dir, then the
+// bundled embeds): the FIRST occurrence of an id wins and later
+// duplicates become skips — the same-shadowing rule the factory
+// applies against the Go roster.
 // The returned providers carry the script-declared capability
 // adapters (Adapt) — the exact shape the registry consumes.
 //

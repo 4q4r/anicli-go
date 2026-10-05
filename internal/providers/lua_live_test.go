@@ -75,6 +75,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		"animevost": "naruto",
 		"anilib":    "черная лагуна",
 		"yummy":     "лагуна",
+		// shiza (PR125): the GraphQL catalog answers direct from RU
+		// networks (no Cloudflare challenge, the 2026-09-18 and
+		// 2026-10-05 characterizations) — the default no-proxy route
+		// is its honest one.
+		"shiza": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

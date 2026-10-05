@@ -1,16 +1,24 @@
 package providers
 
-// SHIZA Project (PR57) — shape tests against the live-captured GraphQL
-// fixtures (testdata/shiza_*.json, captured 2026-09-18 from
-// shizaproject.com/graphql with the provider's exact query documents).
-// The request-body assertions pin those query documents: a projection
-// change that silently drifts from the captured shape must fail here.
+// SHIZA Project (PR57) runs as the BUNDLED LUA SCRIPT (PR125:
+// internal/luaproviders/scripts/shiza/main.lua) — these tests pin the
+// script through the same contracts.Provider surface and the same
+// live-captured GraphQL fixtures (testdata/shiza_*.json, captured
+// 2026-09-18 from shizaproject.com/graphql with the provider's exact
+// query documents) the compiled Go implementation was held to.
+//
+// The fresh-sandbox state contract adapts one pin: streams(raw_id,
+// dub) receives only RawID, so raw_id carries the {s, n} state JSON
+// (release slug + episode number) and the resolve leg re-fetches the
+// release detail before extracting (the animedia/anitokyo
+// precedent). The request-body assertions pin the two GraphQL query
+// documents verbatim: a projection change that silently drifts from
+// the captured shape must fail here.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +28,22 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// shizaGraphQLBody mirrors the JSON request the provider must POST.
+// shizaSearchQuery is the exact search document the fixtures were
+// captured with (2026-09-18). Changing it invalidates the fixtures.
+// The script carries the same literal; the test owns the canonical
+// text since the compiled provider is gone.
+const shizaSearchQuery = `query fetchReleases($first: Int, $query: String) { releases(first: $first, query: $query) { edges { node { slug name posters { preview: resize(width: 360, height: 500) { url } } } } } }`
+
+// shizaReleaseQuery is the exact release-detail document the fixtures
+// were captured with (2026-09-18).
+const shizaReleaseQuery = `query fetchRelease($slug: String!) { release(slug: $slug) { viewerInBlockedCountry episodes { number name videos { embedUrl } } } }`
+
+// shizaDub is the single dub key of the provider: a release is one
+// team's dub, whichever embed host carries it. The script's DUB
+// literal must stay identical.
+const shizaDub = "SHIZA Project"
+
+// shizaGraphQLBody mirrors the JSON request the script must POST.
 type shizaGraphQLBody struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables"`
@@ -52,16 +75,52 @@ func shizaServeGraphQL(t *testing.T, response []byte, body **shizaGraphQLBody) (
 	return srv, srv.URL
 }
 
-// shizaSearchQuery is the exact search document the fixtures were
-// captured with (2026-09-18). Changing it invalidates the fixtures.
-// The canonical constants live in shiza.go.
+// shizaStateJSON builds the {e} state JSON the script encodes into
+// raw_id (the fresh-sandbox streams() state carrier: the episode's
+// embed list — the sandbox's only channel for the data the compiled
+// provider read from its in-memory RawEmbeds).
+func shizaStateJSON(embeds []string) (string, error) {
+	b, err := json.Marshal(map[string][]string{"e": embeds})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// TestShizaMeta pins the service-level identity: registration
+// identity, the site root the roster renders, source type, the RU
+// content language and the declared live probe.
+func TestShizaMeta(t *testing.T) {
+	t.Parallel()
+
+	p := luaProviderAtProduction(t, "shiza")
+	if p.ID() != "shiza" || p.Name() != shizaDub {
+		t.Errorf("identity = %q/%q, want shiza/%q", p.ID(), p.Name(), shizaDub)
+	}
+	if p.BaseURL() != "https://shizaproject.com" {
+		t.Errorf("BaseURL = %q, want https://shizaproject.com", p.BaseURL())
+	}
+	if p.SourceType() != contracts.SourceTypeBoth {
+		t.Errorf("SourceType = %q, want both", p.SourceType())
+	}
+	if lc := p.(interface{ ContentLanguage() string }); lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru", lc.ContentLanguage())
+	}
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
+		t.Fatal("shiza lost the SmokeQueryProvider surface")
+	}
+	if got := sq.SmokeQuery(); got != "черная лагуна" {
+		t.Errorf("SmokeQuery = %q, want черная лагуна (the live-matrix probe)", got)
+	}
+}
 
 func TestShizaSearch(t *testing.T) {
 	t.Parallel()
 
 	var body *shizaGraphQLBody
 	srv, _ := shizaServeGraphQL(t, fixture(t, "shiza_search.json"), &body)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	results, err := p.Search(context.Background(), "черная лагуна")
 	if err != nil {
@@ -107,7 +166,7 @@ func TestShizaSearchEmptyQueryRejected(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := shizaServeGraphQL(t, []byte(`{"data":{"releases":{"edges":[]}}}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	results, err := p.Search(context.Background(), "   ")
 	if !errors.Is(err, contracts.ErrInvalidInput) {
@@ -122,7 +181,7 @@ func TestShizaSearchNoResults(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := shizaServeGraphQL(t, []byte(`{"data":{"releases":{"edges":[]}}}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	results, err := p.Search(context.Background(), "несуществующее")
 	if err != nil {
@@ -137,7 +196,7 @@ func TestShizaSearchGraphQLError(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := shizaServeGraphQL(t, []byte(`{"errors":[{"message":"boom"}]}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	results, err := p.Search(context.Background(), "черная лагуна")
 	if err == nil || !strings.Contains(err.Error(), "boom") {
@@ -154,7 +213,7 @@ func TestShizaSearchHTTPStatus(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	if _, err := p.Search(context.Background(), "черная лагуна"); err == nil {
 		t.Fatal("err = nil, want a transport status error")
@@ -166,7 +225,7 @@ func TestShizaGetEpisodes(t *testing.T) {
 
 	var body *shizaGraphQLBody
 	srv, _ := shizaServeGraphQL(t, fixture(t, "shiza_release.json"), &body)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/neon-genesis-evangelion-tv")
 	if err != nil {
@@ -179,11 +238,21 @@ func TestShizaGetEpisodes(t *testing.T) {
 		t.Fatalf("episodes = %d, want 26 (fixture shiza_release.json)", len(episodes))
 	}
 	first := episodes[0]
-	if first.Num != "1" || first.RawID != "1" {
-		t.Errorf("Num/RawID = %q/%q, want 1/1", first.Num, first.RawID)
+	if first.Num != "1" {
+		t.Errorf("Num = %q, want 1", first.Num)
 	}
 	if first.Title != "Нападение покемонов" {
 		t.Errorf("Title = %q", first.Title)
+	}
+	// The raw_id state carrier must round-trip as JSON the streams
+	// call can decode: the episode's embed list rides WITH the id
+	// (the sandbox's only state channel — the compiled provider's
+	// ResolveStream read the same list from memory, making zero
+	// shiza requests per resolve; the site tarpits the 4th GraphQL
+	// POST inside a minute window, so the resolve leg must not
+	// re-fetch).
+	if !strings.Contains(first.RawID, `"e":`) || !strings.Contains(first.RawID, "kodikplayer.com") {
+		t.Errorf("RawID = %q, want the {e} embed-list state JSON", first.RawID)
 	}
 	embeds := first.RawEmbeds[shizaDub]
 	if len(embeds) != 2 {
@@ -210,7 +279,7 @@ func TestShizaGetEpisodes(t *testing.T) {
 func TestShizaGetEpisodesBadURL(t *testing.T) {
 	t.Parallel()
 
-	p := newShiza(ShizaBase, testClient(t, "shiza"))
+	p := luaProviderAtProduction(t, "shiza")
 
 	if _, err := p.GetEpisodes(context.Background(), "https://example.com/anime/xyz"); !errors.Is(err, contracts.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput for a foreign URL", err)
@@ -221,7 +290,7 @@ func TestShizaGetEpisodesNotFound(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := shizaServeGraphQL(t, []byte(`{"data":{"release":null}}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	if _, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/no-such-slug"); !errors.Is(err, contracts.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
@@ -232,7 +301,7 @@ func TestShizaGetEpisodesGeoBlocked(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := shizaServeGraphQL(t, []byte(`{"data":{"release":{"viewerInBlockedCountry":true,"episodes":[]}}}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	if _, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/geo-locked"); !errors.Is(err, contracts.ErrGeoBlocked) {
 		t.Fatalf("err = %v, want ErrGeoBlocked", err)
@@ -242,14 +311,14 @@ func TestShizaGetEpisodesGeoBlocked(t *testing.T) {
 func TestShizaGetEpisodesNullNumberSkipped(t *testing.T) {
 	t.Parallel()
 
-	// A null episode number is not a consumable episode (the Go side
-	// keys episodes by their number string); such entries are skipped
-	// instead of surfacing a "None" episode.
+	// A null episode number is not a consumable episode (the episode
+	// keys off its number); such entries are skipped instead of
+	// surfacing a null-keyed episode.
 	srv, _ := shizaServeGraphQL(t, []byte(`{"data":{"release":{"viewerInBlockedCountry":false,"episodes":[
 		{"number":null,"name":"Анонс","videos":[]},
 		{"number":1,"name":"Эпизод","videos":[{"embedUrl":"https://kodikplayer.com/uv/1/ab/720p"}]}
 	]}}}`), nil)
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/some-slug")
 	if err != nil {
@@ -263,19 +332,26 @@ func TestShizaGetEpisodesNullNumberSkipped(t *testing.T) {
 func TestShizaResolveStream(t *testing.T) {
 	t.Parallel()
 
-	// The sibnet embed of the fixture shape resolves through the shared
-	// extractor factory (anidub pattern): the fake shell page carries
-	// "sibnet" so the extractor's substring gate matches locally.
+	// The streams() leg resolves the embed list carried in the raw_id
+	// state through the shared extractor factory — NO release
+	// re-fetch (the compiled provider's ResolveStream read its
+	// in-memory RawEmbeds without a shiza request; the state JSON is
+	// the sandbox translation of exactly that). The fake shell page
+	// carries "sibnet" so the extractor's substring gate matches
+	// locally.
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, `player = new Playerjs({src: "https://video.sibnet.ru/videos/5228112/ep1.mp4"});`)
+		_, _ = w.Write([]byte(`player = new Playerjs({src: "https://video.sibnet.ru/videos/5228112/ep1.mp4"});`))
 	})
-	p := newShiza(srv.URL, testClient(t, "shiza"))
+	p := luaProvider(t, "shiza", srv.URL)
+	shellURL := srv.URL + "/sibnet/shell.php?videoid=5228112"
+	rawID, err := shizaStateJSON([]string{shellURL})
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
 	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "1",
-		RawEmbeds: map[string][]string{
-			shizaDub: {srv.URL + "/sibnet/shell.php?videoid=5228112"},
-		},
+		Num:       "1",
+		RawID:     rawID,
+		RawEmbeds: map[string][]string{},
 	}
 
 	stream, err := p.ResolveStream(context.Background(), episode, shizaDub)
@@ -297,10 +373,14 @@ func TestShizaResolveStream(t *testing.T) {
 func TestShizaResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
-	p := newShiza(ShizaBase, testClient(t, "shiza"))
+	p := luaProviderAtProduction(t, "shiza")
+	rawID, err := shizaStateJSON([]string{"https://kodikplayer.com/uv/1/ab/720p"})
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
 
 	stream, err := p.ResolveStream(context.Background(),
-		contracts.Episode{RawEmbeds: map[string][]string{}}, "NoSuchDub")
+		contracts.Episode{RawID: rawID, RawEmbeds: map[string][]string{}}, "NoSuchDub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}

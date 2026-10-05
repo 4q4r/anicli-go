@@ -36,6 +36,9 @@ var luaProductionBases = map[string][]string{
 	// exactly this one).
 	"animevost": {"https://api.animevost.org/v1"},
 	"yummy":     {"https://api.yani.tv", "https://plapi.cdnvideohub.com"},
+	// shiza (PR125): the site root — the GraphQL endpoint rides the
+	// same host (the Nuxt PUBLIC_API_URL), the release-page URLs too.
+	"shiza": {"https://shizaproject.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

@@ -199,6 +199,19 @@ func (v *validator) optStr(t *lua.LTable, field, path string) (string, bool, err
 	return string(s), true, nil
 }
 
+// optBool reads an optional boolean field: missing -> (false, false, nil).
+func (v *validator) optBool(t *lua.LTable, field, path string) (bool, bool, error) {
+	val := t.RawGetH(lua.LString(field))
+	if val == lua.LNil {
+		return false, false, nil
+	}
+	b, ok := val.(lua.LBool)
+	if !ok {
+		return false, false, v.errf("%s: expected boolean, got %s", joinPath(path, field), val.Type().String())
+	}
+	return bool(b), true, nil
+}
+
 // strArray reads a required 1..n array of strings; a bad element names
 // its index.
 func (v *validator) strArray(t *lua.LTable, field, path string) ([]string, error) {

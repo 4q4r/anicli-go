@@ -27,6 +27,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/lua"
 	"github.com/an0nx/anicli-go/internal/luaproviders"
 	"github.com/an0nx/anicli-go/internal/netclient"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // kodik (PR140) deliberately has NO entry in the live queries: the
@@ -68,7 +69,23 @@ func liveProvider(t *testing.T, id string) contracts.Provider {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	return p.Adapt()
+	adapted := p.Adapt()
+
+	// Torrent-declared scripts (rutor, PR142): the search surface is
+	// the script's; the engine legs are Go machinery. The production
+	// composition is the factory's luaTorrent adapter over a real
+	// engine — mirrored here so the walk exercises the same
+	// preflight → metadata → resolve chain the registry serves.
+	if declared, ok := adapted.(interface{ Torrent() bool }); ok && declared.Torrent() {
+		transport, err := netclient.New(network, netclient.WithProvider("torrent"))
+		if err != nil {
+			t.Fatalf("torrent netclient: %v", err)
+		}
+		eng := torrent.NewEngine(config.Default().Torrent, transport, nil)
+		t.Cleanup(func() { _ = eng.Close() })
+		return newLuaTorrent(adapted, transport, eng)
+	}
+	return adapted
 }
 
 func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
@@ -177,6 +194,16 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// search leg answered the DLE listing in ~0.5s through the
 		// proxy, live 2026-10-06).
 		"hdrezka": "черная лагуна",
+		// rutor (PR142): the proxy is the honest route (the route
+		// matrix's note, pre-probed 2026-10-06: the direct route does
+		// not even resolve on the characterization network — DNS
+		// failure, the anidub class — while the standard per-provider
+		// netclient answers the search 200 in ~0.3s through the
+		// proxy; the PR87-era uTLS tarpit is gone on the honest
+		// route). The torrent walk (preflight → metadata → resolve)
+		// rides the adapter + engine composition liveProvider builds
+		// for torrent-declared scripts.
+		"rutor": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

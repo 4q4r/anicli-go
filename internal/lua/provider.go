@@ -44,6 +44,10 @@ type Provider struct {
 	contentLang string
 	smokeQuery  string
 	namePref    contracts.NamePreference
+	// torrent marks a torrent-provider script (the rutor PR142
+	// declaration): the factory grafts the Go engine legs onto it
+	// through the providers-package adapter.
+	torrent bool
 }
 
 // Compile-time proof of the consumer-side contract.
@@ -138,6 +142,11 @@ func (e *Engine) LoadProvider(dirID, src string) (*Provider, error) {
 		default:
 			return nil, loadErrf("provider %q: name_preference %q is not one of latin", dirID, pref)
 		}
+	}
+	if torrent, present, err := vld.optBool(tbl, "torrent", "provider"); err != nil {
+		return nil, loadErrf("%v", err)
+	} else if present {
+		p.torrent = torrent
 	}
 
 	return p, nil

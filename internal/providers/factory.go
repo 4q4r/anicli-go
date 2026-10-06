@@ -340,10 +340,15 @@ var allFactories = []struct {
 	// first RU-indexed one (the Jackett rutor.yml recipe, re-verified
 	// live 2026-09-23). Fully anonymous (search and .torrent
 	// downloads); the engine is injected by NewRegistry when
-	// [torrent] is enabled.
-	{"rutor", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newRutor(RutorBase, http, nil)
-	}},
+	// [torrent] is enabled. Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/rutor/main.lua) — the
+	// twenty-fifth Go→Lua provider migration and the FIRST TORRENT
+	// one (PR142). luaOnly pins the roster slot; the script serves
+	// the id and declares torrent = true, so the factory grafts the
+	// shared Go engine legs (the PR66 preflight, the metadata wait,
+	// the loopback resolve) onto it through the luaTorrent adapter —
+	// the engine side (internal/torrent) is untouched.
+	{"rutor", true, nil},
 	// anirena (PR88): the anirena.com search RSS on the same
 	// TorrentBase plumbing — the <enclosure> is the direct
 	// .torrent URL on the site itself, the Anime category scope is
@@ -477,13 +482,15 @@ func providerSettingsFor(cfg config.Settings) lua.SettingsFor {
 // wired to its OWN netclient (the compiled providers' transport
 // isolation) and its OWN settings map (PR140). The [providers].exclude
 // list applies to Lua ids the same way it applies to the Go factories.
-// Returns the providers by id plus their assembly order (tail-append
-// order for non-shadowing ids). A broken script is a skip inside
-// LoadSources — never an error; a client build failure IS an error
-// (the Go factories' fail-loud transport contract).
-func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[string]bool, log *slog.Logger) (map[string]contracts.Provider, []string, error) {
+// Returns the providers by id, the per-id transports (the torrent
+// adapter's preflight rides the same route — PR142), and their
+// assembly order (tail-append order for non-shadowing ids). A broken
+// script is a skip inside LoadSources — never an error; a client
+// build failure IS an error (the Go factories' fail-loud transport
+// contract).
+func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[string]bool, log *slog.Logger) (map[string]contracts.Provider, map[string]*netclient.Client, []string, error) {
 	if !cfg.Providers.Lua.Enabled {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	// First occurrence of an id wins the precedence; only winners
@@ -503,7 +510,7 @@ func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[st
 		opts := append([]netclient.Option{netclient.WithProvider(src.ID)}, extra...)
 		client, err := netclient.New(cfg.Network, opts...)
 		if err != nil {
-			return nil, nil, fmt.Errorf("build lua provider %s client: %w", src.ID, err)
+			return nil, nil, nil, fmt.Errorf("build lua provider %s client: %w", src.ID, err)
 		}
 		clients[src.ID] = client
 	}
@@ -517,7 +524,7 @@ func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[st
 		byID[p.ID()] = p
 		order = append(order, p.ID())
 	}
-	return byID, order, nil
+	return byID, clients, order, nil
 }
 
 // allWithCFDisabled is allWithCF that also returns the
@@ -535,13 +542,37 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 	// PR116: the Lua provider set shadows the compiled Go factories
 	// by id — the script takes the Go slot in roster order, a
 	// non-shadowing id appends at the roster tail.
-	luaByID, luaOrder, err := luaProviders(cfg, extra, excluded, log)
+	luaByID, luaClients, luaOrder, err := luaProviders(cfg, extra, excluded, log)
 	if err != nil {
 		return nil, nil, err
 	}
 	luaPending := make(map[string]bool, len(luaOrder))
 	for _, id := range luaOrder {
 		luaPending[id] = true
+	}
+	// luaTorrentGated records torrent-declared scripts whose slot
+	// dropped for the disabled [torrent] subsystem (the PR142 rule:
+	// the engine is Go infrastructure no script can replace). Their
+	// ids must NOT be un-disabled below — the notice stays.
+	luaTorrentGated := make(map[string]bool)
+
+	// luaTorrentServe wraps a torrent-declared Lua script in the
+	// engine adapter, or reports the slot gated: without the
+	// [torrent] subsystem the provider cannot play anything (the
+	// disabled-table rule — never register a provider that cannot
+	// run), so the slot drops exactly like the compiled torrent
+	// factories' do.
+	luaTorrentServe := func(id string, p contracts.Provider) (contracts.Provider, bool) {
+		declared, ok := p.(interface{ Torrent() bool })
+		if !ok || !declared.Torrent() {
+			return p, true
+		}
+		if !cfg.Torrent.Enabled {
+			luaTorrentGated[id] = true
+			log.Info("provider " + id + ": lua torrent script without the [torrent] subsystem — slot dropped")
+			return nil, false
+		}
+		return newLuaTorrent(p, luaClients[id], nil), true
 	}
 
 	out := make([]contracts.Provider, 0, len(allFactories)+len(luaOrder))
@@ -555,7 +586,9 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 			if !factory.luaOnly {
 				log.Info("provider " + factory.id + " shadowed by its lua script")
 			}
-			out = append(out, lp)
+			if served, ok := luaTorrentServe(factory.id, lp); ok {
+				out = append(out, served)
+			}
 			continue
 		}
 		if factory.luaOnly {
@@ -581,15 +614,19 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 	// assembly order.
 	for _, id := range luaOrder {
 		if luaPending[id] {
-			out = append(out, luaByID[id])
+			if served, ok := luaTorrentServe(id, luaByID[id]); ok {
+				out = append(out, served)
+			}
 		}
 	}
 	// A Lua script serving a normally-unconfigured id (a user kodik
 	// with its own token handling) un-disables that id: the notice
-	// must not fire for a provider that IS active.
+	// must not fire for a provider that IS active. A torrent-gated
+	// script is the exception: its slot dropped (no engine), so the
+	// notice stays (the PR142 rule).
 	disabled := make([]DisabledProvider, 0, len(disabledMap))
 	for _, d := range disabledMap {
-		if _, active := luaByID[d.ID]; active {
+		if _, active := luaByID[d.ID]; active && !luaTorrentGated[d.ID] {
 			continue
 		}
 		disabled = append(disabled, d)

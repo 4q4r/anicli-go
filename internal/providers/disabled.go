@@ -16,9 +16,14 @@ type DisabledProvider struct {
 
 // unconfiguredRules lists every credential-gated provider and the
 // predicate that decides whether it can run. Grow the table as new
-// credentialled providers land.
+// credentialled providers land. The torrent flag marks the
+// [torrent]-subsystem gates (PR142): their missing piece is the Go
+// engine — infrastructure no script can replace — so a serving script
+// does not un-disable them while the subsystem is off (the doctor
+// parity with the factory's slot drop).
 var unconfiguredRules = []struct {
 	id       string
+	torrent  bool
 	disabled func(cfg config.Settings) (reason string, disabled bool)
 }{
 	{
@@ -35,7 +40,8 @@ var unconfiguredRules = []struct {
 		// results resolve through the torrent core — without the
 		// [torrent] subsystem it cannot play anything (kodik-parity:
 		// never register a provider that cannot run).
-		id: "anilibria-torrent",
+		id:      "anilibria-torrent",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -48,7 +54,8 @@ var unconfiguredRules = []struct {
 		// through the torrent core — without the [torrent] subsystem
 		// it cannot play anything (kodik-parity: never register a
 		// provider that cannot run).
-		id: "animetosho",
+		id:      "animetosho",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -61,7 +68,8 @@ var unconfiguredRules = []struct {
 		// through the torrent core — without the [torrent] subsystem
 		// it cannot play anything (kodik-parity: never register a
 		// provider that cannot run).
-		id: "tokyotosho",
+		id:      "tokyotosho",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -74,8 +82,11 @@ var unconfiguredRules = []struct {
 		// downloads), but its results resolve through
 		// the torrent core — without the [torrent] subsystem it
 		// cannot play anything (kodik-parity: never register a
-		// provider that cannot run).
-		id: "rutor",
+		// provider that cannot run). PR142: the provider is the
+		// bundled Lua script now; the gate is unchanged — the engine
+		// is Go infrastructure the script cannot replace.
+		id:      "rutor",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -88,7 +99,8 @@ var unconfiguredRules = []struct {
 		// through the torrent core — without the
 		// [torrent] subsystem it cannot play anything (kodik-parity:
 		// never register a provider that cannot run).
-		id: "anirena",
+		id:      "anirena",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -104,7 +116,8 @@ var unconfiguredRules = []struct {
 		// note (fix/93): the rule was missing from the PR89 branch and
 		// is restored here so the whole torrent family shares the
 		// same behavior.
-		id: "subsplease",
+		id:      "subsplease",
+		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {
 			if !cfg.Torrent.Enabled {
 				return "выключена подсистема [torrent] (torrent.enabled)", true
@@ -183,10 +196,30 @@ func DisabledProvidersFor(cfg config.Settings) []DisabledProvider {
 	}
 	out := make([]DisabledProvider, 0, len(unconfigured))
 	for _, d := range unconfigured {
+		// The torrent gates are the exception (PR142): their missing
+		// piece is the Go engine, which no script serves — a
+		// script-present torrent id with the subsystem off stays in
+		// the disabled set (the factory drops that slot; the parity
+		// with the compiled factories' gate requires it).
+		if torrentGated := torrentRule(d.ID); torrentGated && !cfg.Torrent.Enabled {
+			out = append(out, d)
+			continue
+		}
 		if served[d.ID] {
 			continue
 		}
 		out = append(out, d)
 	}
 	return out
+}
+
+// torrentRule reports whether the id's unconfigured rule is a
+// [torrent]-subsystem gate (false for unknown ids).
+func torrentRule(id string) bool {
+	for _, rule := range unconfiguredRules {
+		if rule.id == id {
+			return rule.torrent
+		}
+	}
+	return false
 }

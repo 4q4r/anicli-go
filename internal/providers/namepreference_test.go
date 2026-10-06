@@ -33,16 +33,25 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 		}
 	}
 
+	// The RU group: anilibria-torrent (compiled Go, PR37) must not
+	// declare the preference at all; rutor (the bundled Lua script
+	// since PR142) declares no name_preference either — its adapted
+	// composite always carries the surface, so the check there is the
+	// VALUE: NamePrefDefault, never the latin preference.
 	for _, id := range []string{"anilibria-torrent", "rutor"} {
 		var p contracts.Provider
 		switch id {
 		case "anilibria-torrent":
 			p = newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, id), nil)
 		case "rutor":
-			p = newRutor(RutorBase, testClient(t, id), nil)
+			p = luaProvider(t, "rutor", luaProductionBases["rutor"][0])
 		}
-		if _, declares := p.(contracts.NamePreferenceProvider); declares {
-			t.Errorf("%s must stay in the RU group (no latin preference declaration)", id)
+		np, declares := p.(contracts.NamePreferenceProvider)
+		if !declares {
+			continue // the compiled no-declaration convention
+		}
+		if got := np.NamePreference(); got != contracts.NamePrefDefault {
+			t.Errorf("%s name preference = %v, want NamePrefDefault (RU group — no latin declaration)", id, got)
 		}
 	}
 }

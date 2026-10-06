@@ -123,6 +123,11 @@ var luaProductionBases = map[string][]string{
 	// rotates mirrors; this literal is whatever the fixtures carry
 	// (rezka-ua.tv, the PR72 serving mirror).
 	"hdrezka": {"https://rezka-ua.tv"},
+	// rutor (PR142): the site root — the Jackett search route hangs
+	// off the one base_url literal, and the protocol-relative
+	// //d.rutor.info download hrefs inherit their scheme from it
+	// (the host rides the href, never a literal).
+	"rutor": {"https://rutor.info"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

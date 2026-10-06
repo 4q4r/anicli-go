@@ -15,6 +15,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // Fixture provenance (PR87): rutor_search_dandadan.html and
@@ -28,6 +29,14 @@ import (
 // sits in its own td ("38.92&nbsp;GB") — td counts vary between rows
 // (the comments cell is optional upstream), so the size is fished by
 // content, never by position.
+//
+// PR142: the search surface is the bundled Lua script
+// (internal/luaproviders/scripts/rutor/main.lua) driven through the
+// luaProductionBases harness; the engine legs (preflight, episodes,
+// stream resolve) ride the luaTorrent adapter over the shared
+// TorrentBase plumbing — the exact production composition the factory
+// assembles. The same fixture captures pin the Lua implementation
+// that pinned the compiled Go provider (the PR87 shapes byte-faithful).
 
 // rutorRow is the real element order of one live search-result row,
 // parameterized for constructed-row tests (the tokyotosho fixture
@@ -77,9 +86,23 @@ func rutorPage(rows ...string) string {
 		strings.Join(rows, "") + `</table></div></body></html>`
 }
 
-func newRutorFixtureAt(t *testing.T, baseURL string) *RuTor {
+// rutorLua loads the bundled script with its production base literal
+// pointed at the fixture server: the Lua-side search surface, exactly
+// what the factory hands to the luaTorrent adapter.
+func rutorLua(t *testing.T, baseURL string) contracts.Provider {
 	t.Helper()
-	return newRutor(baseURL, testClient(t, "rutor"), nil)
+	return luaProvider(t, "rutor", baseURL)
+}
+
+// rutorMigrated is the production composition: the Lua search surface
+// wrapped in the torrent adapter over the shared engine plumbing. The
+// engine may be nil (the adapter then skips the preflight — the same
+// fail-loud-on-use rule the compiled providers kept).
+func rutorMigrated(t *testing.T, baseURL string, engine *torrent.Engine) *luaTorrent {
+	t.Helper()
+	p := newLuaTorrent(rutorLua(t, baseURL), testClient(t, "rutor"), engine)
+	p.preflightTimeout = 2 * time.Second
+	return p
 }
 
 func rutorServer(t *testing.T, body string, hits *int) string {
@@ -103,7 +126,7 @@ func TestRutorSearchParsesHTML(t *testing.T) {
 	t.Parallel()
 
 	srvURL := rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), nil)
-	p := newRutorFixtureAt(t, srvURL)
+	p := rutorLua(t, srvURL)
 	results, err := p.Search(context.Background(), "dandadan")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -173,7 +196,7 @@ func TestRutorSearchRequestParams(t *testing.T) {
 		_, _ = w.Write([]byte(rutorPage(rutorRow("", rutorMagnet1, "Show 1080p", "1.00&nbsp;GB", "5", "1"))))
 	}))
 	t.Cleanup(srv.Close)
-	p := newRutorFixtureAt(t, srv.URL)
+	p := rutorLua(t, srv.URL)
 
 	// The live-verified query form: a Cyrillic multi-word query rides
 	// the search PATH percent-encoded (spaces %20, UTF-8 bytes), the
@@ -193,7 +216,7 @@ func TestRutorSearchEmptyQueryFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newRutorFixtureAt(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), &hits))
+	p := rutorLua(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), &hits))
 	for _, query := range []string{"", "   "} {
 		_, err := p.Search(context.Background(), query)
 		if err == nil {
@@ -217,7 +240,7 @@ func TestRutorSearchEmptyQueryFailsLoud(t *testing.T) {
 func TestRutorSearchZeroResultsIsClean(t *testing.T) {
 	t.Parallel()
 
-	p := newRutorFixtureAt(t, rutorServer(t, string(fixture(t, "rutor_search_empty.html")), nil))
+	p := rutorLua(t, rutorServer(t, string(fixture(t, "rutor_search_empty.html")), nil))
 	results, err := p.Search(context.Background(), "несуществует")
 	if err != nil {
 		t.Fatalf("zero results must not error, got: %v", err)
@@ -227,14 +250,14 @@ func TestRutorSearchZeroResultsIsClean(t *testing.T) {
 	}
 }
 
-// TestRutorSearchToleratesGarbageHTML pins the HTML tolerance: goquery
-// on a non-HTML body matches no rows — that is an empty surface, not
-// a malfunction (HTML parsers never fail loud on bytes; the typed
-// error path is the transport's).
+// TestRutorSearchToleratesGarbageHTML pins the HTML tolerance: the
+// parser on a non-HTML body matches no rows — that is an empty
+// surface, not a malfunction (HTML parsers never fail loud on bytes;
+// the typed error path is the transport's).
 func TestRutorSearchToleratesGarbageHTML(t *testing.T) {
 	t.Parallel()
 
-	p := newRutorFixtureAt(t, rutorServer(t, "this is not html at all", nil))
+	p := rutorLua(t, rutorServer(t, "this is not html at all", nil))
 	results, err := p.Search(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("garbage HTML must not error, got: %v", err)
@@ -251,7 +274,10 @@ func TestRutorSearchHTTPErrorTypedError(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	p := newRutorFixtureAt(t, srv.URL)
+	// The adapter is the provider consumers see: its Search wraps the
+	// transport failure in the rutor-tagged ProviderError (the
+	// compiled provider's rutorGet behavior, byte-faithful).
+	p := rutorMigrated(t, srv.URL, nil)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
@@ -266,7 +292,9 @@ func TestRutorSearchHTTPErrorTypedError(t *testing.T) {
 // TestRutorSearchSeedlessDropped pins the PR44 rule on the live seed
 // fields: a row reporting span.green = 0 is a dead result and is
 // dropped BEFORE the preflight spends a fetch on it; a row with no
-// seed span at all is kept (fail-soft: no field, no filter).
+// seed span at all is kept (fail-soft: no field, no filter). The
+// script applies the rule row-level (the bare harness proves it);
+// the adapter re-applies the family rule defensively.
 func TestRutorSearchSeedlessDropped(t *testing.T) {
 	t.Parallel()
 
@@ -275,7 +303,7 @@ func TestRutorSearchSeedlessDropped(t *testing.T) {
 		rutorRow("//dl.example/b.torrent", rutorMagnet2, "Seedless 1080p", "2.00&nbsp;GB", "0", "3"),
 		rutorRow("//dl.example/c.torrent", rutorMagnet1, "No seed field 1080p", "3.00&nbsp;GB", "", "1"),
 	)
-	p := newRutorFixtureAt(t, rutorServer(t, page, nil))
+	p := rutorLua(t, rutorServer(t, page, nil))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -300,7 +328,7 @@ func TestRutorSearchSkipsLinklessRows(t *testing.T) {
 		rutorRow("", "", "No links 1080p", "2.00&nbsp;GB", "5", "1"),
 		rutorRow("", "magnet:?xt=urn:btih:zzzz", "Broken magnet 1080p", "3.00&nbsp;GB", "5", "1"),
 	)
-	p := newRutorFixtureAt(t, rutorServer(t, page, nil))
+	p := rutorLua(t, rutorServer(t, page, nil))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -319,7 +347,7 @@ func TestRutorSearchMagnetFallback(t *testing.T) {
 	t.Parallel()
 
 	page := rutorPage(rutorRow("", rutorMagnet2, "Magnet only 1080p", "4.00&nbsp;GB", "7", "2"))
-	p := newRutorFixtureAt(t, rutorServer(t, page, nil))
+	p := rutorLua(t, rutorServer(t, page, nil))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -337,8 +365,7 @@ func TestRutorGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 
 	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
 	eng := newOfflineTestEngine(t)
-	t.Cleanup(func() { _ = eng.Close() })
-	p := newRutor(RutorBase, testClient(t, "rutor"), eng)
+	p := rutorMigrated(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), nil), eng)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -358,7 +385,7 @@ func TestRutorGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 func TestRutorCapabilityAndRoster(t *testing.T) {
 	t.Parallel()
 
-	p := newRutorFixtureAt(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), nil))
+	p := rutorMigrated(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), nil), nil)
 	if !p.IsTorrent() {
 		t.Error("rutor must carry the torrent capability")
 	}
@@ -416,6 +443,101 @@ func TestRutorDisabledWhenTorrentOff(t *testing.T) {
 	}
 }
 
+// TestRutorFactoryTorrentOffDropsSlot pins the factory leg of the
+// disabled rule for the Lua-pinned slot: with [torrent] disabled the
+// bundled script does NOT register (the engine is Go infrastructure
+// no script can replace — the "never register a provider that cannot
+// run" ruling), and the provider lands in the registry's disabled set
+// with the torrent reason.
+func TestRutorFactoryTorrentOffDropsSlot(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Torrent.Enabled = false
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(bare) != 24 {
+		t.Fatalf("All() = %d providers, want 24 (the stream roster; every torrent slot drops with [torrent] off — rutor's Lua slot with it)", len(bare))
+	}
+	for _, p := range bare {
+		if p.ID() == "rutor" {
+			t.Fatal("the rutor Lua slot must not register with [torrent] disabled")
+		}
+	}
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+	var found *DisabledProvider
+	for _, d := range reg.Disabled() {
+		if d.ID == "rutor" {
+			dd := d
+			found = &dd
+		}
+	}
+	if found == nil {
+		t.Fatal("rutor must sit in the registry disabled set with [torrent] disabled")
+	}
+	if !strings.Contains(found.Reason, "[torrent]") {
+		t.Errorf("reason = %q, want the torrent-subsystem wording", found.Reason)
+	}
+}
+
+// TestRutorFactoryRegistersTorrentAdapter pins the production
+// composition: All() serves rutor through the torrent adapter (the
+// IsTorrent/SetEngine surfaces), and the registry's torrent-roster
+// check sees it through the wrapper layers.
+func TestRutorFactoryRegistersTorrentAdapter(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var rutor contracts.Provider
+	for _, p := range bare {
+		if p.ID() == "rutor" {
+			rutor = p
+			break
+		}
+	}
+	if rutor == nil {
+		t.Fatal("All() missing the rutor slot")
+	}
+	tp, ok := rutor.(contracts.TorrentProvider)
+	if !ok || !tp.IsTorrent() {
+		t.Fatalf("rutor slot is %T, want the torrent adapter carrying IsTorrent", rutor)
+	}
+	if _, wired := rutor.(interface{ SetEngine(*torrent.Engine) }); !wired {
+		t.Fatalf("rutor slot %T must expose SetEngine (the registry engine injection)", rutor)
+	}
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+	var listed bool
+	for _, id := range reg.TorrentProviderIDs() {
+		if id == "rutor" {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		t.Errorf("TorrentProviderIDs() = %v, want rutor (the capability survives the wrapper layers)", reg.TorrentProviderIDs())
+	}
+}
+
 // --- PR66 preflight pins (the shared TorrentBase mechanism, exercised
 // for rutor's own route): dead hosts dropped BEFORE surfacing,
 // survivors' bytes feed the engine, no double fetch.
@@ -443,7 +565,7 @@ func TestRutorSearchPreflightDropsDeadHosts(t *testing.T) {
 		rutorRow("http://"+dead.Addr().String()+"/dead.torrent", rutorMagnet2, "Dead 1080p", "2.00&nbsp;GB", "5", "1"),
 		rutorRow(live.URL+"/good2.torrent", rutorMagnet1, "Good 2 1080p", "3.00&nbsp;GB", "5", "1"),
 	)
-	p := newRutor(rutorServer(t, page, nil), testClient(t, "rutor"), newOfflineTestEngine(t))
+	p := rutorMigrated(t, rutorServer(t, page, nil), newOfflineTestEngine(t))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -480,7 +602,7 @@ func TestRutorSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
 	var fetches atomic.Int64
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
 	page := rutorPage(rutorRow(live.URL+"/good.torrent", rutorMagnet1, "Good 1080p", "1.00&nbsp;GB", "5", "1"))
-	p := newRutor(rutorServer(t, page, nil), testClient(t, "rutor"), newOfflineTestEngine(t))
+	p := rutorMigrated(t, rutorServer(t, page, nil), newOfflineTestEngine(t))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -527,7 +649,7 @@ func TestRutorSearchPreflightNotMetainfoDropped(t *testing.T) {
 		rutorRow(html.URL+"/wall.torrent", rutorMagnet1, "Wall 1080p", "1.00&nbsp;GB", "5", "1"),
 		rutorRow(live.URL+"/good.torrent", rutorMagnet2, "Good 1080p", "2.00&nbsp;GB", "5", "1"),
 	)
-	p := newRutor(rutorServer(t, page, nil), testClient(t, "rutor"), newOfflineTestEngine(t))
+	p := rutorMigrated(t, rutorServer(t, page, nil), newOfflineTestEngine(t))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -563,7 +685,7 @@ func TestRutorSearchPreflightSlowHostDropped(t *testing.T) {
 		rutorRow(slow.URL+"/slow.torrent", rutorMagnet1, "Slow 1080p", "1.00&nbsp;GB", "5", "1"),
 		rutorRow(live.URL+"/good.torrent", rutorMagnet2, "Good 1080p", "2.00&nbsp;GB", "5", "1"),
 	)
-	p := newRutor(rutorServer(t, page, nil), testClient(t, "rutor"), newOfflineTestEngine(t))
+	p := rutorMigrated(t, rutorServer(t, page, nil), newOfflineTestEngine(t))
 	p.preflightTimeout = 50 * time.Millisecond
 
 	results, err := p.Search(context.Background(), "show")
@@ -583,7 +705,7 @@ func TestRutorSearchPreflightLogsTypedReason(t *testing.T) {
 	dead := newDeadListener(t)
 	deadURL := "http://" + dead.Addr().String() + "/dead.torrent"
 	page := rutorPage(rutorRow(deadURL, rutorMagnet1, "Dead 1080p", "1.00&nbsp;GB", "5", "1"))
-	p := newRutor(rutorServer(t, page, nil), testClient(t, "rutor"), newOfflineTestEngine(t))
+	p := rutorMigrated(t, rutorServer(t, page, nil), newOfflineTestEngine(t))
 
 	var logBuf bytes.Buffer
 	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
@@ -608,7 +730,7 @@ func TestRutorSearchNoEngineSkipsPreflight(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newRutorFixtureAt(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), &hits))
+	p := rutorMigrated(t, rutorServer(t, string(fixture(t, "rutor_search_dandadan.html")), &hits), nil)
 	results, err := p.Search(context.Background(), "dandadan")
 	if err != nil {
 		t.Fatalf("Search: %v", err)

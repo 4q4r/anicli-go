@@ -32,6 +32,11 @@ type adapted struct {
 	contentLang string
 	smokeQuery  string
 	namePref    contracts.NamePreference
+	// torrent is the script's torrent-provider declaration (the rutor
+	// PR142 precedent): the factory reads it to graft the Go engine
+	// legs on; it is NOT the contracts.TorrentProvider capability —
+	// that lives on the factory-built adapter.
+	torrent bool
 }
 
 func (a adapted) ContentLanguage() string { return a.contentLang }
@@ -40,11 +45,18 @@ func (a adapted) NamePreference() contracts.NamePreference { return a.namePref }
 
 func (a adapted) SmokeQuery() string { return a.smokeQuery }
 
+// Torrent reports the script's torrent-provider declaration. A
+// distinct accessor (not IsTorrent) on purpose: the capability the
+// registry duck-types stays on the providers-package adapter, which
+// also carries the engine plumbing — a bare declared script satisfies
+// nothing torrent-shaped.
+func (a adapted) Torrent() bool { return a.torrent }
+
 // Adapt wraps the provider in the capability adapter when the script
 // declared at least one optional surface; bare returns the provider
 // itself.
 func (p *Provider) Adapt() contracts.Provider {
-	if p.contentLang == "" && p.smokeQuery == "" && p.namePref == contracts.NamePrefDefault {
+	if p.contentLang == "" && p.smokeQuery == "" && p.namePref == contracts.NamePrefDefault && !p.torrent {
 		return p
 	}
 	return adapted{
@@ -52,5 +64,6 @@ func (p *Provider) Adapt() contracts.Provider {
 		contentLang: p.contentLang,
 		smokeQuery:  p.smokeQuery,
 		namePref:    p.namePref,
+		torrent:     p.torrent,
 	}
 }

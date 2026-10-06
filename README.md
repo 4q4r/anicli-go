@@ -281,6 +281,11 @@ return {
   name = "My source",         -- optional display name
   base_url = "https://…",     -- optional
   capabilities = "video",     -- optional: "video" | "audio" | "both"
+  torrent = true,             -- optional: a torrent-provider script — the
+                              -- factory grafts the Go engine legs (search-time
+                              -- .torrent preflight, metadata episodes, loopback
+                              -- stream resolve) onto it; the script owns only
+                              -- the search surface (rutor is the bundled example)
 
   search = function(query) … end,
   episodes = function(url) … end,

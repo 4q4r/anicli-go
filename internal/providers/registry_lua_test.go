@@ -59,19 +59,20 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	// rutor (PR141): the shadow sample must be a COMPILED factory —
+	// anirena (PR142): the shadow sample must be a COMPILED factory —
 	// since the PR141 hdrezka migration every stream provider is
-	// Lua-only, and the only compiled factories left are the six
-	// torrent ones. rutor is the sample (fully anonymous, one client
-	// build away once [torrent] is on; the other five behave
-	// identically through the same factory plumbing).
-	dir := filepath.Join(xdg, "anicli", "providers", "rutor")
+	// Lua-only, and since the PR142 rutor migration the only
+	// compiled factories left are the five remaining torrent ones.
+	// anirena is the sample (fully anonymous, one client build away
+	// once [torrent] is on; the other four behave identically through
+	// the same factory plumbing).
+	dir := filepath.Join(xdg, "anicli", "providers", "anirena")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	shadow := `
 	return {
-		id = "rutor",
+		id = "anirena",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
@@ -94,12 +95,12 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("rutor")
+	_, ok := reg.Get("anirena")
 	if !ok {
-		t.Fatal("the shadowed rutor must stay registered (as the Lua script)")
+		t.Fatal("the shadowed anirena must stay registered (as the Lua script)")
 	}
-	if got := reg.ContentLanguage("rutor"); got != "lua-probe" {
-		t.Fatalf("rutor ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("anirena"); got != "lua-probe" {
+		t.Fatalf("anirena ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "shadowed by its lua script") {
 		t.Fatalf("the shadow must be logged, got: %s", buf.String())

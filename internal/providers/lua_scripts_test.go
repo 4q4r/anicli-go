@@ -73,6 +73,11 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal, and the stream Referer
 	// derives from it.
 	"sameband": {"https://sameband.studio"},
+	// anikado (PR133): the site root — every leg (the DLE search POST,
+	// the title page and the per-episode translator pages) hangs off
+	// the one base_url literal; the kodik embeds are never fetched
+	// hosts (the shared extractor consumes them).
+	"anikado": {"https://anikado.net"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

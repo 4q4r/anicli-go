@@ -1,7 +1,56 @@
 package providers
 
+// [LIVE-VERIFIED 2026-09-25, re-verified 2026-10-06 through the direct
+// route] anikado.net is a DataLife Engine install (UTF-8, anonymous,
+// direct 200): search is the DLE search form POST (do=search&
+// subaction=search&story=…, server-rendered cards — live 2026-10-06:
+// «черная лагуна» → «найдено 2 ответ», 2 cards, 0.73s), the title page
+// carries a THREE-tab player block (kodik — active and primary; vkg —
+// a client-side hydrated mali aggregator; tomion — a frame-gated embed
+// that 404s outside its iframe), episode links render server-side on
+// the title page (.flex-episodes-links, live: 12 anchors), and EVERY
+// episode page carries the per-(episode, dub) kodik embed table as
+// b-translator__item rows (live: 4 translators). Movies skip the
+// episode pages: their kodik /video/ embed sits directly in the title
+// page's kodik tab. Streams resolve through the shared kodik extractor
+// (kodik.info embed hosts are normalized onto the interchangeable
+// kodikplayer.com mirror — same /seria/ path answers 200 with the
+// hash-consistent player page). All fixtures below are real captures
+// of 2026-09-25 trimmed to the load-bearing markup, except the walled
+// page, which is derived (provenance noted in the file).
+//
+// PR133: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anikado/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to. Contract shifts
+// forced by the fresh-sandbox Lua adapter (the animedia/anikoto
+// precedent), documented here rather than hidden:
+//
+//   - episode RawID carries the streams() state JSON instead of the
+//     bare episode number (the only state channel into the
+//     per-invocation streams(raw_id, dub) call): series ride the
+//     {n, u} page-state shape (the animedia/anizone precedent), movies
+//     the {n, e} embed-state shape — the movie embed is fully
+//     determined at listing time, so the movie resolve stays a
+//     zero-fetch extract exactly like the Go original.
+//   - a series resolve re-fetches the episode page to rebuild the
+//     translator table (+1 fetch per resolve; the animedia rule) —
+//     the direct media URL itself is still never fetched (the
+//     extractors' .mp4/.m3u8 fast path).
+//   - the episode-page fan-out rides http.get_batch bounded-parallel;
+//     the bound is the config network.max_parallel default (4) pinned
+//     in the script — out of script reach, and get_batch clamps ≤0 to
+//     1 (the kickassanime review-F3 precedent). The Go constructor's
+//     maxParallel<=0→1 fallback test died with the constructor.
+//   - the akNormalizeEmbed unit pins fold into the series listing pins:
+//     the fixture translator rows carry protocol-relative //kodik.info
+//     srcs with the doubled ?hide_selectors=true query, and the
+//     produced raw_embeds pins assert absolutization, mirror
+//     normalization and verbatim query preservation in one.
+
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,24 +62,17 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// anikado.net is NOT a Python-tree port (like animedia): the Go
-// provider was written against the live site characterized on
-// 2026-09-25 (PR102). The site is a DataLife Engine install (UTF-8,
-// anonymous, direct 200): search is the DLE search form POST
-// (do=search&subaction=search&story=…, server-rendered cards), the
-// title page carries a THREE-tab player block (kodik — active and
-// primary; vkg — a client-side hydrated mali aggregator; tomion —
-// a frame-gated embed that 404s outside its iframe), episode links
-// render server-side on the title page, and EVERY episode page
-// carries the per-(episode, dub) kodik embed table as
-// b-translator__item rows. Movies skip the episode pages: their kodik
-// /video/ embed sits directly in the title page's kodik tab. Streams
-// resolve through the shared kodik extractor (kodik.info embed hosts
-// are normalized onto the interchangeable kodikplayer.com mirror —
-// same /seria/ path answers 200 with the hash-consistent player page,
-// live-verified 2026-09-25). All fixtures below are real captures of
-// 2026-09-25 trimmed to the load-bearing markup, except the walled
-// page, which is derived (provenance noted in the file).
+// akEmbedStateJSON builds the movie embed-state JSON the script encodes
+// into a movie episode's raw_id ({n, e}: the episode number and the
+// already-normalized kodik /video/ embed).
+func akEmbedStateJSON(t *testing.T, num, embed string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"n": num, "e": embed})
+	if err != nil {
+		t.Fatalf("marshal movie state: %v", err)
+	}
+	return string(b)
+}
 
 func TestAniKadoSearch(t *testing.T) {
 	t.Parallel()
@@ -38,7 +80,7 @@ func TestAniKadoSearch(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anikado_search.html"))
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
 	results, err := p.Search(context.Background(), "черная лагуна")
 	if err != nil {
@@ -67,6 +109,9 @@ func TestAniKadoSearch(t *testing.T) {
 	if got := rec.Form["story"]; len(got) != 1 || got[0] != "черная лагуна" {
 		t.Errorf("form story = %v, want [черная лагуна]", got)
 	}
+	if ct := rec.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want the form encoding", ct)
+	}
 
 	// Exactly the 2 real result cards of the fixture, in document
 	// order.
@@ -83,7 +128,7 @@ func TestAniKadoSearch(t *testing.T) {
 		t.Errorf("SourceID = %q", results[0].SourceID)
 	}
 	// The result posters are site-relative img srcs; the provider
-	// absolutizes them against its base URL.
+	// absolutizes them against its (harness-rewritten) base URL.
 	if results[0].Poster != srv.URL+"/uploads/posts/2024-03/piraty-chernoj-laguny-vtoroj-zalp.webp" {
 		t.Errorf("Poster = %q, want the base-URL-prefixed img src", results[0].Poster)
 	}
@@ -106,7 +151,7 @@ func TestAniKadoSearchMissIsEmpty(t *testing.T) {
 			"<div class='message-info'><div class='message-info__content'>К сожалению, поиск по сайту не дал никаких результатов.</div></div>" +
 			"</form></div></body></html>"))
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
 	results, err := p.Search(context.Background(), "дандадан")
 	if err != nil {
@@ -122,12 +167,12 @@ func TestAniKadoGetEpisodesSeries(t *testing.T) {
 
 	// The title page carries the 12 episode anchors; every episode
 	// fetch is answered with the (real) episode-2 capture. Fetches run
-	// bounded-parallel, so this test serves through its own
-	// httptest.Server with a mutex-guarded path recorder (the shared
-	// fixtureServer recorder is single-request) and rewrites the title
-	// fixture off the real origin before the server starts (base is
-	// assigned before the first request fires); the episode capture
-	// references no site origin and serves verbatim.
+	// bounded-parallel (http.get_batch), so this test serves through
+	// its own httptest.Server with a mutex-guarded path recorder (the
+	// shared fixtureServer recorder is single-request) and rewrites
+	// the title fixture off the real origin before the server starts
+	// (base is assigned before the first request fires); the episode
+	// capture references no site origin and serves verbatim.
 	titleFixture := string(fixture(t, "anikado_anime.html"))
 	episodeFixture := fixture(t, "anikado_episode.html")
 	var base string
@@ -145,7 +190,7 @@ func TestAniKadoGetEpisodesSeries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	base = srv.URL
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 4)
+	p := luaProvider(t, "anikado", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/572-piraty-chernoj-laguny.html")
 	if err != nil {
@@ -161,8 +206,20 @@ func TestAniKadoGetEpisodesSeries(t *testing.T) {
 		if ep.Num != strconv.Itoa(i+1) {
 			t.Fatalf("episodes[%d].Num = %q, want ascending document order", i, ep.Num)
 		}
-		if ep.RawID != ep.Num {
-			t.Errorf("episodes[%d].RawID = %q, want the episode num", i, ep.RawID)
+		// The state JSON rides RawID ({n, u}): the episode number and
+		// its episode-page URL — the fresh-sandbox streams() channel.
+		var state struct {
+			N string `json:"n"`
+			U string `json:"u"`
+		}
+		if err := json.Unmarshal([]byte(ep.RawID), &state); err != nil {
+			t.Fatalf("episodes[%d].RawID = %q, want the {n,u} state JSON: %v", i, ep.RawID, err)
+		}
+		if state.N != ep.Num {
+			t.Errorf("episodes[%d] state n = %q, want the episode num", i, state.N)
+		}
+		if state.U != srv.URL+"/572-piraty-chernoj-laguny/episode-"+ep.Num+".html" {
+			t.Errorf("episodes[%d] state u = %q, want the episode-page URL", i, state.U)
 		}
 	}
 
@@ -199,7 +256,8 @@ func TestAniKadoGetEpisodesSeries(t *testing.T) {
 	// The embed of each dub is its b-translator__item data-this_link:
 	// protocol-relative src absolutized, kodik.info host normalized
 	// onto the interchangeable kodikplayer.com mirror, query verbatim
-	// (including the site's doubled ?hide_selectors=true quirk).
+	// (including the site's doubled ?hide_selectors=true quirk) — the
+	// akNormalizeEmbed pins, folded here (see the header).
 	const wantSilver = "https://kodikplayer.com/seria/1265743/6788d79b1b6e3d622f0863ee05c13e41/720p" +
 		"?season=1&episode=2&only_translations=2835&hide_selectors=true?hide_selectors=true"
 	if got := ep2.RawEmbeds["Silver AniAge"][0]; got != wantSilver {
@@ -222,7 +280,7 @@ func TestAniKadoGetEpisodesMovie(t *testing.T) {
 		// active kodik tab].
 		_, _ = w.Write(fixture(t, "anikado_anime_movie.html"))
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/11-klinok-rassekajuschij-demonov-beskonechnyj-poezd-film.html")
 	if err != nil {
@@ -233,15 +291,31 @@ func TestAniKadoGetEpisodesMovie(t *testing.T) {
 		t.Fatalf("episodes = %d, want 1", len(episodes))
 	}
 	ep := episodes[0]
-	if ep.Num != "1" || ep.RawID != "1" {
-		t.Errorf("Num/RawID = %q/%q, want 1/1", ep.Num, ep.RawID)
+	if ep.Num != "1" {
+		t.Errorf("Num = %q, want 1", ep.Num)
+	}
+	// The embed-state JSON rides RawID ({n, e}): the movie's single
+	// kodik /video/ embed, already normalized, resolved later with no
+	// page fetch (the Go zero-fetch movie resolve kept).
+	var state struct {
+		N string `json:"n"`
+		E string `json:"e"`
+	}
+	if err := json.Unmarshal([]byte(ep.RawID), &state); err != nil {
+		t.Fatalf("RawID = %q, want the {n,e} state JSON: %v", ep.RawID, err)
+	}
+	if state.N != "1" {
+		t.Errorf("state n = %q, want 1", state.N)
+	}
+	const wantEmbed = "https://kodikplayer.com/video/109611/d41372e3683900687a68073a26e671f0/720p"
+	if state.E != wantEmbed {
+		t.Errorf("state e = %q, want the /video/ src absolutized verbatim", state.E)
 	}
 	links := ep.RawEmbeds["AniKado"]
 	if len(links) != 1 {
 		t.Fatalf("dubs = %v, want the single AniKado service dub", ep.RawEmbeds)
 	}
-	const want = "https://kodikplayer.com/video/109611/d41372e3683900687a68073a26e671f0/720p"
-	if links[0] != want {
+	if links[0] != wantEmbed {
 		t.Errorf("movie embed = %s, want the /video/ src absolutized verbatim", links[0])
 	}
 }
@@ -252,7 +326,7 @@ func TestAniKadoGetEpisodesNoPlayerIsTypedWall(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anikado_anime_walled.html"))
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/11-klinok-rassekajuschij-demonov-beskonechnyj-poezd-film.html")
 	if err == nil {
@@ -267,24 +341,40 @@ func TestAniKadoGetEpisodesNoPlayerIsTypedWall(t *testing.T) {
 	}
 }
 
+// TestAniKadoResolveStream pins the resolve chain through the fresh
+// sandbox: streams(raw_id, dub) re-fetches the episode page named in
+// the state JSON, rebuilds the translator table and resolves the
+// chosen dub's embed through the shared extractor factory. A bare .mp4
+// embed resolves through the extractors' direct fast path — the media
+// URL itself must never be fetched (the kodik extractor itself is
+// behavior-tested in internal/extractors).
 func TestAniKadoResolveStream(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("direct .mp4 embeds must not be fetched")
-	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	var base string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/stream/") {
+			t.Error("direct .mp4 embeds must not be fetched")
+			http.Error(w, "media is never fetched", http.StatusInternalServerError)
+			return
+		}
+		// The minimal episode-page shape: one translator row whose
+		// data-this_link is the direct mp4.
+		_, _ = w.Write([]byte(`<html><body><ul>` +
+			`<li class="b-translator__item" data-this_translator="SHIZA Project" data-this_link="` +
+			base + `/stream/episode-5.mp4"></li></ul></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+	base = srv.URL
+	p := luaProvider(t, "anikado", srv.URL)
 
-	// The plumbing under test: RawEmbeds[dubID] → resolveEmbeds →
-	// MediaStream. A bare .mp4 embed resolves without network (the
-	// resolveEmbeds direct fallback; the kodik extractor itself is
-	// behavior-tested in internal/extractors).
-	embed := srv.URL + "/stream/episode-5.mp4"
-	ep := contracts.Episode{
-		Num:       "5",
-		RawID:     "5",
-		RawEmbeds: map[string][]string{"SHIZA Project": {embed}},
+	page := srv.URL + "/572-piraty-chernoj-laguny/episode-5.html"
+	rawID, err := luaStateJSON(page, "5")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
 	}
+	ep := contracts.Episode{Num: "5", RawID: rawID}
+
 	stream, err := p.ResolveStream(context.Background(), ep, "SHIZA Project")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
@@ -296,94 +386,83 @@ func TestAniKadoResolveStream(t *testing.T) {
 	if !ok {
 		t.Fatalf("Links = %v, want a 720 entry", stream.Links)
 	}
-	if src.URL != embed {
+	if want := srv.URL + "/stream/episode-5.mp4"; src.URL != want {
 		t.Errorf("Links[720].URL = %q, want the embed verbatim", src.URL)
 	}
 }
 
-func TestAniKadoResolveStreamUnknownDubIsTyped(t *testing.T) {
+func TestAniKadoResolveStreamUnknownDubIsTypedWall(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("an unknown dub must fail before any fetch")
+		_, _ = w.Write([]byte(`<html><body><ul>` +
+			`<li class="b-translator__item" data-this_translator="Silver AniAge" ` +
+			`data-this_link="//kodik.info/seria/1265743/6788/720p?episode=1"></li></ul></body></html>`))
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
-	ep := contracts.Episode{
-		Num:       "1",
-		RawID:     "1",
-		RawEmbeds: map[string][]string{"Silver AniAge": {"https://kodikplayer.com/seria/1265743/6788/720p?episode=1"}},
+	page := srv.URL + "/572-piraty-chernoj-laguny/episode-1.html"
+	rawID, err := luaStateJSON(page, "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
 	}
-	_, err := p.ResolveStream(context.Background(), ep, "Ancord")
+	ep := contracts.Episode{Num: "1", RawID: rawID}
+
+	_, err = p.ResolveStream(context.Background(), ep, "Ancord")
 	if !errors.Is(err, contracts.ErrInvalidInput) {
 		t.Fatalf("err = %v, want contracts.ErrInvalidInput wrap", err)
 	}
 }
 
+// TestAniKadoResolveStreamEmptyExtractionIsTypedWall pins the typed
+// extract wall: an embed with no matching extractor (the tomion tab's
+// host, which also 404s outside its iframe context) fails
+// ErrExtractFailed. The movie embed-state resolve is pure — the
+// handler must never be reached (the zero-fetch movie resolve kept).
 func TestAniKadoResolveStreamEmptyExtractionIsTypedWall(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("embeds with no matching extractor must fail before any fetch")
+		t.Error("the embed-state resolve must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
 	})
-	p := newAniKado(srv.URL, testClient(t, "anikado"), 1)
+	p := luaProvider(t, "anikado", srv.URL)
 
-	// The tomion tab's embed host has no extractor (and 404s outside
-	// its iframe context): the typed extract wall.
-	ep := contracts.Episode{
-		Num:       "1",
-		RawID:     "1",
-		RawEmbeds: map[string][]string{"AniKado": {"https://tomion.org/yal/40456"}},
-	}
+	embed := akEmbedStateJSON(t, "1", "https://tomion.org/yal/40456")
+	ep := contracts.Episode{Num: "1", RawID: embed}
+
 	_, err := p.ResolveStream(context.Background(), ep, "AniKado")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("err = %v, want contracts.ErrExtractFailed wrap", err)
 	}
 }
 
-// TestAniKadoEmbedNormalization pins the embed-URL rules: protocol-
-// relative absolutization, the kodik.info → kodikplayer.com mirror
-// normalization (same /seria/ path answers the hash-consistent player
-// page, live-verified 2026-09-25), and the verbatim preservation of
-// the site's doubled ?hide_selectors=true query quirk.
-func TestAniKadoEmbedNormalization(t *testing.T) {
+// TestAniKadoSmokeQueryUndeclared pins the PR51 smoke routing: the
+// shared RU smoke probe («черная лагуна») surfaces this catalog — 2
+// real hits, re-verified live 2026-10-06 — so the script declares no
+// probe of its own; the adapter-declared capability answers empty and
+// the shared probe applies (Go parity: the compiled provider
+// implemented no usable SmokeQuery either).
+func TestAniKadoSmokeQueryUndeclared(t *testing.T) {
 	t.Parallel()
 
-	got := akNormalizeEmbed("//kodik.info/seria/1265743/6788d79b1b6e3d622f0863ee05c13e41/720p" +
-		"?season=1&episode=2&only_translations=2835&hide_selectors=true?hide_selectors=true")
-	want := "https://kodikplayer.com/seria/1265743/6788d79b1b6e3d622f0863ee05c13e41/720p" +
-		"?season=1&episode=2&only_translations=2835&hide_selectors=true?hide_selectors=true"
-	if got != want {
-		t.Errorf("akNormalizeEmbed = %s, want %s", got, want)
+	p := luaProviderAtProduction(t, "anikado")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
+		t.Fatal("the content_lang adapter must keep the capability surface assertions-stable")
 	}
-
-	// A URL already on kodikplayer.com passes unchanged.
-	same := "https://kodikplayer.com/video/109611/d41372e3683900687a68073a26e671f0/720p"
-	if got := akNormalizeEmbed(same); got != same {
-		t.Errorf("akNormalizeEmbed = %s, want %s verbatim", got, same)
-	}
-}
-
-// TestAniKadoSmokeProbeIsShared pins the PR51 ruling: the shared RU
-// smoke probe («черная лагуна») surfaces this catalog — 2 real hits
-// live-verified 2026-09-25 — so the provider must NOT declare a
-// SmokeQuery (a declared probe would override the shared one for no
-// reason).
-func TestAniKadoSmokeProbeIsShared(t *testing.T) {
-	t.Parallel()
-
-	p := newAniKado(AniKadoBase, nil, 1)
-	if _, ok := any(p).(contracts.SmokeQueryProvider); ok {
-		t.Error("anikado must not implement SmokeQueryProvider: the shared RU probe hits the catalog")
+	if got := sq.SmokeQuery(); got != "" {
+		t.Errorf("SmokeQuery = %q, want empty (the shared RU probe applies)", got)
 	}
 }
 
 // TestAniKadoIdentity pins the registration-card values the factory
-// roster and the README table render.
+// roster and the README table render, through the bundled script's own
+// declarations.
 func TestAniKadoIdentity(t *testing.T) {
 	t.Parallel()
 
-	p := newAniKado(AniKadoBase, nil, 1)
+	p := luaProviderAtProduction(t, "anikado")
 	if p.ID() != "anikado" {
 		t.Errorf("ID = %q", p.ID())
 	}
@@ -396,12 +475,11 @@ func TestAniKadoIdentity(t *testing.T) {
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok {
+		t.Fatal("the anikado script lost the ContentLanguage surface")
 	}
-	// maxParallel <= 0 degrades to 1, never 0 (a zero-bounded fan-out
-	// would never run).
-	if p.maxParallel != 1 {
-		t.Errorf("maxParallel = %d, want the 1 fallback", p.maxParallel)
+	if got := lc.ContentLanguage(); got != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru", got)
 	}
 }

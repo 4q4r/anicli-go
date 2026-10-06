@@ -111,6 +111,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// LIVE-VERIFIED 2026-09-18: HTTP 200, no Cloudflare challenge,
 		// no Referer needed).
 		"sameband": "дьявол",
+		// anikado (PR133): the DLE POST search answers direct (the
+		// route matrix's honest route — re-verified 2026-10-06:
+		// «черная лагуна» → 2 cards in 0.73s, every leg anonymous on
+		// the direct route).
+		"anikado": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

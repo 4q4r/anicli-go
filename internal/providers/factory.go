@@ -266,10 +266,10 @@ var allFactories = []struct {
 	// primitives, the XOR unpack and the AJAX shapes the script
 	// header).
 	{"anikoto", true, nil},
-	// anipub (PR107): the anipub.xyz EN catalog — an open Express+Mongo
-	// API (github.com/AnimePub/AniPub, the site's own source; the
-	// api. subdomain is static GitHub Pages, the real API rides the
-	// apex host). Written from the live API + backend source
+	// anipub (PR107 → PR139): the anipub.xyz EN catalog — an open
+	// Express+Mongo API (github.com/AnimePub/AniPub, the site's own
+	// source; the api. subdomain is static GitHub Pages, the real API
+	// rides the apex host). Written from the live API + backend source
 	// (2026-09-25); anonymous on every leg (the validkey middleware
 	// next()s on a missing key). /api/searchAll name search in, the
 	// /v1/api/details ep array out; each link is the site's own
@@ -279,10 +279,16 @@ var allFactories = []struct {
 	// master.m3u8 — no extractor factory hop. Sub and Dub emit per
 	// episode (the site's own changeStreamType toggle); the megaplay
 	// CDN 403s playback without the stream-origin Referer, so it rides
-	// on the source.
-	{"anipub", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniPub(AniPubBase, http)
-	}},
+	// on the source. Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anipub/main.lua) — the
+	// twenty-second Go→Lua provider migration. luaOnly pins the roster
+	// slot; the script serves the id: the AES decrypt rides the
+	// anicli.crypto SDK primitive (no cipher reimplemented in Lua),
+	// the fresh-sandbox raw_id state carries the catalog-flavor player
+	// URL (the sameband/anidub single-value precedent) and the
+	// megaplay embed origin is never a literal — the script follows
+	// the video page's iframe (the anikoto precedent).
+	{"anipub", true, nil},
 	// anilibria-torrent (PR37): the aniliberty.top API's per-release
 	// torrents on the same TorrentBase plumbing. Shares the release
 	// search endpoint with the anilibria stream provider and expands

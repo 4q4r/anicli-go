@@ -138,6 +138,12 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// ~1.6s through the proxy; the hdrezka-class geo-fence per the
 		// route notes above).
 		"anifilm": "дьявол",
+		// anipub (PR139): the EN catalog rides the proxy (the smoke
+		// matrix's honest route: the «cowboy bebop» probe PASSes the
+		// full chain — 3 cards surfaced, the megaplay AES decrypt
+		// lands — in ~1.8s through the proxy; the shared EN probe
+		// misses this Latin-only Name index).
+		"anipub": "cowboy bebop",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

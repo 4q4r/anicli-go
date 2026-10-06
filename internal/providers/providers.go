@@ -74,13 +74,6 @@ func (b Base) SourceType() contracts.SourceType { return b.sourceType }
 // TUI derive from it via dubLangTag — not from a per-dub field.
 func (b Base) ContentLanguage() string { return b.contentLang }
 
-// formContentType marks a request body as form-encoded (the header
-// PostForm used to set; kept explicit for Do-based calls). Shared by
-// the providers that hand-build POST bodies (kodik; lived in
-// animevost.go until the PR119 Lua migration and in sameband.go until
-// the PR131 Lua migration).
-var formContentType = map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
-
 // pyQuote ports urllib.parse.quote with its default safe="/" set:
 // every byte outside the URL-unreserved set (and "/") is percent-
 // encoded uppercase, one UTF-8 byte at a time — spaces become %20, not

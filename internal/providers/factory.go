@@ -113,11 +113,21 @@ var allFactories = []struct {
 	// Playerjs playlist chain and the direct no-network quality-map
 	// resolve (the raw file field rides episode RawID). No
 	// credentials; formContentType's last sameband consumer died here
-	// — kodik still uses the helper.
+	// (the helper itself followed when kodik migrated in PR140).
 	{"sameband", true, nil},
-	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
-	}},
+	// kodik → PR140: the tokenled kodik-api.com search API plus the
+	// scraped kodik.info player pages (the anicli-py kodik.py port)
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/kodik/main.lua) — the TWENTY-THIRD
+	// Go→Lua provider migration. luaOnly pins the roster slot; the API
+	// token rides anicli.provider_setting("token") (the PR140 per-
+	// provider config read — the reason that SDK leg exists) and an
+	// empty or missing token fails loud on search exactly like the Go
+	// constructor did. The parity smoke's credential-gated kodik SKIP
+	// stays untouched. LIVE VERIFICATION IS IMPOSSIBLE for this
+	// provider — no owner token exists; the fixture suite carries the
+	// whole proof (the script header documents it loudly).
+	{"kodik", true, nil},
 	// anidub (PR132): the online.anidub.com RU DLE catalog migrated to
 	// the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/anidub/main.lua) — the sixteenth

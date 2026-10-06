@@ -49,12 +49,25 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 	}
 }
 
+// KodikAPIBase is the kodik JSON API root. Domain intel (verified
+// 2026-09-12): the Python base kodakapi.com and its kodikapi.* failover
+// list are dead; the live API lives at kodik-api.com and answers 401
+// without a token. The const moved here from kodik.go when the
+// provider migrated to the bundled Lua script (PR140) — the script
+// pins the same literal; this map entry is the remaining Go consumer.
+const KodikAPIBase = "https://kodik-api.com"
+
 // baseURLs maps provider IDs onto their primary base URLs — the
 // targets `anicli cf solve` opens the browser against. Migrated Lua
 // providers leave the map as they go (the script owns its base; the
 // anilib precedent — anizone left with PR130, sameband with PR131,
 // anilib precedent — anizone left with PR130, sameband with PR131,
 // anidub with PR132).
+//
+// kodik (PR140) is the EXCEPTION precedent: its provider is the
+// bundled Lua script now, but the script serves the SAME
+// kodik-api.com base, so the entry keeps pointing at a live target —
+// its entry was never about a Go-only capability.
 var baseURLs = map[string]string{
 	"anilibria": AniLibriaAPIBase,
 	"kodik":     KodikAPIBase,

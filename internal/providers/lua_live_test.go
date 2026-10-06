@@ -29,6 +29,13 @@ import (
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
+// kodik (PR140) deliberately has NO entry in the live queries: the
+// kodik-api.com API answers 401 without an owner token and none
+// exists, so a live leg is unprovable by design — the fixture suite
+// (internal/providers/kodik_test.go) carries the whole proof and the
+// script header documents it loudly. Adding a query to the map below
+// would be a fabricated live claim.
+
 func liveProvider(t *testing.T, id string) contracts.Provider {
 	t.Helper()
 

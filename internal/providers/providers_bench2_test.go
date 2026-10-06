@@ -128,12 +128,14 @@ func BenchmarkSamebandSearchHTML(b *testing.B) {
 
 // --- kodik ---
 
-// BenchmarkKodikSearchJSON — kodik token'd search decode.
+// BenchmarkKodikSearchJSON — kodik token'd search decode (the Lua
+// script's search leg; the PR140 harness with the settings seam —
+// the script fails loud without a token).
 func BenchmarkKodikSearchJSON(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "kodik_search.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newKodik(srv.URL, "bench-token", benchClient(b, "kodik"))
+	p := luaProviderWithSettings(b, "kodik", srv.URL, map[string]string{"token": "bench-token"})
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "naruto")

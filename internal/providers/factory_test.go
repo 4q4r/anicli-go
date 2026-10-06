@@ -126,7 +126,14 @@ func TestFactoryProviderSettingsReachScripts(t *testing.T) {
 	t.Fatal("All() missing the kodik provider")
 }
 
-func TestAllWiresKodikTokenFromConfig(t *testing.T) {
+// TestAllKodikSlotIsLuaPinned pins the PR140 migration shape: the
+// kodik roster slot keeps its place, name and base with the bundled
+// Lua script serving the id. (There is no compiled constructor to
+// type-assert against anymore — the Lua-only proof is the
+// [providers.lua] disabled leg in disabled_test.go, plus the token
+// flow pinned by TestFactoryProviderSettingsReachScripts and the
+// search form pin in kodik_test.go.)
+func TestAllKodikSlotIsLuaPinned(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -141,12 +148,11 @@ func TestAllWiresKodikTokenFromConfig(t *testing.T) {
 		if p.ID() != "kodik" {
 			continue
 		}
-		k, ok := p.(*Kodik)
-		if !ok {
-			t.Fatalf("kodik entry is %T, want *Kodik", p)
+		if got := p.Name(); got != "Kodik" {
+			t.Errorf("kodik Name = %q, want the script's declaration", got)
 		}
-		if k.token != "from-config" {
-			t.Errorf("kodik token = %q, want the settings value", k.token)
+		if got := p.BaseURL(); got != KodikAPIBase {
+			t.Errorf("kodik BaseURL = %q, want %q", got, KodikAPIBase)
 		}
 		return
 	}

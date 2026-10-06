@@ -66,8 +66,13 @@ func TestRealDepsConstruction(t *testing.T) {
 	}
 }
 
-// TestRealDepsDisabledProviders (PR24): a tokenless kodik lands in the
-// disabled set and is absent from the searchable roster.
+// TestRealDepsDisabledProviders (PR24, PR140 re-pin): the disabled-set
+// mechanism through real deps. Since the kodik Lua migration the
+// tokenless leg splits: with [providers.lua] enabled (the default) the
+// bundled script serves the id — kodik is searchable (its token guard
+// fails loud on use, the Go port's error policy) and nothing is
+// disabled; switching Lua off drops the slot and kodik lands in the
+// disabled set with its reason.
 func TestRealDepsDisabledProviders(t *testing.T) {
 	store, err := storage.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -79,21 +84,47 @@ func TestRealDepsDisabledProviders(t *testing.T) {
 	settings.Download.Dir = t.TempDir()
 	// No provider credentials: this test pins the kodik specimen of
 	// the disabled-set mechanism.
-	real, err := NewRealDeps(settings, store)
-	if err != nil {
-		t.Fatalf("NewRealDeps: %v", err)
-	}
-	defer real.Close()
 
-	for _, p := range real.Deps.Search.Providers() {
-		if p.ID == "kodik" {
-			t.Fatalf("tokenless kodik must not be searchable")
+	t.Run("lua enabled: the Lua-pinned kodik stays searchable", func(t *testing.T) {
+		real, err := NewRealDeps(settings, store)
+		if err != nil {
+			t.Fatalf("NewRealDeps: %v", err)
 		}
-	}
-	disabled := real.Deps.Search.DisabledProviders()
-	if len(disabled) != 1 || disabled[0].ID != "kodik" || disabled[0].Reason == "" {
-		t.Fatalf("kodik must be reported disabled with a reason, got %+v", disabled)
-	}
+		defer real.Close()
+
+		found := false
+		for _, p := range real.Deps.Search.Providers() {
+			if p.ID == "kodik" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("the Lua-pinned tokenless kodik must stay searchable (it fails loud on use)")
+		}
+		if disabled := real.Deps.Search.DisabledProviders(); len(disabled) != 0 {
+			t.Fatalf("the active script un-disables kodik, got %+v", disabled)
+		}
+	})
+
+	t.Run("lua disabled: kodik lands in the disabled set", func(t *testing.T) {
+		off := settings
+		off.Providers.Lua.Enabled = false
+		real, err := NewRealDeps(off, store)
+		if err != nil {
+			t.Fatalf("NewRealDeps: %v", err)
+		}
+		defer real.Close()
+
+		for _, p := range real.Deps.Search.Providers() {
+			if p.ID == "kodik" {
+				t.Fatalf("tokenless kodik with [providers.lua] disabled must not be searchable")
+			}
+		}
+		disabled := real.Deps.Search.DisabledProviders()
+		if len(disabled) != 1 || disabled[0].ID != "kodik" || disabled[0].Reason == "" {
+			t.Fatalf("kodik must be reported disabled with a reason, got %+v", disabled)
+		}
+	})
 }
 
 // TestRealDownloadPrunesSettledParts (M13): once the manager settles

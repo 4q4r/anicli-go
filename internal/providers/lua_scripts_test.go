@@ -77,6 +77,11 @@ var luaProductionBases = map[string][]string{
 	// the anime page and, through the shared extractor factory, the
 	// sibnet embed rewrites) hangs off the one base_url literal.
 	"anidub": {"https://online.anidub.com"},
+	// anikado (PR133): the site root — every leg (the DLE search POST,
+	// the title page and the per-episode translator pages) hangs off
+	// the one base_url literal; the kodik embeds are never fetched
+	// hosts (the shared extractor consumes them).
+	"anikado": {"https://anikado.net"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

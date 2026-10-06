@@ -53,6 +53,7 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 // targets `anicli cf solve` opens the browser against. Migrated Lua
 // providers leave the map as they go (the script owns its base; the
 // anilib precedent — anizone left with PR130, sameband with PR131,
+// anilib precedent — anizone left with PR130, sameband with PR131,
 // anidub with PR132).
 var baseURLs = map[string]string{
 	"anilibria": AniLibriaAPIBase,

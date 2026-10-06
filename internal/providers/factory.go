@@ -221,20 +221,19 @@ var allFactories = []struct {
 	{"animiku", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAnimiku(AniMikuBase, http)
 	}},
-	// anikado (PR102): the anikado.net RU catalog (DLE, UTF-8,
-	// anonymous) — search POST form in, episodes off the title page's
-	// server-rendered anchor list, per-(episode, dub) kodik embeds off
-	// each episode page's b-translator__item table (fan-out bounded by
-	// network.max_parallel, the kickassanime pattern); movies carry
-	// their kodik /video/ embed directly in the title page's kodik tab.
-	// The title page's vkg/tomion fallback tabs are client-side
-	// hydrated or frame-gated — not anonymously resolvable, documented
-	// walls. kodik.info embed hosts normalize onto the interchangeable
-	// kodikplayer.com mirror (live-verified 2026-09-25). No frozen
-	// Python original; written from the live site.
-	{"anikado", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniKado(AniKadoBase, http, cfg.Network.MaxParallel)
-	}},
+	// anikado (PR102 → PR133): the anikado.net RU DLE catalog (DLE,
+	// UTF-8, anonymous) migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anikado/main.lua) — the
+	// seventeenth Go→Lua provider migration. luaOnly pins the roster
+	// slot; the script serves the DLE search-form POST, the
+	// server-side episode anchor listing fanned out bounded-parallel
+	// over the per-episode b-translator__item pages (the kickassanime
+	// pattern), the kodik.info → kodikplayer.com mirror
+	// normalization and the service-dub movie tab — the movie embed
+	// rides the {n, e} raw_id state, keeping the compiled provider's
+	// zero-fetch movie resolve. The title page's vkg/tomion fallback
+	// tabs stay documented walls (client-side hydrated / frame-gated).
+	{"anikado", true, nil},
 	// animevib (PR103 → PR116): the www.animevib.ru RU DLE catalog
 	// migrated to the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/animevib/main.lua) — the third

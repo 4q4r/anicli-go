@@ -675,7 +675,9 @@ portable between the two frontends.
   routes only stealth-browser downloads/updates; `[torrent].proxy` routes engine HTTP
   traffic (peer and UDP-tracker traffic stays direct — a library limitation, documented).
 - **Sandboxed extensibility** — Lua providers run in a stripped, budget-capped VM with
-  fresh state per invocation; scripts cannot shadow built-ins or outlive their call.
+  fresh state per invocation; a running script cannot reach other providers'
+  registrations or outlive its call (first-occurrence replacement at load time is the
+  documented discovery rule, not a runtime path).
 - **Torrent hygiene** — port fallback warns loudly with the real port; tracker lists
   fail open (static trackers keep working when a list download fails).
 - **License hygiene** — `THIRD-PARTY-NOTICES.md` carries the full direct-dependency

@@ -72,6 +72,47 @@ func TestSDKHTTPGetHeaders(t *testing.T) {
 	}
 }
 
+// TestSDKHTTPPostHeaders pins the POST opts extension (PR130): the
+// anizone Livewire continuation POSTs JSON with X-CSRF-TOKEN /
+// X-Requested-With / X-Livewire headers — http.post grows the same
+// optional opts table http.get has had since PR116, symmetrically as
+// the trailing argument. The content-type keeps its positional slot
+// (the existing three-argument call sites stay verbatim).
+func TestSDKHTTPPostHeaders(t *testing.T) {
+	var gotMethod, gotCT, gotCSRF, gotXRW, gotBody string
+	e, srv, _ := newSDKEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		gotCSRF = r.Header.Get("X-CSRF-TOKEN")
+		gotXRW = r.Header.Get("X-Requested-With")
+		b := make([]byte, 512)
+		n, _ := r.Body.Read(b)
+		gotBody = string(b[:n])
+		_, _ = fmt.Fprint(w, "ok")
+	}))
+
+	_, err := evalSDK(t, e, fmt.Sprintf(`
+		anicli.http.post(%q, '{"components":[]}', "application/json",
+			{ headers = { ["X-CSRF-TOKEN"] = "tok-1", ["X-Requested-With"] = "XMLHttpRequest" } })
+		return "done"
+	`, srv.URL+"/livewire/update"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want the positional argument", gotCT)
+	}
+	if gotCSRF != "tok-1" || gotXRW != "XMLHttpRequest" {
+		t.Fatalf("server saw X-CSRF-TOKEN=%q X-Requested-With=%q, want the opts headers (the Livewire POST needs them)", gotCSRF, gotXRW)
+	}
+	if gotBody != `{"components":[]}` {
+		t.Errorf("body = %q, want the script body verbatim", gotBody)
+	}
+}
+
 // TestSDKHTTPGetBatch pins the bounded-parallel fan-out: every URL
 // resolves to its index-aligned result, a dead URL carries the error
 // field (soft per-URL failure — one dead leg never kills the batch)

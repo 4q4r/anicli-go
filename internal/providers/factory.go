@@ -388,19 +388,6 @@ var allFactories = []struct {
 	{"subsplease", true, nil},
 }
 
-// luaTorrentFactories lists the TORRENT roster slots served by bundled
-// Lua scripts (PR143): when a script serves one of these ids, the
-// factory wraps it in the luaTorrent adapter — the torrent capability
-// (IsTorrent, the engine injection, the PR66 .torrent preflight and
-// the episodes/stream resolve) stays Go around the script's search
-// surface. The wrap applies to the SLOT: a user script shadowing the
-// id rides the same adapter, because the slot itself is torrent-shaped
-// (the compiled factories behind these ids carried the identical
-// plumbing).
-var luaTorrentFactories = map[string]bool{
-	"anirena": true,
-}
-
 // registryOptions carries the NewRegistry customizations.
 type registryOptions struct {
 	// torrentLogger routes the shared torrent engine's diagnostics;

@@ -197,19 +197,20 @@ var allFactories = []struct {
 	// Go→Lua provider migration. luaOnly pins the roster slot; the
 	// script serves the id.
 	{"anitokyo", true, nil},
-	// animiku (PR101): the beta.animiku.tokyo RU catalog (DLE under a
-	// custom template, UTF-8, anonymous; live-verified 2026-09-25) —
-	// search GET form in, the mrdeath/aaparser player bridge
-	// (POST engine/ajax/controller.php?mod=anime_grabber&module=
-	// kodik_playlist_ajax) out: translator row = dubs, episode grid =
-	// per-(episode, dub) kodikplayer.com embeds through the shared
-	// extractor. The advertised 4K/FHD tiers are runtime JS resolvers
-	// (anilibria.top API by title) with no deterministic embed URLs —
-	// documented in animiku.go, out of the stream contract. No frozen
-	// Python original; written from the live site.
-	{"animiku", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimiku(AniMikuBase, http)
-	}},
+	// animiku (PR101 → PR134): the beta.animiku.tokyo RU catalog (DLE
+	// under a custom template, UTF-8, anonymous; live-verified
+	// 2026-09-25) migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animiku/main.lua) — the eighteenth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the DLE search GET, the mrdeath/aaparser player
+	// bridge (POST news_id+action=load_player: translator row = dubs,
+	// episode grid = per-(episode, dub) kodikplayer.com embeds
+	// re-derived at resolve time from the {n,id} raw_id state) and the
+	// shared-extractor resolve (anicli.extract). The advertised 4K/FHD
+	// tiers are runtime JS resolvers (anilibria.top API by title) with
+	// no deterministic embed URLs — out of the stream contract. No
+	// frozen Python original; written from the live site.
+	{"animiku", true, nil},
 	// anikado (PR102): the anikado.net RU catalog (DLE, UTF-8,
 	// anonymous) — search POST form in, episodes off the title page's
 	// server-rendered anchor list, per-(episode, dub) kodik embeds off

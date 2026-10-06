@@ -73,6 +73,10 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal, and the stream Referer
 	// derives from it.
 	"sameband": {"https://sameband.studio"},
+	// animiku (PR134): the site root — the DLE search GET and the
+	// mrdeath/aaparser player bridge both hang off the one base_url
+	// literal (the bridge rides the POST form, not a second host).
+	"animiku": {"https://beta.animiku.tokyo"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

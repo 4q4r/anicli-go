@@ -102,6 +102,12 @@ var luaProductionBases = map[string][]string{
 	// extractor factory, the legacy embeds) hangs off the one base_url
 	// literal; the Referer sets derive from it and the episode URL.
 	"anistar": {"https://anistar.org"},
+	// anipub (PR139): the catalog API root only (the apex host — the
+	// api. subdomain is static GitHub Pages). The megaplay embed origin
+	// is never a literal — the script derives it from the video page's
+	// iframe (the getSourcesNew endpoint is same-origin), and the
+	// fixtures rewrite it to the test server at serve time.
+	"anipub": {"https://anipub.xyz"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

@@ -5,15 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
-	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // AniPub offline fixture tests. Every anipub_* fixture in testdata is a
@@ -31,24 +27,20 @@ import (
 //	anipub_sources_sub.json GET megaplay.buzz/stream/getSourcesNew?id=41014&type=sub&s=bcdn
 //	anipub_sources_dub.json GET megaplay.buzz/stream/getSourcesNew?id=104085&type=dub&s=bcdn
 //
-// The resolve-chain tests serve the real fixture bytes on a local
-// server, rewriting the megaplay origin to it (the provider derives the
-// stream host from the video page's iframe — megaplay's own client
-// fetches stream/getSourcesNew same-origin, so origin-following is the
+// PR139: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anipub/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixture captures the compiled Go implementation was held to. The
+// resolve-chain tests serve the real fixture bytes on a local server,
+// rewriting the megaplay origin to it (the script derives the stream
+// host from the video page's iframe — megaplay's own client fetches
+// stream/getSourcesNew same-origin, so origin-following is the
 // faithful shape). The enc fixtures still decrypt to the REAL CDN
-// manifest URLs, pinning the AES-256-CBC leg against live bytes.
-
-// anipubFixture loads a testdata capture; failure to read is a test
-// setup error.
-func anipubFixture(t *testing.T, name string) []byte {
-	t.Helper()
-
-	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec // trusted testdata path
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
-	}
-	return data
-}
+// manifest URLs, pinning the AES-256-CBC leg against live bytes. The
+// raw_id state channel carries the episode's catalog-flavor /video
+// player URL (the sameband/anidub single-value precedent) so the
+// fresh-sandbox streams(raw_id, dub) call re-derives the requested
+// dub flavor through the site's own changeStreamType grammar.
 
 // anipubRecorder captures the requests the chain issued, mutex-guarded
 // (tests run in parallel; each test owns its server and recorder).
@@ -81,12 +73,13 @@ func (r *anipubRecorder) refererFor(uri string) string {
 	return r.referers[uri]
 }
 
-// anipubTestEnv wires a provider against a local server serving the
-// given path handlers. The video-page fixtures' iframe origin rewrites
-// to this server, so the whole resolve chain stays offline and the
-// playback Referer (derived from the iframe origin, megaplay's
-// same-origin getSourcesNew fetch) asserts against origin.
-func anipubTestEnv(t *testing.T, handle func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request)) (*AniPub, *anipubRecorder, string) {
+// anipubTestEnv wires the bundled script against a local server serving
+// the given path handlers. The harness rewrites the script's production
+// base_url literal onto this server; the video-page fixtures' iframe
+// origin rewrites to it at serve time, so the whole resolve chain stays
+// offline and the playback Referer (derived from the iframe origin,
+// megaplay's same-origin getSourcesNew fetch) asserts against origin.
+func anipubTestEnv(t *testing.T, handle func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request)) (contracts.Provider, *anipubRecorder, string) {
 	t.Helper()
 
 	rec := &anipubRecorder{}
@@ -96,13 +89,7 @@ func anipubTestEnv(t *testing.T, handle func(rec *anipubRecorder, w http.Respons
 	}))
 	t.Cleanup(ts.Close)
 
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
-	client, err := netclient.New(cfg, netclient.WithProvider("anipub"))
-	if err != nil {
-		t.Fatalf("netclient.New: %v", err)
-	}
-	return newAniPub(ts.URL, client), rec, ts.URL
+	return luaProvider(t, "anipub", ts.URL), rec, ts.URL
 }
 
 // anipubServeFixture answers with a fixture body (optionally rewritten:
@@ -110,7 +97,7 @@ func anipubTestEnv(t *testing.T, handle func(rec *anipubRecorder, w http.Respons
 func anipubServeFixture(t *testing.T, w http.ResponseWriter, name string, rewrite map[string]string) {
 	t.Helper()
 
-	body := anipubFixture(t, name)
+	body := fixture(t, name)
 	for from, to := range rewrite {
 		body = []byte(strings.ReplaceAll(string(body), from, to))
 	}
@@ -199,10 +186,12 @@ func TestAniPubSearchEncodesQuery(t *testing.T) {
 // TestAniPubGetEpisodesSub: the Cowboy Bebop details decode into 25
 // episodes; the catalog flavor (/sub) lands on the Sub row and the
 // complementary Dub row is the site's own changeStreamType rewrite.
+// raw_id carries the catalog-flavor player URL (the fresh-sandbox
+// state channel).
 func TestAniPubGetEpisodesSub(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/api/details/8270" {
 			anipubServeFixture(t, w, "anipub_details_sub.json", nil)
 			return
@@ -218,19 +207,19 @@ func TestAniPubGetEpisodesSub(t *testing.T) {
 		t.Fatalf("GetEpisodes = %d episodes, want 25", len(eps))
 	}
 	first, last := eps[0], eps[24]
-	if first.Num != "1" || first.RawID != "850" {
-		t.Errorf("first episode = (Num %q, RawID %q), want (1, 850)", first.Num, first.RawID)
+	if first.Num != "1" || first.RawID != base+"/video/850/sub" {
+		t.Errorf("first episode = (Num %q, RawID %q), want (1, %s/video/850/sub)", first.Num, first.RawID, base)
 	}
 	if last.Num != "25" {
 		t.Errorf("last episode Num = %q, want 25", last.Num)
 	}
 	subs := first.RawEmbeds["Sub"]
 	dubs := first.RawEmbeds["Dub"]
-	if len(subs) != 1 || subs[0] != p.baseURL+"/video/850/sub" {
-		t.Errorf("Sub row = %v, want [%s/video/850/sub]", subs, p.baseURL)
+	if len(subs) != 1 || subs[0] != base+"/video/850/sub" {
+		t.Errorf("Sub row = %v, want [%s/video/850/sub]", subs, base)
 	}
-	if len(dubs) != 1 || dubs[0] != p.baseURL+"/video/850/dub" {
-		t.Errorf("Dub row = %v, want [%s/video/850/dub]", dubs, p.baseURL)
+	if len(dubs) != 1 || dubs[0] != base+"/video/850/dub" {
+		t.Errorf("Dub row = %v, want [%s/video/850/dub]", dubs, base)
 	}
 }
 
@@ -240,7 +229,7 @@ func TestAniPubGetEpisodesSub(t *testing.T) {
 func TestAniPubGetEpisodesDub(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/api/details/82" {
 			anipubServeFixture(t, w, "anipub_details_dub.json", nil)
 			return
@@ -256,14 +245,14 @@ func TestAniPubGetEpisodesDub(t *testing.T) {
 		t.Fatalf("GetEpisodes = %d episodes, want 219", len(eps))
 	}
 	first := eps[0]
-	if first.RawID != "12353" {
-		t.Errorf("first RawID = %q, want 12353", first.RawID)
+	if first.RawID != base+"/video/12353/dub" {
+		t.Errorf("first RawID = %q, want %s/video/12353/dub", first.RawID, base)
 	}
 	dubs := first.RawEmbeds["Dub"]
-	if len(dubs) != 1 || dubs[0] != p.baseURL+"/video/12353/dub" {
-		t.Errorf("Dub row = %v, want [%s/video/12353/dub]", dubs, p.baseURL)
+	if len(dubs) != 1 || dubs[0] != base+"/video/12353/dub" {
+		t.Errorf("Dub row = %v, want [%s/video/12353/dub]", dubs, base)
 	}
-	if subs := first.RawEmbeds["Sub"]; len(subs) != 1 || subs[0] != p.baseURL+"/video/12353/sub" {
+	if subs := first.RawEmbeds["Sub"]; len(subs) != 1 || subs[0] != base+"/video/12353/sub" {
 		t.Errorf("Sub row = %v, want the complementary rewrite", subs)
 	}
 }
@@ -275,7 +264,7 @@ func TestAniPubGetEpisodesDub(t *testing.T) {
 func TestAniPubGetEpisodesMovieDocLink(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/api/details/1387" {
 			anipubServeFixture(t, w, "anipub_details_movie.json", nil)
 			return
@@ -291,12 +280,12 @@ func TestAniPubGetEpisodesMovieDocLink(t *testing.T) {
 		t.Fatalf("GetEpisodes = %d episodes, want 1", len(eps))
 	}
 	first := eps[0]
-	if first.Num != "1" || first.RawID != "74019" {
-		t.Errorf("episode = (Num %q, RawID %q), want (1, 74019)", first.Num, first.RawID)
+	if first.Num != "1" || first.RawID != base+"/video/74019/sub" {
+		t.Errorf("episode = (Num %q, RawID %q), want (1, %s/video/74019/sub)", first.Num, first.RawID, base)
 	}
 	subs := first.RawEmbeds["Sub"]
-	if len(subs) != 1 || subs[0] != p.baseURL+"/video/74019/sub" {
-		t.Errorf("Sub row = %v, want [%s/video/74019/sub]", subs, p.baseURL)
+	if len(subs) != 1 || subs[0] != base+"/video/74019/sub" {
+		t.Errorf("Sub row = %v, want [%s/video/74019/sub]", subs, base)
 	}
 }
 
@@ -339,8 +328,10 @@ func TestAniPubResolveStreamSubChain(t *testing.T) {
 	t.Parallel()
 
 	rewrite := map[string]string{}
-	p, rec, origin := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, rec, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/v1/api/details/8270":
+			anipubServeFixture(t, w, "anipub_details_sub.json", nil)
 		case "/video/850/sub":
 			anipubServeFixture(t, w, "anipub_video_sub.html", rewrite)
 		case "/stream/s-2/850/sub":
@@ -360,21 +351,14 @@ func TestAniPubResolveStreamSubChain(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	rewrite["https://megaplay.buzz"] = origin
+	rewrite["https://megaplay.buzz"] = base
 
-	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "850",
-		RawEmbeds: map[string][]string{
-			"Sub": {"" + "/video/850/sub"},
-			"Dub": {"" + "/video/850/dub"},
-		},
+	eps, err := p.GetEpisodes(context.Background(), "8270")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
 	}
-	// The chain starts on the provider base; point RawEmbeds at it
-	// explicitly (the empty-string rewrite keeps fixture bytes real).
-	episode.RawEmbeds["Sub"] = []string{p.baseURL + "/video/850/sub"}
 
-	stream, err := p.ResolveStream(context.Background(), episode, "Sub")
+	stream, err := p.ResolveStream(context.Background(), eps[0], "Sub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -393,13 +377,13 @@ func TestAniPubResolveStreamSubChain(t *testing.T) {
 	if src.Type != "m3u8" || src.Quality != "auto" {
 		t.Errorf("source type/quality = %q/%q, want m3u8/auto", src.Type, src.Quality)
 	}
-	if src.Headers["Referer"] != origin+"/" {
-		t.Errorf("Referer = %q, want the iframe origin %s/", src.Headers["Referer"], origin)
+	if src.Headers["Referer"] != base+"/" {
+		t.Errorf("Referer = %q, want the iframe origin %s/", src.Headers["Referer"], base)
 	}
 	// Megaplay hotlink-gates the stream page on the embedding site's
 	// Referer (live-verified 2026-09-25: no Referer → its Error page).
-	if got := rec.refererFor("/stream/s-2/850/sub"); got != p.baseURL+"/" {
-		t.Errorf("stream page Referer = %q, want %s/", got, p.baseURL)
+	if got := rec.refererFor("/stream/s-2/850/sub"); got != base+"/" {
+		t.Errorf("stream page Referer = %q, want %s/", got, base)
 	}
 }
 
@@ -409,8 +393,10 @@ func TestAniPubResolveStreamDubChain(t *testing.T) {
 	t.Parallel()
 
 	rewrite := map[string]string{}
-	p, _, origin := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/v1/api/details/82":
+			anipubServeFixture(t, w, "anipub_details_dub.json", nil)
 		case r.URL.Path == "/video/12353/dub":
 			anipubServeFixture(t, w, "anipub_video_dub.html", rewrite)
 		case r.URL.Path == "/stream/s-2/12353/dub":
@@ -422,16 +408,14 @@ func TestAniPubResolveStreamDubChain(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	rewrite["https://megaplay.buzz"] = origin
+	rewrite["https://megaplay.buzz"] = base
 
-	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "12353",
-		RawEmbeds: map[string][]string{
-			"Dub": {p.baseURL + "/video/12353/dub"},
-		},
+	eps, err := p.GetEpisodes(context.Background(), "82")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
 	}
-	stream, err := p.ResolveStream(context.Background(), episode, "Dub")
+
+	stream, err := p.ResolveStream(context.Background(), eps[0], "Dub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -443,7 +427,8 @@ func TestAniPubResolveStreamDubChain(t *testing.T) {
 }
 
 // TestAniPubResolveStreamUnknownDub: a dub the episode does not carry is
-// the typed not-found.
+// the typed not-found (the raw_id state is synthesized per the
+// documented state channel).
 func TestAniPubResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
@@ -451,9 +436,8 @@ func TestAniPubResolveStreamUnknownDub(t *testing.T) {
 		http.NotFound(w, r)
 	})
 
-	episode := contracts.Episode{Num: "1", RawID: "850", RawEmbeds: map[string][]string{
-		"Sub": {p.baseURL + "/video/850/sub"},
-	}}
+	episode := contracts.Episode{Num: "1", RawID: "https://anipub.xyz/video/850/sub",
+		RawEmbeds: map[string][]string{"Sub": {"https://anipub.xyz/video/850/sub"}}}
 	_, err := p.ResolveStream(context.Background(), episode, "AniLibria")
 	if !errors.Is(err, contracts.ErrNotFound) {
 		t.Fatalf("unknown dub err = %v, want contracts.ErrNotFound", err)
@@ -465,13 +449,12 @@ func TestAniPubResolveStreamUnknownDub(t *testing.T) {
 func TestAniPubResolveStreamNoIframe(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("<html><body>no player</body></html>"))
 	})
 
-	episode := contracts.Episode{Num: "1", RawID: "850", RawEmbeds: map[string][]string{
-		"Sub": {p.baseURL + "/video/850/sub"},
-	}}
+	episode := contracts.Episode{Num: "1", RawID: base + "/video/850/sub",
+		RawEmbeds: map[string][]string{"Sub": {base + "/video/850/sub"}}}
 	_, err := p.ResolveStream(context.Background(), episode, "Sub")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("no-iframe err = %v, want contracts.ErrExtractFailed", err)
@@ -484,22 +467,25 @@ func TestAniPubResolveStreamEncMissing(t *testing.T) {
 	t.Parallel()
 
 	rewrite := map[string]string{}
-	p, _, origin := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
+	p, _, base := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/v1/api/details/8270":
+			anipubServeFixture(t, w, "anipub_details_sub.json", nil)
 		case "/video/850/sub":
 			anipubServeFixture(t, w, "anipub_video_sub.html", rewrite)
 		case "/stream/s-2/850/sub":
-			anipubServeFixture(t, w, "anipub_megaplay.html", rewrite)
+			anipubServeFixture(t, w, "anipub_megaplay_sub.html", rewrite)
 		default:
 			_, _ = w.Write([]byte(`{"tracks":[],"t":1}`))
 		}
 	})
-	rewrite["https://megaplay.buzz"] = origin
+	rewrite["https://megaplay.buzz"] = base
 
-	episode := contracts.Episode{Num: "1", RawID: "850", RawEmbeds: map[string][]string{
-		"Sub": {p.baseURL + "/video/850/sub"},
-	}}
-	_, err := p.ResolveStream(context.Background(), episode, "Sub")
+	eps, err := p.GetEpisodes(context.Background(), "8270")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	_, err = p.ResolveStream(context.Background(), eps[0], "Sub")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("enc-missing err = %v, want contracts.ErrExtractFailed", err)
 	}
@@ -511,38 +497,19 @@ func TestAniPubResolveStreamEncMissing(t *testing.T) {
 func TestAniPubDeclarations(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := anipubTestEnv(t, func(rec *anipubRecorder, w http.ResponseWriter, r *http.Request) {})
-	if got := p.NamePreference(); got != contracts.NamePrefLatin {
+	p := luaProviderAtProduction(t, "anipub")
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the capability adapter must stay assertions-stable")
+	}
+	if got := np.NamePreference(); got != contracts.NamePrefLatin {
 		t.Errorf("NamePreference = %v, want NamePrefLatin", got)
 	}
-	if got := p.SmokeQuery(); got != "cowboy bebop" {
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
+		t.Fatal("the capability adapter must expose SmokeQuery")
+	}
+	if got := sq.SmokeQuery(); got != "cowboy bebop" {
 		t.Errorf("SmokeQuery = %q, want %q", got, "cowboy bebop")
-	}
-}
-
-// TestAniPubChangeLangPort: the lang rewriter ports the site's
-// changeStreamType — both the path form (the only per-episode shape in
-// the captures) and the type= query form (the doc-level link shape).
-func TestAniPubChangeLangPort(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ in, want string }{
-		// flip: sub → dub, query string preserved
-		{"https://anipub.xyz/video/850/sub", "https://anipub.xyz/video/850/dub"},
-		{"https://anipub.xyz/video/850/sub?track=2", "https://anipub.xyz/video/850/dub?track=2"},
-		{"https://www.anipub.xyz/video/12353/sub", "https://www.anipub.xyz/video/12353/dub"},
-		// idempotent: already-dub links stay put (first-match replace)
-		{"https://www.anipub.xyz/video/12353/dub", "https://www.anipub.xyz/video/12353/dub"},
-		{"https://gogoanime.com.by/streaming.php?id=naruto-677&ep=12352&server=hd-1&type=dub",
-			"https://gogoanime.com.by/streaming.php?id=naruto-677&ep=12352&server=hd-1&type=dub"},
-		// the type= grammar takes precedence over a path suffix
-		{"https://gogoanime.com.by/streaming.php?id=x&type=sub", "https://gogoanime.com.by/streaming.php?id=x&type=dub"},
-		// no lang marker → unchanged
-		{"https://example.com/no-lang", "https://example.com/no-lang"},
-	}
-	for _, tc := range cases {
-		if got := anipubChangeLang(tc.in, "dub"); got != tc.want {
-			t.Errorf("anipubChangeLang(%q, dub) = %q, want %q", tc.in, got, tc.want)
-		}
 	}
 }

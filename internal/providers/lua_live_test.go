@@ -157,6 +157,12 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// in ~1.2s through the proxy; the direct route tarpits on the
 		// characterization network like the anifilm class).
 		"anistar": "боруто",
+		// anipub (PR139): the EN catalog rides the proxy (the smoke
+		// matrix's honest route: the «cowboy bebop» probe PASSes the
+		// full chain — 3 cards surfaced, the megaplay AES decrypt
+		// lands — in ~1.8s through the proxy; the shared EN probe
+		// misses this Latin-only Name index).
+		"anipub": "cowboy bebop",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

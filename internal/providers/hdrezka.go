@@ -3,8 +3,6 @@ package providers
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
+	"github.com/an0nx/anicli-go/internal/anubis"
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
 )
@@ -32,21 +31,19 @@ import (
 const HDRezkaBase = "https://rezka-ua.tv"
 
 // hdrezkaAnubisMarker detects the Anubis proof-of-work challenge page:
-// every mirror of the rezka family is fronted by Anubis 1.25.0
-// (TecharoHQ), so the first request of any operation (and any later
-// one after the auth cookie expires) is answered with this page
-// instead of the real content [LIVE-VERIFIED 2026-09-19 on four
-// family mirrors]. The upstream anicli-api reference has
-// no anti-bot handling and CRASHES against the live site (its httpx
-// client receives the challenge for the anime page and the init-script
-// selector IndexErrors); this port solves the gate in pure Go.
+// every mirror of the rezka family is fronted by Anubis (TecharoHQ),
+// so the first request of any operation (and any later one after the
+// auth cookie expires) is answered with this page instead of the real
+// content [LIVE-VERIFIED 2026-09-19 on four family mirrors; the gate
+// was re-verified live 2026-10-06 at Anubis v1.27.0 — the sha256 PoW
+// contract is stable across the versions]. The upstream anicli-api
+// reference has no anti-bot handling and CRASHES against the live site
+// (its httpx client receives the challenge for the anime page and the
+// init-script selector IndexErrors); this port solves the gate in pure
+// Go — the ladder lives in internal/anubis since the PR141 SDK
+// extraction (the same solver the Lua hdrezka script rides through
+// anicli.solve_anubis).
 const hdrezkaAnubisMarker = `<script id="anubis_challenge"`
-
-// hdrezkaMaxPoWIterations bounds the proof-of-work search. The
-// observed difficulty is 2 (leading zero hex digits — ~10² hashes);
-// difficulty 8 would still fit the cap (~4·10⁹ is out, 1.6·10⁷ hashes
-// ≈ seconds). Anything beyond is treated as a hostile gate.
-const hdrezkaMaxPoWIterations = 1 << 24
 
 // hdrezkaAnubisChallengeRe extracts the challenge JSON blob.
 var hdrezkaAnubisChallengeRe = regexp.MustCompile(
@@ -165,46 +162,6 @@ func (p *HDRezka) do(ctx context.Context, r hdrezkaRequest) (*netclient.Response
 	return retry, nil
 }
 
-// hdrezkaAnubisChallenge mirrors the anubis_challenge JSON the gate
-// embeds in the page.
-type hdrezkaAnubisChallenge struct {
-	Rules struct {
-		Algorithm  string `json:"algorithm"`
-		Difficulty int    `json:"difficulty"`
-	} `json:"rules"`
-	Challenge struct {
-		ID         string `json:"id"`
-		RandomData string `json:"randomData"`
-		Method     string `json:"method"`
-	} `json:"challenge"`
-}
-
-// solveHDRezkaAnubis ports the worker contract of Anubis 1.25
-// (sha256-purejs.mjs + lib/challenge/proofofwork): the nonce N makes
-// hex(sha256(randomData + strconv.Itoa(N))) start with `difficulty`
-// zero hex digits. "fast" and "slow" share the same sha256 validation
-// server-side (both register the same Impl); anything else fails loud.
-func solveHDRezkaAnubis(challenge hdrezkaAnubisChallenge) (int, string, error) {
-	switch challenge.Rules.Algorithm {
-	case "fast", "slow":
-		// same sha256 proof-of-work on both (anubis lib/challenge:
-		// chall.Register("fast"/"slow", same Impl))
-	default:
-		return 0, "", fmt.Errorf("%w: unsupported anubis algorithm %q",
-			contracts.ErrProvider403, challenge.Rules.Algorithm)
-	}
-	prefix := strings.Repeat("0", challenge.Rules.Difficulty)
-	for nonce := 0; nonce <= hdrezkaMaxPoWIterations; nonce++ {
-		sum := sha256.Sum256([]byte(challenge.Challenge.RandomData + strconv.Itoa(nonce)))
-		digest := hex.EncodeToString(sum[:])
-		if strings.HasPrefix(digest, prefix) {
-			return nonce, digest, nil
-		}
-	}
-	return 0, "", fmt.Errorf("%w: anubis proof-of-work exceeded %d iterations (difficulty %d)",
-		contracts.ErrProvider403, hdrezkaMaxPoWIterations, challenge.Rules.Difficulty)
-}
-
 // passAnubisGate solves the challenge and completes the pass-challenge
 // round-trip; the auth cookie lands in the provider's cookie jar.
 // redir must be a same-host parseable URI (the server rejects anything
@@ -215,12 +172,12 @@ func (p *HDRezka) passAnubisGate(ctx context.Context, body []byte, originalURL s
 	if m == nil {
 		return fmt.Errorf("%w: anubis challenge page without challenge JSON", contracts.ErrProvider403)
 	}
-	var challenge hdrezkaAnubisChallenge
+	var challenge anubis.Challenge
 	if err := json.Unmarshal(m[1], &challenge); err != nil {
 		return fmt.Errorf("%w: decode anubis challenge: %w", contracts.ErrProvider403, err)
 	}
 	start := time.Now()
-	nonce, digest, err := solveHDRezkaAnubis(challenge)
+	nonce, digest, err := anubis.Solve(challenge)
 	if err != nil {
 		return err
 	}

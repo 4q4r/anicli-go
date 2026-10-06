@@ -84,6 +84,11 @@ func (e *Engine) openSDK(ls *lua.LState) {
 	// cp1251 scraper leg) decoded into UTF-8.
 	openSDKIconv(ls, mod)
 
+	// The PR141 Anubis PoW solver: the rezka family's gate solved in
+	// pure Go behind the sandbox (the hdrezka hybrid's load-bearing
+	// leg).
+	openSDKAnubis(ls, mod)
+
 	// The PR140 settings read: providers.<id>.<key> string values for
 	// the script's OWN provider id (the kodik token leg).
 	e.openSDKSettings(ls, mod)

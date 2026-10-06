@@ -101,6 +101,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// the animevost/anikoto pattern; the parity smoke command
 		// passes --proxy for the same reason).
 		"gogoanime": "one piece",
+		// anizone (PR130): the Livewire catalog rides the proxy (the
+		// direct route tarpits on the characterization network — the
+		// route-matrix honest note; the latin index answers the shared
+		// EN probe).
+		"anizone": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

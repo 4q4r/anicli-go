@@ -195,7 +195,7 @@ func providerBaseURLList() []string {
 	return []string{
 		"anilibria", "animevost", "anilib", "animego",
 		"gogoanime", "sameband", "kodik",
-		"anidub", "anizone",
+		"anidub",
 	}
 }
 

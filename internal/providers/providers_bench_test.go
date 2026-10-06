@@ -61,25 +61,8 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 	return srv
 }
 
-// --- anizone Livewire payload decode ---
-
-// BenchmarkAnizoneJSONArgDecode decodes a Livewire JSON.parse argument
-// (escaped-unicode heavy) — the inner loop of every anizone page walk.
-func BenchmarkAnizoneJSONArgDecode(b *testing.B) {
-	b.ReportAllocs()
-	raw := `{"t":"\u0427\u0451\u0440\u043d\u0430\u044f \u043b\u0430\u0433\u0443\u043d\u0430","e":"\ud83d\ude00","url":"https:\/\/anizone.to\/anime\/c05ffeb2-617d-4a52-af9f-19131a5c8b31","n":42}`
-	var sink []byte
-	for b.Loop() {
-		out, err := azDecodeJSONArgument(raw)
-		if err != nil {
-			b.Fatalf("decode: %v", err)
-		}
-		sink = out
-	}
-	benchSinkStr = string(sink)
-}
-
-var benchSinkStr string
+// benchSinkResults keeps Search/GetEpisodes results alive.
+var benchSinkResults []any
 
 // --- hdrezka page + anubis PoW ---
 
@@ -213,11 +196,13 @@ func BenchmarkAnilibSearch(b *testing.B) {
 var benchSinkN int
 
 // BenchmarkAniZoneSearch — anizone.to Livewire HTML search parse.
+// PR130: the bundled Lua script is the production path — the bench
+// drives it (the shiza precedent).
 func BenchmarkAniZoneSearch(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anizone_search.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAniZone(srv.URL, benchClient(b, "anizone"))
+	p := luaProvider(b, "anizone", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "black lagoon")
@@ -293,15 +278,15 @@ func BenchmarkAnilibGetEpisodes(b *testing.B) {
 }
 
 // BenchmarkAniZoneGetEpisodes — anizone series-page Livewire episode
-// walk over the live series capture.
+// walk over the live series capture (the bundled Lua script, PR130).
 func BenchmarkAniZoneGetEpisodes(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anizone_series.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAniZone(srv.URL, benchClient(b, "anizone"))
+	p := luaProvider(b, "anizone", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
-		eps, err := p.GetEpisodes(ctx, "https://anizone.to/anime/c05ffeb2-617d-4a52-af9f-19131a5c8b31")
+		eps, err := p.GetEpisodes(ctx, "a8vfumal")
 		if err != nil {
 			b.Fatalf("anizone episodes: %v", err)
 		}

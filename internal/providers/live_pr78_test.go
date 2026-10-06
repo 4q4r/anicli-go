@@ -13,6 +13,11 @@
 //
 //     ANICLI_LIVE_PROXY=http://127.0.0.1:10809 \
 //     go test -tags live -run TestLivePR78 -count=1 -v ./internal/providers/
+//
+// PR130: the provider runs as the BUNDLED LUA SCRIPT — the probe
+// loads it through the same proxy-aware live loader the other script
+// verifications use (the direct route tarpits on the characterization
+// network; ANICLI_LUA_LIVE_PROXY carries the same value).
 package providers
 
 import (
@@ -20,23 +25,15 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // TestLivePR78AniZoneNoResults runs the owner's failing query and its
 // latin variant against the live index.
 func TestLivePR78AniZoneNoResults(t *testing.T) {
-	cfg := config.Default()
-	if proxy := os.Getenv("ANICLI_LIVE_PROXY"); proxy != "" {
-		cfg.Network.ProxyURL = proxy
+	if os.Getenv("ANICLI_LIVE_PROXY") != "" {
+		t.Setenv("ANICLI_LUA_LIVE_PROXY", os.Getenv("ANICLI_LIVE_PROXY"))
 	}
-	http, err := netclient.New(cfg.Network, netclient.WithProvider("anizone"))
-	if err != nil {
-		t.Fatalf("netclient: %v", err)
-	}
-	p := newAniZone(AniZoneBase, http)
+	p := liveProvider(t, "anizone")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

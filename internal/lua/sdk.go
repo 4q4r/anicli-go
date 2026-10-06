@@ -120,12 +120,12 @@ func (e *Engine) sdkFail(ls *lua.LState) int {
 // transport, capping the body before it can reach a script. The
 // transport/error branches live in httpDo (sdk_ext.go) — shared with
 // http.get / http.get_batch.
-func (e *Engine) sdkHTTP(ls *lua.LState, method, rawURL, body, contentType string) *lua.LTable {
+func (e *Engine) sdkHTTP(ls *lua.LState, method, rawURL, body, contentType string, headers map[string]string) *lua.LTable {
 	ctx := ls.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return e.luaResponseTable(ls, e.httpDo(ctx, method, rawURL, body, contentType, nil), method+" "+rawURL)
+	return e.luaResponseTable(ls, e.httpDo(ctx, method, rawURL, body, contentType, headers), method+" "+rawURL)
 }
 
 func flattenHeaders(h http.Header) map[string]string {
@@ -140,7 +140,7 @@ func flattenHeaders(h http.Header) map[string]string {
 
 func (e *Engine) sdkHTTPGetJSON(ls *lua.LState) int {
 	url := ls.CheckString(1)
-	resp := e.sdkHTTP(ls, http.MethodGet, url, "", "")
+	resp := e.sdkHTTP(ls, http.MethodGet, url, "", "", nil)
 	if resp == nil {
 		return 0
 	}
@@ -158,7 +158,11 @@ func (e *Engine) sdkHTTPPost(ls *lua.LState) int {
 	url := ls.CheckString(1)
 	body := ls.CheckString(2)
 	ct := ls.OptString(3, "")
-	ls.Push(e.sdkHTTP(ls, http.MethodPost, url, string(body), ct))
+	// PR130: the trailing opts table (headers) mirrors http.get's —
+	// the anizone Livewire continuation POSTs X-CSRF-TOKEN and the
+	// XHR markers a bare content-type cannot carry.
+	headers := optHeadersTable(ls, 4)
+	ls.Push(e.sdkHTTP(ls, http.MethodPost, url, string(body), ct, headers))
 	return 1
 }
 

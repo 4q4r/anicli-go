@@ -64,6 +64,10 @@ var luaProductionBases = map[string][]string{
 	// rewritten to the test server at serve time (the harness rewrites
 	// exactly this one literal).
 	"gogoanime": {"https://anitaku.io"},
+	// anizone (PR130): the site root — every leg (search, the series
+	// page, /livewire/update, the watch page) hangs off the one
+	// base_url literal, and the Referer/Origin headers derive from it.
+	"anizone": {"https://anizone.to"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

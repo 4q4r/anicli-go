@@ -2,10 +2,9 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -13,64 +12,180 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// kaaBodyCapture records the raw request body of the last POST (the
-// fsearch endpoint speaks JSON, which recordedRequest.Form does not
-// see).
-type kaaBodyCapture struct {
-	mu   sync.Mutex
-	body []byte
+// kickassanime (PR58) serves the kaa.lt catalog: a fuzzy JSON search,
+// a paginated per-show episode API, and per-episode server lists whose
+// media ids resolve onto the krussdomi HLS edge. All fixtures are
+// verbatim live captures of 2026-09-18 (kaa.lt answered every probe
+// anonymously — no challenge page).
+//
+// PR129: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/kickassanime/main.lua) — these tests
+// pin the script through the same contracts.Provider surface and the
+// same fixtures the compiled Go implementation was held to.
+//
+// Dubs-hydration delta vs the compiled provider: the Go provider
+// exposed FetchDubs (contracts.DubsHydrator) and hydrated lazily per
+// episode; the Lua provider contract has no such capability (the
+// session resolves only from the listing's raw_embeds), so the script
+// hydrates EAGERLY per episode in one bounded-parallel batch — the
+// anikoto/animedia/yummy precedent. The empty-raw_embeds pins of the
+// Go tests flip accordingly: here the embeds ride the listing.
+
+// kaaRequest is one recorded request (method, path, query, headers,
+// body) — the mutex-guarded log the resolution-chain tests read.
+type kaaRequest struct {
+	Method string
+	Path   string
+	Query  string
+	Header http.Header
+	Body   string
 }
 
-func (c *kaaBodyCapture) read(r *http.Request) {
-	b, _ := io.ReadAll(r.Body)
-	c.mu.Lock()
-	c.body = b
-	c.mu.Unlock()
+// kaaOverride replaces the fixture answer for every path carrying the
+// prefix (the failure-shape tests).
+type kaaOverride struct {
+	body string
+	code int
 }
 
-func (c *kaaBodyCapture) last() []byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.body
+// kaaTestServer builds a dedicated mux server (NOT the shared
+// fixtureServer recorder — the eager hydration runs parallel fetches,
+// which race the single-slot recorder) answering the kickassanime
+// fixtures, with per-test override answers.
+type kaaTestServer struct {
+	*httptest.Server
+	t         *testing.T
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	reqs      []kaaRequest
+	overrides map[string]kaaOverride
+}
+
+func newKaaTestServer(t *testing.T) *kaaTestServer {
+	t.Helper()
+	s := &kaaTestServer{t: t, mux: http.NewServeMux(), overrides: map[string]kaaOverride{}}
+
+	// fsearch: capture the POST body (the JSON form recordedRequest
+	// does not see — the kaaBodyCapture lesson, carried over).
+	s.mux.HandleFunc("/api/fsearch", func(w http.ResponseWriter, r *http.Request) {
+		s.answer(w, r, "kickassanime_search.json")
+	})
+	// show / episodes / servers: keyed by path shape.
+	s.mux.HandleFunc("/api/show/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/episodes"):
+			s.answer(w, r, "kickassanime_episodes.json")
+		case strings.Contains(r.URL.Path, "/episode/"):
+			s.answer(w, r, "kickassanime_servers.json")
+		default:
+			s.answer(w, r, "kickassanime_show.json")
+		}
+	})
+
+	s.Server = httptest.NewServer(s.mux)
+	t.Cleanup(s.Close)
+	return s
+}
+
+// override replaces the fixture answer for paths carrying prefix (an
+// override, not a re-registration — Go 1.22+ ServeMux panics on
+// duplicate patterns).
+func (s *kaaTestServer) override(prefix string, body string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overrides[prefix] = kaaOverride{body: body, code: code}
+}
+
+// answer records the request and serves the first matching override,
+// else the fixture file.
+func (s *kaaTestServer) answer(w http.ResponseWriter, r *http.Request, name string) {
+	s.record(r)
+	s.mu.Lock()
+	var hit *kaaOverride
+	for prefix, ov := range s.overrides {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			o := ov
+			hit = &o
+			break
+		}
+	}
+	s.mu.Unlock()
+	if hit != nil {
+		w.WriteHeader(hit.code)
+		_, _ = w.Write([]byte(hit.body))
+		return
+	}
+	_, _ = w.Write(fixture(s.t, name))
+}
+
+func (s *kaaTestServer) record(r *http.Request) {
+	buf := new(strings.Builder)
+	if r.Body != nil {
+		bufs := make([]byte, 4096)
+		n, _ := r.Body.Read(bufs)
+		buf.Write(bufs[:n])
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqs = append(s.reqs, kaaRequest{
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Query:  r.URL.RawQuery,
+		Header: r.Header.Clone(),
+		Body:   buf.String(),
+	})
+}
+
+func (s *kaaTestServer) log() []kaaRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]kaaRequest(nil), s.reqs...)
+}
+
+func (s *kaaTestServer) countPath(segment string) int {
+	n := 0
+	for _, req := range s.log() {
+		if strings.Contains(req.Path, segment) {
+			n++
+		}
+	}
+	return n
+}
+
+// kaaProvider loads the bundled kickassanime script against the test
+// server (the Lua harness rewrites the production base literal).
+func kaaProvider(t *testing.T, srv *kaaTestServer) contracts.Provider {
+	t.Helper()
+	return luaProvider(t, "kickassanime", srv.URL)
 }
 
 func TestKickassAnimeSearch(t *testing.T) {
 	t.Parallel()
 
-	cap := &kaaBodyCapture{}
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		cap.read(r)
-		if r.URL.Path == "/api/fsearch" {
-			_, _ = w.Write(fixture(t, "kickassanime_search.json"))
-			return
-		}
-		http.NotFound(w, r)
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	p := kaaProvider(t, srv)
 
 	results, err := p.Search(context.Background(), "one piece")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 
-	if rec.Method != http.MethodPost {
-		t.Errorf("request method = %q, want POST", rec.Method)
+	reqs := srv.log()
+	if len(reqs) == 0 {
+		t.Fatal("no request recorded")
 	}
-	if rec.Path != "/api/fsearch" {
-		t.Errorf("request path = %q, want /api/fsearch", rec.Path)
+	req := reqs[len(reqs)-1]
+	if req.Method != http.MethodPost {
+		t.Errorf("request method = %q, want POST", req.Method)
 	}
-	if got := rec.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+	if req.Path != "/api/fsearch" {
+		t.Errorf("request path = %q, want /api/fsearch", req.Path)
+	}
+	if got := req.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}
-	var body struct {
-		Page  int    `json:"page"`
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal(cap.last(), &body); err != nil {
-		t.Fatalf("request body %q is not JSON: %v", cap.last(), err)
-	}
-	if body.Page != 1 || body.Query != "one piece" {
-		t.Errorf("request body = %q, want {page:1, query:\"one piece\"}", cap.last())
+	if !strings.Contains(req.Body, `"page":1`) || !strings.Contains(req.Body, `"query":"one piece"`) {
+		t.Errorf("request body = %q, want {page:1, query:\"one piece\"}", req.Body)
 	}
 
 	// Fixture values are verbatim live captures (kaa.lt /api/fsearch
@@ -97,10 +212,9 @@ func TestKickassAnimeSearch(t *testing.T) {
 func TestKickassAnimeSearchEmpty(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":[],"maxPage":0}`))
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	srv.override("/api/fsearch", `{"result":[],"maxPage":0}`, http.StatusOK)
+	p := kaaProvider(t, srv)
 
 	results, err := p.Search(context.Background(), "zzz-no-such-anime")
 	if err != nil {
@@ -114,10 +228,9 @@ func TestKickassAnimeSearchEmpty(t *testing.T) {
 func TestKickassAnimeSearchMalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("<html>challenge page</html>"))
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	srv.override("/api/fsearch", "<html>challenge page</html>", http.StatusOK)
+	p := kaaProvider(t, srv)
 
 	_, err := p.Search(context.Background(), "q")
 	if err == nil {
@@ -131,24 +244,30 @@ func TestKickassAnimeSearchMalformedJSON(t *testing.T) {
 func TestKickassAnimeGetEpisodes(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/show/dandadan-da3b":
-			_, _ = w.Write(fixture(t, "kickassanime_show.json"))
-		case "/api/show/dandadan-da3b/episodes":
-			if got := r.URL.Query().Get("lang"); got != "ja-JP" {
-				t.Errorf("episodes lang = %q, want ja-JP", got)
-			}
-			_, _ = w.Write(fixture(t, "kickassanime_episodes.json"))
-		default:
-			http.NotFound(w, r)
-		}
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	p := kaaProvider(t, srv)
 
 	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
+	}
+
+	// The episode API request shape: ?ep=1 first page + lang=ja-JP.
+	var epsReq *kaaRequest
+	for i := range srv.log() {
+		req := srv.log()[i]
+		if strings.HasSuffix(req.Path, "/episodes") {
+			epsReq = &req
+		}
+	}
+	if epsReq == nil {
+		t.Fatal("the episode API was never fetched")
+	}
+	if !strings.Contains(epsReq.Query, "ep=1") {
+		t.Errorf("episodes query = %q, want the ep=1 first page", epsReq.Query)
+	}
+	if !strings.Contains(epsReq.Query, "lang=ja-JP") {
+		t.Errorf("episodes query = %q, want lang=ja-JP", epsReq.Query)
 	}
 
 	// Fixture = verbatim live capture of the 12-episode Dandadan page.
@@ -167,8 +286,19 @@ func TestKickassAnimeGetEpisodes(t *testing.T) {
 	if first.RawID != "dandadan-da3b/ep-1-b324b5" {
 		t.Errorf("RawID = %q, want dandadan-da3b/ep-1-b324b5", first.RawID)
 	}
-	if len(first.RawEmbeds) != 0 {
-		t.Errorf("RawEmbeds = %v, want empty (servers hydrate per episode)", first.RawEmbeds)
+	// Eager hydration (the DubsHydrator delta): the VidStreaming
+	// manifest rides the listing; the dash-typed BirdStream is skipped
+	// (its id answers 502 against the manifest path — two independent
+	// ids probed live).
+	links, ok := first.RawEmbeds["VidStreaming"]
+	if !ok || len(links) != 1 {
+		t.Fatalf("RawEmbeds[\"VidStreaming\"] = %v, want the one HLS mirror", first.RawEmbeds["VidStreaming"])
+	}
+	if links[0] != "https://hls.krussdomi.com/manifest/6713f500b97399e0e1ae2020/master.m3u8" {
+		t.Errorf("mirror = %q, want the constructed krussdomi master manifest", links[0])
+	}
+	if _, ok := first.RawEmbeds["BirdStream"]; ok {
+		t.Errorf("BirdStream slot present = %v, want skipped (type=dash)", first.RawEmbeds["BirdStream"])
 	}
 }
 
@@ -182,27 +312,31 @@ func TestKickassAnimeGetEpisodesMultiPage(t *testing.T) {
 		`{"slug":"ccc333","title":"Ep Three","episode_number":3,"episode_string":"3"},` +
 		`{"slug":"ddd444","title":"Ep Four","episode_number":4,"episode_string":"4"}]}`
 	show := `{"slug":"dandadan-da3b","type":"tv","locales":["ja-JP","en-US"]}`
+	servers := `{"slug":"aaa111","show_slug":"dandadan-da3b","servers":[` +
+		`{"name":"VidStreaming","shortName":"Vid","src":"https://krussdomi.com/cat-player/player?id=6713f500b97399e0e1ae2020&source=vidstream&ln=ja-JP"}]}`
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/show/dandadan-da3b":
-			_, _ = w.Write([]byte(show))
-		case "/api/show/dandadan-da3b/episodes":
-			switch r.URL.Query().Get("ep") {
-			case "1":
-				_, _ = w.Write([]byte(page1))
-			case "3":
-				// The follow-up page is fetched with the page's FIRST
-				// episode number (the Anivexa recipe's pg.eps[0] hop).
-				_, _ = w.Write([]byte(page2))
-			default:
-				http.NotFound(w, r)
-			}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/show/dandadan-da3b", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(show))
+	})
+	mux.HandleFunc("/api/show/dandadan-da3b/episodes", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("ep") {
+		case "1":
+			_, _ = w.Write([]byte(page1))
+		case "3":
+			// The follow-up page is fetched with the page's FIRST
+			// episode number (the pg.eps[0] hop).
+			_, _ = w.Write([]byte(page2))
 		default:
 			http.NotFound(w, r)
 		}
 	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	mux.HandleFunc("/api/show/dandadan-da3b/episode/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(servers))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	p := luaProvider(t, "kickassanime", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
 	if err != nil {
@@ -233,17 +367,21 @@ func TestKickassAnimeGetEpisodesSkipsInvalidNumbers(t *testing.T) {
 		`{"slug":"good1","title":"ok","episode_number":1,"episode_string":"1"},` +
 		`{"slug":"bad0","title":"zero","episode_number":0,"episode_string":"0"},` +
 		`{"slug":"badj","title":"junk","episode_number":"x","episode_string":"x"}]}`
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/show/x":
-			_, _ = w.Write([]byte(show))
-		case "/api/show/x/episodes":
-			_, _ = w.Write([]byte(page))
-		default:
-			http.NotFound(w, r)
-		}
+	servers := `{"servers":[]}`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/show/x", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(show))
 	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	mux.HandleFunc("/api/show/x/episodes", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(page))
+	})
+	mux.HandleFunc("/api/show/x/episode/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(servers))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	p := luaProvider(t, "kickassanime", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "x")
 	if err != nil {
@@ -262,19 +400,23 @@ func TestKickassAnimeGetEpisodesMovie(t *testing.T) {
 	// — the movie renders as ONE episode numbered 1 (the wire number is
 	// 0 and must not leak), RawID from the watch_uri tail.
 	show := `{"slug":"demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62","type":"movie","locales":["ja-JP","en-US"],"watch_uri":"/demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62/ep-0-8d7564"}`
+	servers := `{"servers":[{"name":"VidStreaming","shortName":"Vid","src":"https://krussdomi.com/cat-player/player?id=6713f500b97399e0e1ae2020&source=vidstream&ln=ja-JP"}]}`
+
+	mux := http.NewServeMux()
 	episodesRequested := false
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/show/demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62":
-			_, _ = w.Write([]byte(show))
-		case strings.HasSuffix(r.URL.Path, "/episodes"):
-			episodesRequested = true
-			http.NotFound(w, r)
-		default:
-			http.NotFound(w, r)
-		}
+	mux.HandleFunc("/api/show/demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(show))
 	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	mux.HandleFunc("/api/show/demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62/episodes", func(w http.ResponseWriter, _ *http.Request) {
+		episodesRequested = true
+		http.NotFound(w, nil)
+	})
+	mux.HandleFunc("/api/show/demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62/episode/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(servers))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	p := luaProvider(t, "kickassanime", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62")
 	if err != nil {
@@ -292,15 +434,18 @@ func TestKickassAnimeGetEpisodesMovie(t *testing.T) {
 	if episodes[0].RawID != "demon-slayer-kimetsu-no-yaiba-the-movie-mugen-train-cc62/ep-0-8d7564" {
 		t.Errorf("RawID = %q, want the show-prefixed watch_uri tail", episodes[0].RawID)
 	}
+	// Eager hydration covers the movie's single episode too.
+	if _, ok := episodes[0].RawEmbeds["VidStreaming"]; !ok {
+		t.Errorf("RawEmbeds = %v, want the hydrated VidStreaming slot", episodes[0].RawEmbeds)
+	}
 }
 
 func TestKickassAnimeGetEpisodesShow404(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	srv.override("/api/show/", "not found", http.StatusNotFound)
+	p := kaaProvider(t, srv)
 
 	_, err := p.GetEpisodes(context.Background(), "gone-show")
 	if !errors.Is(err, contracts.ErrNotFound) {
@@ -308,37 +453,28 @@ func TestKickassAnimeGetEpisodesShow404(t *testing.T) {
 	}
 }
 
-func TestKickassAnimeFetchDubs(t *testing.T) {
+// TestKickassAnimeEpisodeEmbeds pins the eager hydration shape: every
+// server with an id-bearing src becomes a constructed master-manifest
+// embed under the server's name; dash-typed servers and id-less srcs
+// are skipped (the compiled FetchDubs rules, now riding the listing).
+func TestKickassAnimeEpisodeEmbeds(t *testing.T) {
 	t.Parallel()
 
-	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/show/dandadan-da3b/episode/ep-1-b324b5" {
-			_, _ = w.Write(fixture(t, "kickassanime_servers.json"))
-			return
-		}
-		http.NotFound(w, r)
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	p := kaaProvider(t, srv)
 
-	episode := contracts.Episode{
-		Num:       "1",
-		RawID:     "dandadan-da3b/ep-1-b324b5",
-		RawEmbeds: map[string][]string{},
-	}
-	got, err := p.FetchDubs(context.Background(), &episode)
+	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
 	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
-	}
-	if rec.Path != "/api/show/dandadan-da3b/episode/ep-1-b324b5" {
-		t.Errorf("request path = %q, want the episode servers endpoint", rec.Path)
+		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	embeds := got.RawEmbeds
-	// [LIVE-VERIFIED 2026-09-18] the Dandadan ep-1 server list carries
-	// VidStreaming (HLS id) + BirdStream (type=dash); the dash id
-	// answers 502 against the krussdomi manifest path (two independent
-	// ids probed), so dash-typed servers are skipped — an embed slot
-	// that cannot resolve is dead weight in the picker.
+	// The hydration batch hit the per-episode servers endpoint (12
+	// episodes in the fixture).
+	if got := srv.countPath("/episode/"); got < 12 {
+		t.Errorf("server-list fetches = %d, want >= 12 (eager hydration)", got)
+	}
+
+	embeds := episodes[0].RawEmbeds
 	if len(embeds) != 1 {
 		t.Fatalf("RawEmbeds = %v, want 1 dub slot (VidStreaming; the type=dash BirdStream is skipped)", embeds)
 	}
@@ -351,54 +487,53 @@ func TestKickassAnimeFetchDubs(t *testing.T) {
 	}
 }
 
-func TestKickassAnimeFetchDubsSkipsMissingID(t *testing.T) {
+// TestKickassAnimeEpisodeEmbedsSkipMissingID: a src without an ?id=
+// query has nothing to build a manifest from — the server is skipped,
+// the id-bearing sibling is kept.
+func TestKickassAnimeEpisodeEmbedsSkipMissingID(t *testing.T) {
 	t.Parallel()
 
 	servers := `{"slug":"b324b5","show_slug":"dandadan-da3b","servers":[` +
 		`{"name":"NoID","shortName":"N","src":"https://krussdomi.com/cat-player/player?source=vidstream"},` +
 		`{"name":"VidStreaming","shortName":"Vid","src":"https://krussdomi.com/cat-player/player?id=6713f500b97399e0e1ae2020&source=vidstream&ln=ja-JP"}]}`
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/show/dandadan-da3b/episode/ep-1-b324b5" {
-			_, _ = w.Write([]byte(servers))
-			return
-		}
-		http.NotFound(w, r)
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
+	srv := newKaaTestServer(t)
+	srv.override("/api/show/dandadan-da3b/episode/", servers, http.StatusOK)
+	p := kaaProvider(t, srv)
 
-	episode := contracts.Episode{
-		Num:       "1",
-		RawID:     "dandadan-da3b/ep-1-b324b5",
-		RawEmbeds: map[string][]string{},
-	}
-	got, err := p.FetchDubs(context.Background(), &episode)
+	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
 	if err != nil {
-		t.Fatalf("FetchDubs: %v", err)
+		t.Fatalf("GetEpisodes: %v", err)
 	}
-	if _, ok := got.RawEmbeds["NoID"]; ok {
-		t.Errorf("NoID slot present = %v, want skipped (no id to build a manifest from)", got.RawEmbeds["NoID"])
+	if _, ok := episodes[0].RawEmbeds["NoID"]; ok {
+		t.Errorf("NoID slot present = %v, want skipped (no id to build a manifest from)", episodes[0].RawEmbeds["NoID"])
 	}
-	if len(got.RawEmbeds["VidStreaming"]) != 1 {
-		t.Errorf("VidStreaming = %v, want the id-bearing mirror", got.RawEmbeds["VidStreaming"])
+	if len(episodes[0].RawEmbeds["VidStreaming"]) != 1 {
+		t.Errorf("VidStreaming = %v, want the id-bearing mirror", episodes[0].RawEmbeds["VidStreaming"])
 	}
 }
 
 func TestKickassAnimeResolveStream(t *testing.T) {
 	t.Parallel()
 
-	p := newKickassanime(KickassAnimeBase, testClient(t, "kickassanime"), 4)
-	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "dandadan-da3b/ep-1-b324b5",
-		RawEmbeds: map[string][]string{
-			"VidStreaming": {"https://hls.krussdomi.com/manifest/6713f500b97399e0e1ae2020/master.m3u8"},
-		},
-	}
+	srv := newKaaTestServer(t)
+	p := kaaProvider(t, srv)
 
-	stream, err := p.ResolveStream(context.Background(), episode, "VidStreaming")
+	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	before := srv.countPath("/episode/ep-1-b324b5")
+
+	stream, err := p.ResolveStream(context.Background(), episodes[0], "VidStreaming")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
+	// The fresh-sandbox contract re-derives the server list at resolve
+	// time (the anikoto/yummy re-fetch pattern).
+	if after := srv.countPath("/episode/ep-1-b324b5"); after <= before {
+		t.Errorf("server-list fetches for ep-1 = %d before, %d after — the resolve must re-fetch", before, after)
+	}
+
 	if stream.DubName != "VidStreaming" {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
@@ -420,74 +555,50 @@ func TestKickassAnimeResolveStream(t *testing.T) {
 	}
 }
 
-// TestKickassAnimeResolveStreamLazyFetchesDubs keeps the gogoanime
-// behavior: an episode without embeds gets its server list fetched on
-// demand inside resolve.
-func TestKickassAnimeResolveStreamLazyFetchesDubs(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/show/dandadan-da3b/episode/ep-1-b324b5" {
-			_, _ = w.Write(fixture(t, "kickassanime_servers.json"))
-			return
-		}
-		http.NotFound(w, r)
-	})
-	p := newKickassanime(srv.URL, testClient(t, "kickassanime"), 4)
-
-	episode := contracts.Episode{
-		Num:       "1",
-		RawID:     "dandadan-da3b/ep-1-b324b5",
-		RawEmbeds: map[string][]string{},
-	}
-
-	stream, err := p.ResolveStream(context.Background(), episode, "VidStreaming")
-	if err != nil {
-		t.Fatalf("ResolveStream: %v", err)
-	}
-	if _, ok := stream.Links["auto"]; !ok {
-		t.Fatalf("Links = %v, want the lazy-fetched auto source", stream.Links)
-	}
-}
-
 func TestKickassAnimeResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
-	p := newKickassanime(KickassAnimeBase, testClient(t, "kickassanime"), 4)
-	episode := contracts.Episode{
-		Num:   "1",
-		RawID: "dandadan-da3b/ep-1-b324b5",
-		RawEmbeds: map[string][]string{
-			"VidStreaming": {"https://hls.krussdomi.com/manifest/6713f500b97399e0e1ae2020/master.m3u8"},
-		},
+	srv := newKaaTestServer(t)
+	p := kaaProvider(t, srv)
+
+	episodes, err := p.GetEpisodes(context.Background(), "dandadan-da3b")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "Nope")
-	if err == nil {
-		t.Fatal("error = nil, want a typed unknown-dub failure")
+	_, err = p.ResolveStream(context.Background(), episodes[0], "Nope")
+	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
+		t.Errorf("err = %v, want ErrInvalidInput", err)
 	}
-	if !strings.Contains(err.Error(), "kickassanime") {
-		t.Errorf("error = %v, want provider-tagged failure", err)
+}
+
+// TestKickassAnimeResolveStreamBadRawID: a RawID without the
+// {showSlug}/{epSlug} shape is a caller bug — typed invalid input, no
+// fetch.
+func TestKickassAnimeResolveStreamBadRawID(t *testing.T) {
+	t.Parallel()
+
+	p := kaaProvider(t, newKaaTestServer(t))
+	_, err := p.ResolveStream(context.Background(), contracts.Episode{Num: "1", RawID: "no-slash-here"}, "VidStreaming")
+	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
+		t.Errorf("err = %v, want ErrInvalidInput", err)
 	}
 }
 
 func TestKickassAnimeProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newKickassanime(KickassAnimeBase, testClient(t, "kickassanime"), 4)
-	if p.ID() != "kickassanime" || p.Name() != "KickassAnime" || p.BaseURL() != KickassAnimeBase {
+	p := luaProviderAtProduction(t, "kickassanime")
+	if p.ID() != "kickassanime" || p.Name() != "KickassAnime" || p.BaseURL() != "https://kaa.lt" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
-	}
-	if KickassAnimeBase != "https://kaa.lt" {
-		t.Errorf("KickassAnimeBase = %q, want the live kaa.lt domain", KickassAnimeBase)
 	}
 	// JA audio native, EN dub audio switchable inside the same master
 	// manifest [LIVE-VERIFIED 2026-09-18: EXT-X-MEDIA NAME="English"].
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ja" {
-		t.Errorf("ContentLanguage = %q, want ja", p.ContentLanguage())
+	if lc, ok := p.(interface{ ContentLanguage() string }); !ok || lc.ContentLanguage() != "ja" {
+		t.Errorf("ContentLanguage = %v, want ja", p)
 	}
 }
 
@@ -497,10 +608,10 @@ func TestKickassAnimeProviderMeta(t *testing.T) {
 func TestKickassAnimeNamePreference(t *testing.T) {
 	t.Parallel()
 
-	p := newKickassanime(KickassAnimeBase, testClient(t, "kickassanime"), 4)
-	np, ok := any(p).(contracts.NamePreferenceProvider)
+	p := luaProviderAtProduction(t, "kickassanime")
+	np, ok := p.(contracts.NamePreferenceProvider)
 	if !ok {
-		t.Fatalf("KickassAnime must implement contracts.NamePreferenceProvider")
+		t.Fatalf("the kickassanime lua provider lost the NamePreference surface (%T)", p)
 	}
 	if got := np.NamePreference(); got != contracts.NamePrefLatin {
 		t.Errorf("NamePreference = %v, want NamePrefLatin", got)
@@ -508,20 +619,20 @@ func TestKickassAnimeNamePreference(t *testing.T) {
 }
 
 // TestKickassAnimeSmokeQuery pins the PR52 capability: the shared
-// probes (черная лагуна / black lagoon) hit kaa.lt catalog entries
-// whose episode server lists are currently EMPTY server-side
-// [LIVE-VERIFIED 2026-09-18: black-lagoon-ac06 ep-1 answers servers:[]
-// in both ja-JP and en-US], so the provider declares its own
-// end-to-end-proven broad hit instead.
+// probes (черная лагуна / black lagoon) surface kaa.lt entries whose
+// episode server lists are currently empty server-side — the chain
+// dies at hydration through no provider-code fault. "dandadan" is the
+// proven broad hit: two fresh-season search hits, both with populated
+// per-episode servers.
 func TestKickassAnimeSmokeQuery(t *testing.T) {
 	t.Parallel()
 
-	p := newKickassanime(KickassAnimeBase, testClient(t, "kickassanime"), 4)
-	sq, ok := contracts.Provider(p).(contracts.SmokeQueryProvider)
+	p := luaProviderAtProduction(t, "kickassanime")
+	sq, ok := p.(contracts.SmokeQueryProvider)
 	if !ok {
-		t.Fatalf("KickassAnime does not declare SmokeQueryProvider")
+		t.Fatalf("kickassanime does not declare SmokeQueryProvider")
 	}
-	if sq.SmokeQuery() == "" {
-		t.Fatalf("SmokeQuery = \"\", want a provider-specific probe")
+	if sq.SmokeQuery() != "dandadan" {
+		t.Errorf("SmokeQuery = %q, want dandadan", sq.SmokeQuery())
 	}
 }

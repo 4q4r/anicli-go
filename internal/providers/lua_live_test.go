@@ -90,6 +90,12 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// direct route tarpits on the characterization network — the
 		// compiled provider's route note verbatim).
 		"anikoto": "black lagoon",
+		// kickassanime (PR129): the kaa.lt JSON API tarpits the direct
+		// route's episode fan-out on the characterization network (the
+		// search answers, the episode pages stall — live 2026-10-06),
+		// so the honest route is the proxy; run with
+		// ANICLI_LUA_LIVE_PROXY.
+		"kickassanime": "dandadan",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

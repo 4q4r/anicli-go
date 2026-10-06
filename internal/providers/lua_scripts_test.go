@@ -53,6 +53,11 @@ var luaProductionBases = map[string][]string{
 	// stream resolver's answer (the fixtures rewrite it to the test
 	// server at serve time).
 	"anikoto": {"https://anikototv.to"},
+	// kickassanime (PR129): the site root — every leg (fsearch, show,
+	// episodes, servers) hangs off the one base_url literal. The
+	// krussdomi HLS edge and its Referer are constructed constants, not
+	// fetched hosts.
+	"kickassanime": {"https://kaa.lt"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

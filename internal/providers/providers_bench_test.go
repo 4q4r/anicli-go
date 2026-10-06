@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
@@ -59,9 +60,6 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 	b.Cleanup(srv.Close)
 	return srv
 }
-
-// benchSinkResults keeps Search/GetEpisodes results alive.
-var benchSinkResults []any
 
 // --- anizone Livewire payload decode ---
 
@@ -138,26 +136,40 @@ func BenchmarkHDRezkaAnubisPoWD2(b *testing.B) {
 
 var benchSinkPoW int
 
-// --- kickassanime episode page conversion ---
+// --- kickassanime episode walk ---
 
-// BenchmarkKaaPageEpisodes converts one wire episodes page (live
-// capture) into contracts.Episode values.
-func BenchmarkKaaPageEpisodes(b *testing.B) {
+// BenchmarkKaaGetEpisodes drives the bundled Lua script's episode walk
+// (show routing, first page, follow-up fan-out and the eager
+// per-episode hydration) over the live captures. PR129: the bundled
+// Lua script is the production path — the bench drives it (the shiza
+// precedent), the compiled pageEpisodes conversion bench is gone with
+// the Go file.
+func BenchmarkKaaGetEpisodes(b *testing.B) {
 	b.ReportAllocs()
-	body := benchFixture(b, "kickassanime_episodes.json")
-	var page kaaEpisodesResponse
-	if err := json.Unmarshal(body, &page); err != nil {
-		b.Fatalf("decode kaa episodes: %v", err)
-	}
-	var sink []any
-	for b.Loop() {
-		eps, err := pageEpisodes("one-piece", &page)
-		if err != nil {
-			b.Fatalf("pageEpisodes: %v", err)
+	show := benchFixture(b, "kickassanime_show.json")
+	episodes := benchFixture(b, "kickassanime_episodes.json")
+	servers := benchFixture(b, "kickassanime_servers.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/episodes"):
+			_, _ = w.Write(episodes)
+		case strings.Contains(r.URL.Path, "/episode/"):
+			_, _ = w.Write(servers)
+		default:
+			_, _ = w.Write(show)
 		}
-		sink = append(sink[:0], any(eps))
+	}))
+	b.Cleanup(srv.Close)
+	p := luaProvider(b, "kickassanime", srv.URL)
+	ctx := context.Background()
+	for b.Loop() {
+		eps, err := p.GetEpisodes(ctx, "dandadan-da3b")
+		if err != nil {
+			b.Fatalf("kaa episodes: %v", err)
+		}
+		benchSinkN = len(eps)
 	}
-	benchSinkResults = sink
 }
 
 // --- SequenceMatcher similarity (rehydrate matching) ---

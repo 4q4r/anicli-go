@@ -64,9 +64,19 @@ var allFactories = []struct {
 	// tier-1 (the anilib.go helper's last Go consumer dies here — the
 	// distribution lives in the script's episodes()).
 	{"animego", true, nil},
-	{"gogoanime", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newGogoAnime(GogoAnimeBase, http)
-	}},
+	// gogoanime (PR128): the anitaku.io WordPress platform (the
+	// gogoanime rebrand, Kohi-den extensions-source issue #410; the
+	// anicli-py gogoanime.py port re-verified live 2026-09-18) migrated
+	// to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/gogoanime/main.lua) — the ninth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script carries the ts_ac_do_search admin-ajax search, the
+	// newest-first .eplister listing reversed to ascending, the eager
+	// per-episode mirror hydration (base64 select.mirror options, the
+	// Lua contract has no DubsHydrator — the yummy/animedia/anikoto
+	// precedent) and the fresh-sandbox resolve through the shared
+	// extractor factory (anicli.extract).
+	{"gogoanime", true, nil},
 	{"kickassanime", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
 	}},

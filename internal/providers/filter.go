@@ -74,8 +74,8 @@ func (f *StreamFilter) Excluded(dub string) bool {
 // HTTP API, parity) reads the dub list from. ResolveStream is left
 // untouched: an excluded stream can no longer be selected because it
 // never appears in a listing. Providers hydrating their dubs lazily
-// via FetchDubs inside GetEpisodes (gogoanime) are covered too: the
-// filter sees the final embeds.
+// via FetchDubs (kickassanime; gogoanime until its PR128 Lua
+// migration) are covered too: the filter sees the final embeds.
 type dubFilteredProvider struct {
 	contracts.Provider
 

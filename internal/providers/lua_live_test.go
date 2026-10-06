@@ -90,6 +90,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// direct route tarpits on the characterization network — the
 		// compiled provider's route note verbatim).
 		"anikoto": "black lagoon",
+		// gogoanime (PR128): the declared "one piece" probe rides the
+		// proxy (the honest route per the characterization network —
+		// the animevost/anikoto pattern; the parity smoke command
+		// passes --proxy for the same reason).
+		"gogoanime": "one piece",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

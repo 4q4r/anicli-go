@@ -172,16 +172,18 @@ var allFactories = []struct {
 	{"anistar", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniStar(AniStarBase, http)
 	}},
-	// anifilm (PR91): the anifilm.pro RU stream+torrent catalog — a
-	// custom Yii/Vue engine, NOT DLE. Written from the live site
-	// (2026-09-23); no credentials: GET-form search, Vue
-	// player-component props → api:online playlists → api:video pages
-	// wrapping kodik embeds (shared extractor). The per-release
-	// .torrent downloads are a TorrentBase extension candidate,
-	// deliberately out of scope here.
-	{"anifilm", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniFilm(AniFilmBase, http)
-	}},
+	// anifilm (PR91 → PR135): the anifilm.pro RU stream+torrent catalog
+	// — a custom Yii/Vue engine, NOT DLE; written from the live site
+	// (2026-09-23; re-verified live through the configured proxy
+	// 2026-10-06). Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anifilm/main.lua) — the nineteenth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the GET-form search, the Vue player-component props
+	// → api:online playlists → api:video pages wrapping kodik embeds
+	// (shared extractor). No credentials. The per-release .torrent
+	// downloads are a TorrentBase extension candidate, deliberately out
+	// of scope here.
+	{"anifilm", true, nil},
 	// animemobi (PR92): the animemobi.com RU mobile catalog (DLE, UTF-8,
 	// anonymous) — search POST form in, per-episode kodik-family embeds
 	// out (kodikplayer.com and aniqit.com, both covered by the shared

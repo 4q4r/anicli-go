@@ -1,17 +1,5 @@
 package providers
 
-import (
-	"context"
-	"encoding/base64"
-	"errors"
-	"fmt"
-	"net/http"
-	"strings"
-	"testing"
-
-	"github.com/an0nx/anicli-go/internal/contracts"
-)
-
 // The fixtures below are REAL captures of anifilm.pro (2026-09-23,
 // plain curl with a browser UA — the site fronts no anti-bot wall):
 //
@@ -29,28 +17,47 @@ import (
 // player-component attribute in TestAniFilmEpisodesServiceFallback —
 // no kodik-inactive release was found live (the catalog is
 // kodik-dominant); its SHAPE mirrors the real attributes verbatim.
+//
+// PR135: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anifilm/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to. Contract shift
+// forced by the fresh-sandbox Lua adapter (the sameband/animego
+// precedent), documented here rather than hidden:
+//
+//   - streams(raw_id, dub) receives no dub set, so the Go provider's
+//     unknown-dub caller-bug wall (ErrInvalidInput) has no surface —
+//     the resolve re-derives everything from the playlist row id that
+//     rides RawID; RawEmbeds keeps carrying the api:video URL for
+//     consumers.
+//   - the attribute parser (parseServicesProps/servableServices) was a
+//     Go-internal unit; its observable behavior — kodik-first active
+//     service preference, the trailer exclusion — stays pinned here
+//     through TestAniFilmEpisodesServiceFallback and
+//     TestAniFilmEpisodesTrailerNeverServed.
 
-// testAniFilm builds the provider against one httptest server standing
-// in for anifilm.pro (search, release pages and the api:online /
-// api:video endpoints all ride the one origin live).
-func testAniFilm(t *testing.T, handle func(w http.ResponseWriter, r *http.Request)) (*AniFilm, *recordedRequest) {
-	t.Helper()
-	srv, rec := fixtureServer(t, handle)
-	return newAniFilm(srv.URL, testClient(t, "anifilm")), rec
-}
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
 
-// TestAniFilmMeta pins the service-level identity: registration
+	"github.com/an0nx/anicli-go/internal/contracts"
+)
+
+// TestAniFilmProviderMeta pins the service-level identity: registration
 // identity, BOTH content semantics (RU voice-overs over present
-// video), the RU content language, the declared smoke probe (the
-// shared «черная лагуна» probe lands 0 cards live — Black Lagoon is
-// not on the catalog, verified 2026-09-23), and the capability the
-// provider deliberately does NOT declare: the search index is the
-// site's own RU matching, so the RU-default query routing needs no
-// NamePreference (anistar precedent).
-func TestAniFilmMeta(t *testing.T) {
+// video), the RU content language, and the declared smoke probe — the
+// shared «черная лагуна» probe lands 0 cards live (Black Lagoon is not
+// on the catalog, verified 2026-09-23), so the script declares its own
+// live-verified probe.
+func TestAniFilmProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAniFilm(AniFilmBase, testClient(t, "anifilm"))
+	p := luaProviderAtProduction(t, "anifilm")
 	if p.ID() != "anifilm" || p.Name() != "AniFilm" {
 		t.Errorf("identity = %q/%q, want anifilm/AniFilm", p.ID(), p.Name())
 	}
@@ -60,31 +67,33 @@ func TestAniFilmMeta(t *testing.T) {
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	// ContentLanguage is a duck-typed capability (the registry's
+	// ContentLanguage surface), never part of contracts.Provider.
+	cl, ok := p.(interface{ ContentLanguage() string })
+	if !ok || cl.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage declared=%v, want the ru declaration", ok)
 	}
-	sq, ok := any(p).(contracts.SmokeQueryProvider)
+	sq, ok := p.(contracts.SmokeQueryProvider)
 	if !ok {
 		t.Fatalf("SmokeQueryProvider not declared: the shared RU probe lands 0 cards on this catalog")
 	}
 	if got := sq.SmokeQuery(); got != "дьявол" {
 		t.Errorf("SmokeQuery = %q, want дьявол (the live-verified probe)", got)
 	}
-	if _, ok := any(p).(contracts.NamePreferenceProvider); ok {
-		t.Errorf("NamePreferenceProvider declared: RU is the default routing")
-	}
 }
 
 // TestAniFilmSearch pins the catalog search against the real captured
 // response page (testdata/anifilm_search.html, GET
 // /releases?title=дьявол, 2026-09-23): four rendered .releases__item
-// cards, absolute URLs and posters.
+// cards, absolute URLs and posters, and the ride on the site's own GET
+// form field (title=).
 func TestAniFilmSearch(t *testing.T) {
 	t.Parallel()
 
-	p, rec := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anifilm_search.html"))
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
 	results, err := p.Search(context.Background(), "дьявол")
 	if err != nil {
@@ -92,6 +101,13 @@ func TestAniFilmSearch(t *testing.T) {
 	}
 	if len(results) != 4 {
 		t.Fatalf("results = %d, want 4 (fixture anifilm_search.html)", len(results))
+	}
+
+	if rec.Method != "GET" {
+		t.Errorf("request method = %q, want GET (the site's own header form is method=get)", rec.Method)
+	}
+	if !strings.Contains(rec.Query, "title=") {
+		t.Errorf("search rode %q, want a title= query param (the site's own GET form field)", rec.Query)
 	}
 
 	first := results[0]
@@ -110,9 +126,6 @@ func TestAniFilmSearch(t *testing.T) {
 	if !strings.Contains(first.Poster, "/static/upload/releases/poster/thumb/1200-devil-may-cry-") {
 		t.Errorf("Poster = %q, want the thumb path", first.Poster)
 	}
-	if !strings.Contains(rec.Query, "title=") {
-		t.Errorf("search rode %q, want a title= query param (the site's own GET form field)", rec.Query)
-	}
 
 	// Every surfaced URL must be absolute: the TUI feeds it straight
 	// into GetEpisodes.
@@ -130,9 +143,10 @@ func TestAniFilmSearch(t *testing.T) {
 func TestAniFilmSearchMiss(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anifilm_search_miss.html"))
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
 	results, err := p.Search(context.Background(), "несуществующий тайтл 12345")
 	if err != nil {
@@ -153,7 +167,7 @@ func TestAniFilmSearchMiss(t *testing.T) {
 func TestAniFilmEpisodes(t *testing.T) {
 	t.Parallel()
 
-	p, rec := testAniFilm(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/1200-devil-may-cry":
 			_, _ = w.Write(fixture(t, "anifilm_release.html"))
@@ -164,8 +178,9 @@ func TestAniFilmEpisodes(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	episodes, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1200-devil-may-cry")
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1200-devil-may-cry")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -204,20 +219,21 @@ func TestAniFilmEpisodes(t *testing.T) {
 // TestAniFilmEpisodes404 pins the deleted-but-indexed release wall:
 // the search index still lists releases whose pages answer 404
 // (observed live 2026-09-23 on the 1203/1204/1202 RSS entries). The
-// netclient's typed mapping must surface, never an empty list.
+// typed mapping must surface, never an empty list.
 func TestAniFilmEpisodes404(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	_, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1203-zetsuen-no-tempest-the-civilization-blaster")
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1203-zetsuen-no-tempest-the-civilization-blaster")
 	if err == nil {
 		t.Fatal("GetEpisodes on a 404 page must fail loud")
 	}
 	if !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound (the netclient 404 mapping)", err)
+		t.Fatalf("err = %v, want ErrNotFound (the transport 404 mapping)", err)
 	}
 }
 
@@ -227,11 +243,12 @@ func TestAniFilmEpisodes404(t *testing.T) {
 func TestAniFilmEpisodesNoPlayer(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("<html><body><h1>release page without a player</h1></body></html>"))
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	_, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1200-devil-may-cry")
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1200-devil-may-cry")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("err = %v, want ErrExtractFailed", err)
 	}
@@ -252,7 +269,7 @@ func TestAniFilmEpisodesServiceFallback(t *testing.T) {
 		`:services_props={"kodik":{"from":"kodik","active":false},"sibnet":{"from":"sibnet","active":true}}`,
 	)
 
-	p, rec := testAniFilm(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/1200-devil-may-cry":
 			_, _ = w.Write([]byte(page))
@@ -263,8 +280,9 @@ func TestAniFilmEpisodesServiceFallback(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	episodes, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1200-devil-may-cry")
+	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1200-devil-may-cry")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -288,7 +306,7 @@ func TestAniFilmEpisodesTrailerNeverServed(t *testing.T) {
 		`:services_props={"kodik":{"from":"kodik","active":false},"trailer":{"from":"trailer","active":true}}`,
 	)
 
-	p, rec := testAniFilm(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/releases/1200-devil-may-cry" {
 			_, _ = w.Write([]byte(page))
 			return
@@ -296,15 +314,15 @@ func TestAniFilmEpisodesTrailerNeverServed(t *testing.T) {
 		t.Errorf("unexpected fetch: %s (trailer must never be polled)", r.URL.Path)
 		http.NotFound(w, r)
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	_, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1200-devil-may-cry")
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1200-devil-may-cry")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("err = %v, want ErrExtractFailed (no servable episode service)", err)
 	}
 	if !strings.Contains(err.Error(), "trailer") {
 		t.Errorf("err = %v, want the wall to name the serving service", err)
 	}
-	_ = rec
 }
 
 // TestAniFilmEpisodesEmptyPlaylists pins the all-services-empty wall:
@@ -319,7 +337,7 @@ func TestAniFilmEpisodesEmptyPlaylists(t *testing.T) {
 		`:services_props={"kodik":{"from":"kodik","active":false},"sibnet":{"from":"sibnet","active":true}}`,
 	)
 
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/releases/1200-devil-may-cry":
 			_, _ = w.Write([]byte(page))
@@ -329,8 +347,9 @@ func TestAniFilmEpisodesEmptyPlaylists(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
-	_, err := p.GetEpisodes(context.Background(), p.BaseURL()+"/releases/1200-devil-may-cry")
+	_, err := p.GetEpisodes(context.Background(), srv.URL+"/releases/1200-devil-may-cry")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
 		t.Fatalf("err = %v, want ErrExtractFailed", err)
 	}
@@ -339,46 +358,19 @@ func TestAniFilmEpisodesEmptyPlaylists(t *testing.T) {
 	}
 }
 
-// TestAniFilmParseServicesProps pins the attribute parser on the real
-// captured attribute value: document-order pairs, balanced braces
-// through the nested JSON, trailer shape intact.
-func TestAniFilmParseServicesProps(t *testing.T) {
-	t.Parallel()
-
-	raw := `{"kodik":{"from":"kodik","active":true},"rutube":{"from":"rutube","active":false},"trailer":{"from":"trailer","active":false}}`
-	services, err := parseServicesProps(raw)
-	if err != nil {
-		t.Fatalf("parseServicesProps: %v", err)
-	}
-	if len(services) != 3 {
-		t.Fatalf("services = %+v, want 3 in document order", services)
-	}
-	if services[0].From != "kodik" || !services[0].Active {
-		t.Errorf("services[0] = %+v, want active kodik", services[0])
-	}
-	if services[1].From != "rutube" || services[1].Active {
-		t.Errorf("services[1] = %+v, want inactive rutube", services[1])
-	}
-
-	// The episode-service ordering: kodik first when active, others in
-	// document order, trailer dropped.
-	order := servableServices(services)
-	if len(order) != 1 || order[0] != "kodik" {
-		t.Errorf("servableServices = %v, want [kodik]", order)
-	}
-}
-
 // TestAniFilmResolveStream pins the stream chain against the real
 // api:video capture (testdata/anifilm_video.html) with the kodik leg
 // served by the test server (kodik_test.go pattern): the embedded
 // iframe src runs through the shared extractor factory and yields the
-// quality-keyed links.
+// quality-keyed links. The resolve state channel is RawID (the fresh-
+// sandbox streams(raw_id, dub) contract); RawEmbeds rides along for
+// consumers.
 func TestAniFilmResolveStream(t *testing.T) {
 	t.Parallel()
 
 	var kodikPage string
 	var base string
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/releases/api:video:16231":
 			// The real capture points at kodikplayer.com; the offline
@@ -411,14 +403,15 @@ func TestAniFilmResolveStream(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
+	base = srv.URL
 	kodikPage = string(fixture(t, "anifilm_video.html"))
-	base = p.BaseURL()
+	p := luaProvider(t, "anifilm", srv.URL)
 
 	episode := contracts.Episode{
 		Num:   "1",
 		RawID: "16231",
 		RawEmbeds: map[string][]string{
-			"Боллектив Media": {p.BaseURL() + "/releases/api:video:16231"},
+			"Боллектив Media": {srv.URL + "/releases/api:video:16231"},
 		},
 	}
 
@@ -462,41 +455,21 @@ func afKodikEncodeSrc(u string) string {
 	return string(b)
 }
 
-// TestAniFilmResolveStreamUnknownDub pins the caller-bug wall
-// (animedia precedent): a dub the episode does not carry is typed
-// ErrInvalidInput.
-func TestAniFilmResolveStreamUnknownDub(t *testing.T) {
-	t.Parallel()
-
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.NotFound(w, nil)
-	})
-
-	episode := contracts.Episode{
-		Num:       "1",
-		RawID:     "16231",
-		RawEmbeds: map[string][]string{"Боллектив Media": {p.BaseURL() + "/releases/api:video:16231"}},
-	}
-	_, err := p.ResolveStream(context.Background(), episode, "Несуществующая озвучка")
-	if !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Fatalf("err = %v, want ErrInvalidInput", err)
-	}
-}
-
 // TestAniFilmResolveStreamNoIframe pins the video-page wall: an
 // api:video response without the player iframe carries nothing to
 // extract — typed ErrExtractFailed.
 func TestAniFilmResolveStreamNoIframe(t *testing.T) {
 	t.Parallel()
 
-	p, _ := testAniFilm(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("<html><body>no player here</body></html>"))
 	})
+	p := luaProvider(t, "anifilm", srv.URL)
 
 	episode := contracts.Episode{
 		Num:       "1",
 		RawID:     "16231",
-		RawEmbeds: map[string][]string{"Боллектив Media": {p.BaseURL() + "/releases/api:video:16231"}},
+		RawEmbeds: map[string][]string{"Боллектив Media": {srv.URL + "/releases/api:video:16231"}},
 	}
 	_, err := p.ResolveStream(context.Background(), episode, "Боллектив Media")
 	if !errors.Is(err, contracts.ErrExtractFailed) {

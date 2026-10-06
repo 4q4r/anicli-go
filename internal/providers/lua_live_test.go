@@ -111,6 +111,12 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// LIVE-VERIFIED 2026-09-18: HTTP 200, no Cloudflare challenge,
 		// no Referer needed).
 		"sameband": "дьявол",
+		// anifilm (PR135): the Yii/Vue catalog rides the proxy (the
+		// smoke matrix's honest route: the «дьявол» probe PASSes the
+		// full chain — 4 cards surfaced, the kodik resolve lands — in
+		// ~1.6s through the proxy; the hdrezka-class geo-fence per the
+		// route notes above).
+		"anifilm": "дьявол",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

@@ -73,6 +73,11 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal, and the stream Referer
 	// derives from it.
 	"sameband": {"https://sameband.studio"},
+	// anifilm (PR135): the site root — every leg (the GET-form search,
+	// the release page, the api:online playlist and the api:video page)
+	// hangs off the one base_url literal (the site fronts no anti-bot
+	// wall, so no Referer/header set is derived).
+	"anifilm": {"https://anifilm.pro"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

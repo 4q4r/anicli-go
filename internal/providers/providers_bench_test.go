@@ -61,9 +61,6 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 	return srv
 }
 
-// benchSinkResults keeps Search/GetEpisodes results alive.
-var benchSinkResults []any
-
 // --- hdrezka page + anubis PoW ---
 
 // BenchmarkHDRezkaPageParse parses the live series-page capture (the

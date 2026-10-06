@@ -22,11 +22,10 @@ import (
 // nowhere, never to stderr (the TUI alt-screen contract, PR62 #4).
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// Base carries the fields every provider shares: identity, site root,
-// content language and the per-provider HTTP headers applied on every
-// request. Providers embed it and implement the three operations
-// themselves (port of the BaseSource attributes in anicli-py
-// anicli/core/base.py:8-33).
+// Base carries the fields every provider shares: identity, site root
+// and content language. Providers embed it and implement the three
+// operations themselves (port of the BaseSource attributes in
+// anicli-py anicli/core/base.py:8-33).
 type Base struct {
 	id         string
 	name       string
@@ -36,7 +35,6 @@ type Base struct {
 	// "ja", …): the tag every dub the service emits carries. It is a
 	// service-level declaration, not per-dub introspection (PR23).
 	contentLang string
-	headers     map[string]string
 	http        *netclient.Client
 	// logger routes provider-level diagnostics (search-preflight
 	// drops, …). Nil degrades to discard — NEVER slog.Default, whose

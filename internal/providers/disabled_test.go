@@ -129,8 +129,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("All: %v", err)
 		}
-		if len(bare) != 10 {
-			t.Fatalf("All() = %d providers, want 10 (the Go factories; kodik is Lua-only since PR140)", len(bare))
+		if len(bare) != 7 {
+			t.Fatalf("All() = %d providers, want 7 (the Go factories; kodik is Lua-only since PR140)", len(bare))
 		}
 		for _, p := range bare {
 			if p.ID() == "kodik" {

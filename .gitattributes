@@ -1,0 +1,4 @@
+# GitHub linguist: the provider sources are Lua scripts (30 bundled
+# providers under scripts/), not Go — without this hint the language
+# bar shows 100% Go even though the whole source layer is scripted.
+internal/luaproviders/scripts/**/*.lua linguist-language=Lua

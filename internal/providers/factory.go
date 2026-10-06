@@ -174,15 +174,23 @@ var allFactories = []struct {
 		}
 		return newHDRezka(base, http)
 	}},
-	// anistar (PR77): the anistar.org DLE catalog with its self-hosted
-	// an-media.org player stack — the roster's first Windows-1251 site
-	// (search form POST and page bodies both ride cp1251). Written
-	// from the live site, not ported; no credentials. The p2p player
-	// page exposes direct per-quality HLS/MP4 links behind a media_id;
-	// the an-media edge requires the site Referer on playback.
-	{"anistar", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniStar(AniStarBase, http)
-	}},
+	// anistar (PR77 → PR138): the anistar.org DLE catalog with its
+	// self-hosted an-media.org player stack — the roster's first
+	// Windows-1251 site (search form POST and page bodies both ride
+	// cp1251; the SDK's anicli.iconv decodes the wire, the script
+	// carries the reverse map for the story field). Written from the
+	// live site, not ported; no credentials. The p2p player page
+	// exposes direct per-quality HLS/MP4 links behind a media_id; the
+	// an-media edge requires the site Referer on playback. Migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anistar/main.lua) — the
+	// twenty-first Go→Lua provider migration; it died with anistar.go
+	// (its last consumer), so anistarStreamHeaders/Type,
+	// anistar1251Encode/Decode and anistarAbsURL are script-local now.
+	// luaOnly pins the roster slot; the script serves the DLE search
+	// POST, both player generations (the p2p playlst array and the
+	// legacy #PlayList spans) and the per-quality resolve.
+	{"anistar", true, nil},
 	// anifilm (PR91 → PR135): the anifilm.pro RU stream+torrent catalog
 	// — a custom Yii/Vue engine, NOT DLE; written from the live site
 	// (2026-09-23; re-verified live through the configured proxy

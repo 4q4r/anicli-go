@@ -202,12 +202,13 @@ func BenchmarkAniMediaSearchHTML(b *testing.B) {
 // --- anistar ---
 
 // BenchmarkAniStarSearchHTML — the 53K DLE full-search page (the
-// heaviest HTML search payload on the roster).
+// heaviest HTML search payload on the roster; the Lua script's search
+// leg, PR138 harness).
 func BenchmarkAniStarSearchHTML(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anistar_search.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAniStar(srv.URL, benchClient(b, "anistar"))
+	p := luaProvider(b, "anistar", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "наруто")

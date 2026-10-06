@@ -91,6 +91,11 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal (the site fronts no anti-bot
 	// wall, so no Referer/header set is derived).
 	"anifilm": {"https://anifilm.pro"},
+	// anistar (PR138): the site root — every leg (the DLE search POST,
+	// the release page, both player generations and, through the shared
+	// extractor factory, the legacy embeds) hangs off the one base_url
+	// literal; the Referer sets derive from it and the episode URL.
+	"anistar": {"https://anistar.org"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

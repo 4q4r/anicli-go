@@ -344,15 +344,21 @@ var allFactories = []struct {
 	{"rutor", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newRutor(RutorBase, http, nil)
 	}},
-	// anirena (PR88): the anirena.com search RSS on the same
-	// TorrentBase plumbing — the <enclosure> is the direct
-	// .torrent URL on the site itself, the Anime category scope is
-	// enforced client-side (the documented ?category= filter is
-	// ignored server-side, live-verified 2026-09-23); no credentials,
-	// engine injected by NewRegistry when [torrent] is enabled.
-	{"anirena", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniRena(AniRenaBase, http, nil)
-	}},
+	// anirena (PR88 → PR143): the anirena.com search RSS migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anirena/main.lua) — the
+	// twenty-sixth Go→Lua provider migration, the torrent family's
+	// second Lua slot (the PR142 rutor migration was the first).
+	// luaOnly pins the roster slot; the script serves the
+	// search surface (the anonymous /rss?q= route — the documented
+	// JSON API gates torrent search behind personal bearer keys,
+	// live-verified 2026-09-23; the Anime scope and the 30-item cap
+	// are client-side, the feed carries no seed fields). The torrent
+	// plumbing stays GO: the slot rides the luaTorrent adapter
+	// (luaTorrentFactories below) — the PR66 .torrent preflight, the
+	// engine ingestion and the episodes/stream resolve behave
+	// byte-identically to the compiled TorrentBase provider's.
+	{"anirena", true, nil},
 	// subsplease (PR89): the subsplease.org JSON API on the same
 	// TorrentBase plumbing — the EN seasonal group's f=search catalog
 	// (the RSS feeds are latest-only and queryless, the site search
@@ -362,6 +368,19 @@ var allFactories = []struct {
 	{"subsplease", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSubsPlease(SubsPleaseBase, http, nil)
 	}},
+}
+
+// luaTorrentFactories lists the TORRENT roster slots served by bundled
+// Lua scripts (PR143): when a script serves one of these ids, the
+// factory wraps it in the luaTorrent adapter — the torrent capability
+// (IsTorrent, the engine injection, the PR66 .torrent preflight and
+// the episodes/stream resolve) stays Go around the script's search
+// surface. The wrap applies to the SLOT: a user script shadowing the
+// id rides the same adapter, because the slot itself is torrent-shaped
+// (the compiled factories behind these ids carried the identical
+// plumbing).
+var luaTorrentFactories = map[string]bool{
+	"anirena": true,
 }
 
 // registryOptions carries the NewRegistry customizations.
@@ -554,6 +573,9 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 			delete(luaPending, factory.id)
 			if !factory.luaOnly {
 				log.Info("provider " + factory.id + " shadowed by its lua script")
+			}
+			if luaTorrentFactories[factory.id] {
+				lp = newLuaTorrent(lp)
 			}
 			out = append(out, lp)
 			continue

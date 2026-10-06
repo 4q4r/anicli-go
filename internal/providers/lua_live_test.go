@@ -177,6 +177,25 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// search leg answered the DLE listing in ~0.5s through the
 		// proxy, live 2026-10-06).
 		"hdrezka": "черная лагуна",
+		// anirena (PR143): the RSS search rides the proxy (the route
+		// matrix's honest route: the «black lagoon» probe surfaced
+		// 11/11 anime entries in ~1.6s through the proxy, live
+		// 2026-10-06; the JA/multilingual torrent index answers the
+		// shared EN probe). Torrent slot: the episodes leg resolves
+		// through the Go engine, so this harness proves the search
+		// surface only — the full chain rides the parity smoke (see
+		// liveTorrentSlots below).
+		"anirena": "black lagoon",
+	}
+	// liveTorrentSlots are the torrent providers in the queries map:
+	// their results resolve through the Go torrent engine (the
+	// luaTorrent adapter + the shared core), which the script-only
+	// harness never wires — the episodes walk would wall by design on
+	// every result. The live proof here is the search surface; the
+	// full chain (preflight → ingest → episodes) is exercised against
+	// the real engine by the parity smoke (cmd/parity).
+	liveTorrentSlots := map[string]bool{
+		"anirena": true,
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
@@ -192,6 +211,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 				t.Fatalf("Search(%q) = 0 results (the live catalog moved?)", query)
 			}
 			t.Logf("search %q: %d results, first = %q", query, len(results), results[0].Title)
+
+			if liveTorrentSlots[id] {
+				t.Logf("torrent slot: search-only live proof (%d torrent surfaces); the full chain rides the parity smoke", len(results))
+				return
+			}
 
 			// Walk the results: a typed not-found is the documented
 			// wall for announcement («Анонс») pages — the site renders

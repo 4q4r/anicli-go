@@ -59,19 +59,21 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	// rutor (PR141): the shadow sample must be a COMPILED factory —
-	// since the PR141 hdrezka migration every stream provider is
-	// Lua-only, and the only compiled factories left are the six
-	// torrent ones. rutor is the sample (fully anonymous, one client
-	// build away once [torrent] is on; the other five behave
-	// identically through the same factory plumbing).
-	dir := filepath.Join(xdg, "anicli", "providers", "rutor")
+	// subsplease (PR143): the shadow sample must be a COMPILED
+	// factory — after the PR141 hdrezka and PR143 anirena migrations
+	// every stream provider is Lua-only, and the compiled factories
+	// left are the five torrent ones. subsplease is the sample (fully
+	// anonymous, one client build away once [torrent] is on; the
+	// other four behave identically through the same factory
+	// plumbing; the anirena slot additionally wraps its script in the
+	// luaTorrent adapter, which this shadow rule does not exercise).
+	dir := filepath.Join(xdg, "anicli", "providers", "subsplease")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	shadow := `
 	return {
-		id = "rutor",
+		id = "subsplease",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
@@ -94,12 +96,12 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("rutor")
+	_, ok := reg.Get("subsplease")
 	if !ok {
-		t.Fatal("the shadowed rutor must stay registered (as the Lua script)")
+		t.Fatal("the shadowed subsplease must stay registered (as the Lua script)")
 	}
-	if got := reg.ContentLanguage("rutor"); got != "lua-probe" {
-		t.Fatalf("rutor ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("subsplease"); got != "lua-probe" {
+		t.Fatalf("subsplease ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "shadowed by its lua script") {
 		t.Fatalf("the shadow must be logged, got: %s", buf.String())

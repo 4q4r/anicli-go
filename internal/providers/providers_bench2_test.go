@@ -109,12 +109,13 @@ func BenchmarkGogoanimeGetEpisodesHTML(b *testing.B) {
 
 // --- sameband ---
 
-// BenchmarkSamebandSearchHTML — sameband HTML search parse.
+// BenchmarkSamebandSearchHTML — sameband HTML search parse (the Lua
+// script's search leg; PR131 harness).
 func BenchmarkSamebandSearchHTML(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "sameband_search.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newSameBand(srv.URL, benchClient(b, "sameband"))
+	p := luaProvider(b, "sameband", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "one piece")

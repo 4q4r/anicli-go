@@ -98,16 +98,23 @@ var allFactories = []struct {
 	// live 2026-09-18. Livewire HTML payloads, /livewire/update episode
 	// pagination and vidstackPlayer HLS on the watch page; no
 	// credentials. Migrated to the BUNDLED LUA SCRIPT
-	// (internal/luaproviders/scripts/anizone/main.lua) — the twelfth
+	// (internal/luaproviders/scripts/anizone/main.lua) — the fourteenth
 	// Go→Lua provider migration. luaOnly pins the roster slot; the
 	// script carries the Livewire continuation walk (the csrf/snapshot
 	// round-trip re-derived per invocation — the fresh-sandbox
 	// contract), the JSON-argument decoder and the {n,u} raw_id watch
 	// state (the animevost/anilib precedent).
 	{"anizone", true, nil},
-	{"sameband", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSameBand(SameBandBase, http)
-	}},
+	// sameband (PR131): the SameBand studio DLE catalog migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/sameband/main.lua) — the fifteenth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the DLE search-form POST, the iframe-chained
+	// Playerjs playlist chain and the direct no-network quality-map
+	// resolve (the raw file field rides episode RawID). No
+	// credentials; formContentType's last sameband consumer died here
+	// — kodik still uses the helper.
+	{"sameband", true, nil},
 	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
 	}},

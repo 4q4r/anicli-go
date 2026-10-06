@@ -1,5 +1,28 @@
 package providers
 
+// [LIVE-VERIFIED 2026-09-18] The DLE POST search is ALIVE: POST
+// /index.php?do=search with the do/subaction/story form renders real
+// shortstory results server-side (live: 2 cards for the fixture query,
+// junk query → 0 cards, HTTP 200, Referer not required). The fixtures
+// (sameband_search.html, sameband_anime.html, sameband_player.html,
+// sameband_playlist.json) are byte-verbatim live captures; the player
+// page's Playerjs bootstrap sits inside a Cloudflare Rocket Loader
+// retyped script tag and the playlist URL carries RAW SPACES (fetched
+// percent-encoded).
+//
+// PR131: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/sameband/main.lua) — these tests
+// pin the script through the same contracts.Provider surface and the
+// same fixtures the compiled Go implementation was held to. Contract
+// shift forced by the fresh-sandbox Lua adapter (the animeheaven/
+// anikoto precedent), documented here rather than hidden:
+//
+//   - the raw quality-prefixed file field rides episode RawID alone
+//     (the only state channel into the per-invocation streams(raw_id,
+//     dub) call — the Go provider read it back from RawEmbeds, which
+//     the adapter does not pass into streams); RawEmbeds keeps
+//     carrying the same file string for consumers.
+
 import (
 	"context"
 	"errors"
@@ -11,20 +34,13 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// [LIVE-VERIFIED 2026-09-18] The DLE POST search is ALIVE: POST
-// /index.php?do=search with the do/subaction/story form renders real
-// shortstory results server-side (live: 2 cards for the fixture query,
-// junk query → 0 cards, HTTP 200, Referer not required). Search posts
-// the same form the Python original sends (sameband.py:23-46) and
-// parses the identical .col-auto card template — no client-side
-// filtering (the server already matched the query).
 func TestSameBandSearch(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "sameband_search.html"))
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	results, err := p.Search(context.Background(), "дьявол")
 	if err != nil {
@@ -74,7 +90,7 @@ func TestSameBandSearchNoResultsIsEmpty(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `<html><body><div id="dle-content"></div></body></html>`)
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	results, err := p.Search(context.Background(), "лагуна")
 	if err != nil {
@@ -86,14 +102,16 @@ func TestSameBandSearchNoResultsIsEmpty(t *testing.T) {
 }
 
 // The netclient maps a 403 (WAF wall) onto the typed sentinel before
-// the provider sees it.
+// the provider sees it; the SDK transport layer raises it under the
+// anicli:provider_403: marker so the Lua adapter re-attaches the
+// sentinel (consumer errors.Is branches hold, PR116).
 func TestSameBandSearchProvider403(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	_, err := p.Search(context.Background(), "дьявол")
 	if !errors.Is(err, contracts.ErrProvider403) {
@@ -124,7 +142,7 @@ func TestSameBandGetEpisodes(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(),
 		srv.URL+"/anime/122-djavol-mozhet-plakat-2.html")
@@ -136,9 +154,11 @@ func TestSameBandGetEpisodes(t *testing.T) {
 		t.Fatalf("episodes = %d, want 8 captured + 1 modeled", len(episodes))
 	}
 	first := episodes[0]
-	if first.Num != "1" || first.RawID != "1" {
-		t.Errorf("Num/RawID = %q/%q, want 1/1", first.Num, first.RawID)
+	if first.Num != "1" {
+		t.Errorf("Num = %q, want 1", first.Num)
 	}
+	// PR131 contract shift: the raw file field rides RawID alone (the
+	// fresh-sandbox streams(raw_id, dub) state channel).
 	wantTitle := "<img src='/v/anime/Devil May Cry S02/SnapShots/Devil May Cry S02 - 01_RUS_snapshot.jpg' class=playlist_poster><div class=playlist_duration>39:29</div>Серия 01"
 	if first.Title != wantTitle {
 		t.Errorf("Title = %q, want the raw playlist title (kept like Python)", first.Title)
@@ -146,6 +166,9 @@ func TestSameBandGetEpisodes(t *testing.T) {
 	wantFile := "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8," +
 		"[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_1/index.m3u8," +
 		"[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8"
+	if first.RawID != wantFile {
+		t.Errorf("RawID = %q, want the raw quality-prefixed file string (the streams state channel)", first.RawID)
+	}
 	raw := first.RawEmbeds["SameBand"]
 	if len(raw) != 1 || raw[0] != wantFile {
 		t.Errorf("RawEmbeds = %v, want the raw quality-prefixed file string", raw)
@@ -165,7 +188,7 @@ func TestSameBandGetEpisodesNoIframeTyped(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body>no player here</body></html>")
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/none")
 	if !errors.Is(err, contracts.ErrNotFound) {
@@ -191,7 +214,7 @@ func TestSameBandGetEpisodesPlayerWithoutFileTyped(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
@@ -217,7 +240,7 @@ func TestSameBandGetEpisodesPlaylistDecodeTyped(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	p := newSameBand(srv.URL, testClient(t, "sameband"))
+	p := luaProvider(t, "sameband", srv.URL)
 
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/anime/x")
 	if !errors.Is(err, contracts.ErrExtractFailed) {
@@ -228,17 +251,19 @@ func TestSameBandGetEpisodesPlaylistDecodeTyped(t *testing.T) {
 // ResolveStream splits the raw file field on commas and maps each
 // "[NNNp]<url>" part (port of sameband.py:83-96) — asserted against the
 // real captured file string: three qualities, relative paths
-// base-prefixed verbatim (raw spaces preserved like Python).
+// base-prefixed verbatim (raw spaces preserved like Python). No
+// network: the file string rides RawID (PR131 contract shift), the
+// resolve is pure string mapping like the Go original.
 func TestSameBandResolveStream(t *testing.T) {
 	t.Parallel()
 
-	p := newSameBand("https://sameband.studio", testClient(t, "sameband"))
+	p := luaProviderAtProduction(t, "sameband")
 	file := "[480p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_2/index.m3u8," +
 		"[720p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_1/index.m3u8," +
 		"[1080p]/v/anime/Devil May Cry S02/Devil May Cry S02 - 01_RUS_0/index.m3u8"
 	episode := contracts.Episode{
 		Num:   "1",
-		RawID: "1",
+		RawID: file,
 		RawEmbeds: map[string][]string{
 			"SameBand": {file},
 		},
@@ -278,8 +303,9 @@ func TestSameBandResolveStream(t *testing.T) {
 func TestSameBandResolveStreamUnknownDubIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	p := newSameBand("https://sameband.studio", testClient(t, "sameband"))
+	p := luaProviderAtProduction(t, "sameband")
 	stream, err := p.ResolveStream(context.Background(), contracts.Episode{
+		RawID:     "[720p]/x.m3u8",
 		RawEmbeds: map[string][]string{"SameBand": {"[720p]/x.m3u8"}},
 	}, "NoSuchDub")
 	if err != nil {
@@ -293,8 +319,8 @@ func TestSameBandResolveStreamUnknownDubIsEmpty(t *testing.T) {
 func TestSameBandProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newSameBand(SameBandBase, testClient(t, "sameband"))
-	if p.ID() != "sameband" || p.Name() != "SameBand" || p.BaseURL() != SameBandBase {
+	p := luaProviderAtProduction(t, "sameband")
+	if p.ID() != "sameband" || p.Name() != "SameBand" || p.BaseURL() != "https://sameband.studio" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
@@ -304,14 +330,17 @@ func TestSameBandProviderMeta(t *testing.T) {
 
 // The live smoke query: the catalog is the studio's own dubs under
 // server-side DLE matching, so the shared probes can never surface —
-// the provider declares its own live-verified hit («дьявол», 2 cards).
+// the script declares its own live-verified hit («дьявол», 2 cards)
+// and the adapter surfaces it as the SmokeQueryProvider capability.
 func TestSameBandSmokeQuery(t *testing.T) {
 	t.Parallel()
 
-	p := newSameBand(SameBandBase, testClient(t, "sameband"))
-	if sq, ok := contracts.Provider(p).(contracts.SmokeQueryProvider); !ok {
+	p := luaProviderAtProduction(t, "sameband")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
 		t.Fatalf("SameBand does not declare SmokeQueryProvider")
-	} else if sq.SmokeQuery() == "" {
-		t.Fatalf("SmokeQuery = \"\", want a provider-specific probe")
+	}
+	if sq.SmokeQuery() != "дьявол" {
+		t.Fatalf("SmokeQuery = %q, want the live-verified «дьявол» probe", sq.SmokeQuery())
 	}
 }

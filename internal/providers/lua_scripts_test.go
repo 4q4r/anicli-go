@@ -68,6 +68,11 @@ var luaProductionBases = map[string][]string{
 	// page, /livewire/update, the watch page) hangs off the one
 	// base_url literal, and the Referer/Origin headers derive from it.
 	"anizone": {"https://anizone.to"},
+	// sameband (PR131): the site root — every leg (the DLE search POST,
+	// the anime page iframe, the Playerjs player page and the playlist)
+	// hangs off the one base_url literal, and the stream Referer
+	// derives from it.
+	"sameband": {"https://sameband.studio"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

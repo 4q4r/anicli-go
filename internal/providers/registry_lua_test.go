@@ -99,13 +99,18 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	}
 	_, ok := reg.Get("subsplease")
 	if !ok {
-		t.Fatal("the shadowed subsplease must stay registered (as the Lua script)")
+		t.Fatal("the overridden subsplease must stay registered (as the user's Lua script)")
 	}
 	if got := reg.ContentLanguage("subsplease"); got != "lua-probe" {
 		t.Fatalf("subsplease ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
-	if !strings.Contains(buf.String(), "shadowed by its lua script") {
-		t.Fatalf("the shadow must be logged, got: %s", buf.String())
+	// With zero compiled factories left the override is not a
+	// "shadow" (that log fired only for a script taking a COMPILED
+	// factory's slot): the user copy REPLACES the bundled one by the
+	// first-occurrence rule — proven by the load-source line naming
+	// the user XDG dir, not "bundled".
+	if !strings.Contains(buf.String(), "provider=subsplease source="+filepath.Join(xdg, "anicli", "providers")) {
+		t.Fatalf("the user override must be the served copy (the load source names the user dir), got: %s", buf.String())
 	}
 }
 

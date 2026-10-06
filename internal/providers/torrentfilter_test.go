@@ -53,14 +53,16 @@ func TestAnimeToshoSearchFiltersSeedless(t *testing.T) {
 }
 
 // TestAnilibriaTorrentSearchFiltersSeedless: the API's seeders int
-// rides Meta; zero-seed torrents never surface.
+// rides Meta; zero-seed torrents never surface. The seedless filter
+// lives in the bundled script since the PR145 Lua migration — the pin
+// rides the same inline fixtures through the harness.
 func TestAnilibriaTorrentSearchFiltersSeedless(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/app/search/releases":
+		case "/api/v1/app/search/releases":
 			_, _ = w.Write([]byte(`[{"id":5,"alias":"rel","name":{"main":"Rel"}}]`))
-		case "/anime/torrents/release/5":
+		case "/api/v1/anime/torrents/release/5":
 			_, _ = w.Write([]byte(`[
 				{"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","label":"Seeded AT rel","seeders":5,"leechers":1,"size":100},
 				{"hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","label":"Dead AT rel","seeders":0,"leechers":0,"size":100}
@@ -70,7 +72,7 @@ func TestAnilibriaTorrentSearchFiltersSeedless(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrent(srv.URL, testClient(t, "anilibria-torrent"), nil)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	results, err := p.Search(context.Background(), "query")
 	if err != nil {

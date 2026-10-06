@@ -47,7 +47,9 @@ type Provider struct {
 	namePref    contracts.NamePreference
 	// torrent marks a torrent-provider script (the rutor PR142
 	// declaration): the factory grafts the Go engine legs onto it
-	// through the providers-package adapter.
+	// through the providers-package adapter (the shared TorrentBase
+	// ingests the surfaced links; the wrap replaces the adapted
+	// surface whole — read through Torrent by the factory's wrap).
 	torrent bool
 }
 
@@ -170,6 +172,13 @@ func (p *Provider) BaseURL() string { return p.baseURL }
 // SourceType reports the catalog-wide content assessment the script
 // declares via capabilities.
 func (p *Provider) SourceType() contracts.SourceType { return p.sourceType }
+
+// Torrent reports whether the script declared torrent = true — its
+// episode/stream legs ride the Go torrent adapter (the factory's
+// wrap), not the script functions. The declaration itself stays on
+// the script provider: the wrap keeps the Adapt()-ed surface whole
+// and only re-homes the legs.
+func (p *Provider) Torrent() bool { return p.torrent }
 
 // SetLogger re-routes the engine diagnostics (script print, SDK logs)
 // to log — the registry's logger seam (PR62 #4: TUI file sink, never

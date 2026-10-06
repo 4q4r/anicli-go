@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
 // Fixture provenance (PR37): anilibria-torrent_release.json carries
@@ -26,17 +26,23 @@ import (
 // magnet, no hash) that must be skipped. The search responses reuse
 // anilibria_search.json — the torrent provider consumes the same
 // release-search endpoint and shape as the stream provider.
-
-// newAnilibriaTorrentFixtureAt builds the provider against a fixture
-// server serving the release search plus per-release torrent lists.
-func newAnilibriaTorrentFixtureAt(t *testing.T, baseURL string) *AniLibriaTorrent {
-	t.Helper()
-	return newAnilibriaTorrent(baseURL, testClient(t, "anilibria-torrent"), nil)
-}
+//
+// The provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anilibria-torrent/main.lua, the
+// PR145 Go→Lua migration — the roster's first torrent script): these
+// tests pin the script through the same contracts.Provider surface
+// and the same verbatim live-capture fixtures the compiled Go
+// implementation was held to. The harness rewrites the script's
+// production base_url literal onto the fixture server, so the /api/v1
+// prefix rides along in every request pin below. The search-side
+// contract is the script's; the episode/stream legs stay on the Go
+// TorrentBase (the engine consumes the surfaced magnets unchanged —
+// the owner ruling), pinned at the roster level below.
 
 // anilibriaTorrentFixtureServer serves the search fixture on
-// /app/search/releases and per-release torrent fixtures on
-// /anime/torrents/release/{id}; it records the request paths it saw.
+// /api/v1/app/search/releases and per-release torrent fixtures on
+// /api/v1/anime/torrents/release/{id}; it records the request paths
+// it saw, in order (the fan-out shape pin).
 func anilibriaTorrentFixtureServer(t *testing.T) (*httptest.Server, *[]string) {
 	t.Helper()
 	var mu sync.Mutex
@@ -51,11 +57,11 @@ func anilibriaTorrentFixtureServer(t *testing.T) (*httptest.Server, *[]string) {
 		paths = append(paths, path)
 		mu.Unlock()
 		switch r.URL.Path {
-		case "/app/search/releases":
+		case "/api/v1/app/search/releases":
 			_, _ = w.Write(fixture(t, "anilibria_search.json"))
-		case "/anime/torrents/release/9789":
+		case "/api/v1/anime/torrents/release/9789":
 			_, _ = w.Write(fixture(t, "anilibria-torrent_release.json"))
-		case "/anime/torrents/release/10277":
+		case "/api/v1/anime/torrents/release/10277":
 			_, _ = w.Write([]byte(`[]`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -69,7 +75,7 @@ func TestAnilibriaTorrentSearchExpandsReleaseTorrents(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := anilibriaTorrentFixtureServer(t)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	results, err := p.Search(context.Background(), "dandadan")
 	if err != nil {
@@ -115,13 +121,16 @@ func TestAnilibriaTorrentSearchExpandsReleaseTorrents(t *testing.T) {
 	if got := second.Meta[SearchMetaSize]; got != "3.3 GiB" {
 		t.Errorf("size meta = %v, want 3.3 GiB (3549699018 bytes)", got)
 	}
+	if second.Meta[SearchMetaSeeders] != "42" || second.Meta[SearchMetaLeechers] != "0" {
+		t.Errorf("seeders/leechers meta = %v/%v", second.Meta[SearchMetaSeeders], second.Meta[SearchMetaLeechers])
+	}
 }
 
 func TestAnilibriaTorrentSearchRequestParams(t *testing.T) {
 	t.Parallel()
 
 	srv, paths := anilibriaTorrentFixtureServer(t)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	if _, err := p.Search(context.Background(), "dandadan"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -131,16 +140,17 @@ func TestAnilibriaTorrentSearchRequestParams(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("no requests reached the fixture server")
 	}
-	// First request: the release search, query carried as-is.
-	if got[0] != "/app/search/releases?query=dandadan" {
-		t.Errorf("search request = %q, want /app/search/releases?query=dandadan", got[0])
+	// First request: the release search, query carried as-is (the
+	// /api/v1 prefix derives from the rewritten base_url literal).
+	if got[0] != "/api/v1/app/search/releases?query=dandadan" {
+		t.Errorf("search request = %q, want /api/v1/app/search/releases?query=dandadan", got[0])
 	}
 	// Then one torrents fetch per search hit, by numeric release id.
-	if !strings.Contains(got[1], "/anime/torrents/release/9789") || strings.Contains(got[1], "?") {
-		t.Errorf("torrents request = %q, want /anime/torrents/release/9789 without stray params", got[1])
+	if !strings.Contains(got[1], "/api/v1/anime/torrents/release/9789") || strings.Contains(got[1], "?") {
+		t.Errorf("torrents request = %q, want /api/v1/anime/torrents/release/9789 without stray params", got[1])
 	}
-	if !strings.Contains(got[2], "/anime/torrents/release/10277") {
-		t.Errorf("torrents request = %q, want /anime/torrents/release/10277 (every search hit is probed)", got[2])
+	if !strings.Contains(got[2], "/api/v1/anime/torrents/release/10277") {
+		t.Errorf("torrents request = %q, want /api/v1/anime/torrents/release/10277 (every search hit is probed)", got[2])
 	}
 }
 
@@ -150,10 +160,11 @@ func TestAnilibriaTorrentSearchEmptyQueryFailsLoud(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture(t, "anilibria_search.json"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	for _, query := range []string{"", "   "} {
 		_, err := p.Search(context.Background(), query)
@@ -170,8 +181,9 @@ func TestAnilibriaTorrentSearchEmptyQueryFailsLoud(t *testing.T) {
 }
 
 // TestAnilibriaTorrentSearchCapsReleases: a broad query can match
-// dozens of releases; only the first TorrentSearchReleaseLimit are
-// probed for torrents (latency bound on the sequential fan-out).
+// dozens of releases; only the first six are probed for torrents
+// (latency bound on the sequential fan-out — the compiled provider's
+// AniLibriaTorrentSearchReleaseLimit, kept by the script).
 func TestAnilibriaTorrentSearchCapsReleases(t *testing.T) {
 	t.Parallel()
 
@@ -191,7 +203,7 @@ func TestAnilibriaTorrentSearchCapsReleases(t *testing.T) {
 	releaseHits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/app/search/releases" {
+		if strings.HasSuffix(r.URL.Path, "/app/search/releases") {
 			_, _ = w.Write(broad)
 			return
 		}
@@ -199,14 +211,14 @@ func TestAnilibriaTorrentSearchCapsReleases(t *testing.T) {
 		_, _ = w.Write([]byte(`[]`))
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	results, err := p.Search(context.Background(), "broad")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if releaseHits != AniLibriaTorrentSearchReleaseLimit {
-		t.Errorf("release fetches = %d, want the cap %d", releaseHits, AniLibriaTorrentSearchReleaseLimit)
+	if releaseHits != 6 {
+		t.Errorf("release fetches = %d, want the cap 6", releaseHits)
 	}
 	if len(results) != 0 {
 		t.Errorf("results = %d, want 0 (all capped releases are torrent-less)", len(results))
@@ -237,21 +249,21 @@ func TestAnilibriaTorrentSearchToleratesGeoHiddenRelease404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/app/search/releases":
+		case "/api/v1/app/search/releases":
 			_, _ = w.Write(broad)
-		case "/anime/torrents/release/9789":
+		case "/api/v1/anime/torrents/release/9789":
 			_, _ = w.Write(fixture(t, "anilibria-torrent_release.json"))
-		case "/anime/torrents/release/5555":
+		case "/api/v1/anime/torrents/release/5555":
 			// The geo-hidden release: hidden content answers 404.
 			w.WriteHeader(http.StatusNotFound)
-		case "/anime/torrents/release/10277":
+		case "/api/v1/anime/torrents/release/10277":
 			_, _ = w.Write([]byte(`[]`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	results, err := p.Search(context.Background(), "dandadan")
 	if err != nil {
@@ -274,15 +286,22 @@ func TestAnilibriaTorrentSearchMalformedJSONTypedError(t *testing.T) {
 		_, _ = w.Write([]byte("<html>not json</html>"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("malformed JSON must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "anilibria-torrent" || perr.Op != contracts.OpSearch {
-		t.Errorf("error = %v, want an anilibria-torrent search ProviderError", err)
+	// The engine's non-marker raise path wraps with the provider/op
+	// context (fmt %w, not a *ProviderError — the PR116 taxonomy); the
+	// anilibria sibling pins the same containment shape. The typed
+	// *ProviderError contract holds on the marker paths (the 403 pin
+	// below).
+	if !strings.Contains(err.Error(), "provider \"anilibria-torrent\" search:") {
+		t.Errorf("error = %v, want the provider/op context", err)
+	}
+	if !strings.Contains(err.Error(), "invalid json") {
+		t.Errorf("error = %v, want the invalid-json decode wall", err)
 	}
 }
 
@@ -293,7 +312,7 @@ func TestAnilibriaTorrentSearchHTTPErrorTypedError(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
+	p := luaProvider(t, "anilibria-torrent", srv.URL)
 
 	_, err := p.Search(context.Background(), "test")
 	if !errors.Is(err, contracts.ErrProvider403) {
@@ -305,74 +324,86 @@ func TestAnilibriaTorrentSearchHTTPErrorTypedError(t *testing.T) {
 	}
 }
 
-// TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait: the provider
-// GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the TorrentBase contract).
-func TestAnilibriaTorrentGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
+// TestAnilibriaTorrentRosterCapabilityAndIdentity pins the hybrid
+// roster shape through the real factory assembly: the bundled script
+// serves search and identity, the Go TorrentBase keeps the torrent
+// capability (IsTorrent/SetEngine/ingest legs — the engine consumes
+// the surfaced magnets unchanged). The base_url divergence from the
+// compiled provider is the anilibria-precedent one: the script pins
+// the SITE root (the compiled provider reported the API root).
+func TestAnilibriaTorrentRosterCapabilityAndIdentity(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
-	// Ephemeral listen port (the testTorrentConfig convention): the
-	// default 42069 collides across concurrent test PROCESSES — full
-	// suite runs against each other fail on "bind: address already in
-	// use" before any wait budget matters.
-	cfg.Torrent.Port = 0
-	eng := newOfflineTestEngineCfg(t, cfg.Torrent)
-	p := newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, "anilibria-torrent"), eng)
 
-	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	// Pre-ingest under a generous ceiling (PR38 reviewer disclosure):
-	// under full-suite -race contention the old single 150ms budget
-	// could expire inside Ingest — BEFORE the wait loop starts — and
-	// GetEpisodes surfaced the ingest failure without the «торренты»
-	// wait error. The deduped ingest here returns instantly, so the
-	// budget below only ever bounds the metadata wait itself. The
-	// assertion semantics are unchanged: unreachable metadata fails
-	// loud on the caller's deadline (the TorrentBase contract).
-	ingestCtx, ingestCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer ingestCancel()
-	if _, err := p.Ingest(ingestCtx, dead); err != nil {
-		t.Fatalf("pre-ingest the dead magnet: %v", err)
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	eps, err := p.GetEpisodes(ctx, dead)
-	if err == nil {
-		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
+	var p contracts.Provider
+	for _, item := range bare {
+		if item.ID() == "anilibria-torrent" {
+			p = item
+			break
+		}
 	}
-	if len(eps) != 0 {
-		t.Errorf("episodes = %v, want none", eps)
+	if p == nil {
+		t.Fatal("anilibria-torrent must stay in the roster (the bundled script pins its slot)")
 	}
-	if !strings.Contains(err.Error(), "торренты") {
-		t.Errorf("error = %v, want the torrent-base wait failure", err)
+	tp, ok := p.(contracts.TorrentProvider)
+	if !ok || !tp.IsTorrent() {
+		t.Fatal("the Lua-served anilibria-torrent slot must keep the torrent capability (the smoke's torrent rule rides it)")
 	}
-}
-
-func TestAnilibriaTorrentCapabilityAndRoster(t *testing.T) {
-	t.Parallel()
-
-	srv, _ := anilibriaTorrentFixtureServer(t)
-	p := newAnilibriaTorrentFixtureAt(t, srv.URL)
-	if !p.IsTorrent() {
-		t.Error("anilibria-torrent must carry the torrent capability")
-	}
-	if p.ID() != "anilibria-torrent" {
-		t.Errorf("id = %q", p.ID())
+	if _, ok := p.(interface{ SetEngine(*torrent.Engine) }); !ok {
+		t.Error("the roster provider must accept the registry's engine injection")
 	}
 	if p.Name() != "АниЛибрия (торренты)" {
 		t.Errorf("name = %q, want the TUI display name", p.Name())
 	}
+	if p.BaseURL() != "https://aniliberty.top" {
+		t.Errorf("base URL = %q, want the site root the script pins (the anilibria precedent)", p.BaseURL())
+	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("source type = %q, want both (RU dub audio, video)", p.SourceType())
 	}
-	if got := p.ContentLanguage(); got != "ru" {
-		t.Errorf("content language = %q, want ru (AniLibria dubs)", got)
+	if lc, ok := p.(interface{ ContentLanguage() string }); !ok || lc.ContentLanguage() != "ru" {
+		t.Errorf("content language = %v, want ru (AniLibria dubs)", lc)
 	}
-	if p.BaseURL() != srv.URL {
-		t.Errorf("base URL = %q, want the fixture base", p.BaseURL())
+}
+
+// TestAnilibriaTorrentEpisodesDelegateToTorrentBase pins the leg
+// ownership: GetEpisodes rides the Go TorrentBase (ingest → metadata
+// wait), never the script's stub — with no engine wired the call
+// fails with the base's not-wired error, not a script answer.
+func TestAnilibriaTorrentEpisodesDelegateToTorrentBase(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var p contracts.Provider
+	for _, item := range bare {
+		if item.ID() == "anilibria-torrent" {
+			p = item
+			break
+		}
+	}
+	if p == nil {
+		t.Fatal("anilibria-torrent missing from the roster")
+	}
+
+	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
+	_, err = p.GetEpisodes(context.Background(), dead)
+	if err == nil {
+		t.Fatal("GetEpisodes without a wired engine must fail loud")
+	}
+	if !strings.Contains(err.Error(), "engine is not wired") {
+		t.Errorf("error = %v, want the TorrentBase not-wired failure (the Go leg owns episodes)", err)
 	}
 }
 
@@ -410,26 +441,5 @@ func TestAnilibriaTorrentDisabledWhenTorrentOff(t *testing.T) {
 	}
 	if !strings.Contains(found.Reason, "[torrent]") {
 		t.Errorf("reason = %q, want the torrent-subsystem wording", found.Reason)
-	}
-}
-
-// TestAnilibriaTorrentSizeFormatting pins the human size meta on the
-// byte values the API reports (binary units, one decimal — the TUI
-// torrent suffix convention).
-func TestAnilibriaTorrentSizeFormatting(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		bytes int64
-		want  string
-	}{
-		{0, "0 B"},
-		{1023, "1023 B"},
-		{1024, "1.0 KiB"},
-		{3549699018, "3.3 GiB"},
-		{17448944888, "16.3 GiB"},
-	} {
-		if got := humanBytes(tc.bytes); got != tc.want {
-			t.Errorf("humanBytes(%d) = %q, want %q", tc.bytes, got, tc.want)
-		}
 	}
 }

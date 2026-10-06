@@ -57,6 +57,15 @@ func (a cfSolverAdapter) InvalidateHost(host string) {
 // pins the same literal; this map entry is the remaining Go consumer.
 const KodikAPIBase = "https://kodik-api.com"
 
+// AniLibriaAPIBase is the aniliberty.top JSON API root (the third
+// domain generation; the old anilibria.top /api/v3 routes are dead).
+// It moved here from the torrent provider's file when the PR145 Lua
+// migration deleted that file — the torrent script derives the same
+// root from its site-root base_url literal, and this map entry (the
+// `anicli cf solve` target) is the remaining Go consumer (the kodik
+// precedent: the const lives next to the map that reads it).
+const AniLibriaAPIBase = "https://aniliberty.top/api/v1"
+
 // baseURLs maps provider IDs onto their primary base URLs — the
 // targets `anicli cf solve` opens the browser against. Migrated Lua
 // providers leave the map as they go (the script owns its base; the

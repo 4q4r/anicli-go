@@ -18,7 +18,7 @@ import (
 // PR141: hdrezka; PR142: rutor — the first torrent script;
 // PR143: anirena — a TORRENT slot (its engine plumbing stays Go
 // behind the luaTorrent adapter); PR144: subsplease — the torrent
-// family's third Lua slot.
+// family's third Lua slot; PR145: anilibria-torrent — the fourth.
 func TestSourcesShape(t *testing.T) {
 	srcs := Sources()
 	seen := map[string]bool{}
@@ -39,7 +39,7 @@ func TestSourcesShape(t *testing.T) {
 	if !sort.SliceIsSorted(ids, func(i, j int) bool { return ids[i] < ids[j] }) {
 		t.Errorf("sources not sorted: %v", ids)
 	}
-	for _, want := range []string{"anidub", "anilib", "anilibria", "animeheaven", "anikado", "anifilm", "animemobi", "animiku", "anipub", "anistar", "anitokyo", "animedia", "animevib", "animevost", "animego", "anikoto", "anirena", "gogoanime", "kickassanime", "kodik", "anizone", "rutor", "sameband", "shiza", "subsplease", "yummy", "hdrezka"} {
+	for _, want := range []string{"anidub", "anilib", "anilibria", "anilibria-torrent", "animeheaven", "anikado", "anifilm", "animemobi", "animiku", "anipub", "anistar", "anitokyo", "animedia", "animevib", "animevost", "animego", "anikoto", "anirena", "gogoanime", "kickassanime", "kodik", "anizone", "rutor", "sameband", "shiza", "subsplease", "yummy", "hdrezka"} {
 		if !seen[want] {
 			t.Errorf("bundled scripts missing the migrated provider %q (have %v)", want, ids)
 		}

@@ -164,7 +164,12 @@ func TestDoctorSearchBasedCheck(t *testing.T) {
 
 	for _, want := range []string{
 		"Провайдер", "Статус", "Результатов",
-		"anilibria", "OK", "7",
+		// The compiled sample: with [providers.lua] disabled the
+		// migrated slots drop (anilibria since PR120, its torrent
+		// sibling since PR145) — the PR24 rendering pin rides the
+		// surviving compiled torrent factories instead (the rutor
+		// shadow-sample precedent).
+		"animetosho", "OK", "7",
 		"kodik", "ОТКЛЮЧЁН", "не задан токен",
 	} {
 		if !strings.Contains(out, want) {

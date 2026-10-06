@@ -602,3 +602,52 @@ func TestTorrentBaseIngestMetaInfoNilEngineFailsLoud(t *testing.T) {
 		t.Errorf("err = %v, want the not-wired wording", err)
 	}
 }
+
+// Pins for the shared torrent-base helpers the PR145 anilibria-torrent
+// migration rescued from the deleted provider file: their consumers
+// (animetosho, subsplease) live on, so the exact output contracts
+// must too.
+
+// TestHumanBytesBinaryUnits pins the byte formatting on the values the
+// API reports (binary units, one decimal — the TUI torrent suffix
+// convention; the table carried over from the deleted provider test).
+func TestHumanBytesBinaryUnits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KiB"},
+		{3549699018, "3.3 GiB"},
+		{17448944888, "16.3 GiB"},
+	} {
+		if got := humanBytes(tc.bytes); got != tc.want {
+			t.Errorf("humanBytes(%d) = %q, want %q", tc.bytes, got, tc.want)
+		}
+	}
+}
+
+// TestMagnetURI pins the btih validity contract: prefix, 40-hex hash
+// (case-normalized), the FIRST btih parameter decides, non-magnet
+// input is false.
+func TestMagnetURI(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"magnet:?xt=urn:btih:b451a6b9b67383787be3273ec1a2a8e54cea3380&dn=x", true},
+		{"magnet:?xt=urn:btih:B451A6B9B67383787BE3273EC1A2A8E54CEA3380&dn=x", true},
+		{"magnet:?dn=x&xt=urn:btih:b451a6b9b67383787be3273ec1a2a8e54cea3380", true},
+		{"magnet:?xt=urn:btih:tooshort&dn=x", false},
+		{"magnet:?dn=x&tr=http://tr", false},
+		{"http://example.com/file.torrent", false},
+		{"", false},
+	} {
+		if got := magnetURI(tc.in); got != tc.want {
+			t.Errorf("magnetURI(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

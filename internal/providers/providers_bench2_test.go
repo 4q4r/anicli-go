@@ -223,24 +223,19 @@ func BenchmarkAniStarSearchHTML(b *testing.B) {
 
 // --- anilibria-torrent ---
 
-// newBenchAnilibriaTorrent — the b-variant of the package fixture
-// constructor (engine nil: search never touches it).
-func newBenchAnilibriaTorrent(b *testing.B, baseURL string) *AniLibriaTorrent {
-	b.Helper()
-	return newAnilibriaTorrent(baseURL, benchClient(b, "anilibria-torrent"), nil)
-}
-
-// BenchmarkAnilibriaTorrentSearch — the release-list expansion search:
-// search JSON, then per-release torrent lists (the two-step loader).
+// BenchmarkAnilibriaTorrentSearch — the release-list expansion search
+// through the bundled script (the PR145 Lua harness; the same fixtures
+// the compiled-provider bench served): search JSON, then per-release
+// torrent lists (the two-step loader).
 func BenchmarkAnilibriaTorrentSearch(b *testing.B) {
 	b.ReportAllocs()
 	search := benchFixture(b, "anilibria_search.json")
 	release := benchFixture(b, "anilibria-torrent_release.json")
 	srv := benchRouter(b, []byte(`[]`), map[string][]byte{
-		"/app/search/releases":         search,
-		"/anime/torrents/release/9789": release,
+		"/api/v1/app/search/releases":         search,
+		"/api/v1/anime/torrents/release/9789": release,
 	})
-	p := newBenchAnilibriaTorrent(b, srv.URL)
+	p := luaProvider(b, "anilibria-torrent", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "dandadan")

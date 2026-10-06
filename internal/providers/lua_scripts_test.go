@@ -140,6 +140,11 @@ var luaProductionBases = map[string][]string{
 	// script). The magnets surface verbatim — the engine owns them,
 	// no fetched host beyond the root.
 	"subsplease": {"https://subsplease.org"},
+	// anilibria-torrent (PR145): the site root — the same literal the
+	// anilibria streaming sibling pins; the script derives the
+	// /api/v1 API prefix from it (the torrent list and the release
+	// search hang off that one base).
+	"anilibria-torrent": {"https://aniliberty.top"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

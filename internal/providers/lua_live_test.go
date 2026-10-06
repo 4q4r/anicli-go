@@ -221,9 +221,27 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// the engine-resolve legs (the route matrix's honest route —
 		// its 58.9s row is the metadata-resolve chain, not the origin).
 		"subsplease": "re:zero",
+		// anilibria-torrent (PR145): the proxy is the honest route per
+		// the smoke matrix («черная лагуна» → 4 prefix-matched
+		// releases expanding to 5 seeded torrents, 5/5 resolved in
+		// ~8.8s through the proxy, live 2026-10-06). The subtest's
+		// torrent branch below resolves the surface through the REAL
+		// engine (metadata+files), not the script stubs — the parity
+		// smoke's torrent rule.
+		"anilibria-torrent": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
+			// Torrent scripts resolve through the REAL engine, not the
+			// script stubs: the provider rides the factory's hybrid
+			// wrap with a live engine wired (the parity smoke's torrent
+			// rule — metadata-ready with files ≥ 1 is the complete
+			// torrent resolve; the loopback stream link is the last
+			// leg).
+			if liveIsTorrentID(t, id) {
+				liveTorrentWalk(t, id, query)
+				return
+			}
 			p := liveProvider(t, id)
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
@@ -310,4 +328,104 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// liveIsTorrentID reports whether the bundled script for id declares
+// torrent = true (the hybrid roster shape the factory wraps).
+func liveIsTorrentID(t *testing.T, id string) bool {
+	t.Helper()
+	for _, s := range luaproviders.Sources() {
+		if s.ID != id {
+			continue
+		}
+		cfg := lua.DefaultConfig()
+		p, err := lua.LoadProviderBytes(cfg, nil, id, []byte(s.Src))
+		if err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+		return p.Torrent()
+	}
+	t.Fatalf("no bundled lua script %q", id)
+	return false
+}
+
+// liveTorrentWalk runs the torrent provider against the live site the
+// way the parity smoke does: search through the script, then resolve
+// EVERY surfaced result through the REAL engine (ingest + bounded
+// metadata wait; metadata-ready with files ≥ 1 is the complete torrent
+// resolve), and take the loopback stream link of the first. The hybrid
+// comes from the same factory path the registry serves, with a live
+// engine wired in place of the registry's.
+func liveTorrentWalk(t *testing.T, id, query string) {
+	t.Helper()
+
+	network := config.Default().Network
+	if proxy := os.Getenv("ANICLI_LUA_LIVE_PROXY"); proxy != "" {
+		network.ProxyURL = proxy
+	}
+	cfg := config.Default()
+	cfg.Network = network
+
+	built, _, err := luaProviders(cfg, nil, map[string]bool{}, nil)
+	if err != nil {
+		t.Fatalf("luaProviders: %v", err)
+	}
+	p, ok := built[id]
+	if !ok {
+		t.Fatalf("provider %q missing from the factory build", id)
+	}
+	client, err := netclient.New(network, netclient.WithProvider("torrent"))
+	if err != nil {
+		t.Fatalf("torrent netclient: %v", err)
+	}
+	engine := torrent.NewEngine(cfg.Torrent, client, nil)
+	t.Cleanup(func() { _ = engine.Close() })
+	se, ok := p.(interface{ SetEngine(*torrent.Engine) })
+	if !ok {
+		t.Fatal("the roster provider must accept the engine injection")
+	}
+	se.SetEngine(engine)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	results, err := p.Search(ctx, query)
+	if err != nil {
+		t.Fatalf("Search(%q): %v", query, err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("Search(%q) = 0 results (the live catalog moved?)", query)
+	}
+	t.Logf("search %q: %d results, first = %q", query, len(results), results[0].Title)
+
+	// Torrent rule: every surfaced result resolves (their Search
+	// filters seedless entries pre-surface, so what surfaces is really
+	// seeding — the promise the walk keeps).
+	resolved := 0
+	for _, res := range results {
+		eps, err := p.GetEpisodes(ctx, res.URL)
+		if err != nil {
+			t.Errorf("GetEpisodes(%s): the engine could not resolve a surfaced result: %v", res.URL, err)
+			continue
+		}
+		if len(eps) == 0 {
+			t.Errorf("GetEpisodes(%s) = 0 episodes for a surfaced result", res.URL)
+			continue
+		}
+		resolved++
+		if resolved == 1 {
+			stream, err := p.ResolveStream(ctx, eps[0], torrentDubLabel)
+			if err != nil {
+				t.Logf("ResolveStream: typed failure: %v", err)
+			} else if len(stream.Links) == 0 {
+				t.Error("ResolveStream = zero links")
+			} else {
+				t.Logf("resolved %d files; first stream link rides the loopback server", len(eps))
+			}
+		}
+	}
+	if resolved != len(results) {
+		t.Fatalf("resolved %d/%d surfaced results — the torrent rule needs the whole surface", resolved, len(results))
+	}
+	t.Logf("torrent surface fully resolved: %d/%d", resolved, len(results))
 }

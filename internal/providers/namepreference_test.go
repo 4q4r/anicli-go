@@ -42,7 +42,12 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 		var p contracts.Provider
 		switch id {
 		case "anilibria-torrent":
-			p = newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, id), nil)
+			// The bundled script (PR145): no name_preference
+			// declaration on the provider table. The capability
+			// adapter carries the field with its zero value —
+			// observationally the RU group (the caps.go doctrine),
+			// so the assertion is on the VALUE, not the interface.
+			p = luaProviderAtProduction(t, id)
 		case "rutor":
 			p = luaProvider(t, "rutor", luaProductionBases["rutor"][0])
 		}
@@ -66,7 +71,7 @@ func TestRegistryNamePreference(t *testing.T) {
 	if err := r.Register(newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil)); err != nil {
 		t.Fatalf("register tokyotosho: %v", err)
 	}
-	if err := r.Register(newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, "anilibria-torrent"), nil)); err != nil {
+	if err := r.Register(luaProviderAtProduction(t, "anilibria-torrent")); err != nil {
 		t.Fatalf("register anilibria-torrent: %v", err)
 	}
 

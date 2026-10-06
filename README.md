@@ -44,6 +44,7 @@ and an interface in English or Russian.
 - [Player & Skips](#-player--skips)
 - [Discord Rich Presence](#-discord-rich-presence)
 - [Localization](#-localization)
+- [Startup Dependencies](#-startup-dependencies)
 - [API Surface](#-api-surface)
 - [Configuration](#-configuration)
 - [Data & Backup](#-data--backup)
@@ -435,6 +436,35 @@ locale = "ru"   # "en", "ru", or any table in ~/.config/anicli/locales/<lang>.to
 
 ---
 
+## 🧩 Startup Dependencies
+
+Every startup checks the two external programs anicli drives — **mpv**
+(playback) and **ffmpeg** (download mux) — on `PATH` (`internal/sysdeps`).
+When both are present nothing is printed. When one is missing, anicli names
+it (Russian locale: «mpv не установлена», or «mpv и ffmpeg не установлены»
+when both are) and offers to install it through your platform's package
+manager:
+
+| Platform | Offered when missing |
+| :-- | :-- |
+| Windows | `winget install -e --id shinchiro.mpv` + `winget install -e --id Gyan.FFmpeg` when winget exists; otherwise `choco install mpvio ffmpeg -y`; with neither manager — an offer to install Chocolatey first (its official installer) |
+| macOS | `brew install mpv ffmpeg`; without Homebrew — an offer to run the official Homebrew installer first |
+| Linux | `sudo apt install mpv ffmpeg` / `sudo dnf install mpv ffmpeg` (enables RPM Fusion first) / `sudo pacman -S mpv ffmpeg` / `sudo zypper install mpv ffmpeg` — the first detected manager; none detected prints per-distro manual commands |
+
+- **Interactive sessions only** — the `Установить? [Y/n]` prompt appears
+  only when stdin is a terminal. Under systemd, docker or a pipe anicli
+  never blocks: it prints the exact commands and continues.
+- **Declining never aborts startup** — search, browsing and torrents work;
+  the warning stays on the root screen, and playback/download warn again at
+  use (the player and downloader fail loud on a missing binary).
+- **Fresh-PATH caveat** — after an accepted winget/Homebrew/Chocolatey
+  install the current shell may still not see the new binary; anicli
+  re-checks and, if it is still missing, asks you to restart the terminal
+  and start anicli again. Installers run as direct child processes only.
+- `anicli doctor` reports the environment without offering changes.
+
+---
+
 ## 🔌 API Surface
 
 `internal/api` serves 20 routes under `/api/v1` (chi router):
@@ -658,6 +688,10 @@ portable between the two frontends.
 | **ffmpeg + ffprobe** | downloads and the local IntroSkipper heuristic |
 | Go ≥ 1.27 | building from source (CGO not needed — pure-Go SQLite) |
 | Discord desktop | optional — Rich Presence only |
+
+mpv and ffmpeg are checked at every startup; a missing program triggers a
+one-key install offer for your platform's package manager (see
+[Startup Dependencies](#-startup-dependencies)).
 
 ### 2. Install
 

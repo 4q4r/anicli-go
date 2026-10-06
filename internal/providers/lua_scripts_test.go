@@ -123,6 +123,12 @@ var luaProductionBases = map[string][]string{
 	// rotates mirrors; this literal is whatever the fixtures carry
 	// (rezka-ua.tv, the PR72 serving mirror).
 	"hdrezka": {"https://rezka-ua.tv"},
+	// subsplease (PR144): the site root — every leg (the /api/ search
+	// and f=show payloads and the /shows/ sid hop) hangs off the one
+	// base_url literal (tz=0 rides on every /api/ leg inside the
+	// script). The magnets surface verbatim — the engine owns them,
+	// no fetched host beyond the root.
+	"subsplease": {"https://subsplease.org"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

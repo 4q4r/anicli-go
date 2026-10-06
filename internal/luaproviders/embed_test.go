@@ -15,7 +15,8 @@ import (
 // PR129: kickassanime; PR130: anizone; PR131: sameband; PR132:
 // anidub; PR133: anikado; PR134: animiku; PR135: anifilm;
 // PR137: animemobi; PR138: anistar; PR139: anipub; PR140: kodik;
-// PR141: hdrezka).
+// PR141: hdrezka; PR144: subsplease — the roster's first torrent
+// script, whose search-in-Lua hybrid rides the Go engine).
 func TestSourcesShape(t *testing.T) {
 	srcs := Sources()
 	seen := map[string]bool{}
@@ -36,7 +37,7 @@ func TestSourcesShape(t *testing.T) {
 	if !sort.SliceIsSorted(ids, func(i, j int) bool { return ids[i] < ids[j] }) {
 		t.Errorf("sources not sorted: %v", ids)
 	}
-	for _, want := range []string{"anidub", "anilib", "anilibria", "animeheaven", "anikado", "anifilm", "animemobi", "animiku", "anipub", "anistar", "anitokyo", "animedia", "animevib", "animevost", "animego", "anikoto", "gogoanime", "kickassanime", "kodik", "anizone", "sameband", "shiza", "yummy", "hdrezka"} {
+	for _, want := range []string{"anidub", "anilib", "anilibria", "animeheaven", "anikado", "anifilm", "animemobi", "animiku", "anipub", "anistar", "anitokyo", "animedia", "animevib", "animevost", "animego", "anikoto", "gogoanime", "kickassanime", "kodik", "anizone", "sameband", "shiza", "subsplease", "yummy", "hdrezka"} {
 		if !seen[want] {
 			t.Errorf("bundled scripts missing the migrated provider %q (have %v)", want, ids)
 		}

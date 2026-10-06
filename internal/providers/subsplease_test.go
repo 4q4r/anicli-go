@@ -20,9 +20,27 @@ import (
 	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
+// subsplease (PR144): the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/subsplease/main.lua) — the roster's
+// first torrent Go→Lua migration. These tests pin the script through
+// the same contracts.Provider surface and the same fixtures the
+// compiled Go implementation was held to (the luaProductionBases
+// harness); the torrent ENGINE legs stay Go (the PR144 owner ruling),
+// so the ingest/episodes assertions drive the search-in-Lua hybrid
+// the factory serves (luatorrent.go): the script surfaces the
+// magnets, TorrentBase consumes them.
+
 // spSearchFixtureResults is the number of results the trimmed live
 // search fixture yields: two releases × three resolutions, wire order.
 const spSearchFixtureResults = 6
+
+// The script's surfaced-surface caps (the compiled provider's
+// constants, pinned here through the cap fixtures): 18 episode
+// results (the newest releases × resolutions) plus 6 batch results.
+const (
+	subspleaseEpisodeCap = 18
+	subspleaseBatchCap   = 6
+)
 
 // spMagnet builds a well-formed tracker-rich test magnet (the API
 // shape: base32 btih, dn title, xl byte length, one tr announce).
@@ -98,17 +116,6 @@ func spServer(t *testing.T, routes map[string]string, hits *int) string {
 	return srv.URL
 }
 
-func newSubsPleaseFixtureAt(t *testing.T, baseURL string) *SubsPlease {
-	t.Helper()
-	return newSubsPlease(baseURL, testClient(t, "subsplease"), nil)
-}
-
-func newSubsPleaseWithEngine(t *testing.T) *SubsPlease {
-	t.Helper()
-	eng := newOfflineTestEngine(t)
-	return newSubsPlease(SubsPleaseBase, testClient(t, "subsplease"), eng)
-}
-
 // spFixtureRelease mirrors one search fixture release (test-side
 // decode only).
 type spFixtureRelease struct {
@@ -127,10 +134,18 @@ func fixtureJSON(t *testing.T, name string) map[string]spFixtureRelease {
 	return out
 }
 
+// newSubsPleaseHybrid loads the bundled script through the harness
+// and wraps it in the search-in-Lua torrent hybrid the factory serves
+// (the engine stays nil — SetEngine injects the offline one).
+func newSubsPleaseHybrid(t *testing.T, baseURL string) *luaTorrentProvider {
+	t.Helper()
+	return newLuaTorrentProvider(luaProvider(t, "subsplease", baseURL))
+}
+
 func TestSubsPleaseSearchParsesReleases(t *testing.T) {
 	t.Parallel()
 
-	p := newSubsPleaseFixtureAt(t, spServer(t, map[string]string{
+	p := luaProvider(t, "subsplease", spServer(t, map[string]string{
 		"/api/": "subsplease_api_search_rezero.json",
 	}, nil))
 	results, err := p.Search(context.Background(), "re:zero")
@@ -187,7 +202,7 @@ func TestSubsPleaseSearchRequestParams(t *testing.T) {
 		_, _ = w.Write([]byte("{}"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	if _, err := p.Search(context.Background(), "re:zero"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -202,7 +217,8 @@ func TestSubsPleaseSearchRequestParams(t *testing.T) {
 		t.Errorf("s = %q, want the raw query", gotQuery.Get("s"))
 	}
 	// tz is REQUIRED — the endpoint answers empty without it
-	// (live-verified 2026-09-23); any fixed value works.
+	// (live-verified 2026-09-23 and again 2026-10-06); any fixed value
+	// works.
 	if gotQuery.Get("tz") != "0" {
 		t.Errorf("tz = %q, want 0", gotQuery.Get("tz"))
 	}
@@ -212,7 +228,7 @@ func TestSubsPleaseSearchEmptyQueryFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newSubsPleaseFixtureAt(t, spServer(t, map[string]string{
+	p := luaProvider(t, "subsplease", spServer(t, map[string]string{
 		"/api/": "subsplease_api_search_rezero.json",
 	}, &hits))
 	for _, query := range []string{"", "   "} {
@@ -238,7 +254,7 @@ func TestSubsPleaseSearchEmptyResultSet(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newSubsPleaseFixtureAt(t, spServer(t, map[string]string{
+	p := luaProvider(t, "subsplease", spServer(t, map[string]string{
 		"/api/": "subsplease_api_search_empty.json",
 	}, &hits))
 	results, err := p.Search(context.Background(), "black lagoon")
@@ -253,41 +269,44 @@ func TestSubsPleaseSearchEmptyResultSet(t *testing.T) {
 	}
 }
 
-func TestSubsPleaseSearchMalformedBodyTypedError(t *testing.T) {
+// TestSubsPleaseSearchMalformedBodyFailsLoud pins the broken-body
+// wall. The Lua classification carries the provider id and the op in
+// the error message (the typed ProviderError shape rides the marker
+// kinds — the compiled provider's decode wall surfaced the same
+// context through contracts.WrapProvider).
+func TestSubsPleaseSearchMalformedBodyFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("this is not json at all"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("malformed body must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "subsplease" || perr.Op != contracts.OpSearch {
-		t.Errorf("error = %v, want a subsplease search ProviderError", err)
+	if !strings.Contains(err.Error(), "subsplease") || !strings.Contains(err.Error(), "search") {
+		t.Errorf("error = %v, want the subsplease search context", err)
 	}
 }
 
-func TestSubsPleaseSearchHTTPErrorTypedError(t *testing.T) {
+func TestSubsPleaseSearchHTTPErrorFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("HTTP failure must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "subsplease" {
-		t.Errorf("error = %v, want a subsplease-tagged ProviderError", err)
+	if !strings.Contains(err.Error(), "subsplease") {
+		t.Errorf("error = %v, want the subsplease-tagged failure", err)
 	}
 }
 
@@ -311,7 +330,7 @@ func TestSubsPleaseSearchSkipsUnusableDownloads(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -338,7 +357,7 @@ func TestSubsPleaseSearchSynthesizesTitleWithoutDn(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -382,7 +401,7 @@ func TestSubsPleaseSearchExpandsTopShowBatch(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "re:zero")
 	if err != nil {
@@ -434,7 +453,7 @@ func TestSubsPleaseSearchBatchExpansionFailSoft(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "re:zero")
 	if err != nil {
@@ -446,8 +465,8 @@ func TestSubsPleaseSearchBatchExpansionFailSoft(t *testing.T) {
 }
 
 // TestSubsPleaseSearchEpisodeCap pins the surfaced-surface bound: the
-// episode results stop at subspleaseEpisodeResultCap (the wire-order
-// head — the newest releases survive, the tail is cut).
+// episode results stop at the wire-order head (the newest releases
+// survive, the tail is cut).
 func TestSubsPleaseSearchEpisodeCap(t *testing.T) {
 	t.Parallel()
 
@@ -460,14 +479,14 @@ func TestSubsPleaseSearchEpisodeCap(t *testing.T) {
 		_, _ = w.Write([]byte(spSearchPayload(entries...)))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) != subspleaseEpisodeResultCap {
-		t.Fatalf("results = %d, want the cap %d", len(results), subspleaseEpisodeResultCap)
+	if len(results) != subspleaseEpisodeCap {
+		t.Fatalf("results = %d, want the cap %d", len(results), subspleaseEpisodeCap)
 	}
 	if results[0].Title != "[SubsPlease] Show - 1 (720p) [AAAA].mkv" {
 		t.Errorf("first result = %q, want the wire-order head", results[0].Title)
@@ -475,7 +494,7 @@ func TestSubsPleaseSearchEpisodeCap(t *testing.T) {
 }
 
 // TestSubsPleaseSearchBatchCap pins the batch surface bound: a show
-// payload with many batches stops at subspleaseBatchResultCap.
+// payload with many batches stops at the batch cap.
 func TestSubsPleaseSearchBatchCap(t *testing.T) {
 	t.Parallel()
 
@@ -502,30 +521,31 @@ func TestSubsPleaseSearchBatchCap(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
+	p := luaProvider(t, "subsplease", srv.URL)
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	// 1 episode result + the batch cap.
-	if len(results) != 1+subspleaseBatchResultCap {
-		t.Fatalf("results = %d, want 1 episode + batch cap %d", len(results), subspleaseBatchResultCap)
+	if len(results) != 1+subspleaseBatchCap {
+		t.Fatalf("results = %d, want 1 episode + batch cap %d", len(results), subspleaseBatchCap)
 	}
 }
 
 // TestSubsPleaseLinkIsEngineIngestable pins the ingestion contract on
-// the REAL magnet shape: the API's base32 btih magnets must go through
-// TorrentBase.Ingest without error (anacrolix parses 32-char base32
-// xt= values — the animetosho "40-hex" note covers tracker-list files,
-// not magnet URIs).
+// the REAL magnet shape through the hybrid the factory serves: the
+// API's base32 btih magnets must go through TorrentBase.Ingest
+// without error (anacrolix parses 32-char base32 xt= values — the
+// animetosho "40-hex" note covers tracker-list files, not magnet
+// URIs).
 func TestSubsPleaseLinkIsEngineIngestable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("engine-based ingest in short mode")
 	}
 	t.Parallel()
 
-	p := newSubsPleaseFixtureAt(t, spServer(t, map[string]string{
+	p := newSubsPleaseHybrid(t, spServer(t, map[string]string{
 		"/api/": "subsplease_api_search_rezero.json",
 	}, nil))
 	results, err := p.Search(context.Background(), "re:zero")
@@ -536,8 +556,7 @@ func TestSubsPleaseLinkIsEngineIngestable(t *testing.T) {
 		t.Fatal("results = 0, want the fixture surface")
 	}
 
-	eng := newOfflineTestEngine(t)
-	p.SetEngine(eng)
+	p.SetEngine(newOfflineTestEngine(t))
 	ih, err := p.Ingest(context.Background(), results[0].URL)
 	if err != nil {
 		t.Fatalf("Ingest(api magnet): %v", err)
@@ -547,10 +566,13 @@ func TestSubsPleaseLinkIsEngineIngestable(t *testing.T) {
 	}
 }
 
+// TestSubsPleaseCapabilityAndRoster pins the hybrid's capability
+// surfaces: the torrent capability plus the script-declared
+// declarations the registry and the parity smoke probe.
 func TestSubsPleaseCapabilityAndRoster(t *testing.T) {
 	t.Parallel()
 
-	p := newSubsPleaseFixtureAt(t, spServer(t, map[string]string{
+	p := newSubsPleaseHybrid(t, spServer(t, map[string]string{
 		"/api/": "subsplease_api_search_rezero.json",
 	}, nil))
 	if !p.IsTorrent() {
@@ -592,7 +614,7 @@ func TestSubsPleaseNotUnconfiguredByDefault(t *testing.T) {
 	}
 }
 
-// TestSubsPleaseGetEpisodesDelegatesToEpisodesWait: the provider
+// TestSubsPleaseGetEpisodesDelegatesToEpisodesWait: the hybrid's
 // GetEpisodes path rides the base's bounded metadata wait (the search
 // result resolves long after the search; unreachable metadata fails
 // loud on the caller's deadline, never silent-empty).
@@ -600,7 +622,8 @@ func TestSubsPleaseGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	t.Parallel()
 
 	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	p := newSubsPleaseWithEngine(t)
+	p := newSubsPleaseHybrid(t, "http://127.0.0.1:1")
+	p.SetEngine(newOfflineTestEngine(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
@@ -626,10 +649,9 @@ func TestSubsPleaseBatchHopFailureIsLogged(t *testing.T) {
 		_, _ = w.Write([]byte("<html>garbage</html>"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newSubsPleaseFixtureAt(t, srv.URL)
 
 	var logBuf bytes.Buffer
-	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	p := luaProviderWithLogger(t, "subsplease", srv.URL, slog.New(slog.NewTextHandler(&logBuf, nil)))
 
 	if _, err := p.Search(context.Background(), "re:zero"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -637,4 +659,34 @@ func TestSubsPleaseBatchHopFailureIsLogged(t *testing.T) {
 	if !strings.Contains(logBuf.String(), "batch") {
 		t.Errorf("log = %q, want the typed batch-skip reason", logBuf.String())
 	}
+}
+
+// TestSubsPleaseTorrentOffDropsTheHybrid pins the kodik-parity rule
+// for the hybrid slot: with [torrent] disabled the script still loads
+// (its search is plain HTTP), but the slot must NOT register — its
+// results resolve through the engine, and the disabled set must name
+// the reason (the compiled torrent factories drop the same way).
+func TestSubsPleaseTorrentOffDropsTheHybrid(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Torrent.Enabled = false
+	bare, disabled, err := allWithCFDisabled(cfg, nil, nil, discardLogger)
+	if err != nil {
+		t.Fatalf("allWithCFDisabled: %v", err)
+	}
+	for _, p := range bare {
+		if p.ID() == "subsplease" {
+			t.Fatalf("subsplease registered with [torrent] disabled (it cannot resolve without the engine)")
+		}
+	}
+	for _, d := range disabled {
+		if d.ID == "subsplease" {
+			if d.Reason == "" {
+				t.Error("disabled reason must be user-facing (RU), got empty")
+			}
+			return
+		}
+	}
+	t.Errorf("subsplease missing from the disabled set: %v", disabled)
 }

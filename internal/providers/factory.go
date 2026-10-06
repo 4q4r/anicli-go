@@ -353,15 +353,20 @@ var allFactories = []struct {
 	{"anirena", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniRena(AniRenaBase, http, nil)
 	}},
-	// subsplease (PR89): the subsplease.org JSON API on the same
-	// TorrentBase plumbing — the EN seasonal group's f=search catalog
-	// (the RSS feeds are latest-only and queryless, the site search
-	// endpoint is the API) with tracker-rich magnet links and the
-	// show-page sid hop for batch back-catalog; no credentials, engine
-	// injected by NewRegistry when [torrent] is enabled.
-	{"subsplease", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSubsPlease(SubsPleaseBase, http, nil)
-	}},
+	// subsplease → PR144: the subsplease.org JSON API torrent provider
+	// (the EN seasonal group's f=search catalog — the RSS feeds are
+	// latest-only and queryless — with tracker-rich base32-btih magnet
+	// links and the show-page sid hop for batch back-catalog; no
+	// credentials) migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/subsplease/main.lua) — the
+	// TWENTY-SEVENTH Go→Lua provider migration, and the roster's first
+	// TORRENT one: the SEARCH surface lives in the script while the
+	// engine legs stay Go (the PR144 owner ruling — the anacrolix core
+	// is not sandboxed), so the roster slot carries the search-in-Lua
+	// hybrid (luatorrent.go): the script surfaces the magnets,
+	// TorrentBase ingests them and resolves playback. luaOnly pins the
+	// roster slot.
+	{"subsplease", true, nil},
 }
 
 // registryOptions carries the NewRegistry customizations.
@@ -514,6 +519,13 @@ func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[st
 	byID := make(map[string]contracts.Provider, len(provs))
 	order := make([]string, 0, len(provs))
 	for _, p := range provs {
+		// The torrent-search hybrids (PR144): the script surfaces the
+		// links, the Go torrent engine consumes them — the roster slot
+		// carries the hybrid so TorrentBase's engine legs serve the id
+		// and the consumers' TorrentProvider probe holds.
+		if luaTorrentHybrids[p.ID()] {
+			p = newLuaTorrentProvider(p)
+		}
 		byID[p.ID()] = p
 		order = append(order, p.ID())
 	}
@@ -555,6 +567,16 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 			if !factory.luaOnly {
 				log.Info("provider " + factory.id + " shadowed by its lua script")
 			}
+			// The torrent-search hybrids still resolve through the
+			// engine: the [torrent]-disabled rule applies to the
+			// shadowed slot too (the kodik-parity rule — never register
+			// a provider that cannot run; the compiled torrent
+			// factories drop through the same disabled set below).
+			if luaTorrentHybrids[factory.id] {
+				if _, off := disabledMap[factory.id]; off {
+					continue
+				}
+			}
 			out = append(out, lp)
 			continue
 		}
@@ -586,10 +608,15 @@ func allWithCFDisabled(cfg config.Settings, extra []netclient.Option, cf *cfbrow
 	}
 	// A Lua script serving a normally-unconfigured id (a user kodik
 	// with its own token handling) un-disables that id: the notice
-	// must not fire for a provider that IS active.
+	// must not fire for a provider that IS active. The torrent-search
+	// hybrids are the exception: their scripts still resolve through
+	// the engine, so a fired [torrent]-disabled rule keeps the id in
+	// the disabled set even while its script loads (the slot dropped
+	// in the shadow branch above — a silent drop would hide the
+	// reason).
 	disabled := make([]DisabledProvider, 0, len(disabledMap))
 	for _, d := range disabledMap {
-		if _, active := luaByID[d.ID]; active {
+		if _, active := luaByID[d.ID]; active && !luaTorrentHybrids[d.ID] {
 			continue
 		}
 		disabled = append(disabled, d)

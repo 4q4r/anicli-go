@@ -1,7 +1,30 @@
 package providers
 
+// Live-capture provenance: every animemobi fixture below is a verbatim
+// capture of animemobi.com taken 2026-09-23 (anonymous guest requests,
+// mobile-safari User-Agent). The search fixtures ride the DLE full-search
+// POST (do=search&subaction=search); the release fixtures cover the three
+// observed page shapes: per-episode seria anchors (TV), a single movie
+// anchor (Фильм) and a whole-season «Смотреть» anchor.
+//
+// PR137: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/animemobi/main.lua) — these tests
+// pin the script through the same contracts.Provider surface and the
+// same fixtures the compiled Go implementation was held to. Contract
+// shift forced by the fresh-sandbox Lua adapter (the anikado/anifilm
+// precedent), documented here rather than hidden:
+//
+//   - the episode's embed ref rides episode RawID alone (the {n, d, r}
+//     state JSON — the only state channel into the per-invocation
+//     streams(raw_id, dub) call); RawEmbeds keeps carrying the same
+//     dub → ref map for consumers. The unknown-dub wall stays a typed
+//     not-found: the state carries the credited dub, and a dub the
+//     episode does not carry fails exactly like the compiled
+//     provider's RawEmbeds miss.
+
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,12 +35,22 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// Live-capture provenance: every animemobi fixture below is a verbatim
-// capture of animemobi.com taken 2026-09-23 (anonymous guest requests,
-// mobile-safari User-Agent). The search fixtures ride the DLE full-search
-// POST (do=search&subaction=search); the release fixtures cover the three
-// observed page shapes: per-episode seria anchors (TV), a single movie
-// anchor (Фильм) and a whole-season «Смотреть» anchor.
+// animemobiBase is the production base_url literal the script pins
+// (the fixture pages carry the production domain in their absolute
+// links, so expectations keep it).
+const animemobiBase = "https://animemobi.com"
+
+// animemobiStateJSON builds the {n, d, r} state JSON the script
+// encodes into raw_id (the fresh-sandbox streams() state carrier: the
+// episode number, the credited dub and the embed ref).
+func animemobiStateJSON(t *testing.T, num, dub, ref string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"n": num, "d": dub, "r": ref})
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
+	return string(b)
+}
 
 // TestAnimeMobiSearch pins the catalog search against the real captured
 // "black lagoon" answer: DLE full-search rows (div.shortstory) filtered to
@@ -27,12 +60,38 @@ import (
 func TestAnimeMobiSearch(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_search.html")
-	p := newAnimeMobi(srv.URL, testClient(t, "animemobi"))
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_search.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
+
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
+
+	// The DLE full-search POST rides the site root: the form fields
+	// are the documented search contract, UTF-8 (unlike anistar's
+	// cp1251 form).
+	if rec.Method != "POST" {
+		t.Errorf("request method = %q, want POST (the DLE full-search form)", rec.Method)
+	}
+	if rec.Path != "/" {
+		t.Errorf("request path = %q, want / (the form posts the site root)", rec.Path)
+	}
+	if got := rec.Form["do"]; len(got) != 1 || got[0] != "search" {
+		t.Errorf("do form field = %q, want search", got)
+	}
+	if got := rec.Form["subaction"]; len(got) != 1 || got[0] != "search" {
+		t.Errorf("subaction form field = %q, want search", got)
+	}
+	if got := rec.Form["story"]; len(got) != 1 || got[0] != "black lagoon" {
+		t.Errorf("story form field = %q, want the raw query", got)
+	}
+	if ct := rec.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want the form encoding", ct)
+	}
+
 	if len(results) != 3 {
 		t.Fatalf("len(results) = %d, want 3 (the anime rows; AMV/cover cards filtered)", len(results))
 	}
@@ -40,15 +99,15 @@ func TestAnimeMobiSearch(t *testing.T) {
 	want := []contracts.SearchResult{
 		{
 			Title: "Black Lagoon: Roberta's Blood Trail / Пираты «Чёрной лагуны»: Кровавая тропа Роберты (RUS)",
-			URL:   AnimeMobiBase + "/anime-rus/ova-rus/5857-black-lagoon-robertas-blood-trail-piraty-chernoj-laguny-krovavaja-tropa-roberty-rus.html",
+			URL:   animemobiBase + "/anime-rus/ova-rus/5857-black-lagoon-robertas-blood-trail-piraty-chernoj-laguny-krovavaja-tropa-roberty-rus.html",
 		},
 		{
 			Title: "Black Lagoon: The Second Barrage / Пираты «Черной лагуны» [ТВ-2] (RUS)",
-			URL:   AnimeMobiBase + "/anime-rus/tv-rus/5856-black-lagoon-the-second-barrage-piraty-chernoj-laguny-tv-2-rus.html",
+			URL:   animemobiBase + "/anime-rus/tv-rus/5856-black-lagoon-the-second-barrage-piraty-chernoj-laguny-tv-2-rus.html",
 		},
 		{
 			Title: "Black Lagoon / Пираты «Черной лагуны» [ТВ-1] (RUS)",
-			URL:   AnimeMobiBase + "/anime-rus/tv-rus/5855-black-lagoon-piraty-chernoj-laguny-tv-1-rus.html",
+			URL:   animemobiBase + "/anime-rus/tv-rus/5855-black-lagoon-piraty-chernoj-laguny-tv-1-rus.html",
 		},
 	}
 	wantPosters := []string{
@@ -78,14 +137,15 @@ func TestAnimeMobiSearch(t *testing.T) {
 // the roster's default desktop User-Agent): the operator's UA decides
 // which DLE skin the site renders, and the desktop skin marks result rows
 // div.base/div.bheading (h1.heading) where the smartphone skin used
-// div.shortstory (h2.title). Same query, same 17 answers — only the
-// markup differs; the parser must surface both. Posters on this skin
-// arrive as absolute URLs.
+// div.shortstory (h2.title). Same query, same answers — only the
+// markup differs; the parser must surface both.
 func TestAnimeMobiSearchDesktopSkin(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_search_desktop.html")
-	p := newAnimeMobi(srv.URL, testClient(t, "animemobi"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_search_desktop.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
 
 	results, err := p.Search(context.Background(), "боруто")
 	if err != nil {
@@ -98,7 +158,7 @@ func TestAnimeMobiSearchDesktopSkin(t *testing.T) {
 	if first.Title != "Boruto: Naruto Next Generations / Боруто: Следующее поколение Наруто (RUS)" {
 		t.Errorf("Title = %q", first.Title)
 	}
-	if first.URL != AnimeMobiBase+"/anime-rus/tv-rus/2421-boruto-naruto-next-generations-boruto-sleduyuschee-pokolenie-naruto-rus.html" {
+	if first.URL != animemobiBase+"/anime-rus/tv-rus/2421-boruto-naruto-next-generations-boruto-sleduyuschee-pokolenie-naruto-rus.html" {
 		t.Errorf("URL = %q", first.URL)
 	}
 	if !strings.HasSuffix(first.Poster, "/uploads/posts/2017-06/thumbs/1496681240_boruto-naruto-next-generations.jpg") {
@@ -113,8 +173,11 @@ func TestAnimeMobiSearchDesktopSkin(t *testing.T) {
 func TestAnimeMobiSearchMiss(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_search_miss.html")
-	p := newAnimeMobi(srv.URL, testClient(t, "animemobi"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_search_miss.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
+
 	results, err := p.Search(context.Background(), "zzzqqqxxx")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -131,8 +194,10 @@ func TestAnimeMobiSearchMiss(t *testing.T) {
 func TestAnimeMobiGetEpisodesTV(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_anime_tv.html")
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_anime_tv.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime-rus/tv-rus/5855-black-lagoon-piraty-chernoj-laguny-tv-1-rus.html")
 	if err != nil {
@@ -162,6 +227,26 @@ func TestAnimeMobiGetEpisodesTV(t *testing.T) {
 	if last.RawEmbeds["Многоголосый"][0] != "https://kodikplayer.com/seria/321248/8b7ba285675afdc821f1599810f0ac41/720p" {
 		t.Errorf("last ref = %v, want the captured Серия 12 anchor", last.RawEmbeds["Многоголосый"])
 	}
+
+	// The {n, d, r} state JSON rides RawID: the episode number, the
+	// credited dub and the embed ref — the fresh-sandbox streams()
+	// channel (the anikado {n,u} precedent).
+	for _, ep := range []contracts.Episode{first, last} {
+		var state struct {
+			N string `json:"n"`
+			D string `json:"d"`
+			R string `json:"r"`
+		}
+		if err := json.Unmarshal([]byte(ep.RawID), &state); err != nil {
+			t.Fatalf("episode %s RawID = %q, want the {n,d,r} state JSON: %v", ep.Num, ep.RawID, err)
+		}
+		if state.N != ep.Num || state.D != "Многоголосый" {
+			t.Errorf("episode %s state = {n:%q d:%q}, want {n:%q d:Многоголосый}", ep.Num, state.N, state.D, ep.Num)
+		}
+		if state.R != ep.RawEmbeds["Многоголосый"][0] {
+			t.Errorf("episode %s state r = %q, want the episode's embed ref", ep.Num, state.R)
+		}
+	}
 }
 
 // TestAnimeMobiGetEpisodesMovie pins the movie shape (Naruto film 3
@@ -170,8 +255,10 @@ func TestAnimeMobiGetEpisodesTV(t *testing.T) {
 func TestAnimeMobiGetEpisodesMovie(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_anime_movie.html")
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_anime_movie.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime-rus/movie-rus/5619-naruto-film-3.html")
 	if err != nil {
@@ -200,8 +287,10 @@ func TestAnimeMobiGetEpisodesMovie(t *testing.T) {
 func TestAnimeMobiGetEpisodesSeason(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animemobi_anime_season.html")
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animemobi_anime_season.html"))
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/anime-rus/web-rus/6292-zhe-tian.html")
 	if err != nil {
@@ -226,12 +315,11 @@ func TestAnimeMobiGetEpisodesSeason(t *testing.T) {
 func TestAnimeMobiGetEpisodesNoPlayer(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body><h1>site news</h1></body></html>")
-	}))
-	t.Cleanup(srv.Close)
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
 	_, err := p.GetEpisodes(context.Background(), srv.URL+"/main/1-post1.html")
 	if err == nil {
 		t.Fatal("error = nil, want the typed not-found")
@@ -239,8 +327,12 @@ func TestAnimeMobiGetEpisodesNoPlayer(t *testing.T) {
 	if !strings.Contains(err.Error(), "no onlinevideo anchors") {
 		t.Errorf("error = %v, want the anchor-miss context", err)
 	}
-	if !isNotFoundErr(err) {
+	if !errors.Is(err, contracts.ErrNotFound) {
 		t.Errorf("error = %v, want contracts.ErrNotFound class", err)
+	}
+	var perr *contracts.ProviderError
+	if !errors.As(err, &perr) || perr.Provider != "animemobi" {
+		t.Errorf("error = %v, want an animemobi ProviderError", err)
 	}
 }
 
@@ -249,7 +341,7 @@ func TestAnimeMobiGetEpisodesNoPlayer(t *testing.T) {
 func TestAnimeMobiSearchTransportError(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi("http://"+newDeadListener(t).Addr().String(), testClient(t, "animemobi"))
+	p := luaProvider(t, "animemobi", "http://"+newDeadListener(t).Addr().String())
 	if _, err := p.Search(context.Background(), "black lagoon"); err == nil {
 		t.Fatal("error = nil, want the transport failure")
 	}
@@ -271,15 +363,14 @@ func TestAnimeMobiResolveStreamKodikRoundTrip(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	episode := contracts.Episode{
-		Num: "1",
-		RawEmbeds: map[string][]string{
-			"Многоголосый": {srv.URL + "/kodik/seria/12345/xyz/720p"},
-		},
+	p := luaProvider(t, "animemobi", srv.URL)
+	ref := srv.URL + "/kodik/seria/12345/xyz/720p"
+	ep := contracts.Episode{
+		Num:   "1",
+		RawID: animemobiStateJSON(t, "1", "Многоголосый", ref),
 	}
 
-	stream, err := p.ResolveStream(context.Background(), episode, "Многоголосый")
+	stream, err := p.ResolveStream(context.Background(), ep, "Многоголосый")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -290,23 +381,34 @@ func TestAnimeMobiResolveStreamKodikRoundTrip(t *testing.T) {
 	if src.Type != "m3u8" {
 		t.Errorf("Type = %q, want m3u8 (URL-shape labeling)", src.Type)
 	}
+	if stream.DubName != "Многоголосый" {
+		t.Errorf("DubName = %q, want the requested dub", stream.DubName)
+	}
 }
 
-// TestAnimeMobiResolveStreamUnknownDub pins the typed dub miss.
+// TestAnimeMobiResolveStreamUnknownDub pins the typed dub miss: a dub the
+// episode does not carry is the compiled provider's RawEmbeds miss — the
+// state JSON carries the credited dub, and a mismatch fails not-found
+// without touching the network.
 func TestAnimeMobiResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	episode := contracts.Episode{
-		Num:       "1",
-		RawEmbeds: map[string][]string{"Многоголосый": {"https://kodikplayer.com/seria/1/h/720p"}},
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the unknown-dub wall must not fetch anything (the state carries the ref)")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "animemobi", srv.URL)
+
+	ep := contracts.Episode{
+		Num:   "1",
+		RawID: animemobiStateJSON(t, "1", "Многоголосый", "https://kodikplayer.com/seria/1/h/720p"),
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "NoSuchDub")
+	_, err := p.ResolveStream(context.Background(), ep, "NoSuchDub")
 	if err == nil {
 		t.Fatal("error = nil, want the typed not-found")
 	}
-	if !isNotFoundErr(err) {
+	if !errors.Is(err, contracts.ErrNotFound) {
 		t.Errorf("error = %v, want contracts.ErrNotFound class", err)
 	}
 }
@@ -317,15 +419,14 @@ func TestAnimeMobiResolveStreamUnknownDub(t *testing.T) {
 func TestAnimeMobiResolveStreamTransportFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	episode := contracts.Episode{
-		Num: "1",
-		RawEmbeds: map[string][]string{
-			"Многоголосый": {"//" + newDeadListener(t).Addr().String() + "/kodik/e/9"},
-		},
+	p := luaProvider(t, "animemobi", animemobiBase)
+	ref := "//" + newDeadListener(t).Addr().String() + "/kodik/e/9"
+	ep := contracts.Episode{
+		Num:   "1",
+		RawID: animemobiStateJSON(t, "1", "Многоголосый", ref),
 	}
 
-	_, err := p.ResolveStream(context.Background(), episode, "Многоголосый")
+	_, err := p.ResolveStream(context.Background(), ep, "Многоголосый")
 	if err == nil {
 		t.Fatal("error = nil, want the transport failure")
 	}
@@ -340,15 +441,19 @@ func TestAnimeMobiResolveStreamTransportFailsLoud(t *testing.T) {
 func TestAnimeMobiProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	if p.ID() != "animemobi" || p.Name() != "AnimeMobi" || p.BaseURL() != AnimeMobiBase {
+	p := luaProviderAtProduction(t, "animemobi")
+	if p.ID() != "animemobi" || p.Name() != "AnimeMobi" || p.BaseURL() != animemobiBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok {
+		t.Fatal("the animemobi script lost the ContentLanguage surface")
+	}
+	if got := lc.ContentLanguage(); got != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru", got)
 	}
 }
 
@@ -356,13 +461,18 @@ func TestAnimeMobiProviderMeta(t *testing.T) {
 // animemobi.com's DLE index matches the Cyrillic fragments of its
 // composite titles («наруто» verified live 2026-09-23) — the provider
 // stays in the RU group and must NOT declare the latin-only preference
-// (anilibria-torrent precedent).
+// (anilibria-torrent precedent). Under the capability adapter the
+// declaration surface answers the default (anilibria precedent).
 func TestAnimeMobiNamePreferenceRU(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	if _, declares := any(p).(contracts.NamePreferenceProvider); declares {
-		t.Error("animemobi must stay in the RU group (no latin preference declaration)")
+	p := luaProviderAtProduction(t, "animemobi")
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the content_lang adapter must keep the capability surface assertions-stable")
+	}
+	if got := np.NamePreference(); got != contracts.NamePrefDefault {
+		t.Errorf("NamePreference = %v, want NamePrefDefault (the RU group)", got)
 	}
 }
 
@@ -375,11 +485,12 @@ func TestAnimeMobiNamePreferenceRU(t *testing.T) {
 func TestAnimeMobiSmokeQueryDeclared(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeMobi(AnimeMobiBase, testClient(t, "animemobi"))
-	if _, ok := any(p).(contracts.SmokeQueryProvider); !ok {
+	p := luaProviderAtProduction(t, "animemobi")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
 		t.Fatal("animemobi must declare contracts.SmokeQueryProvider (the shared RU probe misses)")
 	}
-	if got := p.SmokeQuery(); got != "боруто" {
+	if got := sq.SmokeQuery(); got != "боруто" {
 		t.Errorf("SmokeQuery = %q, want «боруто»", got)
 	}
 }
@@ -392,7 +503,7 @@ func isNotFoundErr(err error) bool {
 
 // serveFixture serves one testdata capture over httptest so the page
 // parsing runs against the REAL bytes (the fixture host replaces
-// animemobi.com in the fetch only).
+// animemobi.com in the fetch only). Shared with the anitokyo pins.
 func serveFixture(t *testing.T, name string) *httptest.Server {
 	t.Helper()
 

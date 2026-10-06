@@ -195,15 +195,20 @@ var allFactories = []struct {
 	// downloads are a TorrentBase extension candidate, deliberately out
 	// of scope here.
 	{"anifilm", true, nil},
-	// animemobi (PR92): the animemobi.com RU mobile catalog (DLE, UTF-8,
-	// anonymous) — search POST form in, per-episode kodik-family embeds
-	// out (kodikplayer.com and aniqit.com, both covered by the shared
-	// kodik extractor); the release pages additionally carry per-release
-	// .torrent downloads (documented in animemobi.go, out of the stream
-	// contract). No frozen Python original; written from the live site.
-	{"animemobi", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimeMobi(AnimeMobiBase, http)
-	}},
+	// animemobi (PR92 → PR137): the animemobi.com RU mobile catalog
+	// (DLE, UTF-8, anonymous) migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animemobi/main.lua) — the
+	// TWENTIETH Go→Lua provider migration. luaOnly pins the roster
+	// slot; the script serves the DLE full-search POST (both skins:
+	// the smartphone div.shortstory rows and the desktop div.base/
+	// div.bheading rows), the «Озвучка:»-credited single dub and the
+	// per-episode a.onlinevideo kodik-family embeds (kodikplayer.com
+	// and aniqit.com, both covered by the shared kodik extractor). The
+	// release pages additionally carry per-release .torrent downloads
+	// (documented out of the stream contract — the download pipeline
+	// note lives in the PR92 Go source's git history). No frozen
+	// Python original; written from the live site.
+	{"animemobi", true, nil},
 	// anitokyo (PR100 → PR116): the anitokyo.tv RU DLE catalog with
 	// its RalodePlayer module migrated to the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/anitokyo/main.lua) — the first

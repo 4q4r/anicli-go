@@ -138,6 +138,19 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// ~1.6s through the proxy; the hdrezka-class geo-fence per the
 		// route notes above).
 		"anifilm": "дьявол",
+		// animemobi (PR137): the declared probe rides the proxy (the
+		// route-matrix honest route; the shared RU probe «черная
+		// лагуна» misses the catalog — DLE's word-prefix search never
+		// matches the inflected site titles). LIVE DRIFT NOTE
+		// (2026-10-06): since the PR116 verification matrix the site
+		// tarpits the netclient's TLS fingerprint — the search POST
+		// times out on BOTH routes (silent connection drop direct,
+		// EOF through the proxy; a plain browser-UA curl answers 200
+		// with 10 shortstory rows in ~2-3s). The compiled PR92
+		// provider failed the smoke the same way on the same day
+		// (identical live behavior — the migration-success rule);
+		// the subtest fails until the site's transport wall lifts.
+		"animemobi": "боруто",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

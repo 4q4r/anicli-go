@@ -14,7 +14,6 @@ import (
 	"log/slog"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
-	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // discardLogger is the unwired provider logger's sink: output goes
@@ -34,7 +33,6 @@ type Base struct {
 	// "ja", …): the tag every dub the service emits carries. It is a
 	// service-level declaration, not per-dub introspection (PR23).
 	contentLang string
-	http        *netclient.Client
 	// logger routes provider-level diagnostics (search-preflight
 	// drops, …). Nil degrades to discard — NEVER slog.Default, whose
 	// stderr output corrupts the TUI alt-screen (PR62 #4; the PR42

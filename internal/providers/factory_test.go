@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +51,79 @@ func TestAllRosterComplete(t *testing.T) {
 			t.Errorf("All() missing provider %q", id)
 		}
 	}
+}
+
+// TestProviderSettingsForFlattensConfig pins the PR140 flatten table:
+// every per-provider string setting config.Settings carries today,
+// exposed under its providers.<id>.<key> name — and nothing else (a
+// provider without a settings section reads nil in its scripts).
+func TestProviderSettingsForFlattensConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Providers.Kodik.Token = "tok"
+	cfg.Providers.HDRezka.BaseURL = "https://rezka.example"
+
+	kodik := providerSettingsFor(cfg)("kodik")
+	if len(kodik) != 1 || kodik["token"] != "tok" {
+		t.Fatalf("providerSettingsFor(kodik) = %v, want {token: tok}", kodik)
+	}
+	rezka := providerSettingsFor(cfg)("hdrezka")
+	if len(rezka) != 1 || rezka["base_url"] != "https://rezka.example" {
+		t.Fatalf("providerSettingsFor(hdrezka) = %v, want {base_url: https://rezka.example}", rezka)
+	}
+	if got := providerSettingsFor(cfg)("animego"); got != nil {
+		t.Fatalf("providerSettingsFor(animego) = %v, want nil (no settings section)", got)
+	}
+}
+
+// TestFactoryProviderSettingsReachScripts pins the PR140 config-read
+// seam end to end: cfg.Providers.Kodik.Token flattens through the
+// factory's settingsFor, rides LoadSources into the sandbox and
+// surfaces as anicli.provider_setting("token") inside a script.
+func TestFactoryProviderSettingsReachScripts(t *testing.T) {
+	dir := luaXDG(t)
+	// A user kodik script whose search surfaces the token it reads
+	// (user-dir sources take LoadSources precedence over the bundled
+	// embeds, so this shadows whatever serves the id).
+	sub := filepath.Join(dir, "kodik")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	src := `return {
+	id = "kodik",
+	search = function(query)
+		return { { title = tostring(anicli.provider_setting("token")), url = "/u" } }
+	end,
+	episodes = function(anime_url) return {} end,
+	streams = function(episode_url, dub) return { dub_name = dub, links = {} } end,
+}`
+	if err := os.WriteFile(filepath.Join(sub, "main.lua"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+	cfg.Providers.Kodik.Token = "from-config"
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, p := range bare {
+		if p.ID() != "kodik" {
+			continue
+		}
+		results, err := p.Search(t.Context(), "q")
+		if err != nil {
+			t.Fatalf("kodik Search: %v", err)
+		}
+		if len(results) != 1 || results[0].Title != "from-config" {
+			t.Fatalf("script saw token %v, want from-config", results)
+		}
+		return
+	}
+	t.Fatal("All() missing the kodik provider")
 }
 
 func TestAllWiresKodikTokenFromConfig(t *testing.T) {

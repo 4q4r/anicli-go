@@ -61,6 +61,12 @@ type Config struct {
 	// retry policy shared with the built-in providers). Nil falls back
 	// to a plain client at first use.
 	HTTP *netclient.Client
+	// ProviderSettings carries the flattened settings of the ONE
+	// provider being loaded — the providers.<id>.<key> string values
+	// anicli.provider_setting(key) reads (PR140; the loader and the
+	// factory wire it per id through the same seam as HTTP). Nil means
+	// the provider has no settings section: every read yields Lua nil.
+	ProviderSettings map[string]string
 	// Transport overrides the fallback client's round tripper (tests
 	// redirect the provider's real base_url at an httptest server).
 	Transport http.RoundTripper

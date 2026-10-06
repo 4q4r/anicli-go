@@ -24,6 +24,12 @@ type Source struct {
 // and sandboxes).
 type HTTPFor func(id string) *netclient.Client
 
+// SettingsFor builds the flattened per-provider settings map for the
+// provider id — the providers.<id>.<key> string values
+// anicli.provider_setting reads (PR140). Nil disables the wiring
+// (scripts read nil for every key — tests and sandboxes).
+type SettingsFor func(id string) map[string]string
+
 // LoadSources loads and validates provider scripts in the caller's
 // precedence order (highest-precedence caller first — the factory
 // passes the user config dir, then [providers.lua].dir, then the
@@ -37,8 +43,9 @@ type HTTPFor func(id string) *netclient.Client
 // duplicate ids are collected as DiscoveryErrors and logged; one
 // broken script never blocks the others and never fails the call —
 // discovery is never fatal to startup (the discovery.go contract).
-// Every returned provider routes its SDK HTTP through httpFor(id).
-func LoadSources(cfg Config, log *slog.Logger, sources []Source, httpFor HTTPFor) ([]contracts.Provider, []DiscoveryError) {
+// Every returned provider routes its SDK HTTP through httpFor(id) and
+// its anicli.provider_setting reads through settingsFor(id).
+func LoadSources(cfg Config, log *slog.Logger, sources []Source, httpFor HTTPFor, settingsFor SettingsFor) ([]contracts.Provider, []DiscoveryError) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discardWriter{}, nil))
 	}
@@ -59,6 +66,9 @@ func LoadSources(cfg Config, log *slog.Logger, sources []Source, httpFor HTTPFor
 		engineCfg := cfg
 		if httpFor != nil {
 			engineCfg.HTTP = httpFor(src.ID)
+		}
+		if settingsFor != nil {
+			engineCfg.ProviderSettings = settingsFor(src.ID)
 		}
 		p, err := NewEngine(engineCfg, log).LoadProvider(src.ID, src.Src)
 		if err != nil {

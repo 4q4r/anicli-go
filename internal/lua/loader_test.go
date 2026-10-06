@@ -33,7 +33,7 @@ func TestLoadSourcesDedupsFirstWins(t *testing.T) {
 		{ID: "beta", Src: okScript("beta"), Dir: "/user"},
 	}
 
-	provs, errs := LoadSources(DefaultConfig(), log, sources, nil)
+	provs, errs := LoadSources(DefaultConfig(), log, sources, nil, nil)
 	if len(errs) != 1 {
 		t.Fatalf("skips = %d (%v), want 1 (the duplicate alpha)", len(errs), errs)
 	}
@@ -58,7 +58,7 @@ func TestLoadSourcesIsolatesBrokenScripts(t *testing.T) {
 		{ID: "good", Src: okScript("good"), Dir: "bundled"},
 	}
 
-	provs, errs := LoadSources(DefaultConfig(), log, sources, nil)
+	provs, errs := LoadSources(DefaultConfig(), log, sources, nil, nil)
 	if len(provs) != 1 || provs[0].ID() != "good" {
 		t.Fatalf("loaded = %v, want only good", providerIDs(provs))
 	}
@@ -107,7 +107,7 @@ func TestLoadSourcesWiresHTTPPerProvider(t *testing.T) {
 	}
 
 	log, _ := testLogger(t)
-	provs, errs := LoadSources(DefaultConfig(), log, sources, httpFor)
+	provs, errs := LoadSources(DefaultConfig(), log, sources, httpFor, nil)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected skips: %v", errs)
 	}
@@ -121,6 +121,46 @@ func TestLoadSourcesWiresHTTPPerProvider(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Title != "ok" {
 		t.Fatalf("results = %+v, want the response body routed through the wired client", results)
+	}
+}
+
+// TestLoadSourcesWiresSettingsPerProvider pins the PR140 config-read
+// seam: the settingsFor callback runs per LOADED provider id and each
+// script sees ONLY its own provider's settings through
+// anicli.provider_setting — alpha never reads beta's token.
+func TestLoadSourcesWiresSettingsPerProvider(t *testing.T) {
+	script := func(id string) string {
+		return "return {\n" +
+			"\tid = \"" + id + "\",\n" +
+			"\tsearch = function(query)\n" +
+			"\t\treturn { { title = tostring(anicli.provider_setting(\"token\")), url = \"/u\" } }\n" +
+			"\tend,\n" +
+			"\tepisodes = function(anime_url) return {} end,\n" +
+			"\tstreams = function(episode_url, dub) return { dub_name = dub, links = {} } end,\n" +
+			"}"
+	}
+	sources := []Source{
+		{ID: "alpha", Src: script("alpha"), Dir: "bundled"},
+		{ID: "beta", Src: script("beta"), Dir: "bundled"},
+	}
+	settingsFor := func(id string) map[string]string {
+		return map[string]string{"token": "tok-" + id}
+	}
+
+	log, _ := testLogger(t)
+	provs, errs := LoadSources(DefaultConfig(), log, sources, nil, settingsFor)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected skips: %v", errs)
+	}
+	for i, want := range []string{"tok-alpha", "tok-beta"} {
+		results, err := provs[i].Search(context.Background(), "q")
+		if err != nil {
+			t.Fatalf("%s Search: %v", provs[i].ID(), err)
+		}
+		if len(results) != 1 || results[0].Title != want {
+			t.Fatalf("%s saw token %q, want %q (settings must not leak across providers)",
+				provs[i].ID(), results[0].Title, want)
+		}
 	}
 }
 

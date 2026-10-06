@@ -238,7 +238,10 @@ IDs, pinned order, and fixtures per provider.
 - **Declarative exclusion** — `[providers].exclude` skips IDs entirely (no client, no
   registry slot); `[providers].exclude_streams` filters trash dub streams by regex.
   Providers that cannot run without user configuration (kodik without a token) are
-  never registered and surface in the disabled set with a red startup notice.
+  never registered and surface in the disabled set with a red startup notice —
+  unless a Lua script serves the id (since PR140 the bundled kodik script registers
+  tokenless and fails loud on use, demanding the credential only from users who
+  select that source).
 - **Written from live sites** — most non-ported providers carry protocol notes captured
   from the live site (DLE catalogs, GraphQL, Livewire payloads, newznab feeds, Anubis
   proof-of-work, statically unpacked AES/CBC player bundles — no JavaScript executed).
@@ -300,6 +303,7 @@ provider-scoped field validation; the contract tests
 | `anicli.base64` | `encode`, `decode`, `url_encode`, `url_decode` |
 | `anicli.crypto` | `aes_cbc_decrypt`, `hmac_sha256` — the megaplay-chain primitives (Go stdlib behind the sandbox) |
 | `anicli.iconv` | `iconv(s, from_encoding)` — decode a legacy-encoded byte string (e.g. `cp1251`/`windows-1251`, IANA names) to UTF-8; invalid bytes become U+FFFD |
+| `anicli.provider_setting` | `provider_setting(key)` — the string value of `providers.<id>.<key>` for the script's own provider id; missing key → `nil` (the kodik token read) |
 | `anicli.time` | `now` (RFC 3339 UTC) |
 | `anicli.log` | `info`, `warn`, `error` |
 | `anicli.version` | SDK version string |

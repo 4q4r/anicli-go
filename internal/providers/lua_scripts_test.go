@@ -108,6 +108,13 @@ var luaProductionBases = map[string][]string{
 	// iframe (the getSourcesNew endpoint is same-origin), and the
 	// fixtures rewrite it to the test server at serve time.
 	"anipub": {"https://anipub.xyz"},
+	// kodik (PR140): the JSON API root (kodik-api.com answers 401
+	// without a token — the domain-intel comment in the script header).
+	// The kodik.info player origin is a CONSTRUCTED constant inside the
+	// script (embed URLs are never fetched by the provider — the shared
+	// extractor consumes them), so it is not a fetched host and stays
+	// an unpinned literal.
+	"kodik": {"https://kodik-api.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts
@@ -142,10 +149,24 @@ func luaProviderWithLogger(t testing.TB, id, testURL string, log *slog.Logger) c
 	return luaProviderFull(t, id, testURL, config.Default().Network, log)
 }
 
+// luaProviderWithSettings loads the bundled script with per-provider
+// provider_setting values (the PR140 config-read seam — kodik's
+// token). Everything else matches the production shape.
+func luaProviderWithSettings(t testing.TB, id, testURL string, settings map[string]string) contracts.Provider {
+	t.Helper()
+	return luaProviderCore(t, id, testURL, config.Default().Network, nil, settings)
+}
+
 // luaProviderFull is the shared harness core: the production base
 // literal rewrite plus a production-shaped per-provider transport and
 // engine logger.
 func luaProviderFull(t testing.TB, id, testURL string, ncfg config.Network, log *slog.Logger) contracts.Provider {
+	t.Helper()
+	return luaProviderCore(t, id, testURL, ncfg, log, nil)
+}
+
+// luaProviderCore is luaProviderFull with the PR140 settings seam.
+func luaProviderCore(t testing.TB, id, testURL string, ncfg config.Network, log *slog.Logger, settings map[string]string) contracts.Provider {
 	t.Helper()
 
 	productions, known := luaProductionBases[id]
@@ -180,6 +201,7 @@ func luaProviderFull(t testing.TB, id, testURL string, ncfg config.Network, log 
 		t.Fatalf("netclient for %q: %v", id, err)
 	}
 	cfg.HTTP = client
+	cfg.ProviderSettings = settings
 
 	p, err := lua.LoadProviderBytes(cfg, log, id, []byte(src))
 	if err != nil {

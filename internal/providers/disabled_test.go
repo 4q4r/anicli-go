@@ -1,9 +1,13 @@
 package providers
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
 // TestUnconfiguredProviders: the startup detection table (PR24) — a
@@ -66,31 +70,86 @@ func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 	}
 }
 
+// TestAllSkipsUnconfiguredProviders pins the PR140 credential-gate
+// parity for the Lua-pinned kodik slot. Two legs:
+//
+//   - [providers.lua] enabled (the default): the bundled script serves
+//     the id and REGISTERS even tokenless — and Search fails loud with
+//     the typed ErrInvalidInput BEFORE any request leaves the process
+//     (the dead-endpoint base proves the short-circuit), mirroring the
+//     Go constructor's fail-loud-on-use error policy. This is the
+//     credential-gated no-op the parity smoke's SKIP roster expects.
+//   - [providers.lua] disabled: kodik has no Go constructor anymore —
+//     the slot drops entirely (the twenty migrated slots are Lua-only).
 func TestAllSkipsUnconfiguredProviders(t *testing.T) {
-	cfg := config.Default()
-	cfg.Network.ProxyURL = ""
-	cfg.Providers.Kodik.Token = ""
+	t.Run("lua enabled: tokenless kodik registers and fails loud on use", func(t *testing.T) {
+		t.Parallel()
 
-	bare, err := All(cfg)
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	for _, p := range bare {
-		if p.ID() == "kodik" {
-			t.Fatalf("unconfigured kodik must not be built, got %v", p.ID())
+		cfg := config.Default()
+		cfg.Network.ProxyURL = ""
+		cfg.Providers.Kodik.Token = ""
+
+		bare, err := All(cfg)
+		if err != nil {
+			t.Fatalf("All: %v", err)
 		}
-	}
-	if len(bare) != 29 {
-		t.Fatalf("want the remaining 29 providers, got %d", len(bare))
-	}
+		if len(bare) != 30 {
+			t.Fatalf("All() = %d providers, want 30 (the Lua-pinned kodik stays in the roster)", len(bare))
+		}
+		var kodik contracts.Provider
+		for _, p := range bare {
+			if p.ID() == "kodik" {
+				kodik = p
+				break
+			}
+		}
+		if kodik == nil {
+			t.Fatal("the Lua-pinned kodik slot must register even tokenless (it fails loud on use instead)")
+		}
+		_, err = kodik.Search(context.Background(), "q")
+		if !errors.Is(err, contracts.ErrInvalidInput) {
+			t.Fatalf("tokenless kodik Search = %v, want the typed ErrInvalidInput", err)
+		}
+		for _, want := range []string{"providers.kodik.token", "ANICLI_KODIK_TOKEN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, must mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("lua disabled: the kodik slot drops with its constructor", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.Default()
+		cfg.Network.ProxyURL = ""
+		cfg.Providers.Kodik.Token = ""
+		cfg.Providers.Lua.Enabled = false
+
+		bare, err := All(cfg)
+		if err != nil {
+			t.Fatalf("All: %v", err)
+		}
+		if len(bare) != 10 {
+			t.Fatalf("All() = %d providers, want 10 (the Go factories; kodik is Lua-only since PR140)", len(bare))
+		}
+		for _, p := range bare {
+			if p.ID() == "kodik" {
+				t.Fatal("unconfigured kodik must not be built with [providers.lua] disabled")
+			}
+		}
+	})
 }
 
 // TestRegistryDisabledListsUnconfigured: NewRegistry records the
-// disabled set for the health/search surfaces.
+// disabled set for the health/search surfaces. With [providers.lua]
+// disabled the tokenless kodik lands there (nothing serves the id);
+// with Lua enabled the bundled script un-disables it (factory.go's
+// un-disabling rule) and the loud-on-use search is the gate instead.
 func TestRegistryDisabledListsUnconfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.Network.ProxyURL = ""
 	cfg.Providers.Kodik.Token = ""
+	cfg.Providers.Lua.Enabled = false
 
 	reg, err := NewRegistry(cfg, nil)
 	if err != nil {

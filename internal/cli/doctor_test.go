@@ -19,17 +19,31 @@ import (
 )
 
 // TestStartupNotices: the PR24/PR55 startup warning lines — one
-// per unconfigured provider, exact RU wording.
+// per unconfigured provider, exact RU wording. Since PR140 the kodik
+// slot is Lua-pinned: with [providers.lua] enabled (the default) the
+// bundled script un-disables the id (it registers tokenless and fails
+// loud on use), so the notice only fires when Lua is off.
 func TestStartupNotices(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = ""
 
 	notices := startupNotices(cfg)
-	// Shikimori defaults to enabled=true (core feature) with empty
-	// credentials, so the default config yields the kodik and
-	// Shikimori notices.
+	// The bundled kodik script serves the id tokenless — the only
+	// notice left is Shikimori (defaults to enabled=true with empty
+	// credentials).
+	if len(notices) != 1 {
+		t.Fatalf("want one notice (shikimori; the Lua-pinned kodik un-disables), got %v", notices)
+	}
+	if !strings.Contains(notices[0], "Shikimori") {
+		t.Fatalf("notice[0] = %q, want the shikimori warning", notices[0])
+	}
+
+	// [providers.lua] disabled: nothing serves the id — the notice
+	// returns with its exact wording.
+	cfg.Providers.Lua.Enabled = false
+	notices = startupNotices(cfg)
 	if len(notices) != 2 {
-		t.Fatalf("want two notices (kodik + shikimori), got %v", notices)
+		t.Fatalf("want two notices (kodik + shikimori) with Lua disabled, got %v", notices)
 	}
 	wantKodik := "⚠ Провайдер 'kodik' отключён: не задан токен (providers.kodik.token)"
 	if notices[0] != wantKodik {
@@ -127,7 +141,10 @@ func (s *stubProbe) probe(_ context.Context, p contracts.Provider, _ time.Durati
 // TestDoctorSearchBasedCheck (PR24): doctor probes every registered
 // provider with the two test queries through the probe seam, renders
 // Provider|Статус|Результатов rows and marks unconfigured providers
-// ОТКЛЮЧЁН without probing them.
+// ОТКЛЮЧЁН without probing them. Since PR140 the tokenless-kodik leg
+// needs [providers.lua] disabled: with Lua on, the bundled script
+// serves the id (registers tokenless, fails loud on use) and the
+// doctor probes it like any registered provider.
 func TestDoctorSearchBasedCheck(t *testing.T) {
 	t.Setenv("ANICLI_DATA", t.TempDir())
 
@@ -137,7 +154,10 @@ func TestDoctorSearchBasedCheck(t *testing.T) {
 	t.Cleanup(func() { doctorProbe = orig })
 
 	var buf bytes.Buffer
-	if err := runDoctor(context.Background(), "", &buf); err != nil {
+	if err := runDoctorWithConfig(t, &buf, func(cfg *config.Settings) {
+		cfg.Providers.Kodik.Token = ""
+		cfg.Providers.Lua.Enabled = false
+	}); err != nil {
 		t.Fatalf("runDoctor: %v", err)
 	}
 	out := buf.String()
@@ -159,6 +179,39 @@ func TestDoctorSearchBasedCheck(t *testing.T) {
 	}
 	if len(stub.seen) == 0 {
 		t.Fatalf("the enabled providers must be probed, saw none")
+	}
+}
+
+// TestDoctorLuaPinnedKodikIsProbed: the PR140 flip side — with Lua
+// enabled and no token, the bundled kodik script registers and the
+// doctor probes it (the stub answers; the provider's own token guard
+// is what fails loud in production, never a probe skip).
+func TestDoctorLuaPinnedKodikIsProbed(t *testing.T) {
+	t.Setenv("ANICLI_DATA", t.TempDir())
+
+	stub := &stubProbe{results: 7}
+	orig := doctorProbe
+	doctorProbe = stub.probe
+	t.Cleanup(func() { doctorProbe = orig })
+
+	var buf bytes.Buffer
+	if err := runDoctorWithConfig(t, &buf, func(cfg *config.Settings) {
+		cfg.Providers.Kodik.Token = ""
+	}); err != nil {
+		t.Fatalf("runDoctor: %v", err)
+	}
+	out := buf.String()
+	found := false
+	for _, id := range stub.seen {
+		if id == "kodik" {
+			found = true
+		}
+		if id == "kodik" && strings.Contains(out, "ОТКЛЮЧЁН: не задан") {
+			t.Errorf("the Lua-pinned kodik must be probed, not rendered disabled:\n%s", out)
+		}
+	}
+	if !found {
+		t.Errorf("the Lua-pinned tokenless kodik must register and be probed, saw %v", stub.seen)
 	}
 }
 
@@ -281,6 +334,9 @@ func writeSettings(t *testing.T, cfg config.Settings) string {
 	b.WriteString("[network]\nproxy_url = \"\"\n")
 	if cfg.Providers.Kodik.Token != "" {
 		b.WriteString("\n[providers.kodik]\ntoken = \"" + cfg.Providers.Kodik.Token + "\"\n")
+	}
+	if !cfg.Providers.Lua.Enabled {
+		b.WriteString("\n[providers.lua]\nenabled = false\n")
 	}
 	if len(cfg.Providers.Exclude) > 0 {
 		b.WriteString("\n[providers]\nexclude = [")

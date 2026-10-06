@@ -84,6 +84,10 @@ func (e *Engine) openSDK(ls *lua.LState) {
 	// cp1251 scraper leg) decoded into UTF-8.
 	openSDKIconv(ls, mod)
 
+	// The PR140 settings read: providers.<id>.<key> string values for
+	// the script's OWN provider id (the kodik token leg).
+	e.openSDKSettings(ls, mod)
+
 	// fail raises a typed provider failure: fail(kind, message) with
 	// kind one of not_found|extract_failed|invalid_input. The VM
 	// error's message carries the anicli:<kind>: marker; the adapter's

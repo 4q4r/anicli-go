@@ -65,10 +65,14 @@ var doctorProbe = func(ctx context.Context, p contracts.Provider, budget time.Du
 // startupNotices builds the PR24 startup warning lines — one per
 // provider disabled for missing configuration — plus the PR26
 // first-run Shikimori warning when the integration is enabled but
-// carries neither a session cookie nor an OAuth token.
+// carries neither a session cookie nor an OAuth token. The disabled
+// set is the factory-shaped one (DisabledProvidersFor): a Lua script
+// serving a normally-unconfigured id un-disables it — the bundled
+// kodik script registers tokenless and fails loud on use, so warning
+// at startup would claim a provider is disabled that IS active.
 func startupNotices(cfg config.Settings) []string {
 	var out []string
-	for _, d := range providers.UnconfiguredProviders(cfg) {
+	for _, d := range providers.DisabledProvidersFor(cfg) {
 		out = append(out, fmt.Sprintf("⚠ Провайдер '%s' отключён: %s", d.ID, d.Reason))
 	}
 	if cfg.Shikimori.Enabled && cfg.Shikimori.Session == "" && cfg.Shikimori.AccessToken == "" {

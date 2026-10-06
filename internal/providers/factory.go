@@ -113,11 +113,21 @@ var allFactories = []struct {
 	// Playerjs playlist chain and the direct no-network quality-map
 	// resolve (the raw file field rides episode RawID). No
 	// credentials; formContentType's last sameband consumer died here
-	// — kodik still uses the helper.
+	// (the helper itself followed when kodik migrated in PR140).
 	{"sameband", true, nil},
-	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
-	}},
+	// kodik → PR140: the tokenled kodik-api.com search API plus the
+	// scraped kodik.info player pages (the anicli-py kodik.py port)
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/kodik/main.lua) — the TWENTY-THIRD
+	// Go→Lua provider migration. luaOnly pins the roster slot; the API
+	// token rides anicli.provider_setting("token") (the PR140 per-
+	// provider config read — the reason that SDK leg exists) and an
+	// empty or missing token fails loud on search exactly like the Go
+	// constructor did. The parity smoke's credential-gated kodik SKIP
+	// stays untouched. LIVE VERIFICATION IS IMPOSSIBLE for this
+	// provider — no owner token exists; the fixture suite carries the
+	// whole proof (the script header documents it loudly).
+	{"kodik", true, nil},
 	// anidub (PR132): the online.anidub.com RU DLE catalog migrated to
 	// the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/anidub/main.lua) — the sixteenth
@@ -441,15 +451,35 @@ func luaScriptSources(cfg config.Settings) []lua.Source {
 	return out
 }
 
+// providerSettingsFor flattens config.Settings onto the per-provider
+// settings seam the sandbox exposes through anicli.provider_setting
+// (PR140): every per-provider string setting config carries today,
+// keyed under its providers.<id>.<key> name. A provider without a
+// settings section yields nil — its scripts read Lua nil for every
+// key. The values are secret-bearing (kodik's API token): they ride
+// the engine config only and are never logged.
+func providerSettingsFor(cfg config.Settings) lua.SettingsFor {
+	return func(id string) map[string]string {
+		switch id {
+		case "kodik":
+			return map[string]string{"token": cfg.Providers.Kodik.Token}
+		case "hdrezka":
+			return map[string]string{"base_url": cfg.Providers.HDRezka.BaseURL}
+		default:
+			return nil
+		}
+	}
+}
+
 // luaProviders builds the Lua provider set for cfg: the assembled
 // script sources loaded through the sandboxed engine, each provider
 // wired to its OWN netclient (the compiled providers' transport
-// isolation). The [providers].exclude list applies to Lua ids the
-// same way it applies to the Go factories. Returns the providers by
-// id plus their assembly order (tail-append order for non-shadowing
-// ids). A broken script is a skip inside LoadSources — never an
-// error; a client build failure IS an error (the Go factories'
-// fail-loud transport contract).
+// isolation) and its OWN settings map (PR140). The [providers].exclude
+// list applies to Lua ids the same way it applies to the Go factories.
+// Returns the providers by id plus their assembly order (tail-append
+// order for non-shadowing ids). A broken script is a skip inside
+// LoadSources — never an error; a client build failure IS an error
+// (the Go factories' fail-loud transport contract).
 func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[string]bool, log *slog.Logger) (map[string]contracts.Provider, []string, error) {
 	if !cfg.Providers.Lua.Enabled {
 		return nil, nil, nil
@@ -479,7 +509,7 @@ func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[st
 
 	provs, _ := lua.LoadSources(lua.DefaultConfig(), log, ordered, func(id string) *netclient.Client {
 		return clients[id]
-	})
+	}, providerSettingsFor(cfg))
 	byID := make(map[string]contracts.Provider, len(provs))
 	order := make([]string, 0, len(provs))
 	for _, p := range provs {

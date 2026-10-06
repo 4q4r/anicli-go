@@ -120,7 +120,7 @@ func TestStubOutputs(t *testing.T) {
 			name: "doctor lists registered providers",
 			args: []string{"doctor"},
 			contains: []string{
-				"doctor", "providers",
+				"doctor", "Провайдер",
 				"anilibria", "animevost", "anilib", "animego",
 				"gogoanime", "sameband", "kodik", "anifilm",
 				"anidub",

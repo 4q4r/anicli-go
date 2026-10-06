@@ -146,3 +146,47 @@ func unconfiguredIDs(cfg config.Settings) map[string]DisabledProvider {
 	}
 	return out
 }
+
+// DisabledProvidersFor computes the unconfigured-provider set the way
+// the factory assembles it (PR140): a Lua script serving a normally-
+// unconfigured id UN-DISABLES it — the active script (bundled or
+// user-dir) is the credential gate then, failing loud on use instead
+// of warning at startup (the kodik fail-loud-on-use ruling). The
+// startup notices derive from this so they never claim a provider is
+// disabled while its script serves the roster slot.
+//
+// Precision note: the factory's own disabled set keys off LOADED
+// scripts, so a broken user override of an unconfigured id keeps its
+// notice there; this source-presence variant (no script loading)
+// suppresses it — the registry-driven doctor rendering stays the
+// precise surface.
+func DisabledProvidersFor(cfg config.Settings) []DisabledProvider {
+	unconfigured := UnconfiguredProviders(cfg)
+	if !cfg.Providers.Lua.Enabled {
+		return unconfigured
+	}
+	excluded := make(map[string]bool, len(cfg.Providers.Exclude))
+	for _, id := range cfg.Providers.Exclude {
+		excluded[id] = true
+	}
+	// The LoadSources precedence assembly, id-only: first occurrence
+	// wins, exclusions drop (luaScriptSources is the factory's own
+	// list — user config dir, [providers.lua].dir, bundled embeds).
+	served := make(map[string]bool)
+	seen := make(map[string]bool)
+	for _, src := range luaScriptSources(cfg) {
+		if seen[src.ID] || excluded[src.ID] {
+			continue
+		}
+		seen[src.ID] = true
+		served[src.ID] = true
+	}
+	out := make([]DisabledProvider, 0, len(unconfigured))
+	for _, d := range unconfigured {
+		if served[d.ID] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}

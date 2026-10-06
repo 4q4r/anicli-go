@@ -67,7 +67,9 @@ var unconfiguredRules = []struct {
 		// tokyotosho (PR38): no credentials, but its results resolve
 		// through the torrent core — without the [torrent] subsystem
 		// it cannot play anything (kodik-parity: never register a
-		// provider that cannot run).
+		// provider that cannot run). PR147: the provider is the
+		// bundled Lua script now; the gate is unchanged — the engine
+		// is Go infrastructure the script cannot replace.
 		id:      "tokyotosho",
 		torrent: true,
 		disabled: func(cfg config.Settings) (string, bool) {

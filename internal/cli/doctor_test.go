@@ -164,29 +164,22 @@ func TestDoctorSearchBasedCheck(t *testing.T) {
 
 	for _, want := range []string{
 		"Провайдер", "Статус", "Результатов",
-		// The compiled sample: with [providers.lua] disabled the
-		// migrated slots drop (anilibria since PR120, its torrent
-		// sibling since PR145, animetosho since PR146) — the PR24
-		// rendering pin rides the LAST surviving compiled torrent
-		// factory tokyotosho (the shadow-sample precedent; the
-		// tokyotosho migration must re-home this pin — with zero
-		// compiled factories left, [providers.lua] disabled leaves no
-		// provider to probe).
-		"tokyotosho", "OK", "7",
+		// Zero compiled factories since PR147: with [providers.lua]
+		// disabled every migrated slot drops and NOTHING probes —
+		// the rendering pin rides the kodik disabled row, which the
+		// doctor renders from the unconfigured set regardless of the
+		// roster (the tokenless wall survives the migration).
 		"kodik", "ОТКЛЮЧЁН", "не задан токен",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output missing %q, got:\n%s", want, out)
 		}
 	}
-	// kodik is disabled → never probed.
-	for _, id := range stub.seen {
-		if id == "kodik" {
-			t.Errorf("disabled kodik must not be probed, saw %v", stub.seen)
-		}
-	}
-	if len(stub.seen) == 0 {
-		t.Fatalf("the enabled providers must be probed, saw none")
+	// kodik is disabled → never probed; with zero compiled factories
+	// nothing else registers either — the roster is fully Lua, so the
+	// probe stub must see NO provider in this mode.
+	if len(stub.seen) != 0 {
+		t.Fatalf("with [providers.lua] disabled the roster is fully Lua (zero compiled factories since PR147) — nothing may probe, saw %v", stub.seen)
 	}
 }
 

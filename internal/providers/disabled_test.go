@@ -130,8 +130,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("All: %v", err)
 		}
-		if len(bare) != 1 {
-			t.Fatalf("All() = %d providers, want 1 (the last remaining torrent factory tokyotosho; anirena is Lua-only since PR143, rutor since PR142, subsplease since PR144, anilibria-torrent since PR145, animetosho since PR146, kodik since PR140, hdrezka since PR141)", len(bare))
+		if len(bare) != 0 {
+			t.Fatalf("All() = %d providers (%v), want 0 (zero compiled factories since PR147 — the roster is fully Lua, every migrated slot drops with the loader off)", len(bare), rosterIDs(bare))
 		}
 		for _, p := range bare {
 			if p.ID() == "kodik" {

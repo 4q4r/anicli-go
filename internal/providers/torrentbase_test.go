@@ -385,14 +385,15 @@ func TestRegistryWiresSharedTorrentEngine(t *testing.T) {
 		if !ok {
 			t.Fatal("tokyotosho not registered")
 		}
-		tt, ok := bareProvider(p).(*TokyoTosho)
+		// PR147: the slot is the luaTorrent adapter now (the bundled
+		// script wrapped in the shared TorrentBase plumbing) — the
+		// engine-injection duck is the same SetEngine seam the
+		// adapter pins cover.
+		lt, ok := bareProvider(p).(*luaTorrent)
 		if !ok {
-			t.Fatalf("tokyotosho entry is %T, want *TokyoTosho", bareProvider(p))
+			t.Fatalf("tokyotosho entry is %T, want *luaTorrent (the PR147 Lua slot)", bareProvider(p))
 		}
-		tt.mu.Lock()
-		wired := tt.engine
-		tt.mu.Unlock()
-		if wired == nil {
+		if lt.engineSnapshot() == nil {
 			t.Fatal("the shared engine was not injected into the tokyotosho provider")
 		}
 	})

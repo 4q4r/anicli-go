@@ -52,46 +52,58 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 	}
 }
 
-// TestRegistryLuaShadowReplacesGo pins the PR116 shadow rule (it
-// superseded PR111's "Go always wins"): a user script with a built-in
-// id REPLACES the compiled provider, and the registry's capability
-// probe proves which implementation serves the id.
-func TestRegistryLuaShadowReplacesGo(t *testing.T) {
+// TestRegistryLuaUserOverrideReplacesBundled pins the override rule
+// (the PR116 shadow rule's final form — it superseded PR111's "Go
+// always wins", and PR147 retired its premise). A user script with a
+// built-in id REPLACES the bundled copy at the SAME roster position,
+// and the registry's capability probe proves which implementation
+// serves the id.
+//
+// Why this is no longer a "shadow" test: the sample was re-pointed to
+// subsplease in PR144 precisely because the roster's stream providers
+// had all gone Lua-only — a user script shadowing a COMPILED factory
+// needed a compiled factory to exist. Since PR147 none does (the
+// tokyotosho migration was the thirtieth and last Go→Lua slot), so
+// the machinery's shadow branch (the "shadowed by its lua script"
+// log, fired only for non-luaOnly factories) is unreachable for the
+// real roster: the loader's first-occurrence rule (user XDG dir
+// ahead of the bundled embeds) makes the override a REPLACEMENT. The
+// decision to rewrite rather than synthesize a test-only compiled
+// factory: the allFactories table is package-level state with no
+// mutation seam (every test reads it through All()/NewRegistry in
+// parallel), so a synthetic factory would invent global-state
+// machinery no test exercises — while the load-source line below
+// already proves the replacement honestly.
+func TestRegistryLuaUserOverrideReplacesBundled(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	// tokyotosho (PR146): the shadow sample must be a COMPILED
-	// factory — after the PR141 hdrezka, PR142 rutor, PR143 anirena,
-	// PR144 subsplease, PR145 anilibria-torrent and PR146 animetosho
-	// migrations tokyotosho is THE LAST compiled factory in the
-	// roster (every other slot is Lua-served; animetosho additionally
-	// wraps its script in the luaTorrent adapter, which this shadow
-	// rule does not exercise). NOTE FOR THE TOKYOTOSHO MIGRATION
-	// AGENT: with that factory gone this test's premise dies — zero
-	// compiled factories means no compiled slot can be shadowed; the
-	// sample must be rewritten to pin the first-occurrence override
-	// between user and BUNDLED scripts alone.
-	dir := filepath.Join(xdg, "anicli", "providers", "tokyotosho")
+	// subsplease stays the sample: a torrent-declared BUNDLED script
+	// (Lua-only since PR144), fully anonymous, one client build away
+	// once [torrent] is on. A user copy without a torrent declaration
+	// serves the slot as a plain Lua provider — the first-occurrence
+	// rule does not care what it replaces.
+	dir := filepath.Join(xdg, "anicli", "providers", "subsplease")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	shadow := `
+	override := `
 	return {
-		id = "tokyotosho",
+		id = "subsplease",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
 		streams = function(episode_url, dub) return { dub_name = dub, links = {} } end,
 	}
 	`
-	if err := os.WriteFile(filepath.Join(dir, "main.lua"), []byte(shadow), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.lua"), []byte(override), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
-	// The last torrent factory builds only when the [torrent]
-	// subsystem is enabled (the unconfigured rule drops it otherwise —
-	// there would be no compiled provider to shadow).
+	// The roster builds complete only with the [torrent] subsystem on
+	// (the torrent-declared bundled scripts drop their slots
+	// otherwise — the unconfigured rule).
 	cfg.Torrent.Enabled = true
 
 	log, buf := luaTestLogger(t)
@@ -99,19 +111,17 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("tokyotosho")
+	_, ok := reg.Get("subsplease")
 	if !ok {
-		t.Fatal("the overridden tokyotosho must stay registered (as the user's Lua script)")
+		t.Fatal("the overridden subsplease must stay registered (as the user's Lua script)")
 	}
-	if got := reg.ContentLanguage("tokyotosho"); got != "lua-probe" {
-		t.Fatalf("tokyotosho ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("subsplease"); got != "lua-probe" {
+		t.Fatalf("subsplease ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
-	// With zero compiled factories left the override is not a
-	// "shadow" (that log fired only for a script taking a COMPILED
-	// factory's slot): the user copy REPLACES the bundled one by the
-	// first-occurrence rule — proven by the load-source line naming
-	// the user XDG dir, not "bundled".
-	if !strings.Contains(buf.String(), "provider=tokyotosho source="+filepath.Join(xdg, "anicli", "providers")) {
+	// The user copy REPLACES the bundled one by the first-occurrence
+	// rule — proven by the load-source line naming the user XDG dir,
+	// not "bundled".
+	if !strings.Contains(buf.String(), "provider=subsplease source="+filepath.Join(xdg, "anicli", "providers")) {
 		t.Fatalf("the user override must be the served copy (the load source names the user dir), got: %s", buf.String())
 	}
 }

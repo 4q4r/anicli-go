@@ -347,13 +347,20 @@ var allFactories = []struct {
 	// contracts in Lua and no Go consumer remained (the grep proof in
 	// the PR146 report).
 	{"animetosho", true, nil},
-	// tokyotosho (PR38): the tokyo-tosho.net search RSS on the same
-	// TorrentBase plumbing — direct .torrent <link> URLs; no
+	// tokyotosho (PR38 → PR147): the tokyo-tosho.net search RSS on
+	// the same TorrentBase plumbing — direct .torrent <link> URLs; no
 	// credentials, engine injected by NewRegistry when [torrent] is
-	// enabled.
-	{"tokyotosho", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newTokyoTosho(TokyoToshoBase, http, nil)
-	}},
+	// enabled. Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/tokyotosho/main.lua) — the
+	// THIRTIETH and FINAL Go→Lua provider migration: with this slot
+	// NO compiled factory remains in the roster. The SEARCH surface
+	// lives in the script (the rss.php?terms=&type=1 route, the exact
+	// Anime category gate over the soft type=1 filter, the
+	// footer-shaped zero result, the description-blob size text) while
+	// the engine legs stay Go: the script declares torrent = true and
+	// rides the luaTorrent adapter like rutor/anirena/subsplease.
+	// luaOnly pins the roster slot.
+	{"tokyotosho", true, nil},
 	// rutor (PR87): the rutor.info public tracker's HTML search on the
 	// same TorrentBase plumbing — the fifth torrent provider and the
 	// first RU-indexed one (the Jackett rutor.yml recipe, re-verified

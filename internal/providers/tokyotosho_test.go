@@ -1,22 +1,17 @@
 package providers
 
-import (
-	"bytes"
-	"context"
-	"errors"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/contracts"
-)
-
+// The tokyotosho provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/tokyotosho/main.lua, the PR147 Go→Lua
+// migration — the thirtieth and final one: with this slot no compiled
+// factory remains in the roster). These tests pin the script through
+// the same contracts.Provider surface and the same verbatim live
+// captures the compiled Go implementation was held to. The torrent
+// plumbing (the PR66 .torrent preflight, episodes and streams) stays
+// GO: the roster slot is wrapped by the luaTorrent adapter
+// (luatorrent.go) — the adapter's own contract lives in
+// lua_torrent_test.go, the adapter×script integration pins in the
+// second half of this file.
+//
 // Fixture provenance (PR38): tokyotosho_search.xml carries verbatim
 // live captures of the site's own search RSS (GET
 // https://www.tokyo-tosho.net/rss.php?terms=dandadan&type=1 — the
@@ -28,28 +23,28 @@ import (
 // capture mixes Anime with Raws/Manga/Hentai), so the provider filters
 // on <category>Anime</category> itself.
 
-func newTokyoToshoFixtureAt(t *testing.T, baseURL string) *TokyoTosho {
-	t.Helper()
-	return newTokyoTosho(baseURL, testClient(t, "tokyotosho"), nil)
-}
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
 
-func tokyoToshoServer(t *testing.T, body string, hits *int) string {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if hits != nil {
-			*hits++
-		}
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv.URL
-}
+	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/torrent"
+)
 
 func TestTokyoToshoSearchParsesRSS(t *testing.T) {
 	t.Parallel()
 
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_search.xml")), nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, string(fixture(t, "tokyotosho_search.xml"))))
 	results, err := p.Search(context.Background(), "dandadan")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -78,6 +73,12 @@ func TestTokyoToshoSearchParsesRSS(t *testing.T) {
 	if got := first.Meta[SearchMetaQuality]; got != "1080p" {
 		t.Errorf("quality meta = %v, want the PR35 badge 1080p", got)
 	}
+	// The TT feed carries NO seed fields at all: the seed meta key
+	// must be absent so filterSeedless keeps the item (the fail-soft
+	// "no field, no filter" contract).
+	if _, ok := first.Meta[SearchMetaSeeders]; ok {
+		t.Errorf("seeders meta = %v, want absent (the feed has no seed fields)", first.Meta[SearchMetaSeeders])
+	}
 
 	second := results[1]
 	if second.Title != "[SubsPlease] Dandadan - 24 (1080p) [AD3DEA4E].mkv" {
@@ -91,11 +92,36 @@ func TestTokyoToshoSearchParsesRSS(t *testing.T) {
 	}
 }
 
+func TestTokyoToshoSearchRequestParams(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "tokyotosho_search.xml"))
+	})
+	p := luaProvider(t, "tokyotosho", srv.URL)
+
+	if _, err := p.Search(context.Background(), "fate stay night"); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if rec.Path != "/rss.php" {
+		t.Errorf("path = %q, want the search RSS endpoint", rec.Path)
+	}
+	// The raw query rides terms= URL-encoded (the Go url.Values.Encode
+	// shape the compiled provider sent: space → '+', keys sorted) and
+	// type=1 is the anime category. terms= is the live-verified
+	// parameter — NOT `search=`, which the feed ignores, nor `q=`.
+	if want := "terms=fate+stay+night&type=1"; rec.Query != want {
+		t.Errorf("query = %q, want %q", rec.Query, want)
+	}
+}
+
 // TestTokyoToshoSearchFiltersToAnimeCategory: the search feed's
 // type=1 filter is soft (live capture: 74 Anime + 60 Raws + others on
 // an anime query), so the provider keeps only exact Anime-category
 // items — an anime-search provider must not hand the user raws,
-// manga or hentai (live-verified 2026-09-17).
+// manga or hentai (live-verified 2026-09-17; re-verified live through
+// the proxy 2026-10-06: a «black lagoon» feed mixes 45 Hentai Manga
+// and 24 Music items into the 21 Anime ones).
 func TestTokyoToshoSearchFiltersToAnimeCategory(t *testing.T) {
 	t.Parallel()
 
@@ -121,7 +147,7 @@ func TestTokyoToshoSearchFiltersToAnimeCategory(t *testing.T) {
     </item>
 </channel></rss>`
 
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, body, nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, body))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -161,7 +187,7 @@ func TestTokyoToshoSearchSkipsLinklessItems(t *testing.T) {
     </item>
 </channel></rss>`
 
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, body, nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, body))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -174,38 +200,14 @@ func TestTokyoToshoSearchSkipsLinklessItems(t *testing.T) {
 	}
 }
 
-func TestTokyoToshoSearchRequestParams(t *testing.T) {
-	t.Parallel()
-
-	var gotQuery url.Values
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query()
-		gotPath = r.URL.Path
-		_, _ = w.Write(fixture(t, "tokyotosho_search.xml"))
-	}))
-	t.Cleanup(srv.Close)
-	p := newTokyoToshoFixtureAt(t, srv.URL)
-
-	if _, err := p.Search(context.Background(), "fate stay night"); err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if gotPath != "/rss.php" {
-		t.Errorf("path = %q, want the search RSS endpoint", gotPath)
-	}
-	if gotQuery.Get("terms") != "fate stay night" {
-		t.Errorf("terms = %q, want the raw query (live-verified param — NOT `search=`, which the feed ignores, nor `q=`)", gotQuery.Get("terms"))
-	}
-	if gotQuery.Get("type") != "1" {
-		t.Errorf("type = %q, want 1 (anime category)", gotQuery.Get("type"))
-	}
-}
-
+// TestTokyoToshoSearchEmptyQueryFailsLoud: the empty-query guard is a
+// caller-bug wall, zero network.
 func TestTokyoToshoSearchEmptyQueryFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_search.xml")), &hits))
+	srv := tokyotoshoServerCounted(t, string(fixture(t, "tokyotosho_search.xml")), &hits)
+	p := luaProvider(t, "tokyotosho", srv)
 	for _, query := range []string{"", "   "} {
 		_, err := p.Search(context.Background(), query)
 		if err == nil {
@@ -224,14 +226,14 @@ func TestTokyoToshoSearchEmptyQueryFailsLoud(t *testing.T) {
 // cause fix: TT's search RSS answers an unmatched query (Cyrillic
 // among them — the feed indexes latin release names only) with HTTP
 // 200 and a bare feed FOOTER — the captured real bytes ride the
-// fixture (tokyotosho_empty.xml, live curl 2026-09-17:
-// "</channel>\n</rss>\n"). That is the site's own zero-result shape:
-// it must settle as empty results, never leak a raw "XML syntax
-// error on line 1: unexpected end element </channel>".
+// fixture (tokyotosho_empty.xml, live curl 2026-09-17, re-verified
+// live 2026-10-06: "</channel>\n</rss>\n"). That is the site's own
+// zero-result shape: it must settle as empty results, never leak a
+// raw "XML syntax error on line 1: unexpected end element </channel>".
 func TestTokyoToshoSearchEmptyFooterIsZeroResults(t *testing.T) {
 	t.Parallel()
 
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_empty.xml")), nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, string(fixture(t, "tokyotosho_empty.xml"))))
 	results, err := p.Search(context.Background(), "Пираты «Чёрной лагуны»")
 	if err != nil {
 		t.Fatalf("zero-result footer must not error, got: %v", err)
@@ -252,7 +254,7 @@ func TestTokyoToshoSearchMidStreamTruncationStaysTypedError(t *testing.T) {
 <rss version="2.0"><channel><title>Tokyo Toshokan</title>
     <item>
       <category>Anime`
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, truncated, nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, truncated))
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("a feed broken mid-stream must fail loud")
@@ -263,13 +265,13 @@ func TestTokyoToshoSearchMidStreamTruncationStaysTypedError(t *testing.T) {
 	}
 }
 
-func TestTokyoToshoSearchMalformedXMLTypedError(t *testing.T) {
+func TestTokyoToshoSearchMalformedEnvelopeTypedError(t *testing.T) {
 	t.Parallel()
 
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, "this is not xml at all", nil))
+	p := luaProvider(t, "tokyotosho", tokyotoshoServer(t, "this is not xml at all"))
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
-		t.Fatal("malformed XML must fail loud")
+		t.Fatal("malformed RSS must fail loud")
 	}
 	var perr *contracts.ProviderError
 	if !errors.As(err, &perr) || perr.Provider != "tokyotosho" || perr.Op != contracts.OpSearch {
@@ -277,72 +279,57 @@ func TestTokyoToshoSearchMalformedXMLTypedError(t *testing.T) {
 	}
 }
 
-func TestTokyoToshoSearchHTTPErrorTypedError(t *testing.T) {
+// TestTokyoToshoSearchHTTPErrorFailsLoud pins the HTTP failure wall
+// (the anirena migration precedent): the Lua transport surfaces the
+// netclient sentinel classes through the typed anicli:<kind>: markers
+// — 503 carries the plain StatusError class — so the pin here is the
+// loud, provider-tagged failure.
+func TestTokyoToshoSearchHTTPErrorFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(srv.Close)
-	p := newTokyoToshoFixtureAt(t, srv.URL)
+	srv := tokyotoshoServerStatus(t, http.StatusServiceUnavailable)
+	p := luaProvider(t, "tokyotosho", srv)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("HTTP failure must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "tokyotosho" {
-		t.Errorf("error = %v, want a tokyotosho-tagged ProviderError", err)
+	if !strings.Contains(err.Error(), "tokyotosho") {
+		t.Errorf("error = %v, want the provider-tagged message", err)
 	}
 }
 
-// TestTokyoToshoGetEpisodesDelegatesToEpisodesWait: the provider
-// GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the TorrentBase contract).
-func TestTokyoToshoGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
+// TestTokyoToshoCapabilityDeclarations pins the script-declared
+// capability surfaces (the Adapt composite): the JA content language,
+// the latin-only index routing (PR42) and the both-type catalog
+// assessment — the exact declarations the compiled provider carried
+// in Go code.
+func TestTokyoToshoCapabilityDeclarations(t *testing.T) {
 	t.Parallel()
 
-	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	eng := newOfflineTestEngine(t)
-	t.Cleanup(func() { _ = eng.Close() })
-	p := newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), eng)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-
-	eps, err := p.GetEpisodes(ctx, dead)
-	if err == nil {
-		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
-	}
-	if len(eps) != 0 {
-		t.Errorf("episodes = %v, want none", eps)
-	}
-	if !strings.Contains(err.Error(), "торренты") {
-		t.Errorf("error = %v, want the torrent-base wait failure", err)
-	}
-}
-
-func TestTokyoToshoCapabilityAndRoster(t *testing.T) {
-	t.Parallel()
-
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_search.xml")), nil))
-	if !p.IsTorrent() {
-		t.Error("tokyotosho must carry the torrent capability")
-	}
-	if p.ID() != "tokyotosho" {
-		t.Errorf("id = %q", p.ID())
-	}
+	p := luaProviderAtProduction(t, "tokyotosho")
 	if p.Name() != "TokyoTosho" {
-		t.Errorf("name = %q, want the TUI display name", p.Name())
+		t.Errorf("name = %q, want TokyoTosho (the TUI display name)", p.Name())
+	}
+	if p.BaseURL() != "https://www.tokyo-tosho.net" {
+		t.Errorf("base url = %q, want the site root (www host live-verified)", p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("source type = %q, want both (JA audio, acceptable video)", p.SourceType())
 	}
-	if got := p.ContentLanguage(); got != "ja" {
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok {
+		t.Fatal("the adapted provider lost the ContentLanguage surface")
+	}
+	if got := lc.ContentLanguage(); got != "ja" {
 		t.Errorf("content language = %q, want ja (JP audio with subs)", got)
 	}
-	if p.BaseURL() == "" {
-		t.Error("base URL must be the site root, not empty")
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the adapted provider lost the NamePreference surface")
+	}
+	if np.NamePreference() != contracts.NamePrefLatin {
+		t.Errorf("name preference = %v, want NamePrefLatin (PR42 latin-only index)", np.NamePreference())
 	}
 }
 
@@ -360,8 +347,11 @@ func TestTokyoToshoNotUnconfiguredByDefault(t *testing.T) {
 }
 
 // TestTokyoToshoDisabledWhenTorrentOff pins the disabled-table rule
-// shared across the family: without the [torrent] subsystem the provider
-// cannot play anything, so it is not registered at all.
+// shared across the family: without the [torrent] subsystem the
+// provider cannot play anything, so it is not registered at all. The
+// gate is script-independent (the PR142 doctrine): the engine is Go
+// infrastructure no script replaces, so the migration left the
+// unconfigured rule in place.
 func TestTokyoToshoDisabledWhenTorrentOff(t *testing.T) {
 	t.Parallel()
 
@@ -383,52 +373,96 @@ func TestTokyoToshoDisabledWhenTorrentOff(t *testing.T) {
 	}
 }
 
-// --- PR53: search-time dead-host preflight (owner standing rule:
-// «мёртвь отфасовывается ещё до выдачи» — dead hosts are sorted out
-// BEFORE they surface). The feed below is CONSTRUCTED on the real
-// element order (category/title/link/description): item URLs point at
-// local httptest fixtures so the preflight runs network-free.
+// --- the luaTorrent adapter × the bundled script (the compiled
+// provider's torrent contract, ported) ---
 
-// torrentFixtureServer serves real metainfo bytes as a .torrent host
-// and counts how often its .torrent path was fetched (atomic: the
-// preflight fans out concurrently).
-func torrentFixtureServer(t *testing.T, torrentBytes []byte, fetches *atomic.Int64) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if fetches != nil {
-			fetches.Add(1)
+// TestTokyoToshoTorrentSlotInRegistry pins the migration-safety parity:
+// through the REAL registry the tokyotosho slot keeps every surface it
+// carried as a compiled provider — the torrent capability (the
+// parity smoke's torrent leg routes on it), the engine-injection
+// duck, the JA content language and the latin index routing.
+func TestTokyoToshoTorrentSlotInRegistry(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+
+	torrentFound := false
+	for _, id := range reg.TorrentProviderIDs() {
+		if id == "tokyotosho" {
+			torrentFound = true
 		}
-		w.Header().Set("Content-Type", "application/x-bittorrent")
-		_, _ = w.Write(torrentBytes)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	}
+	if !torrentFound {
+		t.Fatal("tokyotosho lost the torrent capability in the registry (the luaTorrent adapter wrap is missing?)")
+	}
+	p, ok := reg.Get("tokyotosho")
+	if !ok {
+		t.Fatal("tokyotosho is not registered")
+	}
+	// The wrapper layers peel the same way the registry's own wiring
+	// does (the engine injection runs on the bare list BEFORE the
+	// delegator wraps).
+	if _, ok := bareProvider(p).(interface{ SetEngine(*torrent.Engine) }); !ok {
+		t.Fatal("the tokyotosho slot lost the engine-injection surface")
+	}
+	if got := reg.ContentLanguage("tokyotosho"); got != "ja" {
+		t.Errorf("content language = %q, want ja through the adapter", got)
+	}
+	if got := reg.NamePreference("tokyotosho"); got != contracts.NamePrefLatin {
+		t.Errorf("name preference = %v, want NamePrefLatin through the adapter", got)
+	}
 }
 
-// ttFeedWith builds a search RSS with the given Anime item links.
-func ttFeedWith(links ...string) string {
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0"><channel><title>Tokyo Toshokan</title>`)
-	for _, link := range links {
-		b.WriteString(`
-    <item>
-      <category>Anime</category>
-      <title>[Good] Show - 01 (1080p).mkv</title>
-      <link><![CDATA[` + link + `]]></link>
-      <description><![CDATA[Size: 700.00MB<br />]]></description>
-    </item>`)
+// TestTokyoToshoGetEpisodesDelegatesToEpisodesWait: the adapter's
+// GetEpisodes rides the base's bounded metadata wait; unreachable
+// metadata fails loud on the caller's deadline (the TorrentBase
+// contract).
+func TestTokyoToshoGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
+	t.Parallel()
+
+	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
+	inner := luaProvider(t, "tokyotosho", tokyotoshoServer(t, tokyotoshoFeed()))
+	p := newLuaTorrent(inner, nil, nil)
+	p.SetEngine(newOfflineTestEngine(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	eps, err := p.GetEpisodes(ctx, dead)
+	if err == nil {
+		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
 	}
-	b.WriteString(`
-</channel></rss>`)
-	return b.String()
+	if len(eps) != 0 {
+		t.Errorf("episodes = %v, want none", eps)
+	}
+	if !strings.Contains(err.Error(), "торренты") {
+		t.Errorf("error = %v, want the torrent-base wait failure", err)
+	}
+}
+
+// newTokyoToshoLuaTorrent builds the migration shape: the bundled
+// script (production base re-pointed at baseURL) wrapped in the
+// torrent adapter with an offline engine wired.
+func newTokyoToshoLuaTorrent(t *testing.T, baseURL string) *luaTorrent {
+	t.Helper()
+	inner := luaProvider(t, "tokyotosho", baseURL)
+	a := newLuaTorrent(inner, nil, nil)
+	a.SetEngine(newOfflineTestEngine(t))
+	return a
 }
 
 // TestTokyoToshoSearchPreflightDropsDeadHosts pins the PR53 owner
-// ruling: every surfaced result's .torrent bytes are pre-fetched
-// (bounded, short per-URL timeout) BEFORE the result surfaces; a dead
-// host (HTTP error, refused dial) drops the result. Survivors keep
-// feed order and metadata.
+// ruling through the adapter: every surfaced result's .torrent bytes
+// are pre-fetched (bounded, short per-URL budget) BEFORE the result
+// surfaces; a dead host (HTTP error, refused dial) drops the result.
+// Survivors keep feed order and metadata. The feed has no seed
+// fields, so nothing is dropped by the seedless filter first — the
+// preflight is the only gate here.
 func TestTokyoToshoSearchPreflightDropsDeadHosts(t *testing.T) {
 	t.Parallel()
 
@@ -443,11 +477,12 @@ func TestTokyoToshoSearchPreflightDropsDeadHosts(t *testing.T) {
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
 	dead := newDeadListener(t)
 
-	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
-		live.URL+"/good1.torrent",
-		"http://"+dead.Addr().String()+"/dead.torrent",
-		live.URL+"/good2.torrent",
-	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	feed := tokyotoshoFeed(
+		tokyotoshoItem("Anime", "[Good] Show - 01", live.URL+"/good1.torrent", "Size: 700.00MB<br />"),
+		tokyotoshoItem("Anime", "[Good] Show - dead", "http://"+dead.Addr().String()+"/dead.torrent", "Size: 700.00MB<br />"),
+		tokyotoshoItem("Anime", "[Good] Show - 03", live.URL+"/good2.torrent", "Size: 700.00MB<br />"),
+	)
+	p := newTokyoToshoLuaTorrent(t, tokyotoshoServer(t, feed))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -484,8 +519,9 @@ func TestTokyoToshoSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
 
 	var fetches atomic.Int64
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
-	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(live.URL+"/good.torrent"), nil),
-		testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	link := live.URL + "/good.torrent"
+	p := newTokyoToshoLuaTorrent(t, tokyotoshoServer(t, tokyotoshoFeed(
+		tokyotoshoItem("Anime", "[Good] Show - 01", link, "Size: 700.00MB<br />"))))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -496,7 +532,7 @@ func TestTokyoToshoSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	eps, err := p.GetEpisodes(ctx, live.URL+"/good.torrent")
+	eps, err := p.GetEpisodes(ctx, link)
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -528,10 +564,11 @@ func TestTokyoToshoSearchPreflightNotMetainfoDropped(t *testing.T) {
 		return buf.Bytes()
 	}(), nil)
 
-	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
-		html.URL+"/wall.torrent",
-		live.URL+"/good.torrent",
-	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	feed := tokyotoshoFeed(
+		tokyotoshoItem("Anime", "[Good] Show - wall", html.URL+"/wall.torrent", "Size: 700.00MB<br />"),
+		tokyotoshoItem("Anime", "[Good] Show - good", live.URL+"/good.torrent", "Size: 700.00MB<br />"),
+	)
+	p := newTokyoToshoLuaTorrent(t, tokyotoshoServer(t, feed))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -563,10 +600,11 @@ func TestTokyoToshoSearchPreflightSlowHostDropped(t *testing.T) {
 		return buf.Bytes()
 	}(), nil)
 
-	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(
-		slow.URL+"/slow.torrent",
-		live.URL+"/good.torrent",
-	), nil), testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	feed := tokyotoshoFeed(
+		tokyotoshoItem("Anime", "[Good] Show - slow", slow.URL+"/slow.torrent", "Size: 700.00MB<br />"),
+		tokyotoshoItem("Anime", "[Good] Show - good", live.URL+"/good.torrent", "Size: 700.00MB<br />"),
+	)
+	p := newTokyoToshoLuaTorrent(t, tokyotoshoServer(t, feed))
 	p.preflightTimeout = 50 * time.Millisecond
 
 	results, err := p.Search(context.Background(), "show")
@@ -579,17 +617,20 @@ func TestTokyoToshoSearchPreflightSlowHostDropped(t *testing.T) {
 }
 
 // TestTokyoToshoSearchPreflightLogsTypedReason: drops are logged with
-// the URL and the typed failure reason, never silent.
+// the URL and the typed failure reason, never silent (the registry's
+// logger seam routes through the adapter's SetLogger forward).
 func TestTokyoToshoSearchPreflightLogsTypedReason(t *testing.T) {
 	t.Parallel()
 
 	dead := newDeadListener(t)
 	deadURL := "http://" + dead.Addr().String() + "/dead.torrent"
-	p := newTokyoTosho(tokyoToshoServer(t, ttFeedWith(deadURL), nil),
-		testClient(t, "tokyotosho"), newOfflineTestEngine(t))
+	feed := tokyotoshoFeed(tokyotoshoItem("Anime", "[Good] Show - dead", deadURL, "Size: 700.00MB<br />"))
 
-	var logBuf bytes.Buffer
-	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	logBuf := &bytes.Buffer{}
+	inner := luaProviderWithLogger(t, "tokyotosho", tokyotoshoServer(t, feed), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p := newLuaTorrent(inner, nil, nil)
+	p.SetLogger(slog.New(slog.NewTextHandler(logBuf, nil)))
+	p.SetEngine(newOfflineTestEngine(t))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -603,25 +644,70 @@ func TestTokyoToshoSearchPreflightLogsTypedReason(t *testing.T) {
 	}
 }
 
-// TestTokyoToshoSearchNoEngineSkipsPreflight pins the nil-engine rule:
-// without the [torrent] engine there is nothing to preflight or feed,
-// so Search keeps the legacy behavior (no prefetch requests — this is
-// also what keeps hand-built unit tests network-free).
-func TestTokyoToshoSearchNoEngineSkipsPreflight(t *testing.T) {
-	t.Parallel()
+// --- helpers ---
 
-	hits := 0
-	p := newTokyoToshoFixtureAt(t, tokyoToshoServer(t, string(fixture(t, "tokyotosho_search.xml")), &hits))
-	results, err := p.Search(context.Background(), "dandadan")
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2 (nil engine: no preflight, nothing dropped)", len(results))
-	}
-	// Exactly ONE request happened: the RSS search itself. No
-	// preflight attempted the fixture's real cross-posted URLs.
-	if hits != 1 {
-		t.Errorf("server hits = %d, want 1 (search only)", hits)
-	}
+// torrentFixtureServer serves real metainfo bytes as a .torrent host
+// and counts how often its .torrent path was fetched (atomic: the
+// preflight fans out concurrently). Shared with the sibling torrent
+// suites (animetosho, anirena, rutor, the adapter pins).
+func torrentFixtureServer(t *testing.T, torrentBytes []byte, fetches *atomic.Int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fetches != nil {
+			fetches.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/x-bittorrent")
+		_, _ = w.Write(torrentBytes)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// tokyotoshoServer serves body on every request (the RSS search
+// endpoint).
+func tokyotoshoServer(t *testing.T, body string) string {
+	t.Helper()
+	return tokyotoshoServerCounted(t, body, nil)
+}
+
+// tokyotoshoServerCounted is tokyotoshoServer with a request counter.
+func tokyotoshoServerCounted(t *testing.T, body string, hits *int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits != nil {
+			*hits++
+		}
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// tokyotoshoServerStatus serves the bare status code on every request.
+func tokyotoshoServerStatus(t *testing.T, status int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// tokyotoshoItem renders one RSS item fragment on the real element
+// order (category/title/link/description).
+func tokyotoshoItem(category, title, link, desc string) string {
+	var b strings.Builder
+	b.WriteString("<item>\n<category>" + category + "</category>\n" +
+		"<title>" + title + "</title>\n" +
+		"<link><![CDATA[" + link + "]]></link>\n" +
+		"<description><![CDATA[" + desc + "]]></description>\n</item>")
+	return b.String()
+}
+
+// tokyotoshoFeed wraps item fragments into the TT RSS envelope.
+func tokyotoshoFeed(items ...string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Tokyo Toshokan</title>` +
+		strings.Join(items, "") + `</channel></rss>`
 }

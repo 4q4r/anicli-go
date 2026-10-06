@@ -100,7 +100,7 @@ func TestTokyotoshoSearchFailSoftNoSeedField(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	p := newTokyoTosho(srv.URL, testClient(t, "tokyotosho"), nil)
+	p := luaProvider(t, "tokyotosho", srv.URL)
 
 	results, err := p.Search(context.Background(), "query")
 	if err != nil {

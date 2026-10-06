@@ -229,6 +229,15 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// engine (metadata+files), not the script stubs — the parity
 		// smoke's torrent rule.
 		"anilibria-torrent": "черная лагуна",
+		// animetosho (PR146): the JSON search API answers DIRECT (the
+		// route matrix's honest route — live 2026-10-06: the
+		// «black lagoon» probe surfaced 30 bounded records in ~0.4s
+		// direct; the preflighted storage.animetosho.org bytes ride
+		// the same route). Torrent slot: the episodes leg resolves
+		// through the Go engine — the same adapter + engine
+		// composition the rutor/anirena/subsplease/anilibria-torrent
+		// entries ride.
+		"animetosho": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
@@ -366,7 +375,7 @@ func liveTorrentWalk(t *testing.T, id, query string) {
 	cfg := config.Default()
 	cfg.Network = network
 
-	built, _, err := luaProviders(cfg, nil, map[string]bool{}, nil)
+	built, _, _, err := luaProviders(cfg, nil, map[string]bool{}, nil)
 	if err != nil {
 		t.Fatalf("luaProviders: %v", err)
 	}

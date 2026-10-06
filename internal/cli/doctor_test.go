@@ -166,10 +166,13 @@ func TestDoctorSearchBasedCheck(t *testing.T) {
 		"Провайдер", "Статус", "Результатов",
 		// The compiled sample: with [providers.lua] disabled the
 		// migrated slots drop (anilibria since PR120, its torrent
-		// sibling since PR145) — the PR24 rendering pin rides the
-		// surviving compiled torrent factories instead (the rutor
-		// shadow-sample precedent).
-		"animetosho", "OK", "7",
+		// sibling since PR145, animetosho since PR146) — the PR24
+		// rendering pin rides the LAST surviving compiled torrent
+		// factory tokyotosho (the shadow-sample precedent; the
+		// tokyotosho migration must re-home this pin — with zero
+		// compiled factories left, [providers.lua] disabled leaves no
+		// provider to probe).
+		"tokyotosho", "OK", "7",
 		"kodik", "ОТКЛЮЧЁН", "не задан токен",
 	} {
 		if !strings.Contains(out, want) {

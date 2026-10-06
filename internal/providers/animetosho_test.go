@@ -3,7 +3,9 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,38 +17,55 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/torrent"
 )
 
-// Fixture provenance (PR38): animetosho_search.xml carries verbatim
-// live captures of the newznab search API (GET
-// https://feed.animetosho.org/api?t=search&q=dandadan&limit=5&offset=0,
-// 2026-09-17, anonymous 200), trimmed to two items. The third item is
-// constructed on the real element order with every attr stripped — it
-// exercises the enclosure (.torrent URL) fallback and fail-soft meta.
+// Fixture provenance (PR38, re-captured for the PR146 Lua migration):
+// animetosho_search.json carries verbatim live captures of the JSON
+// search API (GET https://feed.animetosho.org/json?q=black+lagoon,
+// 2026-10-06, anonymous 200), trimmed to two full records. The third
+// record is constructed on the real object shape with every optional
+// field stripped — it exercises the torrent_url fallback and the
+// fail-soft meta (no seeders, no size).
+//
+// The provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/animetosho/main.lua, the PR146
+// Go→Lua migration — the torrent family's fifth Lua slot): these
+// tests pin the script through the same contracts.Provider surface
+// and the same verbatim live-capture discipline the compiled Go
+// implementation was held to. The search-side contract is the
+// script's; the episode/stream legs stay on the Go TorrentBase via
+// the luaTorrent adapter (the engine consumes the surfaced links
+// unchanged — the owner ruling), pinned at the roster level below.
+//
+// Documented API divergence (the migration's one honest swap): the
+// compiled provider spoke the newznab XML dialect
+// (/api?t=search&cat=5070&limit=30); the script speaks the JSON twin
+// (/json?q=…, live-verified 2026-10-06) — the Lua contract has no XML
+// parser. The JSON endpoint answers WITHOUT a server-side limit
+// (verified: &limit= changes nothing), so the bounded-page rule
+// (AnimeToshoSearchLimit, 30) moved client-side into the script.
 
-func newAnimeToshoFixtureAt(t *testing.T, baseURL string) *AnimeTosho {
-	t.Helper()
-	return newAnimeTosho(baseURL, testClient(t, "animetosho"), nil)
-}
-
+// animeToshoServer serves a fixed JSON body on every path and counts
+// hits (the request-count pins).
 func animeToshoServer(t *testing.T, body string, hits *int) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if hits != nil {
 			*hits++
 		}
-		w.Header().Set("Content-Type", "application/rss+xml")
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
 
-func TestAnimeToshoSearchParsesRSS(t *testing.T) {
+func TestAnimeToshoSearchParsesJSON(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, string(fixture(t, "animetosho_search.xml")), nil))
-	results, err := p.Search(context.Background(), "dandadan")
+	p := luaProvider(t, "animetosho", animeToshoServer(t, string(fixture(t, "animetosho_search.json")), nil))
+	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -55,25 +74,25 @@ func TestAnimeToshoSearchParsesRSS(t *testing.T) {
 	}
 
 	batch := results[0]
-	if batch.Title != "[ED3N] DAN DA DAN (Season 1) (BD 1080p AV1) [Dual Audio]" {
+	if batch.Title != "[Polarwindz] Black Lagoon + Roberta's Blood Trail (BD 1080p HEVC FLAC)" {
 		t.Errorf("title = %q", batch.Title)
 	}
 	if batch.SourceID != "animetosho" {
 		t.Errorf("source id = %q, want animetosho", batch.SourceID)
 	}
-	// The item's <enclosure> is the direct .torrent URL on AT's own
+	// The record's torrent_url is the direct .torrent on AT's own
 	// storage — PR66 ingestion rides the preflighted bytes, never the
-	// tracker-less magnet built from the infohash attr (the DHT-only
-	// metadata path that timed out the PR52 smoke; the live magneturl
-	// is base32 and is not taken anyway).
-	wantEnclosure := "https://storage.animetosho.org/torrent/5f32a4ef1e889482acb910b4ce80b939fc29049e/%5BED3N%5D%20DAN%20DA%20DAN%20%28Season%201%29%20%28BD%201080p%20AV1%29%20%5BDual%20Audio%5D.torrent"
-	if batch.URL != wantEnclosure {
-		t.Errorf("url = %q, want the enclosure .torrent URL %q", batch.URL, wantEnclosure)
+	// tracker-less magnet built from the info_hash (the DHT-only
+	// metadata path that timed out the PR52 smoke; the live
+	// magnet_uri is base32 and is not taken anyway).
+	wantTorrent := "https://storage.animetosho.org/torrent/68e12263b9af297ead6633acc67a8c77f8f3ba2b/%5BPolarwindz%5D%20Black%20Lagoon%20%2B%20Roberta%27s%20Blood%20Trail%20%28BD%201080p%20HEVC%20FLAC%29.torrent"
+	if batch.URL != wantTorrent {
+		t.Errorf("url = %q, want the torrent_url %q", batch.URL, wantTorrent)
 	}
-	if batch.Meta[SearchMetaSize] != "21.6 GiB" {
-		t.Errorf("size meta = %v, want 21.6 GiB (23175675801 bytes)", batch.Meta[SearchMetaSize])
+	if batch.Meta[SearchMetaSize] != "75.8 GiB" {
+		t.Errorf("size meta = %v, want 75.8 GiB (81377339586 bytes)", batch.Meta[SearchMetaSize])
 	}
-	if batch.Meta[SearchMetaSeeders] != "10" || batch.Meta[SearchMetaLeechers] != "1" {
+	if batch.Meta[SearchMetaSeeders] != "4" || batch.Meta[SearchMetaLeechers] != "3" {
 		t.Errorf("seeders/leechers meta = %v/%v", batch.Meta[SearchMetaSeeders], batch.Meta[SearchMetaLeechers])
 	}
 	if batch.Meta[SearchMetaQuality] != "1080p" {
@@ -81,72 +100,66 @@ func TestAnimeToshoSearchParsesRSS(t *testing.T) {
 	}
 
 	second := results[1]
-	if second.Title != "[Okay-Subs] Dan Da Dan S1 (BD 1080p Dual-Audio)" {
+	if second.Title != "[iiPython] Black Lagoon 01-29 + Specials [1080p BD Dual-Audio Multi-Sub OPUS AV1 v2]" {
 		t.Errorf("second title = %q", second.Title)
 	}
-	wantSecond := "https://storage.animetosho.org/torrent/551d254951545609236617066627b25cba78155b/%5BOkay-Subs%5D%20Dan%20Da%20Dan%20S1%20%28BD%201080p%20Dual-Audio%29.torrent"
+	wantSecond := "https://storage.animetosho.org/torrent/9f1d0bc73e54bd62dabcc1055b615a17ff9aa6b3/%5BiiPython%5D%20Black%20Lagoon%2001-24%20%2B%20OVA%20%2B%20Specials%20%5B1080p%20BD%20Dual-Audio%20Multi-Sub%20OPUS%20AV1%20v2%5D.torrent"
 	if second.URL != wantSecond {
-		t.Errorf("second url = %q, want the enclosure .torrent URL %q", second.URL, wantSecond)
+		t.Errorf("second url = %q, want the torrent_url %q", second.URL, wantSecond)
 	}
-	if second.Meta[SearchMetaSize] != "54.7 GiB" {
-		t.Errorf("second size meta = %v, want 54.7 GiB (58776096237 bytes)", second.Meta[SearchMetaSize])
+	if second.Meta[SearchMetaSize] != "12.0 GiB" {
+		t.Errorf("second size meta = %v, want 12.0 GiB (12843106391 bytes)", second.Meta[SearchMetaSize])
 	}
-	if second.Meta[SearchMetaSeeders] != "331" || second.Meta[SearchMetaLeechers] != "6" {
+	if second.Meta[SearchMetaSeeders] != "13" || second.Meta[SearchMetaLeechers] != "2" {
 		t.Errorf("second seeders/leechers meta = %v/%v", second.Meta[SearchMetaSeeders], second.Meta[SearchMetaLeechers])
 	}
 
-	// No attrs on the wire → the <enclosure> .torrent URL is the link.
+	// No seed/size fields on the wire → the torrent_url is the link
+	// and the meta fails soft (empty strings, never fabricated zeros).
 	fallback := results[2]
 	if fallback.URL != "https://storage.animetosho.org/torrent/abcdef0123456789abcdef0123456789abcdef01/%5BConstructed%5D%20No%20Attrs%20Show%20%281080p%29.torrent" {
-		t.Errorf("fallback url = %q, want the enclosure .torrent URL", fallback.URL)
+		t.Errorf("fallback url = %q, want the torrent_url", fallback.URL)
+	}
+	if fallback.Meta[SearchMetaSize] != "" || fallback.Meta[SearchMetaSeeders] != "" {
+		t.Errorf("fallback meta = %v/%v, want empty strings (fail-soft)", fallback.Meta[SearchMetaSize], fallback.Meta[SearchMetaSeeders])
 	}
 	if fallback.Meta[SearchMetaQuality] != "1080p" {
 		t.Errorf("fallback quality meta = %v, want the PR35 badge from the title", fallback.Meta[SearchMetaQuality])
 	}
 }
 
-// TestAnimeToshoSearchPrefersEnclosureTorrent pins the PR66 link
-// preference: the <enclosure> .torrent URL on AT's own storage wins —
-// it is the preflightable, bytes-ingestible link (the PR53 pattern).
-// Magnets only serve as the no-enclosure fallback: a hex magneturl
+// TestAnimeToshoSearchPrefersTorrentURLBytes pins the PR66 link
+// preference: the torrent_url .torrent on AT's own storage wins — it
+// is the preflightable, bytes-ingestible link (the PR53 pattern).
+// Magnets only serve as the no-torrent_url fallback: a HEX magnet_uri
 // rides verbatim (its tr= announces aid peer discovery), otherwise the
-// magnet is built from the 40-hex infohash attr. The live feed's
-// magneturl is base32 and must NOT be taken (the engine contract is
-// hex; the enclosure covers that item).
-func TestAnimeToshoSearchPrefersEnclosureTorrent(t *testing.T) {
+// magnet is built from the 40-hex info_hash. The live magnet_uri is
+// base32 and must NOT be taken (the engine contract is hex; the
+// torrent_url covers those items).
+func TestAnimeToshoSearchPrefersTorrentURLBytes(t *testing.T) {
 	t.Parallel()
 
-	const body = `<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
-    <item>
-      <title>[Hex] Show - 01 (1080p).mkv</title>
-      <link>https://animetosho.org/view/hex.n1</link>
-      <enclosure url="https://storage.animetosho.org/torrent/1/x.torrent" type="application/x-bittorrent" length="0"/>
-      <torznab:attr name="infohash" value="1111111111111111111111111111111111111111"/>
-      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:1111111111111111111111111111111111111111&amp;tr=udp://tracker.example.org:1337/announce"/>
-      <torznab:attr name="size" value="1073741824"/>
-    </item>
-    <item>
-      <title>[B32] Show - 02 (720p).mkv</title>
-      <link>https://animetosho.org/view/b32.n2</link>
-      <enclosure url="https://storage.animetosho.org/torrent/2/y.torrent" type="application/x-bittorrent" length="0"/>
-      <torznab:attr name="infohash" value="2222222222222222222222222222222222222222"/>
-      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:KZLR34YVXTPNFGFXDDFZETUHGG67DUMD&amp;tr=udp://tracker.example.org:1337/announce"/>
-    </item>
-    <item>
-      <title>[NoEnc] Show - 03 (1080p).mkv</title>
-      <link>https://animetosho.org/view/noenc.n3</link>
-      <torznab:attr name="infohash" value="3333333333333333333333333333333333333333"/>
-      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:3333333333333333333333333333333333333333&amp;tr=udp://tracker.example.org:1337/announce"/>
-    </item>
-    <item>
-      <title>[NoEncNoMagnet] Show - 04 (1080p).mkv</title>
-      <link>https://animetosho.org/view/fallback.n4</link>
-      <torznab:attr name="infohash" value="4444444444444444444444444444444444444444"/>
-    </item>
-</channel></rss>`
+	const body = `[
+  {"title":"[Hex] Show - 01 (1080p).mkv",
+   "torrent_url":"https://storage.animetosho.org/torrent/1/x.torrent",
+   "info_hash":"1111111111111111111111111111111111111111",
+   "magnet_uri":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111&tr=udp://tracker.example.org:1337/announce",
+   "seeders":10},
+  {"title":"[B32] Show - 02 (720p).mkv",
+   "torrent_url":"https://storage.animetosho.org/torrent/2/y.torrent",
+   "info_hash":"2222222222222222222222222222222222222222",
+   "magnet_uri":"magnet:?xt=urn:btih:KZLR34YVXTPNFGFXDDFZETUHGG67DUMD&tr=udp://tracker.example.org:1337/announce",
+   "seeders":10},
+  {"title":"[NoEnc] Show - 03 (1080p).mkv",
+   "info_hash":"3333333333333333333333333333333333333333",
+   "magnet_uri":"magnet:?xt=urn:btih:3333333333333333333333333333333333333333&tr=udp://tracker.example.org:1337/announce",
+   "seeders":10},
+  {"title":"[NoEncNoMagnet] Show - 04 (1080p).mkv",
+   "info_hash":"4444444444444444444444444444444444444444",
+   "seeders":10}
+]`
 
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, body, nil))
+	p := luaProvider(t, "animetosho", animeToshoServer(t, body, nil))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -155,52 +168,74 @@ func TestAnimeToshoSearchPrefersEnclosureTorrent(t *testing.T) {
 		t.Fatalf("results = %d, want 4", len(results))
 	}
 	if results[0].URL != "https://storage.animetosho.org/torrent/1/x.torrent" {
-		t.Errorf("hex magneturl item = %q, want the enclosure .torrent URL (own storage, preflightable)", results[0].URL)
+		t.Errorf("hex magnet_uri item = %q, want the torrent_url (own storage, preflightable)", results[0].URL)
 	}
 	if results[1].URL != "https://storage.animetosho.org/torrent/2/y.torrent" {
-		t.Errorf("base32 magneturl item = %q, want the enclosure .torrent URL", results[1].URL)
+		t.Errorf("base32 magnet_uri item = %q, want the torrent_url", results[1].URL)
 	}
 	if results[2].URL != "magnet:?xt=urn:btih:3333333333333333333333333333333333333333&tr=udp://tracker.example.org:1337/announce" {
-		t.Errorf("no-enclosure hex magneturl = %q, want it verbatim (trackers ride)", results[2].URL)
+		t.Errorf("no-torrent_url hex magnet_uri = %q, want it verbatim (trackers ride)", results[2].URL)
 	}
 	if results[3].URL != "magnet:?xt=urn:btih:4444444444444444444444444444444444444444&dn="+url.QueryEscape("[NoEncNoMagnet] Show - 04 (1080p).mkv") {
-		t.Errorf("no-enclosure no-magneturl = %q, want the infohash-built magnet", results[3].URL)
+		t.Errorf("no-torrent_url no-magnet_uri = %q, want the info-hash-built magnet", results[3].URL)
 	}
 }
 
 func TestAnimeToshoSearchRequestParams(t *testing.T) {
 	t.Parallel()
 
-	var gotQuery url.Values
-	var gotPath string
+	var gotRequests []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query()
-		gotPath = r.URL.Path
-		_, _ = w.Write(fixture(t, "animetosho_search.xml"))
+		gotRequests = append(gotRequests, r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture(t, "animetosho_search.json"))
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnimeToshoFixtureAt(t, srv.URL)
+	p := luaProvider(t, "animetosho", srv.URL)
 
-	if _, err := p.Search(context.Background(), "fate stay night"); err != nil {
+	if _, err := p.Search(context.Background(), "black lagoon"); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if gotPath != "/api" {
-		t.Errorf("path = %q, want the newznab api endpoint", gotPath)
+	if len(gotRequests) != 1 {
+		t.Fatalf("requests = %v, want exactly one search request", gotRequests)
 	}
-	if gotQuery.Get("t") != "search" {
-		t.Errorf("t = %q, want search", gotQuery.Get("t"))
+	// The JSON API endpoint with the raw query; no other parameters —
+	// the endpoint carries no category/limit/offset twins (live-verified
+	// 2026-10-06), the bounded page is client-side.
+	if gotRequests[0] != "/json?q=black+lagoon" {
+		t.Errorf("request = %q, want /json?q=black+lagoon", gotRequests[0])
 	}
-	if gotQuery.Get("q") != "fate stay night" {
-		t.Errorf("q = %q, want the raw query", gotQuery.Get("q"))
+}
+
+// TestAnimeToshoSearchCapsResults pins the bounded-surface rule (the
+// compiled AnimeToshoSearchLimit semantics): the JSON endpoint has no
+// server-side limit parameter (live-verified 2026-10-06), so the
+// script caps the parsed records client-side BEFORE the seedless
+// filter — the Go adapter's preflight fan-out downstream can never
+// spend unbounded fetches.
+func TestAnimeToshoSearchCapsResults(t *testing.T) {
+	t.Parallel()
+
+	records := make([]map[string]any, 0, 35)
+	for i := range 35 {
+		records = append(records, map[string]any{
+			"title":       fmt.Sprintf("[Cap] Show - %02d (1080p)", i+1),
+			"torrent_url": fmt.Sprintf("https://storage.animetosho.org/torrent/%d/a.torrent", i+1),
+			"seeders":     i + 1,
+		})
 	}
-	if gotQuery.Get("cat") != "5070" {
-		t.Errorf("cat = %q, want 5070 (anime)", gotQuery.Get("cat"))
+	broad, err := json.Marshal(records)
+	if err != nil {
+		t.Fatalf("marshal broad fixture: %v", err)
 	}
-	if gotQuery.Get("offset") != "0" {
-		t.Errorf("offset = %q, want 0 (first page)", gotQuery.Get("offset"))
+
+	p := luaProvider(t, "animetosho", animeToshoServer(t, string(broad), nil))
+	results, err := p.Search(context.Background(), "show")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
 	}
-	if gotQuery.Get("limit") != "30" {
-		t.Errorf("limit = %q, want the bounded page size 30", gotQuery.Get("limit"))
+	if len(results) != 30 {
+		t.Fatalf("results = %d, want the bounded page 30", len(results))
 	}
 }
 
@@ -208,7 +243,7 @@ func TestAnimeToshoSearchEmptyQueryFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, string(fixture(t, "animetosho_search.xml")), &hits))
+	p := luaProvider(t, "animetosho", animeToshoServer(t, string(fixture(t, "animetosho_search.json")), &hits))
 	for _, query := range []string{"", "   "} {
 		_, err := p.Search(context.Background(), query)
 		if err == nil {
@@ -223,53 +258,57 @@ func TestAnimeToshoSearchEmptyQueryFailsLoud(t *testing.T) {
 	}
 }
 
-// TestAnimeToshoSearchSkipsUnusableItems: an item without a title, or
-// with a title but none of magneturl/infohash/enclosure, has nothing
-// the engine could ingest — dropped, never a dead result.
+// TestAnimeToshoSearchSkipsUnusableItems: a record without a title,
+// or with a title but none of torrent_url/magnet_uri/info_hash, has
+// nothing the engine could ingest — dropped, never a dead result.
 func TestAnimeToshoSearchSkipsUnusableItems(t *testing.T) {
 	t.Parallel()
 
-	const body = `<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
-    <item>
-      <title>[Good] Show - 01 (1080p).mkv</title>
-      <link>https://animetosho.org/view/good.n1</link>
-      <enclosure url="https://storage.animetosho.org/torrent/3/z.torrent" type="application/x-bittorrent" length="0"/>
-    </item>
-    <item>
-      <title></title>
-      <link>https://animetosho.org/view/nameless.n2</link>
-    </item>
-    <item>
-      <title>[Broken] No link no attrs</title>
-      <torznab:attr name="size" value="1024"/>
-    </item>
-</channel></rss>`
+	const body = `[
+  {"title":"[Good] Show - 01 (1080p).mkv",
+   "torrent_url":"https://storage.animetosho.org/torrent/3/z.torrent",
+   "total_size":0,
+   "seeders":7},
+  {"title":"",
+   "link":"https://animetosho.org/view/nameless.n2"},
+  {"title":"[Broken] No link no attrs",
+   "total_size":1024}
+]`
 
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, body, nil))
+	p := luaProvider(t, "animetosho", animeToshoServer(t, body, nil))
 	results, err := p.Search(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1 (the usable item)", len(results))
+		t.Fatalf("results = %d, want 1 (the usable record)", len(results))
 	}
 	if results[0].URL != "https://storage.animetosho.org/torrent/3/z.torrent" {
-		t.Errorf("url = %q, want the enclosure", results[0].URL)
+		t.Errorf("url = %q, want the torrent_url", results[0].URL)
+	}
+	// The strict zero-size pin (the humanBytesAttr unit table's "0"
+	// row): a numeric zero converts to the TUI convention.
+	if results[0].Meta[SearchMetaSize] != "0 B" {
+		t.Errorf("size meta = %v, want 0 B", results[0].Meta[SearchMetaSize])
 	}
 }
 
-func TestAnimeToshoSearchMalformedXMLTypedError(t *testing.T) {
+func TestAnimeToshoSearchMalformedJSONTypedError(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, "this is not xml at all", nil))
+	p := luaProvider(t, "animetosho", animeToshoServer(t, "<html>not json</html>", nil))
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
-		t.Fatal("malformed XML must fail loud")
+		t.Fatal("malformed JSON must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "animetosho" || perr.Op != contracts.OpSearch {
-		t.Errorf("error = %v, want an animetosho search ProviderError", err)
+	// The engine's non-marker raise path wraps with the provider/op
+	// context (fmt %w, not a *ProviderError — the PR116 taxonomy; the
+	// anilibria-torrent sibling pins the same containment shape).
+	if !strings.Contains(err.Error(), "provider \"animetosho\" search:") {
+		t.Errorf("error = %v, want the provider/op context", err)
+	}
+	if !strings.Contains(err.Error(), "invalid json") {
+		t.Errorf("error = %v, want the invalid-json decode wall", err)
 	}
 }
 
@@ -280,65 +319,99 @@ func TestAnimeToshoSearchHTTPErrorTypedError(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnimeToshoFixtureAt(t, srv.URL)
+	p := luaProvider(t, "animetosho", srv.URL)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("HTTP failure must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "animetosho" {
-		t.Errorf("error = %v, want an animetosho-tagged ProviderError", err)
+	if !strings.Contains(err.Error(), "animetosho") {
+		t.Errorf("error = %v, want the provider-tagged message", err)
 	}
 }
 
-// TestAnimeToshoGetEpisodesDelegatesToEpisodesWait: the provider
-// GetEpisodes path rides the base's bounded metadata wait; unreachable
-// metadata fails loud on the caller's deadline (the TorrentBase contract).
-func TestAnimeToshoGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
+// TestAnimeToshoRosterCapabilityAndIdentity pins the hybrid roster
+// shape through the real factory assembly: the bundled script serves
+// search and identity, the Go TorrentBase keeps the torrent
+// capability (IsTorrent/SetEngine/ingest legs). The latin
+// name-preference declaration rides the script (the PR42 search
+// fan-out routes animetosho the latin variants only).
+func TestAnimeToshoRosterCapabilityAndIdentity(t *testing.T) {
 	t.Parallel()
 
-	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	eng := newOfflineTestEngine(t)
-	t.Cleanup(func() { _ = eng.Close() })
-	p := newAnimeTosho(AnimeToshoFeedBase, testClient(t, "animetosho"), eng)
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-
-	eps, err := p.GetEpisodes(ctx, dead)
-	if err == nil {
-		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
 	}
-	if len(eps) != 0 {
-		t.Errorf("episodes = %v, want none", eps)
+	var p contracts.Provider
+	for _, item := range bare {
+		if item.ID() == "animetosho" {
+			p = item
+			break
+		}
 	}
-	if !strings.Contains(err.Error(), "торренты") {
-		t.Errorf("error = %v, want the torrent-base wait failure", err)
+	if p == nil {
+		t.Fatal("animetosho must stay in the roster (the bundled script pins its slot)")
 	}
-}
-
-func TestAnimeToshoCapabilityAndRoster(t *testing.T) {
-	t.Parallel()
-
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, string(fixture(t, "animetosho_search.xml")), nil))
-	if !p.IsTorrent() {
-		t.Error("animetosho must carry the torrent capability")
+	tp, ok := p.(contracts.TorrentProvider)
+	if !ok || !tp.IsTorrent() {
+		t.Fatal("the Lua-served animetosho slot must keep the torrent capability (the smoke's torrent rule rides it)")
 	}
-	if p.ID() != "animetosho" {
-		t.Errorf("id = %q", p.ID())
+	if _, ok := p.(interface{ SetEngine(*torrent.Engine) }); !ok {
+		t.Error("the roster provider must accept the registry's engine injection")
 	}
 	if p.Name() != "AnimeTosho" {
 		t.Errorf("name = %q, want the TUI display name", p.Name())
 	}
+	if p.BaseURL() != "https://feed.animetosho.org" {
+		t.Errorf("base URL = %q, want the feed host the script pins", p.BaseURL())
+	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("source type = %q, want both (JA audio, acceptable video)", p.SourceType())
 	}
-	if got := p.ContentLanguage(); got != "ja" {
-		t.Errorf("content language = %q, want ja (JP audio with subs)", got)
+	if lc, ok := p.(interface{ ContentLanguage() string }); !ok || lc.ContentLanguage() != "ja" {
+		t.Errorf("content language = %v, want ja (JP audio with subs)", lc)
 	}
-	if p.BaseURL() == "" {
-		t.Error("base URL must be the feed host, not empty")
+	if np, ok := p.(contracts.NamePreferenceProvider); !ok || np.NamePreference() != contracts.NamePrefLatin {
+		t.Errorf("name preference = %v, want NamePrefLatin (the latin-only index)", np)
+	}
+}
+
+// TestAnimeToshoEpisodesDelegateToTorrentBase pins the leg ownership:
+// GetEpisodes rides the Go TorrentBase (ingest → metadata wait),
+// never the script's stub — with no engine wired the call fails with
+// the base's not-wired error, not a script answer.
+func TestAnimeToshoEpisodesDelegateToTorrentBase(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	bare, err := All(cfg)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var p contracts.Provider
+	for _, item := range bare {
+		if item.ID() == "animetosho" {
+			p = item
+			break
+		}
+	}
+	if p == nil {
+		t.Fatal("animetosho missing from the roster")
+	}
+
+	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
+	_, err = p.GetEpisodes(context.Background(), dead)
+	if err == nil {
+		t.Fatal("GetEpisodes without a wired engine must fail loud")
+	}
+	if !strings.Contains(err.Error(), "engine is not wired") {
+		t.Errorf("error = %v, want the TorrentBase not-wired failure (the Go leg owns episodes)", err)
 	}
 }
 
@@ -379,45 +452,31 @@ func TestAnimeToshoDisabledWhenTorrentOff(t *testing.T) {
 	}
 }
 
-// --- PR66: .torrent-bytes ingestion (the tokyotosho PR53 pattern).
-// The search result link is the <enclosure> .torrent URL on AT's own
-// storage; a search-time preflight pre-fetches every result's bytes
-// (bounded, short per-URL budget) and drops the dead ones BEFORE they
-// surface (owner standing rule), handing the survivors' bytes to the
-// engine — the tracker-less synthesized magnet (DHT-only metadata, the
-// PR52 smoke killer) is only the no-enclosure fallback now.
+// --- PR66: .torrent-bytes ingestion (the tokyotosho PR53 pattern),
+// carried over byte-faithfully by the Go luaTorrent adapter. The
+// search result link is the torrent_url .torrent on AT's own storage;
+// a search-time preflight pre-fetches every result's bytes (bounded,
+// short per-URL budget) and drops the dead ones BEFORE they surface
+// (owner standing rule), handing the survivors' bytes to the engine —
+// the tracker-less synthesized magnet (DHT-only metadata, the PR52
+// smoke killer) is only the no-torrent_url fallback now. The pins run
+// the factory hybrid (script search + adapter legs), the exact
+// composition the roster serves.
 
-// atItemXML renders one newznab item fragment: title, optional
-// <enclosure> .torrent URL, optional magneturl/infohash attrs (values
-// must be pre-escaped for an XML attribute), the seeder count (the
-// PR44 filter keys on it).
-func atItemXML(title, enclosure, magnetURL, infoHash, seeders string) string {
-	var b strings.Builder
-	b.WriteString("<item><title>" + title + "</title>")
-	if enclosure != "" {
-		b.WriteString(`<enclosure url="` + enclosure + `" type="application/x-bittorrent" length="0"/>`)
-	}
-	if magnetURL != "" {
-		b.WriteString(`<torznab:attr name="magneturl" value="` + magnetURL + `"/>`)
-	}
-	if infoHash != "" {
-		b.WriteString(`<torznab:attr name="infohash" value="` + infoHash + `"/>`)
-	}
-	b.WriteString(`<torznab:attr name="seeders" value="` + seeders + `"/></item>`)
-	return b.String()
-}
-
-// atFeed wraps item fragments into the newznab RSS envelope.
-func atFeed(items ...string) string {
-	return `<?xml version="1.0" encoding="utf-8"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>` +
-		strings.Join(items, "") + `</channel></rss>`
+// animeToshoHybrid loads the bundled script through the harness and
+// wraps it in the search-in-Lua torrent hybrid the factory serves
+// (the offline engine wired — the Go test built its provider the same
+// way).
+func animeToshoHybrid(t *testing.T, baseURL string) *luaTorrent {
+	t.Helper()
+	return newLuaTorrent(luaProvider(t, "animetosho", baseURL), nil, newOfflineTestEngine(t))
 }
 
 // TestAnimeToshoSearchPreflightDropsDeadHosts pins the PR66 owner
 // ruling: every surfaced result's .torrent bytes are pre-fetched
 // (bounded, short per-URL budget) BEFORE the result surfaces; a dead
-// host drops the result. Seedless items are filtered first and never
-// probed.
+// host drops the result. Seedless records are filtered first and
+// never probed.
 func TestAnimeToshoSearchPreflightDropsDeadHosts(t *testing.T) {
 	t.Parallel()
 
@@ -432,13 +491,14 @@ func TestAnimeToshoSearchPreflightDropsDeadHosts(t *testing.T) {
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
 	dead := newDeadListener(t)
 
-	feed := atFeed(
-		atItemXML("Show - 01", live.URL+"/storage/1.torrent", "", "", "10"),
-		atItemXML("Show - dead", "http://"+dead.Addr().String()+"/storage/2.torrent", "", "", "10"),
-		atItemXML("Show - seedless", live.URL+"/storage/3.torrent", "", "", "0"),
-		atItemXML("Show - 03", live.URL+"/storage/4.torrent", "", "", "7"),
-	)
-	p := newAnimeTosho(animeToshoServer(t, feed, nil), testClient(t, "animetosho"), newOfflineTestEngine(t))
+	body := fmt.Sprintf(`[
+  {"title":"Show - 01","torrent_url":"%s/storage/1.torrent","seeders":10},
+  {"title":"Show - dead","torrent_url":"http://%s/storage/2.torrent","seeders":10},
+  {"title":"Show - seedless","torrent_url":"%s/storage/3.torrent","seeders":0},
+  {"title":"Show - 03","torrent_url":"%s/storage/4.torrent","seeders":7}
+]`, live.URL, dead.Addr().String(), live.URL, live.URL)
+
+	p := animeToshoHybrid(t, animeToshoServer(t, body, nil))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -450,7 +510,7 @@ func TestAnimeToshoSearchPreflightDropsDeadHosts(t *testing.T) {
 	if results[0].URL != live.URL+"/storage/1.torrent" || results[1].URL != live.URL+"/storage/4.torrent" {
 		t.Errorf("results = [%s, %s], want the two live links in feed order", results[0].URL, results[1].URL)
 	}
-	// The seedless item was filtered before the preflight: only the
+	// The seedless record was filtered before the preflight: only the
 	// two live results were fetched, each exactly once.
 	if fetches.Load() != 2 {
 		t.Errorf("preflight fetches = %d, want 2", fetches.Load())
@@ -477,8 +537,8 @@ func TestAnimeToshoSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
 	var fetches atomic.Int64
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
 	link := live.URL + "/storage/1.torrent"
-	p := newAnimeTosho(animeToshoServer(t, atFeed(atItemXML("Show - 01", link, "", "", "10")), nil),
-		testClient(t, "animetosho"), newOfflineTestEngine(t))
+	p := animeToshoHybrid(t, animeToshoServer(t,
+		fmt.Sprintf(`[{"title":"Show - 01","torrent_url":"%s","seeders":10}]`, link), nil))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -508,8 +568,8 @@ func TestAnimeToshoSearchPreflightLogsTypedReason(t *testing.T) {
 
 	dead := newDeadListener(t)
 	deadURL := "http://" + dead.Addr().String() + "/storage/1.torrent"
-	p := newAnimeTosho(animeToshoServer(t, atFeed(atItemXML("Show - dead", deadURL, "", "", "10")), nil),
-		testClient(t, "animetosho"), newOfflineTestEngine(t))
+	p := animeToshoHybrid(t, animeToshoServer(t,
+		fmt.Sprintf(`[{"title":"Show - dead","torrent_url":"%s","seeders":10}]`, deadURL), nil))
 
 	var logBuf bytes.Buffer
 	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
@@ -529,43 +589,23 @@ func TestAnimeToshoSearchPreflightLogsTypedReason(t *testing.T) {
 // TestAnimeToshoSearchNoEngineSkipsPreflight pins the nil-engine rule:
 // without the [torrent] engine there is nothing to preflight or feed,
 // so Search keeps the legacy behavior (no prefetch requests — this is
-// also what keeps hand-built unit tests network-free).
+// also what keeps hand-built unit tests network-free). The bare
+// harness provider IS the script surface alone (no adapter wrap).
 func TestAnimeToshoSearchNoEngineSkipsPreflight(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newAnimeToshoFixtureAt(t, animeToshoServer(t, string(fixture(t, "animetosho_search.xml")), &hits))
-	results, err := p.Search(context.Background(), "dandadan")
+	p := luaProvider(t, "animetosho", animeToshoServer(t, string(fixture(t, "animetosho_search.json")), &hits))
+	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if len(results) != 3 {
 		t.Fatalf("results = %d, want 3 (nil engine: no preflight, nothing dropped)", len(results))
 	}
-	// Exactly ONE request happened: the newznab search itself. No
+	// Exactly ONE request happened: the JSON search itself. No
 	// preflight attempted the fixture's storage.animetosho.org URLs.
 	if hits != 1 {
 		t.Errorf("server hits = %d, want 1 (search only)", hits)
-	}
-}
-
-// TestAnimeToshoHumanBytesAttr pins the byte-count attribute parse:
-// strict integers convert to the TUI convention, anything else —
-// including numeric-prefixed garbage, which a lenient prefix parse
-// would silently truncate — rides verbatim (fail-soft).
-func TestAnimeToshoHumanBytesAttr(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct{ raw, want string }{
-		{"23175675801", "21.6 GiB"},
-		{"0", "0 B"},
-		{"  1024  ", "1.0 KiB"},
-		{"abc", "abc"},
-		{"123abc", "123abc"},
-		{"", ""},
-	} {
-		if got := humanBytesAttr(tc.raw); got != tc.want {
-			t.Errorf("humanBytesAttr(%q) = %q, want %q", tc.raw, got, tc.want)
-		}
 	}
 }

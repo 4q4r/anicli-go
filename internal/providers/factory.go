@@ -329,13 +329,24 @@ var allFactories = []struct {
 	// (cfwiring.go, the kodik precedent); humanBytes and magnetURI
 	// moved to torrentbase.go with their remaining Go consumers.
 	{"anilibria-torrent", true, nil},
-	// animetosho (PR38): the animetosho.org newznab search on the same
-	// TorrentBase plumbing — hex-infohash magnets, .torrent enclosure
-	// fallback; no credentials, engine injected by NewRegistry when
-	// [torrent] is enabled.
-	{"animetosho", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnimeTosho(AnimeToshoFeedBase, http, nil)
-	}},
+	// animetosho (PR38 → PR146): the animetosho.org torrent search
+	// (the JSON API twin of the compiled provider's newznab feed —
+	// the Lua contract has no XML parser; live-verified 2026-10-06)
+	// migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/animetosho/main.lua) — the
+	// TWENTY-NINTH Go→Lua provider migration, the torrent family's
+	// fifth Lua slot. luaOnly pins the roster slot; the script serves
+	// the search surface (the torrent_url → hex-magnet → info-hash
+	// link ladder, the client-side 30-record page — the endpoint has
+	// no server-side limit — and the latin name preference) and
+	// declares torrent = true, so the factory grafts the shared Go
+	// engine legs (the PR66 .torrent-bytes preflight, the metadata
+	// wait, the loopback resolve) onto it through the luaTorrent
+	// adapter — the engine side (internal/torrent) is untouched.
+	// humanBytes and magnetURI died here: the script re-derives both
+	// contracts in Lua and no Go consumer remained (the grep proof in
+	// the PR146 report).
+	{"animetosho", true, nil},
 	// tokyotosho (PR38): the tokyo-tosho.net search RSS on the same
 	// TorrentBase plumbing — direct .torrent <link> URLs; no
 	// credentials, engine injected by NewRegistry when [torrent] is

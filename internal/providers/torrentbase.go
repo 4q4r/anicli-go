@@ -33,12 +33,6 @@ import (
 // session flow needs one dub slot; a torrent file has no dubs).
 const torrentDubLabel = "Торрент"
 
-// infoHashHexLen is the BitTorrent v1 infohash length in hex chars
-// (40) — the shared 40-hex btih contract a TorrentBase feed hash must
-// meet before it can ride a synthesized magnet (the engine rejects
-// anything else).
-const infoHashHexLen = 40
-
 // SearchMeta keys are the cross-package contract between torrent
 // search providers and the TUI result lists: the provider stashes
 // them in SearchResult.Meta, the TUI renders the torrent suffix.
@@ -53,58 +47,13 @@ const (
 	SearchMetaQuality = "quality"
 )
 
-// isHex reports whether s is non-empty lowercase hexadecimal.
-func isHex(s string) bool {
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return s != ""
-}
-
-// magnetURI reports whether s is a magnet: URI whose btih parameter is
-// a well-formed 40-hex infohash (the engine ingests it directly).
-// Lived in the anilibria-torrent provider file until the PR145 Lua
-// migration deleted it; animetosho is the remaining consumer.
-func magnetURI(s string) bool {
-	const prefix = "magnet:?"
-	if !strings.HasPrefix(s, prefix) {
-		return false
-	}
-	for _, param := range strings.Split(s[len(prefix):], "&") {
-		if hash, ok := strings.CutPrefix(param, "xt=urn:btih:"); ok {
-			hash = strings.ToLower(hash)
-			return len(hash) == infoHashHexLen && isHex(hash)
-		}
-	}
-	return false
-}
-
-// humanBytes renders a byte count in binary units with one decimal —
-// the TUI torrent suffix convention ("16.2 GiB"). Lived in the
-// anilibria-torrent provider file until the PR145 Lua migration
-// deleted it; animetosho and subsplease are the remaining consumers
-// (the script re-derives the same format in Lua).
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
-}
-
 // filterSeedless drops search results whose feed-reported seeder count
 // parses to 0 — a seedless torrent is a dead result, and surfacing it
 // only produces dead ends downstream. Fail-soft by design: a result
 // whose feed carries no (or an unparseable) seed field is kept — no
 // field, no filter. Torrent search providers apply it to their Search
-// output (PR44 owner ruling).
+// output (PR44 owner ruling); the Lua torrent scripts port it
+// row-level (the PR142 rutor precedent).
 func filterSeedless(results []contracts.SearchResult) []contracts.SearchResult {
 	out := results[:0:0]
 	for _, r := range results {

@@ -145,6 +145,12 @@ var luaProductionBases = map[string][]string{
 	// /api/v1 API prefix from it (the torrent list and the release
 	// search hang off that one base).
 	"anilibria-torrent": {"https://aniliberty.top"},
+	// animetosho (PR146): the newznab feed host — the JSON search
+	// endpoint is /json?q=… on that one host, and the surfaced
+	// storage.animetosho.org .torrent links are never fetched by the
+	// script (the Go torrent adapter's preflight fetches them through
+	// the engine seam).
+	"animetosho": {"https://feed.animetosho.org"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

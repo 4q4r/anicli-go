@@ -20,7 +20,9 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 
 	latin := map[string]contracts.Provider{
 		"animetosho": newAnimeTosho(AnimeToshoFeedBase, testClient(t, "animetosho"), nil),
-		"tokyotosho": newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil),
+		// tokyotosho (PR147): the bundled Lua script — the declaration
+		// rides the provider table now.
+		"tokyotosho": luaProvider(t, "tokyotosho", luaProductionBases["tokyotosho"][0]),
 	}
 	for id, p := range latin {
 		np, ok := p.(contracts.NamePreferenceProvider)
@@ -68,7 +70,7 @@ func TestRegistryNamePreference(t *testing.T) {
 	t.Parallel()
 
 	r := NewEmptyRegistry()
-	if err := r.Register(newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil)); err != nil {
+	if err := r.Register(luaProviderAtProduction(t, "tokyotosho")); err != nil {
 		t.Fatalf("register tokyotosho: %v", err)
 	}
 	if err := r.Register(luaProviderAtProduction(t, "anilibria-torrent")); err != nil {

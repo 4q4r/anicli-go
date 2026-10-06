@@ -145,6 +145,12 @@ var luaProductionBases = map[string][]string{
 	// /api/v1 API prefix from it (the torrent list and the release
 	// search hang off that one base).
 	"anilibria-torrent": {"https://aniliberty.top"},
+	// tokyotosho (PR147): the site root — the search RSS endpoint is
+	// the root with query parameters (/rss.php?terms=…&type=1), the
+	// only fetched host. The <link> .torrent URLs point at third-party
+	// mirrors but are never fetched by the script (the Go torrent
+	// adapter's preflight fetches them through the engine seam).
+	"tokyotosho": {"https://www.tokyo-tosho.net"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

@@ -87,15 +87,14 @@ func TestRegistryWiresProviderLogger(t *testing.T) {
 		t.Fatalf("the registry must thread the provider sink into the animego lua engine, got:\n%s", buf.String())
 	}
 
-	tp, ok := reg.Get("tokyotosho")
-	if !ok {
+	if _, ok := reg.Get("tokyotosho"); !ok {
 		t.Fatalf("tokyotosho not registered")
 	}
-	tt, ok := bareProvider(tp).(*TokyoTosho)
-	if !ok {
-		t.Fatalf("bare tokyotosho expected, got %T", bareProvider(tp))
-	}
-	if tt.logger == nil {
-		t.Fatalf("the registry must inject the provider logger into tokyotosho's Base seam")
+	// PR147: tokyotosho runs as the bundled Lua script too — the same
+	// construction-time sink threading the animego leg pins (the
+	// adapter's preflight sink rides the SetLogger forward; the
+	// behavioral routing pin is TestAnilibDropsLogThroughInjectedLogger).
+	if !strings.Contains(buf.String(), "provider=tokyotosho") {
+		t.Fatalf("the registry must thread the provider sink into the tokyotosho lua engine, got:\n%s", buf.String())
 	}
 }

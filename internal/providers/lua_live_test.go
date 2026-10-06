@@ -229,6 +229,16 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// engine (metadata+files), not the script stubs — the parity
 		// smoke's torrent rule.
 		"anilibria-torrent": "черная лагуна",
+		// tokyotosho (PR147): the proxy is the honest route per the
+		// smoke matrix (the «black lagoon» probe PASSes the torrent
+		// chain — 2 of 36 surfaced entries fully resolved to 2/2
+		// playable — in ~21.8s through the proxy; the origin is slow
+		// and the cross-posted .torrent mirrors ride the preflight's
+		// budget timeouts, so the direct route is not the honest
+		// one). The latin-only index takes the shared EN probe; the
+		// torrent walk below resolves through the REAL engine — the
+		// parity smoke's torrent rule.
+		"tokyotosho": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
@@ -366,13 +376,20 @@ func liveTorrentWalk(t *testing.T, id, query string) {
 	cfg := config.Default()
 	cfg.Network = network
 
-	built, _, err := luaProviders(cfg, nil, map[string]bool{}, nil)
+	built, clients, _, err := luaProviders(cfg, nil, map[string]bool{}, nil)
 	if err != nil {
 		t.Fatalf("luaProviders: %v", err)
 	}
 	p, ok := built[id]
 	if !ok {
 		t.Fatalf("provider %q missing from the factory build", id)
+	}
+	// The factory wraps torrent-declared scripts in the luaTorrent
+	// adapter after luaProviders returns (the luaTorrentServe duck);
+	// the walk mirrors that composition so the engine injection below
+	// lands on the TorrentBase the resolve legs ride.
+	if declared, isTorrent := p.(interface{ Torrent() bool }); isTorrent && declared.Torrent() {
+		p = newLuaTorrent(p, clients[id], nil)
 	}
 	client, err := netclient.New(network, netclient.WithProvider("torrent"))
 	if err != nil {

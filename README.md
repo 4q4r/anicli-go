@@ -297,7 +297,8 @@ provider-scoped field validation; the contract tests
 | `anicli.json` | `decode`, `encode` |
 | `anicli.html` | `parse` |
 | `anicli.regexp` | `match` |
-| `anicli.base64` | `encode`, `decode` |
+| `anicli.base64` | `encode`, `decode`, `url_encode`, `url_decode` |
+| `anicli.crypto` | `aes_cbc_decrypt`, `hmac_sha256` — the megaplay-chain primitives (Go stdlib behind the sandbox) |
 | `anicli.iconv` | `iconv(s, from_encoding)` — decode a legacy-encoded byte string (e.g. `cp1251`/`windows-1251`, IANA names) to UTF-8; invalid bytes become U+FFFD |
 | `anicli.time` | `now` (RFC 3339 UTC) |
 | `anicli.log` | `info`, `warn`, `error` |

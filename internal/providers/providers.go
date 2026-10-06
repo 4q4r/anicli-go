@@ -78,8 +78,9 @@ func (b Base) ContentLanguage() string { return b.contentLang }
 
 // formContentType marks a request body as form-encoded (the header
 // PostForm used to set; kept explicit for Do-based calls). Shared by
-// the providers that hand-build POST bodies (kodik, sameband; lived in
-// animevost.go until the PR119 Lua migration).
+// the providers that hand-build POST bodies (kodik; lived in
+// animevost.go until the PR119 Lua migration and in sameband.go until
+// the PR131 Lua migration).
 var formContentType = map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
 
 // pyQuote ports urllib.parse.quote with its default safe="/" set:

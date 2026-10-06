@@ -79,9 +79,16 @@ var allFactories = []struct {
 	{"anizone", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newAniZone(AniZoneBase, http)
 	}},
-	{"sameband", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSameBand(SameBandBase, http)
-	}},
+	// sameband (PR131): the SameBand studio DLE catalog migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/sameband/main.lua) — the twelfth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script serves the DLE search-form POST, the iframe-chained
+	// Playerjs playlist chain and the direct no-network quality-map
+	// resolve (the raw file field rides episode RawID). No
+	// credentials; formContentType's last sameband consumer died here
+	// — kodik still uses the helper.
+	{"sameband", true, nil},
 	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
 	}},

@@ -90,6 +90,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// direct route tarpits on the characterization network — the
 		// compiled provider's route note verbatim).
 		"anikoto": "black lagoon",
+		// sameband (PR131): the DLE POST search answers direct (the
+		// smoke matrix's honest route: 676ms for the «дьявол» probe;
+		// LIVE-VERIFIED 2026-09-18: HTTP 200, no Cloudflare challenge,
+		// no Referer needed).
+		"sameband": "дьявол",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

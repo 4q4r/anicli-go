@@ -53,6 +53,11 @@ var luaProductionBases = map[string][]string{
 	// stream resolver's answer (the fixtures rewrite it to the test
 	// server at serve time).
 	"anikoto": {"https://anikototv.to"},
+	// sameband (PR131): the site root — every leg (the DLE search POST,
+	// the anime page iframe, the Playerjs player page and the playlist)
+	// hangs off the one base_url literal, and the stream Referer
+	// derives from it.
+	"sameband": {"https://sameband.studio"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

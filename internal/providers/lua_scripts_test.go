@@ -134,6 +134,12 @@ var luaProductionBases = map[string][]string{
 	// are never fetched by the script (the Go torrent adapter's
 	// preflight fetches them through the engine seam).
 	"anirena": {"https://www.anirena.com"},
+	// subsplease (PR144): the site root — every leg (the /api/ search
+	// and f=show payloads and the /shows/ sid hop) hangs off the one
+	// base_url literal (tz=0 rides on every /api/ leg inside the
+	// script). The magnets surface verbatim — the engine owns them,
+	// no fetched host beyond the root.
+	"subsplease": {"https://subsplease.org"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

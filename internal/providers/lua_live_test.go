@@ -212,6 +212,15 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// through the Go engine — the same adapter + engine
 		// composition the rutor entry rides.
 		"anirena": "black lagoon",
+		// subsplease (PR144): the whole-catalog JSON API answers on
+		// BOTH routes (live 2026-10-06: the three search legs ~0.3s
+		// direct and ~1-1.5s through the proxy; the tz=0 parameter is
+		// mandatory — without it every /api/ leg answers HTTP 200 with
+		// zero bytes, re-verified the same day). The declared "re:zero"
+		// probe rides either route; the parity smoke keeps --proxy for
+		// the engine-resolve legs (the route matrix's honest route —
+		// its 58.9s row is the metadata-resolve chain, not the origin).
+		"subsplease": "re:zero",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {
@@ -227,6 +236,22 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 				t.Fatalf("Search(%q) = 0 results (the live catalog moved?)", query)
 			}
 			t.Logf("search %q: %d results, first = %q", query, len(results), results[0].Title)
+
+			// subsplease (PR144) is the torrent-search hybrid: the
+			// script owns the SEARCH surface pinned here — every
+			// surfaced link must be an engine-ingestable btih magnet —
+			// while the metadata/resolve legs ride the Go torrent
+			// engine (the parity smoke carries that proof end to end;
+			// the sandbox has no engine and must not fake the chain).
+			if id == "subsplease" {
+				for _, res := range results {
+					if !strings.HasPrefix(res.URL, "magnet:?xt=urn:btih:") {
+						t.Fatalf("result %q: url %q is not a btih magnet", res.Title, res.URL)
+					}
+				}
+				t.Logf("subsplease: %d btih magnet results surfaced (the engine resolve is the parity smoke's proof)", len(results))
+				return
+			}
 
 			// Walk the results: a typed not-found is the documented
 			// wall for announcement («Анонс») pages — the site renders

@@ -364,15 +364,20 @@ var allFactories = []struct {
 	// episodes/stream resolve behave byte-identically to the compiled
 	// TorrentBase provider's.
 	{"anirena", true, nil},
-	// subsplease (PR89): the subsplease.org JSON API on the same
-	// TorrentBase plumbing — the EN seasonal group's f=search catalog
-	// (the RSS feeds are latest-only and queryless, the site search
-	// endpoint is the API) with tracker-rich magnet links and the
-	// show-page sid hop for batch back-catalog; no credentials, engine
-	// injected by NewRegistry when [torrent] is enabled.
-	{"subsplease", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newSubsPlease(SubsPleaseBase, http, nil)
-	}},
+	// subsplease (PR89 → PR144): the subsplease.org JSON API torrent
+	// provider (the EN seasonal group's f=search catalog — the RSS
+	// feeds are latest-only and queryless — with tracker-rich
+	// base32-btih magnet links and the show-page sid hop for batch
+	// back-catalog; no credentials) migrated to the BUNDLED LUA
+	// SCRIPT (internal/luaproviders/scripts/subsplease/main.lua) —
+	// the twenty-seventh Go→Lua provider migration, the torrent
+	// family's third Lua slot. The SEARCH surface lives in the script
+	// (the raw-body depth-1 wire-order scan, the [] no-match quirk,
+	// the base32-btih magnet gate, tz=0 mandatory) while the engine
+	// legs stay Go: the script declares torrent = true and rides the
+	// luaTorrent adapter like rutor/anirena. luaOnly pins the roster
+	// slot.
+	{"subsplease", true, nil},
 }
 
 // luaTorrentFactories lists the TORRENT roster slots served by bundled

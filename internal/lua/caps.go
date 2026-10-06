@@ -54,3 +54,21 @@ func (p *Provider) Adapt() contracts.Provider {
 		namePref:    p.namePref,
 	}
 }
+
+// ScriptProvider peels the capability adapter down to the script
+// provider. The factory's torrent-wrap decision reads the script's
+// torrent declaration off the peeled provider; the wrap itself keeps
+// the OUTER surface so the declared capabilities survive on the
+// roster entry. Non-Lua providers (the compiled factories) report
+// false.
+func ScriptProvider(p contracts.Provider) (*Provider, bool) {
+	switch v := p.(type) {
+	case *Provider:
+		return v, true
+	case adapted:
+		lp, ok := v.Provider.(*Provider)
+		return lp, ok
+	default:
+		return nil, false
+	}
+}

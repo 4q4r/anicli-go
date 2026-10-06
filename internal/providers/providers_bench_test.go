@@ -8,9 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // PR81 offline benchmarks for the provider hot paths. Every benchmark
@@ -20,19 +17,6 @@ import (
 // built BEFORE `for b.Loop()` (auto-excluded from timing); results
 // sink into package-level vars so the compiler cannot dead-code the
 // loop body (go.dev testing.B.Loop contract + sinks).
-
-// benchClient is the *testing.B twin of the package testClient helper.
-func benchClient(b *testing.B, providerID string) *netclient.Client {
-	b.Helper()
-
-	cfg := config.Default().Network
-	cfg.ProxyURL = ""
-	c, err := netclient.New(cfg, netclient.WithProvider(providerID))
-	if err != nil {
-		b.Fatalf("netclient.New(%s): %v", providerID, err)
-	}
-	return c
-}
 
 // benchFixture loads a live-capture fixture from testdata.
 func benchFixture(b *testing.B, name string) []byte {

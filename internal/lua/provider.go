@@ -44,6 +44,13 @@ type Provider struct {
 	contentLang string
 	smokeQuery  string
 	namePref    contracts.NamePreference
+	// torrent marks a script whose episode/stream legs ride the Go
+	// torrent adapter instead of the script functions (the PR145
+	// anilibria-torrent hybrid): the factory wraps the loaded
+	// provider so the shared TorrentBase ingests the surfaced links.
+	// Read through Torrent by the factory's wrap; NOT part of the
+	// Adapt composite — the wrap replaces the adapted surface whole.
+	torrent bool
 }
 
 // Compile-time proof of the consumer-side contract.
@@ -139,6 +146,11 @@ func (e *Engine) LoadProvider(dirID, src string) (*Provider, error) {
 			return nil, loadErrf("provider %q: name_preference %q is not one of latin", dirID, pref)
 		}
 	}
+	if torrent, present, err := vld.optBool(tbl, "torrent", "provider"); err != nil {
+		return nil, loadErrf("%v", err)
+	} else if present {
+		p.torrent = torrent
+	}
 
 	return p, nil
 }
@@ -155,6 +167,13 @@ func (p *Provider) BaseURL() string { return p.baseURL }
 // SourceType reports the catalog-wide content assessment the script
 // declares via capabilities.
 func (p *Provider) SourceType() contracts.SourceType { return p.sourceType }
+
+// Torrent reports whether the script declared torrent = true — its
+// episode/stream legs ride the Go torrent adapter (the factory's
+// wrap), not the script functions. The declaration itself stays on
+// the script provider: the wrap keeps the Adapt()-ed surface whole
+// and only re-homes the legs.
+func (p *Provider) Torrent() bool { return p.torrent }
 
 // SetLogger re-routes the engine diagnostics (script print, SDK logs)
 // to log — the registry's logger seam (PR62 #4: TUI file sink, never

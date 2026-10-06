@@ -123,6 +123,11 @@ var luaProductionBases = map[string][]string{
 	// rotates mirrors; this literal is whatever the fixtures carry
 	// (rezka-ua.tv, the PR72 serving mirror).
 	"hdrezka": {"https://rezka-ua.tv"},
+	// anilibria-torrent (PR145): the site root — the same literal the
+	// anilibria streaming sibling pins; the script derives the
+	// /api/v1 API prefix from it (the torrent list and the release
+	// search hang off that one base).
+	"anilibria-torrent": {"https://aniliberty.top"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

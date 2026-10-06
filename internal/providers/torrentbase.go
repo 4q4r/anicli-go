@@ -63,6 +63,42 @@ func isHex(s string) bool {
 	return s != ""
 }
 
+// magnetURI reports whether s is a magnet: URI whose btih parameter is
+// a well-formed 40-hex infohash (the engine ingests it directly).
+// Lived in the anilibria-torrent provider file until the PR145 Lua
+// migration deleted it; animetosho is the remaining consumer.
+func magnetURI(s string) bool {
+	const prefix = "magnet:?"
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	for _, param := range strings.Split(s[len(prefix):], "&") {
+		if hash, ok := strings.CutPrefix(param, "xt=urn:btih:"); ok {
+			hash = strings.ToLower(hash)
+			return len(hash) == infoHashHexLen && isHex(hash)
+		}
+	}
+	return false
+}
+
+// humanBytes renders a byte count in binary units with one decimal —
+// the TUI torrent suffix convention ("16.2 GiB"). Lived in the
+// anilibria-torrent provider file until the PR145 Lua migration
+// deleted it; animetosho and subsplease are the remaining consumers
+// (the script re-derives the same format in Lua).
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 // filterSeedless drops search results whose feed-reported seeder count
 // parses to 0 — a seedless torrent is a dead result, and surfacing it
 // only produces dead ends downstream. Fail-soft by design: a result

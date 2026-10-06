@@ -313,14 +313,22 @@ var allFactories = []struct {
 	// megaplay embed origin is never a literal — the script follows
 	// the video page's iframe (the anikoto precedent).
 	{"anipub", true, nil},
-	// anilibria-torrent (PR37): the aniliberty.top API's per-release
-	// torrents on the same TorrentBase plumbing. Shares the release
-	// search endpoint with the anilibria stream provider and expands
-	// each hit into its torrent list; no credentials, engine injected
-	// by NewRegistry when [torrent] is enabled.
-	{"anilibria-torrent", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnilibriaTorrent(AniLibriaAPIBase, http, nil)
-	}},
+	// anilibria-torrent (PR37 → PR145): the aniliberty.top API's
+	// per-release torrents. Shares the release search endpoint with
+	// the anilibria stream provider and expands each hit into its
+	// torrent list; no credentials, engine injected by NewRegistry
+	// when [torrent] is enabled. Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anilibria-torrent/main.lua) —
+	// the TWENTY-EIGHTH Go→Lua provider migration and the roster's
+	// first torrent script. luaOnly pins the roster slot; the script
+	// declares torrent = true, so the factory wraps it in the Go
+	// torrent adapter (luaTorrentProvider): search is the script's,
+	// the ingest/metadata/loopback legs stay the shared TorrentBase —
+	// the engine consumes the surfaced magnets unchanged (the owner
+	// ruling). AniLibriaAPIBase stayed behind as the cf-solve target
+	// (cfwiring.go, the kodik precedent); humanBytes and magnetURI
+	// moved to torrentbase.go with their remaining Go consumers.
+	{"anilibria-torrent", true, nil},
 	// animetosho (PR38): the animetosho.org newznab search on the same
 	// TorrentBase plumbing — hex-infohash magnets, .torrent enclosure
 	// fallback; no credentials, engine injected by NewRegistry when
@@ -517,6 +525,10 @@ func luaProviders(cfg config.Settings, extra []netclient.Option, excluded map[st
 		byID[p.ID()] = p
 		order = append(order, p.ID())
 	}
+	// The torrent-declaring scripts get the Go engine legs wrapped
+	// around their Lua search (the PR145 anilibria-torrent hybrid):
+	// the engine consumes the surfaced torrent links unchanged.
+	wrapLuaTorrentProviders(byID)
 	return byID, order, nil
 }
 

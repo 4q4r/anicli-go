@@ -37,12 +37,17 @@ func TestTorrentProvidersNamePreference(t *testing.T) {
 		var p contracts.Provider
 		switch id {
 		case "anilibria-torrent":
-			p = newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, id), nil)
+			// The bundled script (PR145): no name_preference
+			// declaration on the provider table. The capability
+			// adapter carries the field with its zero value —
+			// observationally the RU group (the caps.go doctrine),
+			// so the assertion is on the VALUE, not the interface.
+			p = luaProviderAtProduction(t, id)
 		case "rutor":
 			p = newRutor(RutorBase, testClient(t, id), nil)
 		}
-		if _, declares := p.(contracts.NamePreferenceProvider); declares {
-			t.Errorf("%s must stay in the RU group (no latin preference declaration)", id)
+		if np, declares := p.(contracts.NamePreferenceProvider); declares && np.NamePreference() != contracts.NamePrefDefault {
+			t.Errorf("%s must stay in the RU group (no latin preference declaration), got %v", id, np.NamePreference())
 		}
 	}
 }
@@ -57,7 +62,7 @@ func TestRegistryNamePreference(t *testing.T) {
 	if err := r.Register(newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil)); err != nil {
 		t.Fatalf("register tokyotosho: %v", err)
 	}
-	if err := r.Register(newAnilibriaTorrent(AniLibriaAPIBase, testClient(t, "anilibria-torrent"), nil)); err != nil {
+	if err := r.Register(luaProviderAtProduction(t, "anilibria-torrent")); err != nil {
 		t.Fatalf("register anilibria-torrent: %v", err)
 	}
 

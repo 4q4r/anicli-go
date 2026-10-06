@@ -136,7 +136,15 @@ func pickLinuxPlan(look Looker) plan {
 				argv: []string{"sh", "-c", "sudo dnf install " + rpmFusionFreeRelease},
 				disp: "sudo dnf install " + rpmFusionFreeRelease,
 			},
-			{argv: []string{"sudo", "dnf", "install", "mpv", "ffmpeg"}},
+			// --exclude=openh264* skips Fedora's stripped openh264
+			// builds of mpv/ffmpeg (a poor substitute that blocks the
+			// real packages); the raw glob is safe in argv because the
+			// runner execs without a shell, and the display form quotes
+			// it for a zsh paste.
+			{
+				argv: []string{"sudo", "dnf", "install", "--exclude=openh264*", "mpv", "ffmpeg"},
+				disp: "sudo dnf install --exclude='openh264*' mpv ffmpeg",
+			},
 		}},
 		{"pacman", []step{{argv: []string{"sudo", "pacman", "-S", "mpv", "ffmpeg"}}}},
 		{"zypper", []step{{argv: []string{"sudo", "zypper", "install", "mpv", "ffmpeg"}}}},

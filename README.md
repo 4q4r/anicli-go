@@ -872,4 +872,4 @@ of the 30 registered providers answer.
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 An0nX
+[MIT](LICENSE) © 2026

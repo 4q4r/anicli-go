@@ -64,9 +64,19 @@ var allFactories = []struct {
 	// tier-1 (the anilib.go helper's last Go consumer dies here — the
 	// distribution lives in the script's episodes()).
 	{"animego", true, nil},
-	{"gogoanime", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newGogoAnime(GogoAnimeBase, http)
-	}},
+	// gogoanime (PR128): the anitaku.io WordPress platform (the
+	// gogoanime rebrand, Kohi-den extensions-source issue #410; the
+	// anicli-py gogoanime.py port re-verified live 2026-09-18) migrated
+	// to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/gogoanime/main.lua) — the twelfth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script carries the ts_ac_do_search admin-ajax search, the
+	// newest-first .eplister listing reversed to ascending, the eager
+	// per-episode mirror hydration (base64 select.mirror options, the
+	// Lua contract has no DubsHydrator — the yummy/animedia/anikoto
+	// precedent) and the fresh-sandbox resolve through the shared
+	// extractor factory (anicli.extract).
+	{"gogoanime", true, nil},
 	// kickassanime (PR58 → PR129): the kaa.lt catalog — a fuzzy JSON
 	// search, a paginated per-show episode API and per-episode server
 	// lists whose media ids resolve onto the krussdomi HLS edge
@@ -74,13 +84,13 @@ var allFactories = []struct {
 	// answers anonymously, no gate cookie on the wire). Migrated to the
 	// BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/kickassanime/main.lua) — the
-	// twelfth Go→Lua provider migration. luaOnly pins the roster slot;
-	// the script serves the id: eager per-episode dub hydration in one
-	// bounded-parallel batch (the DubsHydrator delta — the Lua contract
-	// has no such capability), the fan-out bound pinned at the config
-	// default (get_batch cannot carry headers; the live probe proves
-	// Accept optional), and the fresh-sandbox resolve re-deriving the
-	// server list.
+	// thirteenth Go→Lua provider migration. luaOnly pins the roster
+	// slot; the script serves the id: eager per-episode dub hydration
+	// in one bounded-parallel batch (the DubsHydrator delta — the Lua
+	// contract has no such capability), the fan-out bound pinned at the
+	// config default (get_batch cannot carry headers; the live probe
+	// proves Accept optional), and the fresh-sandbox resolve
+	// re-deriving the server list.
 	{"kickassanime", true, nil},
 	// anizone (PR59): the anizone.to sub-only stream source — the first
 	// provider with no frozen Python original, written from the

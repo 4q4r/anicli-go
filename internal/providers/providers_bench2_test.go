@@ -69,12 +69,14 @@ func BenchmarkAnimevostGetEpisodes(b *testing.B) {
 
 // --- gogoanime ---
 
-// BenchmarkGogoanimeSearchJSON — gogoanime search decode.
+// BenchmarkGogoanimeSearchJSON — gogoanime search decode (the PR119
+// migration's benchmark pattern: the bundled script drives the same
+// fixture through the SDK).
 func BenchmarkGogoanimeSearchJSON(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "gogoanime_search.json")
 	srv := benchFixtureServer(b, body, "application/json")
-	p := newGogoAnime(srv.URL, benchClient(b, "gogoanime"))
+	p := luaProvider(b, "gogoanime", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "one piece")
@@ -85,14 +87,16 @@ func BenchmarkGogoanimeSearchJSON(b *testing.B) {
 	}
 }
 
-// BenchmarkGogoanimeGetEpisodesHTML — the series-page goquery walk
-// (episode roster extraction; reverse-descending numbers like 1178).
+// BenchmarkGogoanimeGetEpisodesHTML — the series-page walk plus the
+// eager per-episode mirror hydration (episode roster extraction with
+// reverse-descending numbers like 1178; the batch legs ride the
+// router's episode body).
 func BenchmarkGogoanimeGetEpisodesHTML(b *testing.B) {
 	b.ReportAllocs()
 	series := benchFixture(b, "gogoanime_series.html")
 	episode := benchFixture(b, "gogoanime_episode.html")
 	srv := benchRouter(b, episode, map[string][]byte{"/series/": series})
-	p := newGogoAnime(srv.URL, benchClient(b, "gogoanime"))
+	p := luaProvider(b, "gogoanime", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		eps, err := p.GetEpisodes(ctx, srv.URL+"/series/one-piece/")

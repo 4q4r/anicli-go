@@ -96,6 +96,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// so the honest route is the proxy; run with
 		// ANICLI_LUA_LIVE_PROXY.
 		"kickassanime": "dandadan",
+		// gogoanime (PR128): the declared "one piece" probe rides the
+		// proxy (the honest route per the characterization network —
+		// the animevost/anikoto pattern; the parity smoke command
+		// passes --proxy for the same reason).
+		"gogoanime": "one piece",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

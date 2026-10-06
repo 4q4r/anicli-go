@@ -58,6 +58,12 @@ var luaProductionBases = map[string][]string{
 	// krussdomi HLS edge and its Referer are constructed constants, not
 	// fetched hosts.
 	"kickassanime": {"https://kaa.lt"},
+	// gogoanime (PR128): the site root — the admin-ajax search endpoint,
+	// every series page and every episode page hang off the one
+	// base_url literal; the episode hrefs inside the fixture pages are
+	// rewritten to the test server at serve time (the harness rewrites
+	// exactly this one literal).
+	"gogoanime": {"https://anitaku.io"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

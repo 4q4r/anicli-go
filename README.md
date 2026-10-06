@@ -827,7 +827,7 @@ Statuses reflect the most recent live verification of each source;
 | anikoto | anikototv.to | en | video (EN dub+subs) | ✅ live; megaplay bundle unpacked |
 | anipub | anipub.xyz | en | video (EN dub+subs) | ✅ live; open Express+Mongo API |
 | anilibria-torrent | aniliberty.top | ru | torrent search | ✅ live; AniLibria trackers |
-| animetosho | feed.animetosho.org | ja | torrent search | ✅ live; newznab, preflight |
+| animetosho | feed.animetosho.org | ja | torrent search | ✅ live; JSON API, preflight |
 | tokyotosho | `www.tokyo-tosho.net` | ja | torrent search | ✅ live; search RSS, preflight |
 | rutor | rutor.info | ru | torrent search (RU, ≤4K) | ✅ live; fully anonymous |
 | anirena | `www.anirena.com` | ja | torrent search (JA/multi) | ✅ live; RSS `<enclosure>` |

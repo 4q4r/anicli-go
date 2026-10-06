@@ -210,7 +210,7 @@ func TestAniRenaSearchHTTPErrorFailsLoud(t *testing.T) {
 }
 
 // TestAniRenaSearchCapsResults pins the bounded-surface rule (the
-// animetosho AnimeToshoSearchLimit rationale): the feed has no usable
+// compiled animetosho 30-record page rationale): the feed has no usable
 // server-side limit parameter (live-verified 2026-09-23), so the
 // script caps the parsed items client-side BEFORE the category
 // filter — the Go adapter's preflight fan-out downstream can never

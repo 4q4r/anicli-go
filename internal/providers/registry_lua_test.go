@@ -59,22 +59,24 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	// subsplease (PR143): the shadow sample must be a COMPILED
-	// factory — after the PR141 hdrezka, PR142 rutor and PR143
-	// anirena migrations every stream provider is Lua-only, and the
-	// compiled factories left are the five torrent ones. subsplease
-	// is the sample (fully anonymous, one client build away once
-	// [torrent] is on; the other four behave identically through
-	// the same factory plumbing; the anirena slot additionally wraps
-	// its script in the luaTorrent adapter, which this shadow rule
-	// does not exercise).
-	dir := filepath.Join(xdg, "anicli", "providers", "subsplease")
+	// tokyotosho (PR146): the shadow sample must be a COMPILED
+	// factory — after the PR141 hdrezka, PR142 rutor, PR143 anirena,
+	// PR144 subsplease, PR145 anilibria-torrent and PR146 animetosho
+	// migrations tokyotosho is THE LAST compiled factory in the
+	// roster (every other slot is Lua-served; animetosho additionally
+	// wraps its script in the luaTorrent adapter, which this shadow
+	// rule does not exercise). NOTE FOR THE TOKYOTOSHO MIGRATION
+	// AGENT: with that factory gone this test's premise dies — zero
+	// compiled factories means no compiled slot can be shadowed; the
+	// sample must be rewritten to pin the first-occurrence override
+	// between user and BUNDLED scripts alone.
+	dir := filepath.Join(xdg, "anicli", "providers", "tokyotosho")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	shadow := `
 	return {
-		id = "subsplease",
+		id = "tokyotosho",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
@@ -87,9 +89,9 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
-	// The torrent factories build only when the [torrent] subsystem is
-	// enabled (the unconfigured rule drops them otherwise — there
-	// would be no compiled provider to shadow).
+	// The last torrent factory builds only when the [torrent]
+	// subsystem is enabled (the unconfigured rule drops it otherwise —
+	// there would be no compiled provider to shadow).
 	cfg.Torrent.Enabled = true
 
 	log, buf := luaTestLogger(t)
@@ -97,19 +99,19 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("subsplease")
+	_, ok := reg.Get("tokyotosho")
 	if !ok {
-		t.Fatal("the overridden subsplease must stay registered (as the user's Lua script)")
+		t.Fatal("the overridden tokyotosho must stay registered (as the user's Lua script)")
 	}
-	if got := reg.ContentLanguage("subsplease"); got != "lua-probe" {
-		t.Fatalf("subsplease ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("tokyotosho"); got != "lua-probe" {
+		t.Fatalf("tokyotosho ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
 	// With zero compiled factories left the override is not a
 	// "shadow" (that log fired only for a script taking a COMPILED
 	// factory's slot): the user copy REPLACES the bundled one by the
 	// first-occurrence rule — proven by the load-source line naming
 	// the user XDG dir, not "bundled".
-	if !strings.Contains(buf.String(), "provider=subsplease source="+filepath.Join(xdg, "anicli", "providers")) {
+	if !strings.Contains(buf.String(), "provider=tokyotosho source="+filepath.Join(xdg, "anicli", "providers")) {
 		t.Fatalf("the user override must be the served copy (the load source names the user dir), got: %s", buf.String())
 	}
 }

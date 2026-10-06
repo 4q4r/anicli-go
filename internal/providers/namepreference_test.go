@@ -10,16 +10,19 @@ import (
 // routing: the foreign torrent feeds (animetosho, tokyotosho)
 // index romaji/english release names only — a Cyrillic query there is
 // guaranteed-zero — so they declare NamePrefLatin and the search
-// fan-out routes them the latin variants. anilibria-torrent (PR37)
-// and rutor (PR87) stay in the RU group (RU sites whose indexes match
-// RU names — rutor verified live 2026-09-23: RU queries are
-// first-class, е/ё treated alike) — they must NOT declare the latin
-// preference.
+// fan-out routes them the latin variants. animetosho rides the
+// bundled Lua script since PR146: its name_preference = "latin"
+// declaration lands through the same adapted composite the other
+// script declarations ride (the anilibria-torrent value-check
+// doctrine below). anilibria-torrent (PR37) and rutor (PR87) stay in
+// the RU group (RU sites whose indexes match RU names — rutor
+// verified live 2026-09-23: RU queries are first-class, е/ё treated
+// alike) — they must NOT declare the latin preference.
 func TestTorrentProvidersNamePreference(t *testing.T) {
 	t.Parallel()
 
 	latin := map[string]contracts.Provider{
-		"animetosho": newAnimeTosho(AnimeToshoFeedBase, testClient(t, "animetosho"), nil),
+		"animetosho": luaProviderAtProduction(t, "animetosho"),
 		"tokyotosho": newTokyoTosho(TokyoToshoBase, testClient(t, "tokyotosho"), nil),
 	}
 	for id, p := range latin {

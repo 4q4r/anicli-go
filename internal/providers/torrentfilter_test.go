@@ -27,21 +27,20 @@ func resultTitles(rs []contracts.SearchResult) []string {
 	return out
 }
 
-// TestAnimeToshoSearchFiltersSeedless: the seedless-drop rule over the
-// newznab attribute twins.
+// TestAnimeToshoSearchFiltersSeedless: the seedless-drop rule over
+// the JSON feed's seeder counts. The rule lives in the bundled script
+// since the PR146 Lua migration — the pin rides the same inline
+// fixtures through the harness (the anilibria-torrent precedent).
 func TestAnimeToshoSearchFiltersSeedless(t *testing.T) {
-	body := `<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel>
-<item><title>Seeded AT</title><enclosure url="https://x/1.torrent" type="application/x-bittorrent"/>
-<newznab:attr name="seeders" value="7"/><newznab:attr name="infohash" value="0123456789012345678901234567890123456789"/></item>
-<item><title>Dead AT</title><enclosure url="https://x/2.torrent" type="application/x-bittorrent"/>
-<newznab:attr name="seeders" value="0"/><newznab:attr name="infohash" value="0123456789012345678901234567890123456788"/></item>
-</channel></rss>`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"title":"Seeded AT","torrent_url":"https://x/1.torrent","info_hash":"0123456789012345678901234567890123456789","seeders":7},
+			{"title":"Dead AT","torrent_url":"https://x/2.torrent","info_hash":"0123456789012345678901234567890123456788","seeders":0}
+		]`))
 	}))
 	t.Cleanup(srv.Close)
-	p := newAnimeTosho(srv.URL, testClient(t, "animetosho"), nil)
+	p := luaProvider(t, "animetosho", srv.URL)
 
 	results, err := p.Search(context.Background(), "query")
 	if err != nil {

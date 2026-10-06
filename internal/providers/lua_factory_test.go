@@ -137,15 +137,15 @@ func TestFactoryLuaExcludedIsGone(t *testing.T) {
 
 // TestFactoryLuaDisabledConfig pins the kill switch: [providers.lua]
 // enabled = false leaves the compiled Go factories alone. The
-// twenty-five migrated slots (anitokyo, animedia, animevib since
+// twenty-nine migrated slots (anitokyo, animedia, animevib since
 // PR116; anilibria PR120; animevost PR119; anilib PR122; yummy
 // PR123; animego PR124; shiza PR125; animeheaven PR126; anikoto
 // PR127; gogoanime PR128; kickassanime PR129; anizone PR130;
 // sameband PR131; anidub PR132; anikado PR133; animiku PR134;
 // anifilm PR135; animemobi PR137; anistar PR138; anipub PR139;
 // kodik PR140; hdrezka PR141; rutor PR142; anirena PR143;
-// subsplease PR144; anilibria-torrent PR145) are EMPTY in this
-// mode: they live only in the bundled Lua scripts.
+// subsplease PR144; anilibria-torrent PR145; animetosho PR146) are
+// EMPTY in this mode: they live only in the bundled Lua scripts.
 func TestFactoryLuaDisabledConfig(t *testing.T) {
 	dir := luaXDG(t)
 	writeLuaScript(t, dir, "userscript", "")
@@ -159,16 +159,16 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 		t.Fatalf("All: %v", err)
 	}
 	ids := rosterIDs(bare)
-	if len(ids) != 2 {
-		t.Fatalf("All() = %d providers, want 2 (the remaining torrent factories; the twenty-eight migrated providers are Lua-only)", len(ids))
+	if len(ids) != 1 {
+		t.Fatalf("All() = %d providers, want 1 (the last remaining torrent factory tokyotosho; the twenty-nine migrated providers are Lua-only)", len(ids))
 	}
 	for _, id := range ids {
 		if id == "userscript" {
 			t.Fatal("userscript registered with [providers.lua] disabled")
 		}
-		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven", "anikoto", "gogoanime", "kickassanime", "anizone", "sameband", "anidub", "anikado", "animiku", "anifilm", "animemobi", "anistar", "anipub", "kodik", "hdrezka", "rutor", "anirena", "subsplease", "anilibria-torrent"} {
+		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven", "anikoto", "gogoanime", "kickassanime", "anizone", "sameband", "anidub", "anikado", "animiku", "anifilm", "animemobi", "anistar", "anipub", "kodik", "hdrezka", "rutor", "anirena", "subsplease", "anilibria-torrent", "animetosho"} {
 			if id == migrated {
-				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126/PR127/PR128/PR129/PR130/PR131/PR132/PR133/PR134/PR135/PR137/PR138/PR139/PR140/PR141/PR142/PR143/PR144/PR145)", migrated)
+				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126/PR127/PR128/PR129/PR130/PR131/PR132/PR133/PR134/PR135/PR137/PR138/PR139/PR140/PR141/PR142/PR143/PR144/PR145/PR146)", migrated)
 			}
 		}
 	}

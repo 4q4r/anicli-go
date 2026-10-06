@@ -146,12 +146,13 @@ func BenchmarkKodikSearchJSON(b *testing.B) {
 
 // --- anidub ---
 
-// BenchmarkAnidubSearchHTML — anidub HTML search parse.
+// BenchmarkAnidubSearchHTML — anidub HTML search parse (the Lua
+// script's search leg; PR132 harness).
 func BenchmarkAnidubSearchHTML(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anidub_search.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAnidub(srv.URL, benchClient(b, "anidub"))
+	p := luaProvider(b, "anidub", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		results, err := p.Search(ctx, "блич")
@@ -162,12 +163,13 @@ func BenchmarkAnidubSearchHTML(b *testing.B) {
 	}
 }
 
-// BenchmarkAnidubGetEpisodesHTML — the anime-page episode/dub roster.
+// BenchmarkAnidubGetEpisodesHTML — the anime-page episode/dub roster
+// (the Lua script's episodes leg; PR132 harness).
 func BenchmarkAnidubGetEpisodesHTML(b *testing.B) {
 	b.ReportAllocs()
 	body := benchFixture(b, "anidub_anime.html")
 	srv := benchFixtureServer(b, body, "text/html; charset=utf-8")
-	p := newAnidub(srv.URL, benchClient(b, "anidub"))
+	p := luaProvider(b, "anidub", srv.URL)
 	ctx := context.Background()
 	for b.Loop() {
 		eps, err := p.GetEpisodes(ctx, srv.URL+"/12254-blich.html")

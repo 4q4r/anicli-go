@@ -111,6 +111,17 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// LIVE-VERIFIED 2026-09-18: HTTP 200, no Cloudflare challenge,
 		// no Referer needed).
 		"sameband": "дьявол",
+		// anidub (PR132): the proxy is the honest route — the true
+		// no-proxy route cannot even resolve online.anidub.com on the
+		// characterization network (live 2026-10-06, DNS failure;
+		// the animevost/anikoto/gogoanime class). Through the proxy
+		// the DLE legs answer (story=naruto → 13 cards, HTTP 200;
+		// the anime page after its short-slug 301). The resolve leg
+		// walls at the shared sibnet extractor: video.sibnet.ru
+		// answers HTTP 403 on every route (site-side drift, the
+		// PR116 verification matrix) — the typed resolve failure the
+		// walk logs, not a port defect.
+		"anidub": "naruto",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

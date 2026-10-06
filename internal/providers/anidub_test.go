@@ -11,19 +11,29 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// [LIVE-VERIFIED 2026-09-13] anidub is NOT a Python-tree port: the Go
+// [LIVE-VERIFIED 2026-09-13] anidub is NOT a Python-tree port: the
 // provider was written against the live site after the frozen anicli-py
-// roster. online.anidub.com is a DLE site whose POST search still
-// renders results server-side (unlike sameband): GET
+// roster. online.anidub.com is a DLE site whose search still renders
+// results server-side (unlike sameband): GET
 // /?do=search&subaction=search&story=<q> answers a results page reusing
 // the catalog .th-item card template.
+//
+// PR132: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anidub/main.lua, the sixteenth
+// Go→Lua migration) — these tests pin the script through the same
+// contracts.Provider surface and the same fixtures the compiled Go
+// implementation was held to. The raw_id pin moved with the migration:
+// the fresh-sandbox streams(raw_id, dub) call receives only RawID, so
+// the sibnet embed rides raw_id (the sameband single-value state
+// channel) and the episode number stays in num.
+
 func TestAnidubSearch(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anidub_search.html"))
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	results, err := p.Search(context.Background(), "naruto")
 	if err != nil {
@@ -65,7 +75,7 @@ func TestAnidubSearchRussianQueryPercentEncoded(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body></body></html>")
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	if _, err := p.Search(context.Background(), "наруто"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -88,7 +98,7 @@ func TestAnidubSearchNoResultsIsEmpty(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `<html><body><div class="sect-content sect-items"></div></body></html>`)
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	results, err := p.Search(context.Background(), "zxqjunknothing")
 	if err != nil {
@@ -105,7 +115,7 @@ func TestAnidubSearchProvider403(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	_, err := p.Search(context.Background(), "q")
 	if !errors.Is(err, contracts.ErrProvider403) {
@@ -123,7 +133,7 @@ func TestAnidubGetEpisodes(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anidub_anime.html"))
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/12254-blich.html")
 	if err != nil {
@@ -143,8 +153,11 @@ func TestAnidubGetEpisodes(t *testing.T) {
 	if len(raw) != 1 || raw[0] != "https://video.sibnet.ru/shell.php?videoid=6251180" {
 		t.Errorf("RawEmbeds = %v, want the sibnet shell embed from data", raw)
 	}
-	if episodes[0].RawID != "1" {
-		t.Errorf("RawID = %q, want the episode number", episodes[0].RawID)
+	// The embed rides raw_id: the fresh-sandbox streams(raw_id, dub)
+	// call receives only RawID, so the state channel carries it (the
+	// episode number stays in num).
+	if episodes[0].RawID != "https://video.sibnet.ru/shell.php?videoid=6251180" {
+		t.Errorf("RawID = %q, want the sibnet embed (the streams state channel)", episodes[0].RawID)
 	}
 }
 
@@ -162,7 +175,7 @@ func TestAnidubGetEpisodesMovieSingle(t *testing.T) {
 			</div></div>
 		</div>`)
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/155-naruto-movie-2-2005.html")
 	if err != nil {
@@ -181,7 +194,7 @@ func TestAnidubGetEpisodesNoPlayerIsEmpty(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body>no player here</body></html>")
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/none.html")
 	if err != nil {
@@ -192,10 +205,12 @@ func TestAnidubGetEpisodesNoPlayerIsEmpty(t *testing.T) {
 	}
 }
 
-// ResolveStream runs the episode embeds through the extractor factory
-// (animego pattern): the sibnet extractor turns shell.php embeds into a
-// 480p mp4 source. The fake shell page reproduces the sibnet
-// player-page shape so no network is touched.
+// ResolveStream runs the episode embed through the shared extractor
+// factory via anicli.extract: the sibnet extractor turns shell.php
+// embeds into a 480p mp4 source. The fake shell page reproduces the
+// sibnet player-page shape so no network is touched. The embed rides
+// RawID (the fresh-sandbox state channel) — the compiled Go provider
+// read RawEmbeds[dub] in memory, the script's only channel is raw_id.
 func TestAnidubResolveStream(t *testing.T) {
 	t.Parallel()
 
@@ -205,13 +220,10 @@ func TestAnidubResolveStream(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `player = new Playerjs({src: "https://video.sibnet.ru/videos/6251180/ep1.mp4"});`)
 	})
-	p := newAnidub(srv.URL, testClient(t, "anidub"))
+	p := luaProvider(t, "anidub", srv.URL)
 	episode := contracts.Episode{
 		Num:   "1",
-		RawID: "1",
-		RawEmbeds: map[string][]string{
-			"AniDUB": {srv.URL + "/sibnet/shell.php?videoid=6251180"},
-		},
+		RawID: srv.URL + "/sibnet/shell.php?videoid=6251180",
 	}
 
 	stream, err := p.ResolveStream(context.Background(), episode, "AniDUB")
@@ -233,13 +245,16 @@ func TestAnidubResolveStream(t *testing.T) {
 	}
 }
 
+// An unknown dub carries no embeds: an empty stream, no error (the
+// compiled provider's RawEmbeds[dub] nil parity; an empty raw_id
+// hydrates nothing the same way).
 func TestAnidubResolveStreamUnknownDubIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	p := newAnidub(AnidubBase, testClient(t, "anidub"))
+	p := luaProviderAtProduction(t, "anidub")
 
 	stream, err := p.ResolveStream(context.Background(),
-		contracts.Episode{RawEmbeds: map[string][]string{}}, "NoSuchDub")
+		contracts.Episode{RawID: ""}, "NoSuchDub")
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -251,8 +266,8 @@ func TestAnidubResolveStreamUnknownDubIsEmpty(t *testing.T) {
 func TestAnidubProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnidub(AnidubBase, testClient(t, "anidub"))
-	if p.ID() != "anidub" || p.Name() != "AniDUB" || p.BaseURL() != AnidubBase {
+	p := luaProviderAtProduction(t, "anidub")
+	if p.ID() != "anidub" || p.Name() != "AniDUB" || p.BaseURL() != "https://online.anidub.com" {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	// Russian dub = wanted-language audio + video (PR23 semantics:
@@ -261,7 +276,8 @@ func TestAnidubProviderMeta(t *testing.T) {
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok || lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %v, want ru", lc)
 	}
 }

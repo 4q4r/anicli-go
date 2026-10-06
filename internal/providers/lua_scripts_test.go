@@ -91,6 +91,12 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal (the site fronts no anti-bot
 	// wall, so no Referer/header set is derived).
 	"anifilm": {"https://anifilm.pro"},
+	// animemobi (PR137): the site root — the DLE full-search POST and
+	// the /uploads/ poster absolutization both hang off the one
+	// base_url literal; the release-page fetch rides the caller's
+	// absolute URL and the kodik-family embeds are never fetched hosts
+	// (the shared extractor consumes them).
+	"animemobi": {"https://animemobi.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

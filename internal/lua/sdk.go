@@ -80,6 +80,10 @@ func (e *Engine) openSDK(ls *lua.LState) {
 	// legs) plus the base64 URL-safe variants.
 	openSDKCrypto(ls, mod)
 
+	// The PR136 iconv primitive: legacy-encoding byte strings (the
+	// cp1251 scraper leg) decoded into UTF-8.
+	openSDKIconv(ls, mod)
+
 	// fail raises a typed provider failure: fail(kind, message) with
 	// kind one of not_found|extract_failed|invalid_input. The VM
 	// error's message carries the anicli:<kind>: marker; the adapter's

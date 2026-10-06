@@ -298,6 +298,7 @@ provider-scoped field validation; the contract tests
 | `anicli.html` | `parse` |
 | `anicli.regexp` | `match` |
 | `anicli.base64` | `encode`, `decode` |
+| `anicli.iconv` | `iconv(s, from_encoding)` — decode a legacy-encoded byte string (e.g. `cp1251`/`windows-1251`, IANA names) to UTF-8; invalid bytes become U+FFFD |
 | `anicli.time` | `now` (RFC 3339 UTC) |
 | `anicli.log` | `info`, `warn`, `error` |
 | `anicli.version` | SDK version string |

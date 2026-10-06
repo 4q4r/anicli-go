@@ -170,6 +170,13 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// lands — in ~1.8s through the proxy; the shared EN probe
 		// misses this Latin-only Name index).
 		"anipub": "cowboy bebop",
+		// hdrezka (PR141): the rezka family rides the proxy (the smoke
+		// matrix's honest route: the «черная лагуна» probe PASSes the
+		// full chain through the proxy — the Anubis gate engages on
+		// the anime leg and the hybrid's Go solver clears it; the
+		// search leg answered the DLE listing in ~0.5s through the
+		// proxy, live 2026-10-06).
+		"hdrezka": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

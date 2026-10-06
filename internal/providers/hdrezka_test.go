@@ -1,5 +1,43 @@
 package providers
 
+// The hdrezka provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/hdrezka/main.lua) since the PR141
+// Go→Lua migration — the roster's HYBRID: the script does the
+// scraping, and the Anubis proof-of-work gate solves in pure Go
+// through the anicli.solve_anubis SDK binding (internal/anubis, the
+// solver the compiled provider owned since PR69). These tests pin the
+// script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to (the 2026-09-19
+// live captures; provenance in the git history of this file).
+//
+// The Anubis gate stays live [re-verified 2026-10-06 through the
+// characterization proxy: the search leg answered the DLE listing
+// while the anime page served a fresh challenge — algorithm "fast",
+// difficulty 2, Anubis now at v1.27.0; the sha256 PoW contract is
+// stable across the versions].
+//
+// Contract shifts forced by the fresh-sandbox Lua adapter, documented
+// here rather than hidden (the kodik/anidub precedent):
+//
+//   - the per-(episode, dub) request payload rides episode RawID as
+//     the JSON {[dub]: payload} map — the only state channel into the
+//     per-invocation streams(raw_id, dub) call (the kodik {dub: url}
+//     precedent); RawEmbeds keeps carrying the same payloads for
+//     consumers;
+//   - the mirror override rides anicli.provider_setting("base_url")
+//     (the PR140 seam) with the serving-mirror literal as the
+//     fallback; the literal pin is structural — every harness test
+//     rewrites it onto the fixture server, and the flatten table is
+//     pinned by TestProviderSettingsForFlattensConfig;
+//   - typed walls keep their contracts sentinels but carry
+//     ProviderError status 0 (the anicli.fail channel has no HTTP
+//     status — the kodik precedent);
+//   - the search card's span.info text trims (the sandbox html:text
+//     contract trims every node text; the compiled provider trimmed
+//     the link title but not the info line). Unobservable on the
+//     fixtures — no captured card carries a span.info — and cosmetic
+//     live (the composed title loses surrounding whitespace only).
+
 import (
 	"context"
 	"crypto/sha256"
@@ -9,66 +47,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
-
-// ---------------------------------------------------------------------------
-// Provenance (PR69, HDRezka).
-//
-// The provider is a Go port of the frozen anicli-api reference
-// (github.com/vypivshiy/anicli-api, anicli_api/source/hdrezka.py +
-// parsers/hdrezka_parser.py) re-verified LIVE against
-// https://hdrezka-home.tv on 2026-09-19 [LIVE-VERIFIED]:
-//
-//   - GET /search/?do=search&subaction=search&q=<q> → SSR cards
-//     (.b-content__inline_item with a data-url containing /animation/);
-//   - GET /animation/<slug>.html → translators (#translators-list
-//     li.b-translator__item), seasons (#simple-seasons-tabs), SSR
-//     episodes (.b-simple_episodes__list li[data-episode_id]), the favs
-//     token (input#ctrl_favs) and the init script
-//     sof.tv.initCDN{Series,Movies}Events(<id>, <translator_id>, ...);
-//   - POST /ajax/get_cdn_series/?t=<unix-40> with
-//     id/translator_id/season/episode/favs/action=get_stream (movies:
-//     id/translator_id/favs/action=get_movie) → JSON whose url field is
-//     "[Qp (Ultra)?]URL or URL,..." (mp4 vs m3u8 by extension).
-//
-// The upstream reference runs this exact chain with NO anti-bot
-// handling; hdrezka-home.tv today fronts every path with Anubis 1.25.0
-// (TecharoHQ proof-of-work, "fast" algorithm, difficulty 2 on capture
-// day). The reference therefore CRASHES against the live site
-// (httpx gets the challenge page; PageAnime._init_init_script
-// IndexError). This port adds a pure-Go Anubis solver (sha256 PoW +
-// pass-challenge round-trip, cookie-jar carried) — the divergence is
-// mandatory to reach the pages the reference describes.
-//
-// Fixtures (testdata/hdrezka_*):
-//   - hdrezka_search.html: real capture 2026-09-19 (search "наруто"),
-//     first 6 of 25 result cards, header/menu bulk cut;
-//   - hdrezka_anime_series.html: real capture (Naruto Shippuuden
-//     /animation/adventures/1979-…), parse-relevant regions only, 4 of
-//     500 real episode items kept, ctrl_favs UUID sanitized;
-//   - hdrezka_anime_movie.html: real capture (Naruto film 1
-//     /animation/adventures/2459-…), parse-relevant regions only,
-//     all 8 real translator items kept, ctrl_favs UUID sanitized;
-//   - hdrezka_cdn_nolinks.json: REAL get_stream response body
-//     [LIVE-VERIFIED 2026-09-19] — success:true with url:false, what
-//     the site serves stream links-refusing exits (proxy-verified from
-//     a DE exit AND reproduced by the upstream reference implementation);
-//   - hdrezka_cdn_success.json: RECONSTRUCTED from the reference parser
-//     contract ("[Qp (Ultra)?]URL or URL,..." — hdrezka.py
-//     _parse_videos) and the site player JS (script.666.js consumes
-//     response.url the same way); no success-shaped capture was
-//     obtainable from this machine's exits (see the geo note in
-//     TestHDRezkaResolveStreamNoLinksGeoFenced);
-//   - hdrezka_anubis_challenge.html: real challenge page capture
-//     (Anubis 1.25.0, algorithm "fast", difficulty 2) — the challenge
-//     inside is long spent, harmless.
-// ---------------------------------------------------------------------------
 
 // fixtureNames used across the tests.
 const (
@@ -81,9 +66,42 @@ const (
 	hdrezkaFakeFavs       = "00000000-1111-4222-8333-444444444444"
 )
 
-func newTestHDRezka(t *testing.T, baseURL string) *HDRezka {
+// decodeHDRezkaPayload decodes one raw payload JSON (the episode
+// RawEmbeds entry) for the field pins below.
+func decodeHDRezkaPayload(t *testing.T, raw string) map[string]string {
 	t.Helper()
-	return newHDRezka(baseURL, testClient(t, "hdrezka"))
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode payload %q: %v", raw, err)
+	}
+	return payload
+}
+
+// hdrezkaAnubisChallengeRe extracts the challenge JSON from a capture
+// (the local copy of the page-parse regex the compiled provider
+// owned — the script re-derives it through anicli.regexp.match).
+var hdrezkaAnubisChallengeRe = regexp.MustCompile(
+	`(?s)<script id="anubis_challenge" type="application/json">(.*?)</script>`)
+
+// decodeAnubisFixture extracts the challenge JSON from the capture.
+func decodeAnubisFixture(t *testing.T, body []byte, v any) {
+	t.Helper()
+	m := hdrezkaAnubisChallengeRe.Find(body)
+	if m == nil {
+		t.Fatal("fixture does not carry an anubis_challenge script")
+	}
+	start := strings.Index(string(m), ">") + 1
+	end := strings.LastIndex(string(m), "</script>")
+	if err := json.Unmarshal(m[start:end], v); err != nil {
+		t.Fatalf("decode challenge: %v", err)
+	}
+}
+
+// hdrezkaTestPoW mirrors the server-side Anubis validation: the hex
+// sha256 of challenge+nonce is the expected response.
+func hdrezkaTestPoW(randomData, nonce string) string {
+	sum := sha256.Sum256([]byte(randomData + nonce))
+	return hex.EncodeToString(sum[:])
 }
 
 // TestHDRezkaSearch pins the SSR card parse [LIVE-VERIFIED]: the DLE
@@ -96,7 +114,7 @@ func TestHDRezkaSearch(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, hdrezkaSearchFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	results, err := p.Search(context.Background(), "наруто")
 	if err != nil {
@@ -151,7 +169,7 @@ func TestHDRezkaSearchFiltersNonAnimation(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, html)
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	results, err := p.Search(context.Background(), "naruto")
 	if err != nil {
@@ -166,15 +184,17 @@ func TestHDRezkaSearchFiltersNonAnimation(t *testing.T) {
 	}
 }
 
-// TestHDRezkaSearchRussianQueryPercentEncoded pins pyQuote encoding
-// (UTF-8 bytes uppercase %XX, spaces %20 — never the form-style +).
+// TestHDRezkaSearchRussianQueryPercentEncoded pins the py_quote
+// encoding (UTF-8 bytes uppercase %XX, spaces %20 — never the
+// form-style +; the anidub script precedent, the SDK's query_escape
+// is form-style).
 func TestHDRezkaSearchRussianQueryPercentEncoded(t *testing.T) {
 	t.Parallel()
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html><body></body></html>")
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	if _, err := p.Search(context.Background(), "наруто ру"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -196,7 +216,7 @@ func TestHDRezkaEpisodesSeries(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, hdrezkaSeriesFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	animeURL := srv.URL + "/animation/adventures/1979-naruto-uragannye-hroniki-2007.html"
 	episodes, err := p.GetEpisodes(context.Background(), animeURL)
@@ -228,26 +248,26 @@ func TestHDRezkaEpisodesSeries(t *testing.T) {
 	for i, want := range wantDubs {
 		got := first.RawEmbeds[want]
 		if got == nil {
-			t.Fatalf("RawEmbeds missing dub %q (have %v)", want, dubKeys(first.RawEmbeds))
+			t.Fatalf("RawEmbeds missing dub %q", want)
 		}
 		if i == 0 {
 			// 2x2 is the page-active translator; its payload carries the
 			// get_stream form fields of the first episode.
 			payload := decodeHDRezkaPayload(t, got[0])
-			if payload.ID != "1979" || payload.TranslatorID != "14" {
-				t.Errorf("payload id/translator = %q/%q, want 1979/14", payload.ID, payload.TranslatorID)
+			if payload["id"] != "1979" || payload["translator_id"] != "14" {
+				t.Errorf("payload id/translator = %q/%q, want 1979/14", payload["id"], payload["translator_id"])
 			}
-			if payload.Season != "1" || payload.Episode != "1" {
-				t.Errorf("payload season/episode = %q/%q, want 1/1", payload.Season, payload.Episode)
+			if payload["season"] != "1" || payload["episode"] != "1" {
+				t.Errorf("payload season/episode = %q/%q, want 1/1", payload["season"], payload["episode"])
 			}
-			if payload.Favs != hdrezkaFakeFavs {
-				t.Errorf("payload favs = %q, want the page ctrl_favs", payload.Favs)
+			if payload["favs"] != hdrezkaFakeFavs {
+				t.Errorf("payload favs = %q, want the page ctrl_favs", payload["favs"])
 			}
-			if payload.Action != "get_stream" {
-				t.Errorf("payload action = %q, want get_stream", payload.Action)
+			if payload["action"] != "get_stream" {
+				t.Errorf("payload action = %q, want get_stream", payload["action"])
 			}
-			if payload.PageURL != animeURL {
-				t.Errorf("payload page_url = %q, want the anime page (Referer source)", payload.PageURL)
+			if payload["page_url"] != animeURL {
+				t.Errorf("payload page_url = %q, want the anime page (Referer source)", payload["page_url"])
 			}
 		}
 	}
@@ -260,8 +280,19 @@ func TestHDRezkaEpisodesSeries(t *testing.T) {
 		t.Error("last episode missing the AniDUB payload")
 	}
 	lastPayload := decodeHDRezkaPayload(t, last.RawEmbeds["AniDUB"][0])
-	if lastPayload.Episode != "500" || lastPayload.TranslatorID != "18" {
-		t.Errorf("last payload episode/translator = %q/%q, want 500/18", lastPayload.Episode, lastPayload.TranslatorID)
+	if lastPayload["episode"] != "500" || lastPayload["translator_id"] != "18" {
+		t.Errorf("last payload episode/translator = %q/%q, want 500/18", lastPayload["episode"], lastPayload["translator_id"])
+	}
+
+	// The raw_id state channel carries the same per-dub payload map
+	// (the fresh-sandbox streams(raw_id, dub) input — the kodik
+	// precedent).
+	var state map[string]string
+	if err := json.Unmarshal([]byte(first.RawID), &state); err != nil {
+		t.Fatalf("raw_id is not the {[dub]: payload} map: %v", err)
+	}
+	if state["2x2"] != first.RawEmbeds["2x2"][0] {
+		t.Error("raw_id map diverges from the RawEmbeds payload for dub 2x2")
 	}
 }
 
@@ -274,7 +305,7 @@ func TestHDRezkaEpisodesMovie(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, hdrezkaMovieFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/animation/adventures/2459-naruto-film-pervyy-2004.html")
 	if err != nil {
@@ -291,17 +322,17 @@ func TestHDRezkaEpisodesMovie(t *testing.T) {
 		t.Errorf("Title = %q, want the page h1", ep.Title)
 	}
 	payload := decodeHDRezkaPayload(t, ep.RawEmbeds["Дубляж (неофициальный)"][0])
-	if payload.ID != "2459" || payload.TranslatorID != "489" {
-		t.Errorf("payload id/translator = %q/%q, want 2459/489", payload.ID, payload.TranslatorID)
+	if payload["id"] != "2459" || payload["translator_id"] != "489" {
+		t.Errorf("payload id/translator = %q/%q, want 2459/489", payload["id"], payload["translator_id"])
 	}
-	if payload.Action != "get_movie" {
-		t.Errorf("payload action = %q, want get_movie", payload.Action)
+	if payload["action"] != "get_movie" {
+		t.Errorf("payload action = %q, want get_movie", payload["action"])
 	}
-	if payload.Season != "" || payload.Episode != "" {
-		t.Errorf("movie payload must not carry season/episode, got %q/%q", payload.Season, payload.Episode)
+	if payload["season"] != "" || payload["episode"] != "" {
+		t.Errorf("movie payload must not carry season/episode, got %q/%q", payload["season"], payload["episode"])
 	}
-	if payload.Favs != hdrezkaFakeFavs {
-		t.Errorf("payload favs = %q, want the page ctrl_favs", payload.Favs)
+	if payload["favs"] != hdrezkaFakeFavs {
+		t.Errorf("payload favs = %q, want the page ctrl_favs", payload["favs"])
 	}
 }
 
@@ -319,9 +350,6 @@ func TestHDRezkaResolveStream(t *testing.T) {
 			postSeen.Store(true)
 			// Reference: timestamp in SECONDS minus 40 (hdrezka.py:
 			// ts = int(time() - 40)).
-			if err := r.ParseForm(); err != nil {
-				t.Errorf("ParseForm: %v", err)
-			}
 			if got := r.FormValue("action"); got != "get_stream" {
 				t.Errorf("form action = %q, want get_stream", got)
 			}
@@ -354,7 +382,7 @@ func TestHDRezkaResolveStream(t *testing.T) {
 		}
 		_, _ = w.Write(fixture(t, hdrezkaSeriesFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/animation/adventures/1979-naruto-uragannye-hroniki-2007.html")
 	if err != nil {
@@ -387,7 +415,7 @@ func TestHDRezkaResolveStream(t *testing.T) {
 		"1080": {"https://cdn.example.invalid/rezka/1979/s1e1-1080.m3u8", "m3u8", true},
 	}
 	if len(stream.Links) != len(want) {
-		t.Fatalf("Links = %v, want %d qualities", linkKeys(stream.Links), len(want))
+		t.Fatalf("Links = %d entries, want %d", len(stream.Links), len(want))
 	}
 	for q, w := range want {
 		got, ok := stream.Links[q]
@@ -417,7 +445,6 @@ func TestHDRezkaResolveStreamMovie(t *testing.T) {
 
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/ajax/get_cdn_series/" {
-			_ = r.ParseForm()
 			if got := r.FormValue("action"); got != "get_movie" {
 				t.Errorf("form action = %q, want get_movie", got)
 			}
@@ -430,7 +457,7 @@ func TestHDRezkaResolveStreamMovie(t *testing.T) {
 		}
 		_, _ = w.Write(fixture(t, hdrezkaMovieFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/animation/adventures/2459-naruto-film-pervyy-2004.html")
 	if err != nil {
@@ -460,7 +487,7 @@ func TestHDRezkaResolveStreamNoLinksGeoFenced(t *testing.T) {
 		}
 		_, _ = w.Write(fixture(t, hdrezkaSeriesFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/animation/adventures/1979-naruto-uragannye-hroniki-2007.html")
 	if err != nil {
@@ -492,7 +519,7 @@ func TestHDRezkaResolveStreamSuccessFalse(t *testing.T) {
 		}
 		_, _ = w.Write(fixture(t, hdrezkaSeriesFixture))
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), srv.URL+"/animation/adventures/1979-naruto-uragannye-hroniki-2007.html")
 	if err != nil {
@@ -510,16 +537,20 @@ func TestHDRezkaResolveStreamSuccessFalse(t *testing.T) {
 	}
 }
 
-// TestHDRezkaResolveStreamUnresolvableMalformedURL pins the
-// missing/short payload guard: an empty RawEmbeds entry for the dub
-// fails loud (ErrNotFound), never a zero-value stream.
+// TestHDRezkaResolveStreamMissingDub pins the missing/short payload
+// guard: an unknown dub (and an empty raw_id state) fail loud
+// (ErrNotFound), never a zero-value stream.
 func TestHDRezkaResolveStreamMissingDub(t *testing.T) {
 	t.Parallel()
 
-	p := newTestHDRezka(t, "https://hdrezka-home.tv")
-	ep := contracts.Episode{Num: "1", RawEmbeds: map[string][]string{"2x2": {}}}
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, hdrezkaSeriesFixture))
+	})
+	p := luaProvider(t, "hdrezka", srv.URL)
+
+	ep := contracts.Episode{Num: "1", RawID: "", RawEmbeds: map[string][]string{"2x2": {}}}
 	if _, err := p.ResolveStream(context.Background(), ep, "2x2"); !errors.Is(err, contracts.ErrNotFound) {
-		t.Errorf("err = %v, want ErrNotFound for an empty payload list", err)
+		t.Errorf("err = %v, want ErrNotFound for an empty payload state", err)
 	}
 	if _, err := p.ResolveStream(context.Background(), ep, "несуществующая озвучка"); !errors.Is(err, contracts.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound for an unknown dub", err)
@@ -527,11 +558,12 @@ func TestHDRezkaResolveStreamMissingDub(t *testing.T) {
 }
 
 // TestHDRezkaAnubisGateSolvesChallengeAndRetries pins the Anubis
-// ladder end-to-end on the REAL challenge fixture: the first GET is
-// answered with the PoW challenge, the provider solves it (sha256,
-// difficulty leading zero hex digits), calls pass-challenge with the
-// exact parameter set, and RETRIES the original request — which then
-// succeeds with the auth cookie in the jar.
+// ladder end-to-end on the REAL challenge fixture — the HYBRID proof:
+// the Lua script detects the challenge, solves it through the
+// anicli.solve_anubis Go binding (sha256, difficulty leading zero hex
+// digits), calls pass-challenge with the exact parameter set, and
+// RETRIES the original request — which then succeeds with the auth
+// cookie in the wired netclient's jar.
 func TestHDRezkaAnubisGateSolvesChallengeAndRetries(t *testing.T) {
 	t.Parallel()
 
@@ -548,7 +580,10 @@ func TestHDRezkaAnubisGateSolvesChallengeAndRetries(t *testing.T) {
 			if q.Get("redir") == "" {
 				t.Error("pass-challenge missing redir")
 			}
-			// Validate the PoW exactly like Anubis v1.25
+			if q.Get("elapsedTime") == "" {
+				t.Error("pass-challenge missing elapsedTime (the honest solve duration)")
+			}
+			// Validate the PoW exactly like Anubis
 			// (lib/challenge/proofofwork): sha256(randomData+nonce) hex
 			// must equal response and carry difficulty leading zeros.
 			nonce := q.Get("nonce")
@@ -598,7 +633,7 @@ func TestHDRezkaAnubisGateSolvesChallengeAndRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 	results, err := p.Search(context.Background(), "наруто")
 	if err != nil {
 		t.Fatalf("Search through the gate: %v", err)
@@ -612,8 +647,9 @@ func TestHDRezkaAnubisGateSolvesChallengeAndRetries(t *testing.T) {
 }
 
 // TestHDRezkaAnubisGateFailureTyped pins the bounded-solver contract:
-// an unsolvable (or unsupported-algorithm) challenge fails LOUD with a
-// typed 403-class error instead of looping.
+// an unsupported-algorithm challenge fails LOUD with a typed 403-class
+// error (the SDK binding's anicli:provider_403: marker) instead of
+// looping.
 func TestHDRezkaAnubisGateFailureTyped(t *testing.T) {
 	t.Parallel()
 
@@ -625,7 +661,7 @@ func TestHDRezkaAnubisGateFailureTyped(t *testing.T) {
 	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, html)
 	})
-	p := newTestHDRezka(t, srv.URL)
+	p := luaProvider(t, "hdrezka", srv.URL)
 
 	_, err := p.Search(context.Background(), "naruto")
 	if err == nil {
@@ -642,12 +678,13 @@ func TestHDRezkaOffline(t *testing.T) {
 	t.Parallel()
 
 	dead := newDeadListener(t)
-	p := newTestHDRezka(t, "http://"+dead.Addr().String())
+	deadURL := "http://" + dead.Addr().String()
+	p := luaProvider(t, "hdrezka", deadURL)
 
 	if _, err := p.Search(context.Background(), "naruto"); err == nil {
 		t.Error("Search on a dead endpoint must fail")
 	}
-	if _, err := p.GetEpisodes(context.Background(), "http://"+dead.Addr().String()+"/animation/x.html"); err == nil {
+	if _, err := p.GetEpisodes(context.Background(), deadURL+"/animation/x.html"); err == nil {
 		t.Error("GetEpisodes on a dead endpoint must fail")
 	}
 }
@@ -659,119 +696,52 @@ func TestHDRezkaOffline(t *testing.T) {
 func TestHDRezkaNamePreferenceRUGroup(t *testing.T) {
 	t.Parallel()
 
-	p := newTestHDRezka(t, "https://hdrezka-home.tv")
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, hdrezkaSearchFixture))
+	})
+	p := luaProvider(t, "hdrezka", srv.URL)
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok {
+		t.Fatal("the hdrezka provider lost the ContentLanguage surface")
 	}
-	if _, declares := any(p).(contracts.NamePreferenceProvider); declares {
-		t.Error("hdrezka must stay in the RU group (no latin preference declaration)")
+	if got := lc.ContentLanguage(); got != "ru" {
+		t.Errorf("ContentLanguage = %q, want ru (the script's declaration)", got)
 	}
-	if _, declares := any(p).(contracts.SmokeQueryProvider); declares {
-		t.Error("hdrezka answers the shared smoke probes — no SmokeQuery declaration")
-	}
-}
-
-// --- small helpers -------------------------------------------------
-
-func dubKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
-func linkKeys(m map[string]contracts.VideoSource) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
-func decodeHDRezkaPayload(t *testing.T, raw string) hdrezkaStreamPayload {
-	t.Helper()
-	payload, err := decodeHDRezkaStreamPayload(raw)
-	if err != nil {
-		t.Fatalf("decode payload %q: %v", raw, err)
-	}
-	return payload
-}
-
-func decodeAnubisFixture(t *testing.T, body []byte, v any) {
-	t.Helper()
-	m := hdrezkaAnubisChallengeRe.Find(body)
-	if m == nil {
-		t.Fatal("fixture does not carry an anubis_challenge script")
-	}
-	start := strings.Index(string(m), ">") + 1
-	end := strings.LastIndex(string(m), "</script>")
-	if err := json.Unmarshal(m[start:end], v); err != nil {
-		t.Fatalf("decode challenge: %v", err)
-	}
-}
-
-// hdrezkaTestPoW mirrors the server-side Anubis validation: the hex
-// sha256 of challenge+nonce is the expected response.
-func hdrezkaTestPoW(randomData, nonce string) string {
-	sum := sha256.Sum256([]byte(randomData + nonce))
-	return hex.EncodeToString(sum[:])
-}
-
-// ---------------------------------------------------------------------------
-// PR72 route wiring.
-//
-// Live route matrix 2026-09-19 (DE datacenter exit, Go Chrome_150
-// transport): hdrezka-home.tv and its canonicalized twins (hdrezka.ag,
-// rezka.ag) answer the search fine but REFUSE the stream links
-// (success:true, url:false; the site's own session JWT attests
-// geo:"de") — while rezka-ua.tv, the UA-geo member of the same mirror
-// family, serves full stream lists from the same exit. The default
-// route therefore moves to rezka-ua.tv, and [providers.hdrezka]
-// base_url lets the user re-point the provider without a rebuild when
-// the family rotates again.
-func TestHDRezkaDefaultBaseIsTheServingMirror(t *testing.T) {
-	t.Parallel()
-
-	if HDRezkaBase != "https://rezka-ua.tv" {
-		t.Errorf("HDRezkaBase = %q, want https://rezka-ua.tv (the mirror that serves streams)", HDRezkaBase)
-	}
-}
-
-func TestHDRezkaBaseURLOverrideFromConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Network.ProxyURL = ""
-	cfg.Providers.HDRezka.BaseURL = "https://rezka-mirror.example"
-
-	bare, err := All(cfg)
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	var hd *HDRezka
-	for _, p := range bare {
-		if h, ok := p.(*HDRezka); ok {
-			hd = h
-			break
+	// The Lua adapter's capability composite implements the optional
+	// interfaces for every script (caps.go) — the observationally
+	// honest check is the VALUE (the registry's duck check), not the
+	// type assertion the compiled provider admitted.
+	if np, ok := p.(contracts.NamePreferenceProvider); ok {
+		if got := np.NamePreference(); got != contracts.NamePrefDefault {
+			t.Errorf("NamePreference = %v, want the default (hdrezka must stay in the RU group — no latin preference)", got)
 		}
 	}
-	if hd == nil {
-		t.Fatal("hdrezka not in the built roster")
-	}
-	if hd.baseURL != "https://rezka-mirror.example" {
-		t.Errorf("hdrezka baseURL = %q, want the config override", hd.baseURL)
-	}
-
-	// Empty override keeps the built-in default.
-	cfg.Providers.HDRezka.BaseURL = ""
-	bare, err = All(cfg)
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	for _, p := range bare {
-		if h, ok := p.(*HDRezka); ok && h.baseURL != HDRezkaBase {
-			t.Errorf("hdrezka baseURL = %q, want default %q", h.baseURL, HDRezkaBase)
+	if sq, ok := p.(contracts.SmokeQueryProvider); ok {
+		if got := sq.SmokeQuery(); got != "" {
+			t.Errorf("SmokeQuery = %q, want empty (hdrezka answers the shared smoke probes)", got)
 		}
+	}
+}
+
+// TestHDRezkaBaseURLSettingOverride pins the PR140 mirror seam end to
+// end: a configured providers.hdrezka.base_url re-points every leg
+// (the mirror-rotation contract), the unconfigured path keeps the
+// serving-mirror literal the harness rewrote.
+func TestHDRezkaBaseURLSettingOverride(t *testing.T) {
+	t.Parallel()
+
+	override, overrideRec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, hdrezkaSearchFixture))
+	})
+	p := luaProviderWithSettings(t, "hdrezka", "https://rezka-ua.tv", map[string]string{"base_url": override.URL})
+
+	if got := p.BaseURL(); got != override.URL {
+		t.Errorf("BaseURL = %q, want the configured override", got)
+	}
+	if _, err := p.Search(context.Background(), "наруто"); err != nil {
+		t.Fatalf("Search through the override mirror: %v", err)
+	}
+	if overrideRec.Path != "/search/" {
+		t.Errorf("the search landed on %q, want the override mirror's /search/", overrideRec.Path)
 	}
 }

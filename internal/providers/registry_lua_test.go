@@ -59,18 +59,19 @@ func TestRegistryLuaUserScriptRegisters(t *testing.T) {
 func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
-	// hdrezka (PR139): the shadow sample must be a COMPILED factory —
-	// the Lua-only slots (anitokyo, …, anifilm, and anipub since
-	// PR139) have no Go provider to shadow-log anymore. hdrezka stays
-	// compiled (its Anubis proof-of-work solver is pure Go) and needs
-	// no credentials.
-	dir := filepath.Join(xdg, "anicli", "providers", "hdrezka")
+	// rutor (PR141): the shadow sample must be a COMPILED factory —
+	// since the PR141 hdrezka migration every stream provider is
+	// Lua-only, and the only compiled factories left are the six
+	// torrent ones. rutor is the sample (fully anonymous, one client
+	// build away once [torrent] is on; the other five behave
+	// identically through the same factory plumbing).
+	dir := filepath.Join(xdg, "anicli", "providers", "rutor")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	shadow := `
 	return {
-		id = "hdrezka",
+		id = "rutor",
 		content_lang = "lua-probe",
 		search = function(query) return {} end,
 		episodes = function(anime_url) return {} end,
@@ -83,18 +84,22 @@ func TestRegistryLuaShadowReplacesGo(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Providers.Kodik.Token = "test-token"
+	// The torrent factories build only when the [torrent] subsystem is
+	// enabled (the unconfigured rule drops them otherwise — there
+	// would be no compiled provider to shadow).
+	cfg.Torrent.Enabled = true
 
 	log, buf := luaTestLogger(t)
 	reg, err := NewRegistry(cfg, nil, WithProviderLogger(log))
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	_, ok := reg.Get("hdrezka")
+	_, ok := reg.Get("rutor")
 	if !ok {
-		t.Fatal("the shadowed hdrezka must stay registered (as the Lua script)")
+		t.Fatal("the shadowed rutor must stay registered (as the Lua script)")
 	}
-	if got := reg.ContentLanguage("hdrezka"); got != "lua-probe" {
-		t.Fatalf("hdrezka ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
+	if got := reg.ContentLanguage("rutor"); got != "lua-probe" {
+		t.Fatalf("rutor ContentLanguage = %q, want the LUA implementation's probe value (log: %s)", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "shadowed by its lua script") {
 		t.Fatalf("the shadow must be logged, got: %s", buf.String())

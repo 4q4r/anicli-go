@@ -67,9 +67,21 @@ var allFactories = []struct {
 	{"gogoanime", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newGogoAnime(GogoAnimeBase, http)
 	}},
-	{"kickassanime", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
-	}},
+	// kickassanime (PR58 → PR129): the kaa.lt catalog — a fuzzy JSON
+	// search, a paginated per-show episode API and per-episode server
+	// lists whose media ids resolve onto the krussdomi HLS edge
+	// (live-verified 2026-09-18, re-verified 2026-10-06: every leg
+	// answers anonymously, no gate cookie on the wire). Migrated to the
+	// BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/kickassanime/main.lua) — the
+	// twelfth Go→Lua provider migration. luaOnly pins the roster slot;
+	// the script serves the id: eager per-episode dub hydration in one
+	// bounded-parallel batch (the DubsHydrator delta — the Lua contract
+	// has no such capability), the fan-out bound pinned at the config
+	// default (get_batch cannot carry headers; the live probe proves
+	// Accept optional), and the fresh-sandbox resolve re-deriving the
+	// server list.
+	{"kickassanime", true, nil},
 	// anizone (PR59): the anizone.to sub-only stream source — the first
 	// provider with no frozen Python original, written from the
 	// Anivexa-API AniZone recipe (providers/anizone.js) re-verified live

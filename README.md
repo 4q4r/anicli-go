@@ -303,6 +303,7 @@ provider-scoped field validation; the contract tests
 | `anicli.base64` | `encode`, `decode`, `url_encode`, `url_decode` |
 | `anicli.crypto` | `aes_cbc_decrypt`, `hmac_sha256` — the megaplay-chain primitives (Go stdlib behind the sandbox) |
 | `anicli.iconv` | `iconv(s, from_encoding)` — decode a legacy-encoded byte string (e.g. `cp1251`/`windows-1251`, IANA names) to UTF-8; invalid bytes become U+FFFD |
+| `anicli.solve_anubis` | `solve_anubis(challenge_json)` → `solution_json` — the Anubis proof-of-work gate solver (the sha256 leading-zero ladder in pure Go): input is the exact blob of the `<script id="anubis_challenge">` tag, output is `{"nonce":N,"digest":"<hex>","elapsed_ms":M}`; unsupported algorithms and exhausted ladders raise the typed `provider_403` marker (the hdrezka hybrid) |
 | `anicli.provider_setting` | `provider_setting(key)` — the string value of `providers.<id>.<key>` for the script's own provider id; missing key → `nil` (the kodik token read) |
 | `anicli.time` | `now` (RFC 3339 UTC) |
 | `anicli.log` | `info`, `warn`, `error` |

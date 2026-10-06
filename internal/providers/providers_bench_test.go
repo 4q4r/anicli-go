@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,61 +59,6 @@ func benchFixtureServer(b *testing.B, body []byte, contentType string) *httptest
 	b.Cleanup(srv.Close)
 	return srv
 }
-
-// --- hdrezka page + anubis PoW ---
-
-// BenchmarkHDRezkaPageParse parses the live series-page capture (the
-// episode/dub roster extraction).
-func BenchmarkHDRezkaPageParse(b *testing.B) {
-	b.ReportAllocs()
-	body := benchFixture(b, "hdrezka_anime_series.html")
-	var sink *hdrezkaPage
-	for b.Loop() {
-		page, err := parseHDRezkaPage(body)
-		if err != nil {
-			b.Fatalf("parse page: %v", err)
-		}
-		sink = page
-	}
-	benchHDRezkaSink = sink
-}
-
-var benchHDRezkaSink *hdrezkaPage
-
-// buildBenchAnubisChallenge extracts the challenge JSON from the live
-// capture and clamps the difficulty to 2 (bounded: ~256 sha256 hashes
-// on average — microsecond scale, deterministic enough for a bench).
-func buildBenchAnubisChallenge(b *testing.B, difficulty int) hdrezkaAnubisChallenge {
-	b.Helper()
-
-	m := hdrezkaAnubisChallengeRe.FindSubmatch(benchFixture(b, "hdrezka_anubis_challenge.html"))
-	if m == nil {
-		b.Fatal("fixture does not carry an anubis_challenge script")
-	}
-	var ch hdrezkaAnubisChallenge
-	if err := json.Unmarshal(m[1], &ch); err != nil {
-		b.Fatalf("decode anubis challenge: %v", err)
-	}
-	ch.Rules.Algorithm = "fast"
-	ch.Rules.Difficulty = difficulty
-	return ch
-}
-
-// BenchmarkHDRezkaAnubisPoWD2 solves a difficulty-2 anubis proof of
-// work — the per-page-fetch cost when the gate engages.
-func BenchmarkHDRezkaAnubisPoWD2(b *testing.B) {
-	b.ReportAllocs()
-	ch := buildBenchAnubisChallenge(b, 2)
-	for b.Loop() {
-		nonce, digest, err := solveHDRezkaAnubis(ch)
-		if err != nil {
-			b.Fatalf("solve: %v", err)
-		}
-		benchSinkPoW = nonce + len(digest)
-	}
-}
-
-var benchSinkPoW int
 
 // --- kickassanime episode walk ---
 

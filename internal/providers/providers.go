@@ -12,7 +12,6 @@ package providers
 import (
 	"io"
 	"log/slog"
-	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 	"github.com/an0nx/anicli-go/internal/netclient"
@@ -74,27 +73,9 @@ func (b Base) SourceType() contracts.SourceType { return b.sourceType }
 // TUI derive from it via dubLangTag — not from a per-dub field.
 func (b Base) ContentLanguage() string { return b.contentLang }
 
-// pyQuote ports urllib.parse.quote with its default safe="/" set:
-// every byte outside the URL-unreserved set (and "/") is percent-
-// encoded uppercase, one UTF-8 byte at a time — spaces become %20, not
-// the form-style "+" of url.Values.Encode. Originally ported for
-// sovetromantica (sovetromantica.py:30); its live consumers are the
-// anidub, anistar and hdrezka search queries.
-func pyQuote(s string) string {
-	const hex = "0123456789ABCDEF"
-	var b strings.Builder
-	for i := range len(s) {
-		c := s[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-			b.WriteByte(c)
-		case c == '-' || c == '_' || c == '.' || c == '~' || c == '/':
-			b.WriteByte(c)
-		default:
-			b.WriteByte('%')
-			b.WriteByte(hex[c>>4])
-			b.WriteByte(hex[c&0xF])
-		}
-	}
-	return b.String()
-}
+// pyQuote (urllib.parse.quote with its default safe="/" set — spaces
+// %20, one UTF-8 byte at a time) died with the PR141 hdrezka
+// migration: its last Go consumer was hdrezka.go, and the anidub,
+// anistar and hdrezka search queries all re-derive the encoding in
+// their Lua scripts now (the SDK's query_escape is form-style "+",
+// which is exactly why the scripts cannot use it).

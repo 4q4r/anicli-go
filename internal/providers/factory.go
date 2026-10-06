@@ -165,25 +165,26 @@ var allFactories = []struct {
 	// Go→Lua provider migration. luaOnly pins the roster slot; the
 	// script serves the id.
 	{"yummy", true, nil},
-	// hdrezka (PR69): the RU rezka catalog's anime section — port of
-	// the frozen anicli-api hdrezka source, PLUS a pure-Go Anubis
-	// proof-of-work gate solver the site fronts every path with (see
-	// hdrezka.go). PR72 route matrix: the family geo-fences per domain
-	// (hdrezka-home.tv withholds stream links from datacenter exits —
-	// its session JWT attests geo:"de" — while rezka-ua.tv serves
-	// them), so the built-in default pins the serving mirror and
-	// [providers.hdrezka] base_url re-points it without a rebuild. No
-	// credentials; translators are the dubs (one-voice included),
-	// hdrezka's own CDN resolves to HLS/mp4. From ISP-blocked networks
-	// network.proxy_url routes it (foreign hosting, SNI-blocked direct
-	// route — verified killed mid-TLS on a RU-intercepted network).
-	{"hdrezka", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		base := cfg.Providers.HDRezka.BaseURL
-		if base == "" {
-			base = HDRezkaBase
-		}
-		return newHDRezka(base, http)
-	}},
+	// hdrezka → PR141: the RU rezka catalog's anime section — port of
+	// the frozen anicli-api hdrezka source re-verified live 2026-09-19
+	// — migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/hdrezka/main.lua) — the
+	// TWENTY-FOURTH Go→Lua provider migration, and the roster's
+	// HYBRID: the script scrapes, while the Anubis proof-of-work gate
+	// every family mirror fronts solves in pure Go through the
+	// anicli.solve_anubis SDK binding (internal/anubis — the solver
+	// extracted from the compiled provider, NOT ported to Lua). PR72
+	// route matrix: the family geo-fences per domain (hdrezka-home.tv
+	// withholds stream links from datacenter exits — its session JWT
+	// attests geo:"de" — while rezka-ua.tv serves them), so the
+	// script's default pins the serving mirror and
+	// [providers.hdrezka] base_url re-points every leg through the
+	// PR140 provider_setting seam without a rebuild. No credentials;
+	// translators are the dubs (one-voice included), hdrezka's own CDN
+	// resolves to HLS/mp4. From ISP-blocked networks network.proxy_url
+	// routes it (foreign hosting, SNI-blocked direct route — verified
+	// killed mid-TLS on a RU-intercepted network).
+	{"hdrezka", true, nil},
 	// anistar (PR77 → PR138): the anistar.org DLE catalog with its
 	// self-hosted an-media.org player stack — the roster's first
 	// Windows-1251 site (search form POST and page bodies both ride

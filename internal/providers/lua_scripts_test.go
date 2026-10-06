@@ -115,6 +115,14 @@ var luaProductionBases = map[string][]string{
 	// extractor consumes them), so it is not a fetched host and stays
 	// an unpinned literal.
 	"kodik": {"https://kodik-api.com"},
+	// hdrezka (PR141): the serving-mirror literal only — the one
+	// fallback the script pins behind the provider_setting("base_url")
+	// override. Every leg (search, the anime page, the CDN POST and
+	// the Anubis pass-challenge round-trip) hangs off the one base,
+	// and the Referer/Origin headers derive from it. The family
+	// rotates mirrors; this literal is whatever the fixtures carry
+	// (rezka-ua.tv, the PR72 serving mirror).
+	"hdrezka": {"https://rezka-ua.tv"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

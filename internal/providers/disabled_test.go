@@ -80,7 +80,8 @@ func TestTorrentProvidersDisabledWhenTorrentOff(t *testing.T) {
 //     Go constructor's fail-loud-on-use error policy. This is the
 //     credential-gated no-op the parity smoke's SKIP roster expects.
 //   - [providers.lua] disabled: kodik has no Go constructor anymore —
-//     the slot drops entirely (the twenty migrated slots are Lua-only).
+//     the slot drops entirely (the twenty-four migrated slots are
+//     Lua-only).
 func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 	t.Run("lua enabled: tokenless kodik registers and fails loud on use", func(t *testing.T) {
 		t.Parallel()
@@ -129,8 +130,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("All: %v", err)
 		}
-		if len(bare) != 7 {
-			t.Fatalf("All() = %d providers, want 7 (the Go factories; kodik is Lua-only since PR140)", len(bare))
+		if len(bare) != 6 {
+			t.Fatalf("All() = %d providers, want 6 (the torrent factories; kodik is Lua-only since PR140 and hdrezka since PR141)", len(bare))
 		}
 		for _, p := range bare {
 			if p.ID() == "kodik" {

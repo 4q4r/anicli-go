@@ -327,8 +327,9 @@ func TestDarwinPlanBootstrapsHomebrew(t *testing.T) {
 	if !p.bootstrap || p.titleKey != "deps.offer_bootstrap_brew" {
 		t.Fatalf("plan = %+v, want the Homebrew bootstrap", p)
 	}
-	if len(p.steps) == 0 || !strings.Contains(argvOf(p.steps[0]), "Homebrew/install") {
-		t.Fatalf("bootstrap step must run the official Homebrew installer, got %v", p.steps)
+	const brewInstallScript = "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+	if len(p.steps) == 0 || !strings.Contains(argvOf(p.steps[0]), brewInstallScript) {
+		t.Fatalf("bootstrap step must run the official Homebrew installer (%s), got %v", brewInstallScript, p.steps)
 	}
 }
 
@@ -363,8 +364,11 @@ func TestLinuxPlanDnfEnablesRPMFusionFirst(t *testing.T) {
 	if !strings.Contains(argvOf(p.steps[0]), "rpmfusion-free-release") {
 		t.Errorf("dnf step 1 = %q, want the RPM Fusion free release enable", argvOf(p.steps[0]))
 	}
-	if argvOf(p.steps[1]) != "sudo dnf install mpv ffmpeg" {
-		t.Errorf("dnf step 2 = %q", argvOf(p.steps[1]))
+	if argvOf(p.steps[1]) != "sudo dnf install --exclude=openh264* mpv ffmpeg" {
+		t.Errorf("dnf step 2 argv = %q, want the openh264-excluded install", argvOf(p.steps[1]))
+	}
+	if p.steps[1].display() != "sudo dnf install --exclude='openh264*' mpv ffmpeg" {
+		t.Errorf("dnf step 2 display = %q, want the single-quoted paste-safe form", p.steps[1].display())
 	}
 }
 

@@ -345,7 +345,7 @@
 "deps.nontty_note" = "Non-interactive session: run the commands manually:"
 "deps.manual_title" = "No package manager found. Install manually for your distribution:"
 "deps.manual_debian" = "Debian/Ubuntu/Mint:  sudo apt install mpv ffmpeg"
-"deps.manual_fedora" = "Fedora (RPM Fusion required):  sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm && sudo dnf install mpv ffmpeg"
+"deps.manual_fedora" = "Fedora (RPM Fusion required):  sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm && sudo dnf install --exclude='openh264*' mpv ffmpeg"
 "deps.manual_arch" = "Arch/Manjaro:  sudo pacman -S mpv ffmpeg"
 "deps.manual_suse" = "openSUSE:  sudo zypper install mpv ffmpeg"
 "deps.caveat_fresh_path" = "The install ran, but {names} still cannot be found on PATH — restart your terminal (or re-login) and start anicli again"

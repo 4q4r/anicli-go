@@ -151,6 +151,12 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// (identical live behavior — the migration-success rule);
 		// the subtest fails until the site's transport wall lifts.
 		"animemobi": "боруто",
+		// anistar (PR138): the cp1251 DLE catalog rides the proxy (the
+		// smoke matrix's honest route: the declared «боруто» probe
+		// PASSes the full chain — 3 cards surfaced, 2 resolved fully —
+		// in ~1.2s through the proxy; the direct route tarpits on the
+		// characterization network like the anifilm class).
+		"anistar": "боруто",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

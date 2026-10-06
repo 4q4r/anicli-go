@@ -97,6 +97,11 @@ var luaProductionBases = map[string][]string{
 	// absolute URL and the kodik-family embeds are never fetched hosts
 	// (the shared extractor consumes them).
 	"animemobi": {"https://animemobi.com"},
+	// anistar (PR138): the site root — every leg (the DLE search POST,
+	// the release page, both player generations and, through the shared
+	// extractor factory, the legacy embeds) hangs off the one base_url
+	// literal; the Referer sets derive from it and the episode URL.
+	"anistar": {"https://anistar.org"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

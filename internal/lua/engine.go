@@ -118,6 +118,13 @@ func NewEngine(cfg Config, log *slog.Logger) *Engine {
 // Config returns the engine's effective budget configuration.
 func (e *Engine) Config() Config { return e.cfg }
 
+// HTTPClient returns the wired per-provider transport (nil when the
+// engine was built without one — the SDK HTTP legs fall back to the
+// plain stdlib client). The luaTorrent adapter (internal/providers)
+// probes .torrent bytes through the SAME netclient the script's
+// search used — the one-transport-per-provider isolation.
+func (e *Engine) HTTPClient() *netclient.Client { return e.cfg.HTTP }
+
 // discardWriter sinks logger output for engines built without one.
 type discardWriter struct{}
 

@@ -130,8 +130,8 @@ func TestAllSkipsUnconfiguredProviders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("All: %v", err)
 		}
-		if len(bare) != 5 {
-			t.Fatalf("All() = %d providers, want 5 (the remaining torrent factories; kodik is Lua-only since PR140, hdrezka since PR141 and rutor since PR142)", len(bare))
+		if len(bare) != 4 {
+			t.Fatalf("All() = %d providers, want 4 (the remaining torrent factories; anirena is Lua-only since PR143, kodik since PR140, hdrezka since PR141 and rutor since PR142)", len(bare))
 		}
 		for _, p := range bare {
 			if p.ID() == "kodik" {

@@ -1,7 +1,10 @@
 package lua
 
 import (
+	"log/slog"
+
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // The capability adapter (PR116): contracts.Provider is a small
@@ -51,6 +54,29 @@ func (a adapted) SmokeQuery() string { return a.smokeQuery }
 // also carries the engine plumbing — a bare declared script satisfies
 // nothing torrent-shaped.
 func (a adapted) Torrent() bool { return a.torrent }
+
+// SetLogger forwards the registry's logger seam to the wrapped
+// provider (the lua.Engine log sink). Without the forward the
+// composite HIDES the concrete method from the registry's duck probe
+// — the exact nesting trap this composite exists to prevent; the
+// NewRegistry wiring documents this promotion as the Lua providers'
+// log route.
+func (a adapted) SetLogger(log *slog.Logger) {
+	if sl, ok := a.Provider.(interface{ SetLogger(*slog.Logger) }); ok {
+		sl.SetLogger(log)
+	}
+}
+
+// HTTPClient forwards the wrapped provider's transport seam (the
+// luaTorrent adapter probes the surfaced .torrent links through the
+// SAME netclient the script's search used). Nil when the inner
+// provider carries no wired transport.
+func (a adapted) HTTPClient() *netclient.Client {
+	if hc, ok := a.Provider.(interface{ HTTPClient() *netclient.Client }); ok {
+		return hc.HTTPClient()
+	}
+	return nil
+}
 
 // Adapt wraps the provider in the capability adapter when the script
 // declared at least one optional surface; bare returns the provider

@@ -57,8 +57,17 @@ type luaTorrent struct {
 // Compile-time proof of the consumer-side torrent contract.
 var _ contracts.TorrentProvider = (*luaTorrent)(nil)
 
-// newLuaTorrent builds the adapter over the script provider.
+// newLuaTorrent builds the adapter over the script provider. A nil
+// client falls back to the wrapped provider's HTTPClient() seam (the
+// one-transport-per-provider isolation — the factory passes the same
+// netclient the script's search used); the engine arrives later (the
+// registry injects it when [torrent] is enabled).
 func newLuaTorrent(p contracts.Provider, client *netclient.Client, engine *torrent.Engine) *luaTorrent {
+	if client == nil {
+		if hc, ok := p.(interface{ HTTPClient() *netclient.Client }); ok {
+			client = hc.HTTPClient()
+		}
+	}
 	return &luaTorrent{
 		Provider:    p,
 		TorrentBase: NewTorrentBase(engine),

@@ -204,6 +204,14 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// rides the adapter + engine composition liveProvider builds
 		// for torrent-declared scripts.
 		"rutor": "черная лагуна",
+		// anirena (PR143): the RSS search rides the proxy (the route
+		// matrix's honest route: the «black lagoon» probe surfaced
+		// 11/11 anime entries in ~1.6s through the proxy, live
+		// 2026-10-06; the JA/multilingual torrent index answers the
+		// shared EN probe). Torrent slot: the episodes leg resolves
+		// through the Go engine — the same adapter + engine
+		// composition the rutor entry rides.
+		"anirena": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

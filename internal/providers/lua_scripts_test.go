@@ -128,6 +128,12 @@ var luaProductionBases = map[string][]string{
 	// //d.rutor.info download hrefs inherit their scheme from it
 	// (the host rides the href, never a literal).
 	"rutor": {"https://rutor.info"},
+	// anirena (PR143): the site root — the RSS search endpoint is the
+	// root with query parameters (/rss?q=…), the only fetched host.
+	// The <enclosure> .torrent URLs point back at the same host but
+	// are never fetched by the script (the Go torrent adapter's
+	// preflight fetches them through the engine seam).
+	"anirena": {"https://www.anirena.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

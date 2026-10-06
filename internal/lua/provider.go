@@ -10,6 +10,7 @@ import (
 	lua "github.com/yuin/gopher-lua"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/netclient"
 )
 
 // ErrInvalidScript marks a provider script that failed to load: a
@@ -154,6 +155,11 @@ func (e *Engine) LoadProvider(dirID, src string) (*Provider, error) {
 
 // ID returns the stable provider identifier (the directory name).
 func (p *Provider) ID() string { return p.id }
+
+// HTTPClient forwards the engine's per-provider transport (the
+// torrent preflight seam — see Engine.HTTPClient; the luaTorrent
+// adapter probes the surfaced .torrent links through it).
+func (p *Provider) HTTPClient() *netclient.Client { return p.engine.HTTPClient() }
 
 // Name returns the human-readable provider name (falls back to the id).
 func (p *Provider) Name() string { return p.name }

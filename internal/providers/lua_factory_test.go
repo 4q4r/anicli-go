@@ -143,8 +143,8 @@ func TestFactoryLuaExcludedIsGone(t *testing.T) {
 // PR127; gogoanime PR128; kickassanime PR129; anizone PR130;
 // sameband PR131; anidub PR132; anikado PR133; animiku PR134;
 // anifilm PR135; animemobi PR137; anistar PR138; anipub PR139;
-// kodik PR140; hdrezka PR141; rutor PR142) are EMPTY in this mode:
-// they live only in the bundled Lua scripts.
+// kodik PR140; hdrezka PR141; rutor PR142; anirena PR143) are EMPTY
+// in this mode: they live only in the bundled Lua scripts.
 func TestFactoryLuaDisabledConfig(t *testing.T) {
 	dir := luaXDG(t)
 	writeLuaScript(t, dir, "userscript", "")
@@ -158,16 +158,16 @@ func TestFactoryLuaDisabledConfig(t *testing.T) {
 		t.Fatalf("All: %v", err)
 	}
 	ids := rosterIDs(bare)
-	if len(ids) != 5 {
-		t.Fatalf("All() = %d providers, want 5 (the remaining torrent factories; the twenty-five migrated providers are Lua-only)", len(ids))
+	if len(ids) != 4 {
+		t.Fatalf("All() = %d providers, want 4 (the remaining torrent factories; the twenty-six migrated providers are Lua-only)", len(ids))
 	}
 	for _, id := range ids {
 		if id == "userscript" {
 			t.Fatal("userscript registered with [providers.lua] disabled")
 		}
-		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven", "anikoto", "gogoanime", "kickassanime", "anizone", "sameband", "anidub", "anikado", "animiku", "anifilm", "animemobi", "anistar", "anipub", "kodik", "hdrezka", "rutor"} {
+		for _, migrated := range []string{"anitokyo", "animedia", "animevib", "anilibria", "animevost", "anilib", "yummy", "animego", "shiza", "animeheaven", "anikoto", "gogoanime", "kickassanime", "anizone", "sameband", "anidub", "anikado", "animiku", "anifilm", "animemobi", "anistar", "anipub", "kodik", "hdrezka", "rutor", "anirena"} {
 			if id == migrated {
-				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126/PR127/PR128/PR129/PR130/PR131/PR132/PR133/PR134/PR135/PR137/PR138/PR139/PR140/PR141/PR142)", migrated)
+				t.Errorf("%s registered with [providers.lua] disabled (it is Lua-only since PR116/PR119/PR120/PR122/PR123/PR124/PR125/PR126/PR127/PR128/PR129/PR130/PR131/PR132/PR133/PR134/PR135/PR137/PR138/PR139/PR140/PR141/PR142/PR143)", migrated)
 			}
 		}
 	}

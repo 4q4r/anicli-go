@@ -1,23 +1,17 @@
 package providers
 
-import (
-	"bytes"
-	"context"
-	"errors"
-	"fmt"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	"github.com/an0nx/anicli-go/internal/config"
-	"github.com/an0nx/anicli-go/internal/contracts"
-)
-
+// The anirena provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anirena/main.lua, the PR143 Go→Lua
+// migration — the twenty-sixth, the torrent family's second Lua slot
+// after the PR142 rutor migration): these
+// tests pin the script through the same contracts.Provider surface
+// and the same verbatim live captures the compiled Go implementation
+// was held to. The torrent plumbing (the PR66 .torrent preflight,
+// episodes and streams) stays GO: the roster slot is wrapped by the
+// luaTorrent adapter (lua_torrent.go) — the adapter's own contract
+// lives in lua_torrent_test.go, the adapter×script integration pins
+// in the second half of this file.
+//
 // Fixtures in this file are REAL API captures (the repo convention:
 // offline fixtures must carry provenance):
 //
@@ -27,10 +21,29 @@ import (
 //   - testdata/anirena_search_empty.xml — GET
 //     https://www.anirena.com/rss?q=kjwqvxhjwqlkjhzzz, same day (0 items).
 
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/torrent"
+)
+
 func TestAniRenaSearchParsesRSS(t *testing.T) {
 	t.Parallel()
 
-	p := newAniRenaFixtureAt(t, anirenaServer(t, string(fixture(t, "anirena_search_rss.xml")), nil))
+	p := luaProvider(t, "anirena", anirenaServer(t, string(fixture(t, "anirena_search_rss.xml"))))
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -51,8 +64,8 @@ func TestAniRenaSearchParsesRSS(t *testing.T) {
 	if batch.SourceID != "anirena" {
 		t.Errorf("source id = %q, want anirena", batch.SourceID)
 	}
-	// The <enclosure> is the direct .torrent download URL — the PR66
-	// ingestion: preflighted bytes feed the engine, never re-fetched.
+	// The <enclosure> is the direct .torrent download URL — the
+	// byte-faithful torrent surface the Go engine consumes downstream.
 	if batch.URL != "https://www.anirena.com/torrents/019d5dd9-39ce-7912-a1ba-bb9373c89dd3.torrent" {
 		t.Errorf("url = %q, want the <enclosure> .torrent URL", batch.URL)
 	}
@@ -73,31 +86,28 @@ func TestAniRenaSearchParsesRSS(t *testing.T) {
 func TestAniRenaSearchRequestParams(t *testing.T) {
 	t.Parallel()
 
-	var gotQuery url.Values
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query()
-		gotPath = r.URL.Path
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "anirena_search_rss.xml"))
-	}))
-	t.Cleanup(srv.Close)
-	p := newAniRenaFixtureAt(t, srv.URL)
+	})
+	p := luaProvider(t, "anirena", srv.URL)
 
 	if _, err := p.Search(context.Background(), "black lagoon"); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if gotPath != "/rss" {
-		t.Errorf("path = %q, want /rss", gotPath)
+	if rec.Path != "/rss" {
+		t.Errorf("path = %q, want /rss", rec.Path)
 	}
-	if gotQuery.Get("q") != "black lagoon" {
-		t.Errorf("q = %q, want the raw query", gotQuery.Get("q"))
+	// The query rides q= URL-encoded (the Go url.Values.Encode shape
+	// the compiled provider sent: space → '+').
+	if want := "q=black+lagoon"; rec.Query != want {
+		t.Errorf("query = %q, want %q", rec.Query, want)
 	}
 	// Live-verified 2026-09-23: the server IGNORES the documented
 	// category= parameter (the q= feed spans ALL categories), so the
 	// request must not carry it — category filtering is client-side
 	// (TestAniRenaSearchParsesRSS pins the effect).
-	if gotQuery.Has("category") {
-		t.Errorf("category = %q, want absent (server ignores it — filtering is client-side)", gotQuery.Get("category"))
+	if strings.Contains(rec.Query, "category=") {
+		t.Errorf("query = %q, want no category= (server ignores it — filtering is client-side)", rec.Query)
 	}
 }
 
@@ -105,7 +115,8 @@ func TestAniRenaSearchEmptyQueryFailsLoud(t *testing.T) {
 	t.Parallel()
 
 	hits := 0
-	p := newAniRenaFixtureAt(t, anirenaServer(t, string(fixture(t, "anirena_search_rss.xml")), &hits))
+	srv := anirenaServerCounted(t, string(fixture(t, "anirena_search_rss.xml")), &hits)
+	p := luaProvider(t, "anirena", srv)
 	for _, query := range []string{"", "   "} {
 		_, err := p.Search(context.Background(), query)
 		if err == nil {
@@ -125,7 +136,7 @@ func TestAniRenaSearchEmptyQueryFailsLoud(t *testing.T) {
 func TestAniRenaSearchEmptyFeed(t *testing.T) {
 	t.Parallel()
 
-	p := newAniRenaFixtureAt(t, anirenaServer(t, string(fixture(t, "anirena_search_empty.xml")), nil))
+	p := luaProvider(t, "anirena", anirenaServer(t, string(fixture(t, "anirena_search_empty.xml"))))
 	results, err := p.Search(context.Background(), "kjwqvxhjwqlkjhzzz")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -143,13 +154,13 @@ func TestAniRenaSearchSkipsOutOfScopeItems(t *testing.T) {
 	t.Parallel()
 
 	feed := anirenaFeed(
-		anirenaItemXML("[Manga/Manhwa/Comic] Manga PDF", "Size: 1.0 GB | Uploader: u | Category: Manga/Manhwa/Comic", anirenaEnclosure(t, "m1")),
-		anirenaItemXML("[Anime > RAW] Show - 01", "Size: 1.0 GB | Uploader: u | Category: Anime &gt; RAW", anirenaEnclosure(t, "a1")),
-		anirenaItemXML("[Audio] Soundtrack", "Size: 1.0 GB | Uploader: u | Category: Audio", anirenaEnclosure(t, "s1")),
-		anirenaItemXML("[?] No category in description", "", anirenaEnclosure(t, "n1")),
+		anirenaItemXML("[Manga/Manhwa/Comic] Manga PDF", "Size: 1.0 GB | Uploader: u | Category: Manga/Manhwa/Comic", anirenaEnclosure("m1")),
+		anirenaItemXML("[Anime > RAW] Show - 01", "Size: 1.0 GB | Uploader: u | Category: Anime &gt; RAW", anirenaEnclosure("a1")),
+		anirenaItemXML("[Audio] Soundtrack", "Size: 1.0 GB | Uploader: u | Category: Audio", anirenaEnclosure("s1")),
+		anirenaItemXML("[?] No category in description", "", anirenaEnclosure("n1")),
 		anirenaItemXML("[Anime > RAW] No enclosure", "Size: 1.0 GB | Uploader: u | Category: Anime &gt; RAW", ""),
 	)
-	p := newAniRenaFixtureAt(t, anirenaServer(t, feed, nil))
+	p := luaProvider(t, "anirena", anirenaServer(t, feed))
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -162,10 +173,10 @@ func TestAniRenaSearchSkipsOutOfScopeItems(t *testing.T) {
 	}
 }
 
-func TestAniRenaSearchMalformedXMLTypedError(t *testing.T) {
+func TestAniRenaSearchMalformedEnvelopeTypedError(t *testing.T) {
 	t.Parallel()
 
-	p := newAniRenaFixtureAt(t, anirenaServer(t, "this is not xml at all", nil))
+	p := luaProvider(t, "anirena", anirenaServer(t, "this is not xml at all"))
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("malformed RSS must fail loud")
@@ -176,59 +187,65 @@ func TestAniRenaSearchMalformedXMLTypedError(t *testing.T) {
 	}
 }
 
-func TestAniRenaSearchHTTPErrorTypedError(t *testing.T) {
+// TestAniRenaSearchHTTPErrorFailsLoud pins the HTTP failure wall. The
+// compiled provider wrapped the netclient error in a ProviderError
+// itself; the Lua transport surfaces the netclient sentinel classes
+// through the typed anicli:<kind>: markers instead — 503 carries the
+// plain StatusError class (only 403/404/geo/timeout keep the typed
+// wall, the anilibria migration precedent), so the pin here is the
+// loud, provider-tagged failure.
+func TestAniRenaSearchHTTPErrorFailsLoud(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(srv.Close)
-	p := newAniRenaFixtureAt(t, srv.URL)
+	srv := anirenaServerStatus(t, http.StatusServiceUnavailable)
+	p := luaProvider(t, "anirena", srv)
 
 	_, err := p.Search(context.Background(), "test")
 	if err == nil {
 		t.Fatal("HTTP failure must fail loud")
 	}
-	var perr *contracts.ProviderError
-	if !errors.As(err, &perr) || perr.Provider != "anirena" {
-		t.Errorf("error = %v, want an anirena-tagged ProviderError", err)
+	if !strings.Contains(err.Error(), "anirena") {
+		t.Errorf("error = %v, want the provider-tagged message", err)
 	}
 }
 
 // TestAniRenaSearchCapsResults pins the bounded-surface rule (the
 // animetosho AnimeToshoSearchLimit rationale): the feed has no usable
-// server-side limit parameter (live-verified 2026-09-23), so Search
-// caps the parsed items client-side BEFORE the preflight fan-out —
-// one search can never spend unbounded fetches.
+// server-side limit parameter (live-verified 2026-09-23), so the
+// script caps the parsed items client-side BEFORE the category
+// filter — the Go adapter's preflight fan-out downstream can never
+// spend unbounded fetches.
 func TestAniRenaSearchCapsResults(t *testing.T) {
 	t.Parallel()
 
-	items := make([]string, 0, AniRenaSearchLimit+5)
-	for i := range AniRenaSearchLimit + 5 {
+	items := make([]string, 0, 35)
+	for i := range 35 {
 		items = append(items, anirenaItemXML(
 			fmt.Sprintf("[Anime > RAW] Show - %02d", i+1),
 			"Size: 1.0 GB | Uploader: u | Category: Anime &gt; RAW",
-			anirenaEnclosure(t, fmt.Sprintf("cap%02d", i))))
+			anirenaEnclosure(fmt.Sprintf("cap%02d", i))))
 	}
-	p := newAniRenaFixtureAt(t, anirenaServer(t, anirenaFeed(items...), nil))
+	p := luaProvider(t, "anirena", anirenaServer(t, anirenaFeed(items...)))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) != AniRenaSearchLimit {
-		t.Fatalf("results = %d, want the %d-item cap", len(results), AniRenaSearchLimit)
+	if len(results) != 30 {
+		t.Fatalf("results = %d, want the 30-item cap", len(results))
 	}
 }
 
-// TestAniRenaTitleStripsCategoryPrefix pins the exact prefix rule: a
-// leading bracket group naming one of the site categories (optionally
-// "Cat > Subcat") is stripped; release-group tags like [SubsPlease]
-// and prefix-less titles stay verbatim.
+// TestAniRenaTitleStripsCategoryPrefix pins the exact prefix rule
+// through the search surface: a leading bracket group naming one of
+// the site categories (optionally "Cat > Subcat") is stripped from the
+// release title; release-group tags like [SubsPlease] and prefix-less
+// titles stay verbatim. Every item carries an Anime description
+// category so the scope filter never confounds the title pin.
 func TestAniRenaTitleStripsCategoryPrefix(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct{ in, want string }{
+	cases := []struct{ raw, want string }{
 		{"[Anime > Subtitle(s) and/or Audio(s)] Show - 01", "Show - 01"},
 		{"[Anime > RAW] Show", "Show"},
 		{"[Anime] Show", "Show"},
@@ -243,35 +260,25 @@ func TestAniRenaTitleStripsCategoryPrefix(t *testing.T) {
 		// Not a category prefix: release-group tags survive.
 		{"[SubsPlease] Show - 01 (1080p) [AAC].mkv", "[SubsPlease] Show - 01 (1080p) [AAC].mkv"},
 		{"Show without any prefix", "Show without any prefix"},
-	} {
-		if got := anirenaTitle(tc.in); got != tc.want {
-			t.Errorf("anirenaTitle(%q) = %q, want %q", tc.in, got, tc.want)
+	}
+	items := make([]string, 0, len(cases))
+	for i, tc := range cases {
+		desc := "Size: 1.0 GB | Uploader: u | Category: Anime &gt; RAW"
+		items = append(items, anirenaItemXML(tc.raw, desc, anirenaEnclosure(fmt.Sprintf("ttl%02d", i))))
+	}
+	p := luaProvider(t, "anirena", anirenaServer(t, anirenaFeed(items...)))
+
+	results, err := p.Search(context.Background(), "show")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != len(cases) {
+		t.Fatalf("results = %d, want %d", len(results), len(cases))
+	}
+	for i, tc := range cases {
+		if results[i].Title != tc.want {
+			t.Errorf("results[%d].title = %q, want %q (raw %q)", i, results[i].Title, tc.want, tc.raw)
 		}
-	}
-}
-
-func TestAniRenaCapabilityAndRoster(t *testing.T) {
-	t.Parallel()
-
-	p := newAniRenaFixtureAt(t, anirenaServer(t, string(fixture(t, "anirena_search_rss.xml")), nil))
-	if !p.IsTorrent() {
-		t.Error("anirena must carry the torrent capability")
-	}
-	if p.ID() != "anirena" || p.Name() != "AniRena" {
-		t.Errorf("id/name = %q/%q", p.ID(), p.Name())
-	}
-	if p.SourceType() != contracts.SourceTypeBoth {
-		t.Errorf("source type = %q, want both (JA audio, acceptable video)", p.SourceType())
-	}
-	if got := p.ContentLanguage(); got != "ja" {
-		t.Errorf("content language = %q, want ja (JP/multilingual releases)", got)
-	}
-	// PR42: the index matches romaji/english release names only.
-	if p.NamePreference() != contracts.NamePrefLatin {
-		t.Errorf("name preference = %v, want NamePrefLatin", p.NamePreference())
-	}
-	if p.BaseURL() == "" {
-		t.Error("base URL must be the site root, not empty")
 	}
 }
 
@@ -288,32 +295,102 @@ func TestAniRenaNotUnconfiguredByDefault(t *testing.T) {
 	}
 }
 
-// TestAniRenaGetEpisodesDelegatesToEpisodesWait: the provider
-// GetEpisodes path rides the base's bounded metadata wait (the search
-// result resolves long after the search; unreachable metadata fails
-// loud on the caller's deadline, never silent-empty).
-func TestAniRenaGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
+// TestAniRenaCapabilityDeclarations pins the script-declared capability
+// surfaces (the Adapt composite): the JA/multilingual content
+// language, the latin-only index routing (PR42) and the both-type
+// catalog assessment — the exact declarations the compiled provider
+// carried in Go code.
+func TestAniRenaCapabilityDeclarations(t *testing.T) {
 	t.Parallel()
 
-	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
-	p := newAniRenaWithEngine(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-
-	eps, err := p.GetEpisodes(ctx, dead)
-	if err == nil {
-		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
+	p := luaProviderAtProduction(t, "anirena")
+	if p.Name() != "AniRena" {
+		t.Errorf("name = %q, want AniRena", p.Name())
 	}
-	if len(eps) != 0 {
-		t.Errorf("episodes = %v, want none", eps)
+	if p.BaseURL() != "https://www.anirena.com" {
+		t.Errorf("base url = %q, want the site root", p.BaseURL())
+	}
+	if p.SourceType() != contracts.SourceTypeBoth {
+		t.Errorf("source type = %q, want both (JA audio, acceptable video)", p.SourceType())
+	}
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok {
+		t.Fatal("the adapted provider lost the ContentLanguage surface")
+	}
+	if got := lc.ContentLanguage(); got != "ja" {
+		t.Errorf("content language = %q, want ja (JP/multilingual releases)", got)
+	}
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the adapted provider lost the NamePreference surface")
+	}
+	if np.NamePreference() != contracts.NamePrefLatin {
+		t.Errorf("name preference = %v, want NamePrefLatin", np.NamePreference())
 	}
 }
 
-// TestAniRenaSearchPreflightDropsDeadHosts pins the PR66 owner ruling:
-// every surfaced result's .torrent bytes are pre-fetched (bounded,
-// short per-URL budget) BEFORE the result surfaces; a dead host drops
-// the result. The feed has no seed fields, so nothing is dropped by
-// the seedless filter first — the preflight is the only gate here.
+// --- the luaTorrent adapter × the bundled script (the compiled
+// provider's torrent contract, ported) ---
+
+// TestAniRenaTorrentSlotInRegistry pins the migration-safety parity:
+// through the REAL registry the anirena slot keeps every surface it
+// carried as a compiled provider — the torrent capability (the
+// parity smoke's torrent leg routes on it), the engine-injection
+// duck, the JA content language and the latin index routing.
+func TestAniRenaTorrentSlotInRegistry(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.ProxyURL = ""
+
+	reg, err := NewRegistry(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	defer func() { _ = reg.Close() }()
+
+	torrentFound := false
+	for _, id := range reg.TorrentProviderIDs() {
+		if id == "anirena" {
+			torrentFound = true
+		}
+	}
+	if !torrentFound {
+		t.Fatal("anirena lost the torrent capability in the registry (the luaTorrent adapter wrap is missing?)")
+	}
+	p, ok := reg.Get("anirena")
+	if !ok {
+		t.Fatal("anirena is not registered")
+	}
+	// The wrapper layers peel the same way the registry's own wiring
+	// does (the engine injection runs on the bare list BEFORE the
+	// delegator wraps).
+	if _, ok := bareProvider(p).(interface{ SetEngine(*torrent.Engine) }); !ok {
+		t.Fatal("the anirena slot lost the engine-injection surface")
+	}
+	if got := reg.ContentLanguage("anirena"); got != "ja" {
+		t.Errorf("content language = %q, want ja through the adapter", got)
+	}
+	if got := reg.NamePreference("anirena"); got != contracts.NamePrefLatin {
+		t.Errorf("name preference = %v, want NamePrefLatin through the adapter", got)
+	}
+}
+
+// newAniRenaLuaTorrent builds the migration shape: the bundled script
+// (production base re-pointed at baseURL) wrapped in the torrent
+// adapter with an offline engine wired.
+func newAniRenaLuaTorrent(t *testing.T, baseURL string) *luaTorrent {
+	t.Helper()
+	inner := luaProvider(t, "anirena", baseURL)
+	a := newLuaTorrent(inner, nil, nil)
+	a.SetEngine(newOfflineTestEngine(t))
+	return a
+}
+
+// TestAniRenaSearchPreflightDropsDeadHosts pins the PR66 owner ruling
+// through the adapter: every surfaced result's .torrent bytes are
+// pre-fetched (bounded, short per-URL budget) BEFORE the result
+// surfaces; a dead host drops the result. The feed has no seed
+// fields, so nothing is dropped by the seedless filter first — the
+// preflight is the only gate here.
 func TestAniRenaSearchPreflightDropsDeadHosts(t *testing.T) {
 	t.Parallel()
 
@@ -333,7 +410,7 @@ func TestAniRenaSearchPreflightDropsDeadHosts(t *testing.T) {
 		anirenaItemXML("[Anime > RAW] Show - dead", anirenaDesc("1.0 GiB"), "http://"+dead.Addr().String()+"/download/2.torrent"),
 		anirenaItemXML("[Anime > RAW] Show - 03", anirenaDesc("1.0 GiB"), live.URL+"/download/4.torrent"),
 	)
-	p := newAniRena(anirenaServer(t, feed, nil), testClient(t, "anirena"), newOfflineTestEngine(t))
+	p := newAniRenaLuaTorrent(t, anirenaServer(t, feed))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -371,9 +448,8 @@ func TestAniRenaSearchPreflightFeedsIngestionNoRefetch(t *testing.T) {
 	var fetches atomic.Int64
 	live := torrentFixtureServer(t, torrentBytes.Bytes(), &fetches)
 	link := live.URL + "/download/1.torrent"
-	p := newAniRena(anirenaServer(t, anirenaFeed(
-		anirenaItemXML("[Anime > RAW] Show - 01", anirenaDesc("1.0 GiB"), link)), nil),
-		testClient(t, "anirena"), newOfflineTestEngine(t))
+	p := newAniRenaLuaTorrent(t, anirenaServer(t, anirenaFeed(
+		anirenaItemXML("[Anime > RAW] Show - 01", anirenaDesc("1.0 GiB"), link))))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -420,7 +496,7 @@ func TestAniRenaSearchPreflightNotMetainfoDropped(t *testing.T) {
 		anirenaItemXML("[Anime > RAW] Show - wall", anirenaDesc("1.0 GiB"), html.URL+"/download/1.torrent"),
 		anirenaItemXML("[Anime > RAW] Show - good", anirenaDesc("1.0 GiB"), live.URL+"/download/2.torrent"),
 	)
-	p := newAniRena(anirenaServer(t, feed, nil), testClient(t, "anirena"), newOfflineTestEngine(t))
+	p := newAniRenaLuaTorrent(t, anirenaServer(t, feed))
 
 	results, err := p.Search(context.Background(), "show")
 	if err != nil {
@@ -456,7 +532,7 @@ func TestAniRenaSearchPreflightSlowHostDropped(t *testing.T) {
 		anirenaItemXML("[Anime > RAW] Show - slow", anirenaDesc("1.0 GiB"), slow.URL+"/download/1.torrent"),
 		anirenaItemXML("[Anime > RAW] Show - good", anirenaDesc("1.0 GiB"), live.URL+"/download/2.torrent"),
 	)
-	p := newAniRena(anirenaServer(t, feed, nil), testClient(t, "anirena"), newOfflineTestEngine(t))
+	p := newAniRenaLuaTorrent(t, anirenaServer(t, feed))
 	p.preflightTimeout = 50 * time.Millisecond
 
 	results, err := p.Search(context.Background(), "show")
@@ -469,17 +545,20 @@ func TestAniRenaSearchPreflightSlowHostDropped(t *testing.T) {
 }
 
 // TestAniRenaSearchPreflightLogsTypedReason: drops are logged with the
-// URL and the typed failure reason, never silent.
+// URL and the typed failure reason, never silent (the registry's
+// logger seam routes through the adapter's SetLogger forward).
 func TestAniRenaSearchPreflightLogsTypedReason(t *testing.T) {
 	t.Parallel()
 
 	dead := newDeadListener(t)
 	deadURL := "http://" + dead.Addr().String() + "/download/1.torrent"
 	feed := anirenaFeed(anirenaItemXML("[Anime > RAW] Show - dead", anirenaDesc("1.0 GiB"), deadURL))
-	p := newAniRena(anirenaServer(t, feed, nil), testClient(t, "anirena"), newOfflineTestEngine(t))
 
-	var logBuf bytes.Buffer
-	p.SetLogger(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	logBuf := &bytes.Buffer{}
+	inner := luaProviderWithLogger(t, "anirena", anirenaServer(t, feed), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p := newLuaTorrent(inner, nil, nil)
+	p.SetLogger(slog.New(slog.NewTextHandler(logBuf, nil)))
+	p.SetEngine(newOfflineTestEngine(t))
 
 	if _, err := p.Search(context.Background(), "show"); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -493,38 +572,40 @@ func TestAniRenaSearchPreflightLogsTypedReason(t *testing.T) {
 	}
 }
 
-// TestAniRenaSearchNoEngineSkipsPreflight pins the nil-engine rule:
-// without the [torrent] engine there is nothing to preflight or feed,
-// so Search keeps the legacy behavior (no prefetch requests — this is
-// also what keeps hand-built unit tests network-free).
-func TestAniRenaSearchNoEngineSkipsPreflight(t *testing.T) {
+// TestAniRenaGetEpisodesDelegatesToEpisodesWait: the adapter's
+// GetEpisodes rides the base's bounded metadata wait (the search
+// result resolves long after the search; unreachable metadata fails
+// loud on the caller's deadline, never silent-empty).
+func TestAniRenaGetEpisodesDelegatesToEpisodesWait(t *testing.T) {
 	t.Parallel()
 
-	hits := 0
-	feed := anirenaFeed(
-		anirenaItemXML("[Anime > RAW] Show - 01", anirenaDesc("1.0 GiB"), AniRenaBase+"/torrents/019d5dd9-39ce-7912-a1ba-bb9373c89dd3.torrent"),
-		anirenaItemXML("[Anime > RAW] Show - 02", anirenaDesc("1.0 GiB"), AniRenaBase+"/torrents/019d5dd9-39ce-7912-a1ba-bb9373c89dd4.torrent"),
-	)
-	p := newAniRenaFixtureAt(t, anirenaServer(t, feed, &hits))
-	results, err := p.Search(context.Background(), "show")
-	if err != nil {
-		t.Fatalf("Search: %v", err)
+	const dead = "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98"
+	inner := luaProvider(t, "anirena", anirenaServer(t, anirenaFeed()))
+	p := newLuaTorrent(inner, nil, nil)
+	p.SetEngine(newOfflineTestEngine(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	eps, err := p.GetEpisodes(ctx, dead)
+	if err == nil {
+		t.Fatal("GetEpisodes on unreachable metadata must fail loud")
 	}
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2 (nil engine: no preflight, nothing dropped)", len(results))
-	}
-	// Exactly ONE request happened: the RSS search itself. No
-	// preflight attempted the fixture's download URLs.
-	if hits != 1 {
-		t.Errorf("server hits = %d, want 1 (search only)", hits)
+	if len(eps) != 0 {
+		t.Errorf("episodes = %v, want none", eps)
 	}
 }
 
 // --- helpers ---
 
-// anirenaServer serves body on every request (the RSS search endpoint);
-// hits, when non-nil, counts requests.
-func anirenaServer(t *testing.T, body string, hits *int) string {
+// anirenaServer serves body on every request (the RSS search endpoint).
+func anirenaServer(t *testing.T, body string) string {
+	t.Helper()
+	return anirenaServerCounted(t, body, nil)
+}
+
+// anirenaServerCounted is anirenaServer with a request counter.
+func anirenaServerCounted(t *testing.T, body string, hits *int) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if hits != nil {
@@ -537,16 +618,14 @@ func anirenaServer(t *testing.T, body string, hits *int) string {
 	return srv.URL
 }
 
-func newAniRenaFixtureAt(t *testing.T, baseURL string) *AniRena {
+// anirenaServerStatus serves the bare status code on every request.
+func anirenaServerStatus(t *testing.T, status int) string {
 	t.Helper()
-	return newAniRena(baseURL, testClient(t, "anirena"), nil)
-}
-
-func newAniRenaWithEngine(t *testing.T) *AniRena {
-	t.Helper()
-	eng := newOfflineTestEngine(t)
-	t.Cleanup(func() { _ = eng.Close() })
-	return newAniRena(AniRenaBase, testClient(t, "anirena"), eng)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 // anirenaItemXML renders one RSS item fragment: title, description
@@ -563,10 +642,10 @@ func anirenaItemXML(title, desc, enclosure string) string {
 	return b.String()
 }
 
-// anirenaEnclosure is a fixture-shaped .torrent URL for an id.
-func anirenaEnclosure(t *testing.T, id string) string {
-	t.Helper()
-	return AniRenaBase + "/torrents/019d5df0-0000-7000-8000-0000000000" + id + ".torrent"
+// anirenaEnclosure is a fixture-shaped .torrent URL for an id (the
+// production site host — fixture strings only, never fetched here).
+func anirenaEnclosure(id string) string {
+	return "https://www.anirena.com/torrents/019d5df0-0000-7000-8000-0000000000" + id + ".torrent"
 }
 
 // anirenaDesc renders a description CDATA body like the live feed's.

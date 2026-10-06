@@ -53,6 +53,10 @@ var luaProductionBases = map[string][]string{
 	// stream resolver's answer (the fixtures rewrite it to the test
 	// server at serve time).
 	"anikoto": {"https://anikototv.to"},
+	// anizone (PR130): the site root — every leg (search, the series
+	// page, /livewire/update, the watch page) hangs off the one
+	// base_url literal, and the Referer/Origin headers derive from it.
+	"anizone": {"https://anizone.to"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

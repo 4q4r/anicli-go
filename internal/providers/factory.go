@@ -70,15 +70,19 @@ var allFactories = []struct {
 	{"kickassanime", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKickassanime(KickassAnimeBase, http, cfg.Network.MaxParallel)
 	}},
-	// anizone (PR59): the anizone.to sub-only stream source — the first
-	// provider with no frozen Python original, written from the
-	// Anivexa-API AniZone recipe (providers/anizone.js) re-verified live
-	// 2026-09-18. Livewire HTML payloads, /livewire/update episode
+	// anizone (PR59 → PR130): the anizone.to sub-only stream source —
+	// the first provider with no frozen Python original, written from
+	// the Anivexa-API AniZone recipe (providers/anizone.js) re-verified
+	// live 2026-09-18. Livewire HTML payloads, /livewire/update episode
 	// pagination and vidstackPlayer HLS on the watch page; no
-	// credentials.
-	{"anizone", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAniZone(AniZoneBase, http)
-	}},
+	// credentials. Migrated to the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anizone/main.lua) — the twelfth
+	// Go→Lua provider migration. luaOnly pins the roster slot; the
+	// script carries the Livewire continuation walk (the csrf/snapshot
+	// round-trip re-derived per invocation — the fresh-sandbox
+	// contract), the JSON-argument decoder and the {n,u} raw_id watch
+	// state (the animevost/anilib precedent).
+	{"anizone", true, nil},
 	{"sameband", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newSameBand(SameBandBase, http)
 	}},

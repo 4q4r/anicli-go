@@ -22,6 +22,23 @@ import (
 // testdata/README.md): the Livewire search/series pages and the
 // vidstackPlayer watch page. Page chrome is trimmed; payload values are
 // verbatim.
+//
+// PR130: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/anizone/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to.
+
+// azDub is the fixed single dub name of the sub-only catalog (the
+// script emits it as the raw_embeds key; the streams resolution keys
+// on it).
+const azDub = "Original (AniZone)"
+
+// azProvider loads the bundled anizone script against the test server
+// (the Lua harness rewrites the production base literal).
+func azProvider(t *testing.T, srvURL string) contracts.Provider {
+	t.Helper()
+	return luaProvider(t, "anizone", srvURL)
+}
 
 // rewritePlayerSrc points the captured vidstackPlayer src at a test
 // m3u8 server. The watch fixture keeps the verbatim production URL in
@@ -50,7 +67,7 @@ func TestAniZoneSearch(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		_, _ = w.Write(fixture(t, "anizone_search.html"))
 	})
-	p := newAniZone(srv.URL, testClient(t, "anizone"))
+	p := azProvider(t, srv.URL)
 
 	results, err := p.Search(context.Background(), "black lagoon")
 	if err != nil {
@@ -87,8 +104,10 @@ func TestAniZoneSearch(t *testing.T) {
 	if first.Poster != "https://anizone.to/images/anime/c05ffeb2-617d-4a52-af9f-19131a5c8b31.jpg" {
 		t.Errorf("Poster = %q, want the cover URL", first.Poster)
 	}
-	if year, ok := first.Meta["year"].(int); !ok || year != 2006 {
-		t.Errorf("Meta[year] = %#v, want int 2006", first.Meta["year"])
+	// The Lua adapter decodes meta numbers as json.Number (the
+	// script passes the payload's start_year through).
+	if year, ok := first.Meta["year"].(json.Number); !ok || year.String() != "2006" {
+		t.Errorf("Meta[year] = %#v, want 2006", first.Meta["year"])
 	}
 	if first.Meta["type"] != "TV Series" {
 		t.Errorf("Meta[type] = %v, want the site format string", first.Meta["type"])
@@ -107,7 +126,7 @@ func TestAniZoneSearchSendsHeaders(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, "<html></html>")
 	})
-	p := newAniZone(srv.URL, testClient(t, "anizone"))
+	p := azProvider(t, srv.URL)
 
 	if _, err := p.Search(context.Background(), "q"); err == nil {
 		t.Fatal("Search on a payload-less page must surface the typed error")
@@ -128,7 +147,7 @@ func TestAniZoneSearchTypedErrors(t *testing.T) {
 
 	t.Run("transport error", func(t *testing.T) {
 		t.Parallel()
-		p := newAniZone("http://"+newDeadListener(t).Addr().String(), testClient(t, "anizone"))
+		p := azProvider(t, "http://"+newDeadListener(t).Addr().String())
 		results, err := p.Search(context.Background(), "q")
 		if err == nil {
 			t.Fatal("Search err = nil, want the transport error")
@@ -143,7 +162,7 @@ func TestAniZoneSearchTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, "<html><body>no payload here</body></html>")
 		})
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		_, err := p.Search(context.Background(), "q")
 		if err == nil {
 			t.Fatal("Search err = nil, want the payload error")
@@ -165,7 +184,7 @@ func TestAniZoneSearchTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, `<script>items: JSON.parse('[]')</script>`)
 		})
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		results, err := p.Search(context.Background(), "q")
 		if err != nil {
 			t.Fatalf("Search: %v", err)
@@ -193,7 +212,7 @@ func TestAniZoneSearchNoResultsPage(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		_, _ = w.Write(fixture(t, "anizone_search_empty.html"))
 	})
-	p := newAniZone(srv.URL, testClient(t, "anizone"))
+	p := azProvider(t, srv.URL)
 
 	results, err := p.Search(context.Background(), "Ателье колдовских колпаков")
 	if err != nil {
@@ -202,92 +221,6 @@ func TestAniZoneSearchNoResultsPage(t *testing.T) {
 	if len(results) != 0 {
 		t.Errorf("results = %d, want 0", len(results))
 	}
-}
-
-// TestAzDecodeJSONArgument pins the JS-string-literal decoding: the
-// server double-escapes ("\\u041F" in the raw literal is a literal JSON
-// "\u041F" escape; "\u0022" is a JS quote escape), and surrogate pairs
-// must combine like JS String.fromCharCode.
-func TestAzDecodeJSONArgument(t *testing.T) {
-	t.Parallel()
-
-	t.Run("double-escaped unicode survives", func(t *testing.T) {
-		t.Parallel()
-		// The captured form: a JS-escaped backslash followed by u041F is
-		// a literal JSON "\u041F" escape the decoder must restore
-		// verbatim (a naive unescape yields a stray "\" + char pair).
-		out, err := azDecodeJSONArgument(`{"t":"\\u0427\\u0451\\u0440\\u043d\\u0430\\u044f"}`)
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if string(out) != `{"t":"\u0427\u0451\u0440\u043d\u0430\u044f"}` {
-			t.Errorf("decode = %s, want the restored JSON escapes", out)
-		}
-		// End to end: encoding/json resolves the restored escapes.
-		var doc struct {
-			T string `json:"t"`
-		}
-		if err := json.Unmarshal(out, &doc); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if doc.T != "Чёрная" {
-			t.Errorf("decoded title = %q, want the captured cyrillic", doc.T)
-		}
-	})
-
-	t.Run("single escape decodes", func(t *testing.T) {
-		t.Parallel()
-		out, err := azDecodeJSONArgument(`{"a":"\u0445"}`)
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if string(out) != `{"a":"х"}` {
-			t.Errorf("decode = %s, want the JS unicode escape resolved to the char", out)
-		}
-	})
-
-	t.Run("surrogate pairs combine", func(t *testing.T) {
-		t.Parallel()
-		out, err := azDecodeJSONArgument(`{"e":"\ud83d\ude00"}`)
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if string(out) != `{"e":"😀"}` {
-			t.Errorf("decode = %s, want the combined astral char", out)
-		}
-	})
-
-	t.Run("escaped slashes pass through", func(t *testing.T) {
-		t.Parallel()
-		// The watch-page src rides double-encoded: the decode must NOT
-		// touch the JSON-legal `\/` escapes (they are not \u escapes);
-		// the recipe's normalizeUrl collapses them AFTER the JSON
-		// round-trip.
-		raw := `{"u":"http:\\/\\/x"}`
-		out, err := azDecodeJSONArgument(raw)
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if string(out) != raw {
-			t.Errorf("decode = %s, want the payload unchanged", out)
-		}
-		var doc struct {
-			U string `json:"u"`
-		}
-		if err := json.Unmarshal(out, &doc); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if got := azNormalizeURL(doc.U); got != "http://x" {
-			t.Errorf("normalizeUrl(%q) = %q, want http://x", doc.U, got)
-		}
-	})
-
-	t.Run("garbage fails loud", func(t *testing.T) {
-		t.Parallel()
-		if _, err := azDecodeJSONArgument(`not json`); err == nil {
-			t.Fatal("decode err = nil, want the invalid-JSON error")
-		}
-	})
 }
 
 func TestAniZoneGetEpisodes(t *testing.T) {
@@ -300,7 +233,7 @@ func TestAniZoneGetEpisodes(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusNotFound)
 	})
-	p := newAniZone(srv.URL, testClient(t, "anizone"))
+	p := azProvider(t, srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "a8vfumal")
 	if err != nil {
@@ -317,19 +250,30 @@ func TestAniZoneGetEpisodes(t *testing.T) {
 		t.Fatalf("episodes = %d, want 12 (specials dropped)", len(episodes))
 	}
 	first := episodes[0]
-	if first.Num != "1" || first.RawID != "1" {
-		t.Errorf("Num/RawID = %q/%q, want 1/1", first.Num, first.RawID)
+	if first.Num != "1" || first.RawID != luaStateJSONOf(srv.URL+"/anime/a8vfumal/1", "1") {
+		t.Errorf("Num/RawID = %q/%q, want 1 and the {n,u} state JSON", first.Num, first.RawID)
 	}
 	if first.Title != "The Black Lagoon" {
 		t.Errorf("Title = %q, want the title_list[\"1\"] value", first.Title)
 	}
-	embeds := first.RawEmbeds[anizoneDub]
+	embeds := first.RawEmbeds[azDub]
 	if len(embeds) != 1 || embeds[0] != srv.URL+"/anime/a8vfumal/1" {
 		t.Errorf("RawEmbeds = %v, want the single watch URL", first.RawEmbeds)
 	}
 	if episodes[11].Num != "12" {
 		t.Errorf("episodes[11].Num = %q, want 12 (sorted)", episodes[11].Num)
 	}
+}
+
+// luaStateJSONOf builds the {n, u} state JSON the script encodes into
+// raw_id (the fresh-sandbox streams() state carrier — the
+// animevost/anilib precedent, key order "n" then "u").
+func luaStateJSONOf(pageURL, num string) string {
+	b, err := json.Marshal(map[string]string{"n": num, "u": pageURL})
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // The page-one fixture is the live One Piece capture (hasMore: true +
@@ -381,7 +325,7 @@ func TestAniZoneGetEpisodesPagination(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := newAniZone(srv.URL, testClient(t, "anizone"))
+	p := azProvider(t, srv.URL)
 
 	episodes, err := p.GetEpisodes(context.Background(), "uyyyn4kf")
 	if err != nil {
@@ -416,7 +360,8 @@ func TestAniZoneGetEpisodesPagination(t *testing.T) {
 	}
 
 	// Body: the decoded page-one snapshot, the cursor and the loadPage
-	// call — the Livewire wire format.
+	// call — the Livewire wire format (updates is the empty OBJECT the
+	// wire format carries).
 	var body struct {
 		Components []struct {
 			Snapshot string         `json:"snapshot"`
@@ -435,6 +380,9 @@ func TestAniZoneGetEpisodesPagination(t *testing.T) {
 		t.Fatalf("components = %d, want 1", len(body.Components))
 	}
 	comp := body.Components[0]
+	if comp.Updates == nil {
+		t.Error("updates = null, want the empty object the wire format carries")
+	}
 	// The expected snapshot: the fixture's entity-encoded attribute,
 	// HTML-decoded (recipe decodeEntities).
 	pageFixture := fixture(t, "anizone_series_paged.html")
@@ -473,7 +421,7 @@ func TestAniZoneGetEpisodesTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, "<html>challenge page</html>")
 		})
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		_, err := p.GetEpisodes(context.Background(), "x")
 		if !errors.Is(err, contracts.ErrExtractFailed) {
 			t.Fatalf("err = %v, want ErrExtractFailed", err)
@@ -485,7 +433,7 @@ func TestAniZoneGetEpisodesTypedErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, `<script>items: JSON.parse('[]')</script>`)
 		})
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		_, err := p.GetEpisodes(context.Background(), "x")
 		if !errors.Is(err, contracts.ErrExtractFailed) {
 			t.Fatalf("err = %v, want ErrExtractFailed (payload requires items+snapshot+csrf)", err)
@@ -502,7 +450,7 @@ func TestAniZoneGetEpisodesTypedErrors(t *testing.T) {
 			_, _ = fmt.Fprint(w, "not json")
 		}))
 		t.Cleanup(srv.Close)
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		_, err := p.GetEpisodes(context.Background(), "uyyyn4kf")
 		if err == nil {
 			t.Fatal("GetEpisodes err = nil, want the continuation error")
@@ -523,7 +471,7 @@ func TestAniZoneGetEpisodesTypedErrors(t *testing.T) {
 			_, _ = fmt.Fprint(w, `{"components":[{"snapshot":"x","effects":{"dispatches":[]}}]}`)
 		}))
 		t.Cleanup(srv.Close)
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
+		p := azProvider(t, srv.URL)
 		_, err := p.GetEpisodes(context.Background(), "uyyyn4kf")
 		if !errors.Is(err, contracts.ErrExtractFailed) {
 			t.Fatalf("err = %v, want ErrExtractFailed", err)
@@ -541,16 +489,21 @@ func TestAniZoneResolveStream(t *testing.T) {
 	watchSrv, watchRec := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(rewritePlayerSrc(t, fixture(t, "anizone_watch.html"), m3u8Srv.URL+"/master.m3u8"))
 	})
-	p := newAniZone(watchSrv.URL, testClient(t, "anizone"))
+	// The watch page and the playlist hang off DIFFERENT fixture
+	// servers here; the script resolves the playlist URL from the
+	// decoded payload, so only the watch URL rides the provider base.
+	// The playlist fetch leaves the base — point the captured src at
+	// the m3u8 server (rewritePlayerSrc already did).
+	p := azProvider(t, watchSrv.URL)
 
 	episode := contracts.Episode{
 		Num:   "1",
-		RawID: "1",
+		RawID: luaStateJSONOf(watchSrv.URL+"/anime/a8vfumal/1", "1"),
 		RawEmbeds: map[string][]string{
-			anizoneDub: {watchSrv.URL + "/anime/a8vfumal/1"},
+			azDub: {watchSrv.URL + "/anime/a8vfumal/1"},
 		},
 	}
-	stream, err := p.ResolveStream(context.Background(), episode, anizoneDub)
+	stream, err := p.ResolveStream(context.Background(), episode, azDub)
 	if err != nil {
 		t.Fatalf("ResolveStream: %v", err)
 	}
@@ -566,7 +519,7 @@ func TestAniZoneResolveStream(t *testing.T) {
 		t.Errorf("playlist Referer = %q, want the site root", got)
 	}
 
-	if stream.DubName != anizoneDub {
+	if stream.DubName != azDub {
 		t.Errorf("DubName = %q", stream.DubName)
 	}
 	for _, height := range []string{"360", "720", "1080"} {
@@ -590,6 +543,35 @@ func TestAniZoneResolveStream(t *testing.T) {
 	}
 }
 
+// TestAniZoneResolveStreamFromRawID pins the fresh-sandbox state
+// contract: streams() receives raw_id and the dub ONLY — the watch URL
+// rides the {n,u} JSON state (the animevost/anilib precedent), so the
+// resolution works with empty RawEmbeds too.
+func TestAniZoneResolveStreamFromRawID(t *testing.T) {
+	t.Parallel()
+
+	m3u8Srv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = w.Write(fixture(t, "anizone_master.m3u8"))
+	})
+	watchSrv, _ := fixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(rewritePlayerSrc(t, fixture(t, "anizone_watch.html"), m3u8Srv.URL+"/master.m3u8"))
+	})
+	p := azProvider(t, watchSrv.URL)
+
+	episode := contracts.Episode{
+		Num:   "1",
+		RawID: luaStateJSONOf(watchSrv.URL+"/anime/a8vfumal/1", "1"),
+	}
+	stream, err := p.ResolveStream(context.Background(), episode, azDub)
+	if err != nil {
+		t.Fatalf("ResolveStream from raw_id alone: %v", err)
+	}
+	if len(stream.Links) != 3 {
+		t.Errorf("Links = %d entries, want the three captured variants", len(stream.Links))
+	}
+}
+
 func TestAniZoneResolveStreamErrors(t *testing.T) {
 	t.Parallel()
 
@@ -598,11 +580,9 @@ func TestAniZoneResolveStreamErrors(t *testing.T) {
 		srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprint(w, "<html>no player</html>")
 		})
-		p := newAniZone(srv.URL, testClient(t, "anizone"))
-		episode := contracts.Episode{RawEmbeds: map[string][]string{
-			anizoneDub: {srv.URL + "/anime/x/1"},
-		}}
-		_, err := p.ResolveStream(context.Background(), episode, anizoneDub)
+		p := azProvider(t, srv.URL)
+		episode := contracts.Episode{RawID: luaStateJSONOf(srv.URL+"/anime/x/1", "1")}
+		_, err := p.ResolveStream(context.Background(), episode, azDub)
 		if !errors.Is(err, contracts.ErrExtractFailed) {
 			t.Fatalf("err = %v, want ErrExtractFailed", err)
 		}
@@ -614,11 +594,9 @@ func TestAniZoneResolveStreamErrors(t *testing.T) {
 		watchSrv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write(rewritePlayerSrc(t, fixture(t, "anizone_watch.html"), dead))
 		})
-		p := newAniZone(watchSrv.URL, testClient(t, "anizone"))
-		episode := contracts.Episode{RawEmbeds: map[string][]string{
-			anizoneDub: {watchSrv.URL + "/anime/x/1"},
-		}}
-		_, err := p.ResolveStream(context.Background(), episode, anizoneDub)
+		p := azProvider(t, watchSrv.URL)
+		episode := contracts.Episode{RawID: luaStateJSONOf(watchSrv.URL+"/anime/x/1", "1")}
+		_, err := p.ResolveStream(context.Background(), episode, azDub)
 		if err == nil {
 			t.Fatal("err = nil, want the playlist transport error")
 		}
@@ -630,8 +608,10 @@ func TestAniZoneResolveStreamErrors(t *testing.T) {
 
 	t.Run("empty embeds resolve to an empty stream", func(t *testing.T) {
 		t.Parallel()
-		p := newAniZone("https://anizone.to", testClient(t, "anizone"))
-		stream, err := p.ResolveStream(context.Background(), contracts.Episode{}, anizoneDub)
+		// The compiled provider's semantics: no resolvable watch URL →
+		// an empty stream, no error (the session skips the row).
+		p := azProvider(t, "https://anizone.to")
+		stream, err := p.ResolveStream(context.Background(), contracts.Episode{}, azDub)
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
@@ -644,9 +624,8 @@ func TestAniZoneResolveStreamErrors(t *testing.T) {
 func TestAniZoneNamePreference(t *testing.T) {
 	t.Parallel()
 
-	p := newAniZone(AniZoneBase, testClient(t, "anizone"))
-	var provider contracts.Provider = p
-	np, ok := provider.(contracts.NamePreferenceProvider)
+	p := azProvider(t, "https://anizone.to")
+	np, ok := p.(contracts.NamePreferenceProvider)
 	if !ok {
 		t.Fatal("anizone must implement contracts.NamePreferenceProvider (latin-only index)")
 	}
@@ -656,8 +635,8 @@ func TestAniZoneNamePreference(t *testing.T) {
 }
 
 // azFixtureSnapshot extracts the entity-encoded pages.anime-detail
-// wire:snapshot attribute from a captured page (test-side mirror of the
-// provider's own extraction, without the decode).
+// wire:snapshot attribute from a captured page (test-side mirror of
+// the script's own extraction, without the decode).
 func azFixtureSnapshot(page string) string {
 	const marker = `wire:snapshot="`
 	for _, candidate := range strings.Split(page, marker)[1:] {

@@ -90,6 +90,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// direct route tarpits on the characterization network — the
 		// compiled provider's route note verbatim).
 		"anikoto": "black lagoon",
+		// anizone (PR130): the Livewire catalog rides the proxy (the
+		// direct route tarpits on the characterization network — the
+		// route-matrix honest note; the latin index answers the shared
+		// EN probe).
+		"anizone": "black lagoon",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

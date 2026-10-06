@@ -118,9 +118,20 @@ var allFactories = []struct {
 	{"kodik", false, func(http *netclient.Client, cfg config.Settings, _ *cfbrowser.Manager) contracts.Provider {
 		return newKodik(KodikAPIBase, cfg.Providers.Kodik.Token, http)
 	}},
-	{"anidub", false, func(http *netclient.Client, _ config.Settings, _ *cfbrowser.Manager) contracts.Provider {
-		return newAnidub(AnidubBase, http)
-	}},
+	// anidub (PR132): the online.anidub.com RU DLE catalog migrated to
+	// the BUNDLED LUA SCRIPT
+	// (internal/luaproviders/scripts/anidub/main.lua) — the sixteenth
+	// Go→Lua provider migration. anidub is not a frozen anicli-py
+	// port: the provider was characterized live (the anizone
+	// precedent). luaOnly pins the roster slot; the script serves the
+	// DLE search-form GET (the pyQuote %20 encoding re-derived in the
+	// script — the SDK's query_escape is form-style +), the
+	// «Запасной плеер» sibnet span walk (the ПЛЕЕР #1 playlist span
+	// skipped by the «Серия» gate) and the sibnet resolve through the
+	// shared extractor factory (anicli.extract). No credentials; the
+	// live smoke keeps the documented sibnet 403 drift at resolve
+	// (site-side; the shared extractor, not the port).
+	{"anidub", true, nil},
 	// animedia (PR56 → PR116): the amd.online DLE site migrated to
 	// the BUNDLED LUA SCRIPT
 	// (internal/luaproviders/scripts/animedia/main.lua) — the second

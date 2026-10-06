@@ -73,6 +73,10 @@ var luaProductionBases = map[string][]string{
 	// hangs off the one base_url literal, and the stream Referer
 	// derives from it.
 	"sameband": {"https://sameband.studio"},
+	// anidub (PR132): the site root — every leg (the DLE search GET,
+	// the anime page and, through the shared extractor factory, the
+	// sibnet embed rewrites) hangs off the one base_url literal.
+	"anidub": {"https://online.anidub.com"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

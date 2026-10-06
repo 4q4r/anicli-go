@@ -82,6 +82,10 @@ var luaProductionBases = map[string][]string{
 	// the one base_url literal; the kodik embeds are never fetched
 	// hosts (the shared extractor consumes them).
 	"anikado": {"https://anikado.net"},
+	// animiku (PR134): the site root — the DLE search GET and the
+	// mrdeath/aaparser player bridge both hang off the one base_url
+	// literal (the bridge rides the POST form, not a second host).
+	"animiku": {"https://beta.animiku.tokyo"},
 }
 
 // luaStateJSON builds the {n, u} state JSON the migrated scripts

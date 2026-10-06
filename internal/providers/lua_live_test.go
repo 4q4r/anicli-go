@@ -127,6 +127,11 @@ func TestLiveLuaProvidersAgainstRealSites(t *testing.T) {
 		// «черная лагуна» → 2 cards in 0.73s, every leg anonymous on
 		// the direct route).
 		"anikado": "черная лагуна",
+		// animiku (PR134): the DLE GET search answers direct (the
+		// smoke matrix's honest route: the «черная лагуна» probe
+		// surfaced 4 rows direct, LIVE-RE-VERIFIED 2026-10-06 at
+		// ~0.7s/leg, no challenge, no Referer needed).
+		"animiku": "черная лагуна",
 	}
 	for id, query := range queries {
 		t.Run(id, func(t *testing.T) {

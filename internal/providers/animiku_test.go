@@ -1,5 +1,32 @@
 package providers
 
+// [LIVE-VERIFIED 2026-09-25, re-verified 2026-10-06] Every animiku
+// fixture below is a verbatim capture of beta.animiku.tokyo (anonymous
+// guest requests, desktop Chrome User-Agent, no cookies). The search
+// fixtures ride the DLE full-search GET (do=search&subaction=search&
+// story=…); the player fixtures are the mrdeath/aaparser bridge
+// answers — POST engine/ajax/controller.php?mod=anime_grabber&module=
+// kodik_playlist_ajax with news_id+action=load_player — for the two
+// observed shapes: the serial player (b-simple_episode__item grid) and
+// the movie player (per-dub data-this_link, kodik_translates_alt).
+// The 2026-10-06 re-probe answered byte-equivalent: the same 4 search
+// rows (newsids 9134/8640/5706/5743), the 12-episode/2-dub serial
+// grid and the 13-dub movie translator row, direct route, ~0.7s/leg.
+//
+// PR134: the provider runs as the BUNDLED LUA SCRIPT
+// (internal/luaproviders/scripts/animiku/main.lua) — these tests pin
+// the script through the same contracts.Provider surface and the same
+// fixtures the compiled Go implementation was held to. Contract shift
+// forced by the fresh-sandbox Lua adapter (the anitokyo precedent),
+// documented here rather than hidden:
+//
+//   - the release state (newsid + episode num) rides RawID as the
+//     {n,id} JSON object (the only state channel into the
+//     per-invocation streams(raw_id, dub) call — the Go provider read
+//     the refs back from RawEmbeds, which the adapter does not pass
+//     into streams); RawEmbeds keeps carrying the same refs for
+//     consumers, and streams() re-POSTs the bridge to re-derive them.
+
 import (
 	"context"
 	"errors"
@@ -12,15 +39,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// Live-capture provenance: every animiku fixture below is a verbatim
-// capture of beta.animiku.tokyo taken 2026-09-25 (anonymous guest
-// requests, desktop Chrome User-Agent, no cookies). The search fixtures
-// ride the DLE full-search GET (do=search&subaction=search&story=…);
-// the player fixtures are the mrdeath/aaparser bridge answers —
-// POST engine/ajax/controller.php?mod=anime_grabber&module=
-// kodik_playlist_ajax with news_id+action=load_player — for the two
-// observed shapes: the serial player (b-simple_episode__item grid) and
-// the movie player (per-dub data-this_link, kodik_translates_alt).
+const animikuProductionBase = "https://beta.animiku.tokyo"
 
 // TestAnimikuSearch pins the catalog search against the real captured
 // «черная лагуна» answer: 4 article.news-container-chapter rows, titles
@@ -29,14 +48,29 @@ import (
 func TestAnimikuSearch(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animiku_search.html")
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
+	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animiku_search.html"))
+	})
+	p := luaProvider(t, "animiku", srv.URL)
+
 	results, err := p.Search(context.Background(), "черная лагуна")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if len(results) != 4 {
 		t.Fatalf("len(results) = %d, want 4 (the live capture)", len(results))
+	}
+
+	if rec.Method != http.MethodGet {
+		t.Errorf("request method = %q, want GET (the site header form is method=get)", rec.Method)
+	}
+	if rec.Path != "/index.php" {
+		t.Errorf("request path = %q, want /index.php", rec.Path)
+	}
+	wantQuery := "do=search&subaction=search&story=" +
+		"%D1%87%D0%B5%D1%80%D0%BD%D0%B0%D1%8F+%D0%BB%D0%B0%D0%B3%D1%83%D0%BD%D0%B0"
+	if rec.Query != wantQuery {
+		t.Errorf("request query = %q, want %q", rec.Query, wantQuery)
 	}
 
 	want := []struct {
@@ -54,7 +88,7 @@ func TestAnimikuSearch(t *testing.T) {
 		if got.Title != w.title {
 			t.Errorf("results[%d].Title = %q, want %q", i, got.Title, w.title)
 		}
-		if wantURL := AniMikuBase + "/index.php?newsid=" + w.newsid; got.URL != wantURL {
+		if wantURL := animikuProductionBase + "/index.php?newsid=" + w.newsid; got.URL != wantURL {
 			t.Errorf("results[%d].URL = %q, want %q", i, got.URL, wantURL)
 		}
 		if got.SourceID != "animiku" {
@@ -73,8 +107,11 @@ func TestAnimikuSearch(t *testing.T) {
 func TestAnimikuSearchMiss(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animiku_search_miss.html")
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animiku_search_miss.html"))
+	})
+	p := luaProvider(t, "animiku", srv.URL)
+
 	results, err := p.Search(context.Background(), "zzzqqqxxx")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -98,9 +135,10 @@ func TestAnimikuGetEpisodesTV(t *testing.T) {
 	srv, rec := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(fixture(t, "animiku_player_tv.html"))
 	})
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
+	p := luaProvider(t, "animiku", srv.URL)
 
-	episodes, err := p.GetEpisodes(context.Background(), AniMikuBase+"/index.php?newsid=9134")
+	episodes, err := p.GetEpisodes(context.Background(),
+		animikuProductionBase+"/index.php?newsid=9134")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -111,11 +149,20 @@ func TestAnimikuGetEpisodesTV(t *testing.T) {
 	if rec.Method != http.MethodPost {
 		t.Errorf("request method = %q, want POST (the bridge answers GET with an empty body)", rec.Method)
 	}
+	if rec.Path != "/engine/ajax/controller.php" {
+		t.Errorf("request path = %q, want /engine/ajax/controller.php", rec.Path)
+	}
+	if rec.Query != "mod=anime_grabber&module=kodik_playlist_ajax" {
+		t.Errorf("request query = %q, want the aaparser bridge module pair", rec.Query)
+	}
 	if got := strings.Join(rec.Form["news_id"], ","); got != "9134" {
 		t.Errorf("news_id = %q, want 9134", got)
 	}
 	if got := strings.Join(rec.Form["action"], ","); got != "load_player" {
 		t.Errorf("action = %q, want load_player", got)
+	}
+	if ct := rec.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want the form encoding", ct)
 	}
 
 	first := episodes[0]
@@ -124,6 +171,11 @@ func TestAnimikuGetEpisodesTV(t *testing.T) {
 	}
 	if first.Title != "Серия 1" {
 		t.Errorf("first.Title = %q, want the captured anchor label", first.Title)
+	}
+	// PR134 contract shift: the {n,id} state JSON rides RawID (the
+	// fresh-sandbox streams state channel).
+	if !strings.Contains(first.RawID, `"n":"1"`) || !strings.Contains(first.RawID, `"id":"9134"`) {
+		t.Errorf("first.RawID = %q, want the {n,id} state JSON", first.RawID)
 	}
 	if len(first.RawEmbeds) != 2 {
 		t.Fatalf("first.RawEmbeds = %v, want exactly two dubs (the sparse matrix at episode 1)", first.RawEmbeds)
@@ -152,10 +204,13 @@ func TestAnimikuGetEpisodesTV(t *testing.T) {
 func TestAnimikuGetEpisodesMovie(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animiku_player_movie.html")
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animiku_player_movie.html"))
+	})
+	p := luaProvider(t, "animiku", srv.URL)
 
-	episodes, err := p.GetEpisodes(context.Background(), AniMikuBase+"/index.php?newsid=3147")
+	episodes, err := p.GetEpisodes(context.Background(),
+		animikuProductionBase+"/index.php?newsid=3147")
 	if err != nil {
 		t.Fatalf("GetEpisodes: %v", err)
 	}
@@ -187,10 +242,12 @@ func TestAnimikuGetEpisodesMovie(t *testing.T) {
 func TestAnimikuGetEpisodesNoNewsID(t *testing.T) {
 	t.Parallel()
 
-	srv := serveFixture(t, "animiku_player_tv.html")
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animiku_player_tv.html"))
+	})
+	p := luaProvider(t, "animiku", srv.URL)
 
-	_, err := p.GetEpisodes(context.Background(), AniMikuBase+"/")
+	_, err := p.GetEpisodes(context.Background(), animikuProductionBase+"/")
 	if err == nil {
 		t.Fatal("error = nil, want the typed invalid-input")
 	}
@@ -210,8 +267,8 @@ func TestAnimikuGetEpisodesEmptyPlayer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAnimiku(srv.URL, testClient(t, "animiku"))
-	_, err := p.GetEpisodes(context.Background(), AniMikuBase+"/index.php?newsid=1")
+	p := luaProvider(t, "animiku", srv.URL)
+	_, err := p.GetEpisodes(context.Background(), animikuProductionBase+"/index.php?newsid=1")
 	if err == nil {
 		t.Fatal("error = nil, want the typed not-found")
 	}
@@ -225,35 +282,48 @@ func TestAnimikuGetEpisodesEmptyPlayer(t *testing.T) {
 func TestAnimikuSearchTransportError(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimiku("http://"+newDeadListener(t).Addr().String(), testClient(t, "animiku"))
+	p := luaProvider(t, "animiku", "http://"+newDeadListener(t).Addr().String())
 	if _, err := p.Search(context.Background(), "черная лагуна"); err == nil {
 		t.Fatal("error = nil, want the transport failure")
 	}
 }
 
-// TestAnimikuResolveStreamKodikRoundTrip covers the resolve branch: the
-// stored protocol-relative kodik embed ref runs through the shared
-// extractor factory (Matches kodikplayer.com) and yields the /ftor
-// sources, typed by URL shape.
+// TestAnimikuResolveStreamKodikRoundTrip covers the resolve branch:
+// streams() re-POSTs the bridge from the {n,id} RawID state (the
+// fresh-sandbox re-derive), picks the dub's protocol-relative kodik
+// ref and runs it through the shared extractor factory via
+// anicli.extract (Matches kodikplayer.com), yielding the /ftor
+// sources typed by URL shape.
 func TestAnimikuResolveStreamKodikRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/ftor" {
 			_, _ = fmt.Fprint(w, `{"links": {"720": [{"src": "https://plain.example/x/720.m3u8"}]}}`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/engine/ajax/controller.php" {
+			// The bridge re-answer the fresh-sandbox streams() call
+			// re-derives from: one episode, one dub, the test-server
+			// hosted kodik embed (tests never touch the real network —
+			// the host must carry the "kodik" substring the extractor
+			// Matches; the animemobi round-trip pattern).
+			_, _ = fmt.Fprint(w, `<li class="b-translator__item" data-this_translator="757">MC Entertainment</li>`+
+				`<li class="b-simple_episode__item" data-this_episode="1" data-this_translator="757" data-this_link="`+srv.URL+`/kodik/serial/7485/h/720p?season=2&amp;episode=1">Серия 1</li>`)
 			return
 		}
 		_, _ = fmt.Fprint(w, `<html><script>var hash = "h123"; var id = "456";</script></html>`)
 	}))
 	t.Cleanup(srv.Close)
 
-	p := newAnimiku(AniMikuBase, testClient(t, "animiku"))
+	p := luaProvider(t, "animiku", srv.URL)
+	// The state JSON exactly episodes() encodes: {n,id}, key order
+	// free (json.Marshal sorts).
 	episode := contracts.Episode{
-		Num: "1",
+		Num:   "1",
+		RawID: `{"id":"9134","n":"1"}`,
 		RawEmbeds: map[string][]string{
-			// Test-server-hosted kodik embed (the animemobi round-trip
-			// pattern): tests never touch the real network — the host
-			// must carry the "kodik" substring the extractor Matches.
 			"MC Entertainment": {srv.URL + "/kodik/serial/7485/h/720p?season=2&episode=1"},
 		},
 	}
@@ -271,14 +341,25 @@ func TestAnimikuResolveStreamKodikRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAnimikuResolveStreamUnknownDub pins the typed dub miss.
+// TestAnimikuResolveStreamUnknownDub pins the typed dub miss: a dub
+// the bridge answer does not list on the episode is the not-found
+// sentinel, resolved BEFORE any extractor fetch.
 func TestAnimikuResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimiku(AniMikuBase, testClient(t, "animiku"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `<li class="b-translator__item" data-this_translator="757">MC Entertainment</li>`+
+			`<li class="b-simple_episode__item" data-this_episode="1" data-this_translator="757" data-this_link="//kodikplayer.com/serial/7485/h/720p">Серия 1</li>`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := luaProvider(t, "animiku", srv.URL)
 	episode := contracts.Episode{
-		Num:       "1",
-		RawEmbeds: map[string][]string{"MC Entertainment": {"//kodikplayer.com/serial/7485/h/720p"}},
+		Num:   "1",
+		RawID: `{"id":"9134","n":"1"}`,
+		RawEmbeds: map[string][]string{
+			"MC Entertainment": {"//kodikplayer.com/serial/7485/h/720p"},
+		},
 	}
 
 	_, err := p.ResolveStream(context.Background(), episode, "NoSuchDub")
@@ -296,28 +377,34 @@ func TestAnimikuResolveStreamUnknownDub(t *testing.T) {
 func TestAnimikuProviderMeta(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimiku(AniMikuBase, testClient(t, "animiku"))
-	if p.ID() != "animiku" || p.Name() != "AniMiku" || p.BaseURL() != AniMikuBase {
+	p := luaProviderAtProduction(t, "animiku")
+	if p.ID() != "animiku" || p.Name() != "AniMiku" || p.BaseURL() != animikuProductionBase {
 		t.Errorf("ID/Name/BaseURL = %q/%q/%q", p.ID(), p.Name(), p.BaseURL())
 	}
 	if p.SourceType() != contracts.SourceTypeBoth {
 		t.Errorf("SourceType = %q, want both", p.SourceType())
 	}
-	if p.ContentLanguage() != "ru" {
-		t.Errorf("ContentLanguage = %q, want ru", p.ContentLanguage())
+	lc, ok := p.(interface{ ContentLanguage() string })
+	if !ok || lc.ContentLanguage() != "ru" {
+		t.Errorf("ContentLanguage = %v, want ru", lc)
 	}
 }
 
 // TestAnimikuNamePreferenceRU pins the search routing (PR42 semantics):
 // the DLE index matches Cyrillic word prefixes («черная лагуна»
 // surfaced 4 rows live 2026-09-25, е/ё-equivalence included) — the
-// provider stays in the RU group and must NOT declare the latin-only
-// preference (anilibria-torrent precedent).
+// provider stays in the RU group and must not declare the latin-only
+// preference (anilibria-torrent precedent). The capability adapter
+// keeps the surface assertions-stable (the animeheaven precedent).
 func TestAnimikuNamePreferenceRU(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimiku(AniMikuBase, testClient(t, "animiku"))
-	if _, declares := any(p).(contracts.NamePreferenceProvider); declares {
+	p := luaProviderAtProduction(t, "animiku")
+	np, ok := p.(contracts.NamePreferenceProvider)
+	if !ok {
+		t.Fatal("the capability adapter must stay assertions-stable")
+	}
+	if got := np.NamePreference(); got == contracts.NamePrefLatin {
 		t.Error("animiku must stay in the RU group (no latin preference declaration)")
 	}
 }
@@ -325,14 +412,19 @@ func TestAnimikuNamePreferenceRU(t *testing.T) {
 // TestAnimikuSmokeQueryShared pins the probe routing: the shared RU
 // smoke probe «черная лагуна» HITS this catalog (4 live rows, first
 // resolves through the reachable kodikplayer.com embeds), so the
-// provider must NOT declare contracts.SmokeQueryProvider — declaring
-// would drop the RU fallback needlessly (PR51 semantics).
+// script must not declare a probe of its own — the adapter-declared
+// capability answers empty and the shared probe applies (PR51
+// semantics; the animeheaven precedent).
 func TestAnimikuSmokeQueryShared(t *testing.T) {
 	t.Parallel()
 
-	p := newAnimiku(AniMikuBase, testClient(t, "animiku"))
-	if _, declares := any(p).(contracts.SmokeQueryProvider); declares {
-		t.Error("animiku must not declare SmokeQueryProvider (the shared RU probe hits)")
+	p := luaProviderAtProduction(t, "animiku")
+	sq, ok := p.(contracts.SmokeQueryProvider)
+	if !ok {
+		t.Fatal("the content_lang adapter must keep the capability surface assertions-stable")
+	}
+	if got := sq.SmokeQuery(); got != "" {
+		t.Errorf("SmokeQuery = %q, want empty (the shared RU probe applies)", got)
 	}
 }
 

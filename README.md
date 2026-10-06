@@ -261,14 +261,19 @@ The live health gate is `make parity` (see [Provider Roster](#-provider-roster))
 
 anicli-go is extensible without recompiling: drop a provider script into
 `~/.config/anicli/providers/<id>/main.lua` (honors `XDG_CONFIG_HOME`) and it registers
-alongside the built-ins on the next start.
+on the next start — a fresh id joins the roster, and a bundled id is replaced (see
+the discovery rules below).
 
 **Discovery rules** (`internal/lua/discovery.go`):
 
-- every `<id>/main.lua` conforming to the contract is loaded; the directory name is the
-  intended provider ID;
-- discovery runs **after** the built-ins, so a script can never shadow a compiled
-  provider — a duplicate ID is skipped with a warning, never fatal;
+- every `<id>/main.lua` conforming to the contract is loaded; the directory name is
+  the provider ID;
+- sources load by **precedence** — the user config dir first, then
+  `[providers.lua].dir`, then the bundled embeds — and the first occurrence of an id
+  wins. Since PR147 every roster provider ships as a bundled Lua script (no compiled
+  factories remain), so a user script whose directory name matches a bundled id
+  **replaces** it on the next start; the shadowed copy is skipped with a warning,
+  never fatal;
 - a broken script (syntax error, incomplete contract, budget overrun) is skipped with a
   logged reason; one bad script never blocks the others or startup.
 

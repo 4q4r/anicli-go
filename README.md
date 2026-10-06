@@ -44,6 +44,7 @@ and an interface in English or Russian.
 - [Player & Skips](#-player--skips)
 - [Discord Rich Presence](#-discord-rich-presence)
 - [Localization](#-localization)
+- [Startup Dependencies](#-startup-dependencies)
 - [API Surface](#-api-surface)
 - [Configuration](#-configuration)
 - [Data & Backup](#-data--backup)
@@ -260,14 +261,19 @@ The live health gate is `make parity` (see [Provider Roster](#-provider-roster))
 
 anicli-go is extensible without recompiling: drop a provider script into
 `~/.config/anicli/providers/<id>/main.lua` (honors `XDG_CONFIG_HOME`) and it registers
-alongside the built-ins on the next start.
+on the next start — a fresh id joins the roster, and a bundled id is replaced (see
+the discovery rules below).
 
 **Discovery rules** (`internal/lua/discovery.go`):
 
-- every `<id>/main.lua` conforming to the contract is loaded; the directory name is the
-  intended provider ID;
-- discovery runs **after** the built-ins, so a script can never shadow a compiled
-  provider — a duplicate ID is skipped with a warning, never fatal;
+- every `<id>/main.lua` conforming to the contract is loaded; the directory name is
+  the provider ID;
+- sources load by **precedence** — the user config dir first, then
+  `[providers.lua].dir`, then the bundled embeds — and the first occurrence of an id
+  wins. Since PR147 every roster provider ships as a bundled Lua script (no compiled
+  factories remain), so a user script whose directory name matches a bundled id
+  **replaces** it on the next start; the shadowed copy is skipped with a warning,
+  never fatal;
 - a broken script (syntax error, incomplete contract, budget overrun) is skipped with a
   logged reason; one bad script never blocks the others or startup.
 
@@ -432,6 +438,35 @@ locale = "ru"   # "en", "ru", or any table in ~/.config/anicli/locales/<lang>.to
 - **Contributing a language** — copy `locales/en.toml` to `locales/<lang>.toml`
   (BCP-47 short code), translate the values (keep `{placeholders}` verbatim), and open
   a pull request; the format rules live in [`locales/README.md`](locales/README.md).
+
+---
+
+## 🧩 Startup Dependencies
+
+Every startup checks the two external programs anicli drives — **mpv**
+(playback) and **ffmpeg** (download mux) — on `PATH` (`internal/sysdeps`).
+When both are present nothing is printed. When one is missing, anicli names
+it (Russian locale: «mpv не установлена», or «mpv и ffmpeg не установлены»
+when both are) and offers to install it through your platform's package
+manager:
+
+| Platform | Offered when missing |
+| :-- | :-- |
+| Windows | `winget install -e --id shinchiro.mpv` + `winget install -e --id Gyan.FFmpeg` when winget exists; otherwise `choco install mpvio ffmpeg -y`; with neither manager — an offer to install Chocolatey first (its official installer) |
+| macOS | `brew install mpv ffmpeg`; without Homebrew — an offer to run the official Homebrew installer first |
+| Linux | `sudo apt install mpv ffmpeg` / `sudo dnf install mpv ffmpeg` (enables RPM Fusion first) / `sudo pacman -S mpv ffmpeg` / `sudo zypper install mpv ffmpeg` — the first detected manager; none detected prints per-distro manual commands |
+
+- **Interactive sessions only** — the `Установить? [Y/n]` prompt appears
+  only when stdin is a terminal. Under systemd, docker or a pipe anicli
+  never blocks: it prints the exact commands and continues.
+- **Declining never aborts startup** — search, browsing and torrents work;
+  the warning stays on the root screen, and playback/download warn again at
+  use (the player and downloader fail loud on a missing binary).
+- **Fresh-PATH caveat** — after an accepted winget/Homebrew/Chocolatey
+  install the current shell may still not see the new binary; anicli
+  re-checks and, if it is still missing, asks you to restart the terminal
+  and start anicli again. Installers run as direct child processes only.
+- `anicli doctor` reports the environment without offering changes.
 
 ---
 
@@ -640,7 +675,9 @@ portable between the two frontends.
   routes only stealth-browser downloads/updates; `[torrent].proxy` routes engine HTTP
   traffic (peer and UDP-tracker traffic stays direct — a library limitation, documented).
 - **Sandboxed extensibility** — Lua providers run in a stripped, budget-capped VM with
-  fresh state per invocation; scripts cannot shadow built-ins or outlive their call.
+  fresh state per invocation; a running script cannot reach other providers'
+  registrations or outlive its call (first-occurrence replacement at load time is the
+  documented discovery rule, not a runtime path).
 - **Torrent hygiene** — port fallback warns loudly with the real port; tracker lists
   fail open (static trackers keep working when a list download fails).
 - **License hygiene** — `THIRD-PARTY-NOTICES.md` carries the full direct-dependency
@@ -658,6 +695,10 @@ portable between the two frontends.
 | **ffmpeg + ffprobe** | downloads and the local IntroSkipper heuristic |
 | Go ≥ 1.27 | building from source (CGO not needed — pure-Go SQLite) |
 | Discord desktop | optional — Rich Presence only |
+
+mpv and ffmpeg are checked at every startup; a missing program triggers a
+one-key install offer for your platform's package manager (see
+[Startup Dependencies](#-startup-dependencies)).
 
 ### 2. Install
 

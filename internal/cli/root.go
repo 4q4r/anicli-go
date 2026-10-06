@@ -25,6 +25,7 @@ import (
 	"github.com/an0nx/anicli-go/internal/providers"
 	"github.com/an0nx/anicli-go/internal/shikimori"
 	"github.com/an0nx/anicli-go/internal/storage"
+	"github.com/an0nx/anicli-go/internal/sysdeps"
 	"github.com/an0nx/anicli-go/internal/tui"
 )
 
@@ -171,6 +172,14 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	if err := i18n.Init(settings.General.Locale); err != nil {
 		return fmt.Errorf("init locale %q: %w", settings.General.Locale, err)
 	}
+
+	// PR148: the startup dependency check — mpv (playback) and ffmpeg
+	// (download mux) via LookPath. Missing programs get the localized
+	// warning plus a TTY-gated install offer (pipes/CI/systemd get the
+	// exact commands instead of any prompt). A declined or failed
+	// install NEVER aborts startup: the warning rides the TUI notices
+	// below and playback/download fail loud again at use.
+	notices = append(notices, sysdeps.EnsureStartup(sysdeps.Env{Out: out})...)
 
 	real, err := tui.NewRealDeps(*settings, store,
 		tui.WithShikiPersister(shikiTokenPersister(settingsPath)),

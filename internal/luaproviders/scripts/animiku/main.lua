@@ -49,6 +49,24 @@
 -- not wired. No NamePreference or SmokeQuery declaration (PR42/PR51
 -- semantics): the DLE index matches Cyrillic word prefixes with
 -- е/ё equivalence, the shared RU smoke probe hits.
+--
+-- DUB-MISS SEMANTICS (the #159 doctrine port — the animevib
+-- fix-round-3 semantics, one format across the state-carrying
+-- scripts): streams() NEVER substitutes another dub. When the
+-- requested dub is absent from the episode's ref group, the resolve
+-- walls typed not_found whose message LISTS the dubs the episode
+-- ACTUALLY carries — the g.refs keys, byte-sorted (a Lua map has no
+-- order; the sort is the deterministic canonical form the TUI dub
+-- menu and headless re-asks consume). The stable marker is
+-- `carries no dub "X" (episode dubs: A, B, …)` — the tui
+-- dubNotCarriedFailure predicate keys on the class + marker pair, so
+-- every sibling's miss opens the ask-first flow. An episode the
+-- bridge answer no longer lists → not_found zero-dubs wall (the same
+-- marker, no list). A malformed raw_id — the merged "prov:{json}"
+-- bytes a caller composing the convention without decomposing it
+-- hands over (#157), a stale history record, any non-{n,id} shape —
+-- is the typed invalid_input wall, never the raw json.decode VM
+-- error.
 
 local base_url = "https://beta.animiku.tokyo"
 
@@ -229,7 +247,18 @@ return {
 	end,
 
 	streams = function(raw_id, dub)
-		local state = anicli.json.decode(raw_id)
+		-- The state guard: raw_id is ALWAYS this script's own {n, id}
+		-- json (the fresh-sandbox contract); any other byte sequence —
+		-- the merged prov:id convention composed without decomposing
+		-- it (#157), a stale history record — surfaces typed
+		-- invalid_input, never the raw json.decode VM error (the
+		-- animevib guard).
+		local ok, state = pcall(anicli.json.decode, raw_id)
+		if not ok or type(state) ~= "table" or type(state.id) ~= "string" or state.id == "" then
+			anicli.fail("invalid_input",
+				"episode raw_id is not the {n, id} state json: \"" ..
+				string.sub(tostring(raw_id), 1, 64) .. "\"")
+		end
 		local num, news_id = tostring(state.n), state.id
 
 		local nums, groups = episode_groups(fetch_player(news_id))
@@ -240,10 +269,25 @@ return {
 				break
 			end
 		end
-		local ref = g and g.refs[dub] or nil
+		if g == nil or next(g.refs) == nil then
+			-- the ONLY dub wall with no ask behind it: the bridge
+			-- answer no longer lists this episode under any dub — a
+			-- data-shape fact, not a caller mistake.
+			anicli.fail("not_found", "episode " .. num .. " carries no dub in the player answer")
+		end
+		local ref = g.refs[dub]
 		if ref == nil then
-			anicli.fail("not_found",
-				"dub \"" .. dub .. "\" has no embed references on episode " .. num)
+			-- DUB MISS (the #159 doctrine, see the header): never
+			-- substitute another dub silently — list what the episode
+			-- ACTUALLY carries (the group's own dub table, no extra
+			-- fetches) in the byte-sorted order.
+			local carriers = {}
+			for name in pairs(g.refs) do
+				carriers[#carriers + 1] = name
+			end
+			table.sort(carriers)
+			anicli.fail("not_found", "episode " .. num .. ' carries no dub "' .. dub ..
+				'" (episode dubs: ' .. table.concat(carriers, ", ") .. ')')
 		end
 
 		local links = anicli.extract({ ref })

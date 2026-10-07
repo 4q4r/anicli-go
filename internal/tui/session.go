@@ -785,6 +785,20 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				msg.skipCleanup()
 			}
 			if msg.scope != "" {
+				// The python resolve_dubs_smart ask-don't-substitute
+				// flow (fix-round 3 of #158): the provider typed the
+				// «episode does not carry this dub» verdict and the
+				// episode still carries OTHER dubs — the python
+				// warning, then the dub menu over what the episode
+				// DOES carry. The user picks; playback continues.
+				// Never a silent substitution, never the quality
+				// picker over a swapped dub.
+				if dubNotCarriedFailure(msg.err) && hasLinkedEmbeds(msg.freshEmbeds) {
+					s.setStatus(i18n.T("session.past_settings_unavailable", i18n.Vals{
+						"video": msg.scope, "audio": s.audioDub}))
+					s.openRedubMenuFromEmbeds(msg.freshEmbeds, msg.scope)
+					return s, nil
+				}
 				// PR94 fail-soft (python resolve_dubs_smart
 				// spirit): the remembered dub's provider failed —
 				// the flow must not die on it. Fall through to the
@@ -1876,6 +1890,32 @@ func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 func (s *sessionScreen) pickRedub(dub string) (Screen, tea.Cmd) {
 	s.videoDub, s.audioDub = dub, dub
 	return s.beginStreamResolve(dub)
+}
+
+// openRedubMenuFromEmbeds opens the PR95 dub menu over the FRESH
+// episode embeds — the python resolve_dubs_interactive analog for the
+// remembered-dub miss (fix-round 3 of #158): every track key carrying
+// actual links, the deterministic sortedEmbedKeys order, full keys as
+// values (pickRedub re-scopes the resolve to the chosen dub). The
+// missed key is excluded: the provider just typed it as not carried —
+// its listing entry is staler than the resolve verdict, and offering
+// a guaranteed-fail re-pick is not an ask. The dub-miss flow stamps
+// the «⚠ Прошлые настройки недоступны» warning before opening, so the
+// menu opens with its reason visible.
+func (s *sessionScreen) openRedubMenuFromEmbeds(embeds map[string][]string, missed string) {
+	choices := make([]Choice, 0, len(embeds))
+	for _, key := range sortedEmbedKeys(embeds) {
+		if key == missed || len(embeds[key]) == 0 {
+			continue // the missed dub (freshly proven absent) and tier-1 keys without hydrated links (PR43)
+		}
+		choices = append(choices, Choice{
+			ID:    key,
+			Label: s.dubLabel(key) + " · " + providerOfTrackKey(key),
+			Value: key,
+		})
+	}
+	s.redubList = NewPinList(NewMenu(i18n.T("session.pick_dub"), i18n.T("session.no_dubs"), choices...), defaultListHeight)
+	s.setState(sessionStateRedub)
 }
 
 func (s *sessionScreen) buildStreamList() {
@@ -3002,6 +3042,30 @@ func stripProviderTag(key string) string {
 		return strings.TrimSpace(key[end+1:])
 	}
 	return key
+}
+
+// dubNotCarriedFailure reports the provider's typed «this episode
+// does not carry the requested dub» verdict — the scripts' not_found
+// walls whose message names the missed dub (animevib, anitokyo, the
+// per-episode dub-table class). The message, not just the sentinel:
+// the same scripts use not_found for other data-shape walls (a
+// vanished post page) where the dub menu would be a lie.
+func dubNotCarriedFailure(err error) bool {
+	return err != nil &&
+		errors.Is(err, contracts.ErrNotFound) &&
+		strings.Contains(err.Error(), "carries no dub")
+}
+
+// hasLinkedEmbeds reports whether any track key carries actual links
+// — the dub menu's precondition: a miss with nothing to ask about is
+// the honest fall-through, never an empty menu.
+func hasLinkedEmbeds(embeds map[string][]string) bool {
+	for _, links := range embeds {
+		if len(links) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeValues flattens a map into a slice.

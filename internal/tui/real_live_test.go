@@ -14,6 +14,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -132,11 +133,15 @@ func TestLiveRealEpisodeResolveStreamMergedTrackKey(t *testing.T) {
 	}
 }
 
-// TestLiveRealEpisodeResolveStreamFallback proves the fallback leg
-// live: a dub absent from the episode's table must resolve the
-// episode's first available dub (the embed dub JAM — live-verified as
-// the post's default translation) and attribute it, never wall.
-func TestLiveRealEpisodeResolveStreamFallback(t *testing.T) {
+// TestLiveRealEpisodeResolveStreamDubMissTypesCarriers proves the
+// corrected miss semantics live (fix-round 3 — the round-2 silent
+// first-dub swap was rejected): a dub absent from the episode's table
+// walls typed ErrNotFound whose message LISTS the dubs the episode
+// actually carries (verified per translation page) — the actionable
+// ask. Never a silent substitution, never an unattributed wall. The
+// TUI menu over that list is pinned offline
+// (TestScopedResolveDubMissWarnsAndOpensDubMenu).
+func TestLiveRealEpisodeResolveStreamDubMissTypesCarriers(t *testing.T) {
 	p := liveAnimeVibProvider(t)
 	reg := providers.NewEmptyRegistry()
 	if err := reg.Register(p); err != nil {
@@ -180,15 +185,21 @@ func TestLiveRealEpisodeResolveStreamFallback(t *testing.T) {
 		RawEmbeds: map[string][]string{},
 	}
 
-	stream, err := svc.ResolveStream(ctx, "animevib", merged, "[animevib] NoSuchDub Team")
-	if err != nil {
-		t.Fatalf("ResolveStream (fallback): %v", err)
+	_, err = svc.ResolveStream(ctx, "animevib", merged, "[animevib] NoSuchDub Team")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent substitution)", err)
 	}
-	if stream.DubName == "[animevib] NoSuchDub Team" || stream.DubName == "NoSuchDub Team" {
-		t.Errorf("DubName = %q — the fallback must attribute the RESOLVED dub", stream.DubName)
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "NoSuchDub Team"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
 	}
-	if len(stream.Links) == 0 {
-		t.Fatal("zero links — the fallback did not land playable entries")
+	if !strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want the actionable carrier list", msg)
 	}
-	t.Logf("fallback resolved %q: %d qualities", stream.DubName, len(stream.Links))
+	// The list is the episode's TRUTH: the live-verified carrier of
+	// ep3 (the embed dub JAM) must be among the listed dubs.
+	if !strings.Contains(msg, "JAM") {
+		t.Errorf("message = %q, want the live-verified carrier JAM listed", msg)
+	}
+	t.Logf("typed carrier list: %s", msg[strings.Index(msg, "(episode dubs:"):])
 }

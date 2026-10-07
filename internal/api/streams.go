@@ -176,7 +176,7 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, &apiError{
 			Code:    "all_candidates_failed",
 			Message: "Unable to resolve video streams",
-			Details: map[string]any{"track": "video", "source_id": req.SourceID},
+			Details: providerResolveDetails("video", req.SourceID, err),
 		})
 		return
 	}
@@ -213,7 +213,7 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, r, &apiError{
 				Code:    "all_candidates_failed",
 				Message: "Unable to resolve audio streams",
-				Details: map[string]any{"track": "audio", "source_id": req.SourceID},
+				Details: providerResolveDetails("audio", req.SourceID, err),
 			})
 			return
 		}

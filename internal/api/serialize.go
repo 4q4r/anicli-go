@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -178,6 +179,22 @@ func dubNameFromTrackKey(trackKey string) string {
 		}
 	}
 	return trackKey
+}
+
+// providerResolveDetails composes the resolve failure's details and —
+// when the provider failed with a typed ProviderError — attaches its
+// compact cause (fix-round 3 of #158): the scripts' «episode carries
+// no dub "X" (episode dubs: …)» wall reaches headless clients
+// actionable, so they can re-request with a LISTED dub. The
+// code/message stay the pinned python contract; only the detail is
+// new.
+func providerResolveDetails(track, sourceID string, err error) map[string]any {
+	details := map[string]any{"track": track, "source_id": sourceID}
+	var pe *contracts.ProviderError
+	if err != nil && errors.As(err, &pe) && pe.Err != nil {
+		details["provider_error"] = pe.Err.Error()
+	}
+	return details
 }
 
 // streamType normalizes the stream kind hint (python _stream_type).

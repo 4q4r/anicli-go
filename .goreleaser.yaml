@@ -1,14 +1,10 @@
 # goreleaser v2 config — cross-platform release engineering.
-# Binaries: linux/amd64, linux/arm64, windows/amd64, darwin/amd64,
-# darwin/arm64; CGO disabled (pure-Go sqlite); version triple injected
-# at internal/cli's -ldflags seams. No docker yet (no registry).
+# Six-target matrix: linux/{amd64,arm64}, windows/{amd64,arm64},
+# darwin/{amd64,arm64}; CGO disabled (pure-Go sqlite); version triple
+# injected at internal/cli's -ldflags seams. GitHub release (default).
 version: 2
 
-project_name: anicli
-
-before:
-  hooks:
-    - go mod tidy
+project_name: anicli-go
 
 builds:
   - id: anicli
@@ -23,21 +19,15 @@ builds:
     goarch:
       - amd64
       - arm64
-    ignore:
-      # windows/arm64 is not in the release matrix.
-      - goos: windows
-        goarch: arm64
+    # Single -ldflags string wired to the existing seam in internal/cli/root.go.
     ldflags:
-      - -s -w
-      - -X github.com/an0nx/anicli-go/internal/cli.Version={{.Version}}
-      - -X github.com/an0nx/anicli-go/internal/cli.Commit={{.Commit}}
-      - -X github.com/an0nx/anicli-go/internal/cli.Date={{.Date}}
+      - -s -w -X github.com/an0nx/anicli-go/internal/cli.Version={{.Version}} -X github.com/an0nx/anicli-go/internal/cli.Commit={{.FullCommit}} -X github.com/an0nx/anicli-go/internal/cli.Date={{.Date}}
 
 archives:
   - id: anicli
     ids:
       - anicli
-    # tarball everywhere; zip for windows (Exploder-friendly).
+    # tarball everywhere; zip for windows (Explorer-friendly).
     formats: [tar.gz]
     format_overrides:
       - goos: windows
@@ -52,6 +42,7 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -63,4 +54,4 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
-      - "merge"
+      - "^Merge"

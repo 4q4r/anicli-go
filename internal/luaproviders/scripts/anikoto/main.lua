@@ -47,6 +47,24 @@
 --   - The skip_data (intro/outro ranges) the resolver hands out has
 --     no slot in the stream contract — documented, out of scope.
 --
+-- DUB-MISS SEMANTICS (the #159 doctrine port — the animevib
+-- fix-round-3 semantics, one format across the state-carrying
+-- scripts): streams() NEVER substitutes another dub group. When the
+-- requested dub is absent from the episode's server groups, the
+-- resolve walls typed not_found whose message LISTS the groups the
+-- episode ACTUALLY carries — DUB first, then SUB (the fixed
+-- canonical order of the two-group table the parser builds). The
+-- stable marker is `carries no dub "X" (episode dubs: A, B)` — the
+-- tui dubNotCarriedFailure predicate keys on the class + marker
+-- pair, so every sibling's miss opens the ask-first flow; the
+-- round-2 shape walled the miss invalid_input (a caller-mistake
+-- class the predicate cannot see). A server list with no link rows
+-- at all → not_found zero-dubs wall (the same marker, no list).
+-- The episode identifier in the message is the raw_id itself: this
+-- state carries no episode number. The malformed-raw_id wall (a
+-- colonless raw_id, the merged prov:id convention composed without
+-- decomposing it, #157) is invalid_input and stays.
+--
 -- Crypto material: the AES-256-CBC decrypt and the HMAC-SHA256 digest
 -- ride the anicli.crypto SDK primitives (Go stdlib behind them — the
 -- sandbox has no bit library for a pure-Lua cipher). The XOR wrapper
@@ -795,8 +813,24 @@ return {
 				.. anicli.http.query_escape(ids)))
 		local link_ids = embeds[dub]
 		if link_ids == nil or #link_ids == 0 then
-			anicli.fail("invalid_input",
-				"episode " .. raw_id .. " carries no dub \"" .. dub .. "\"")
+			-- DUB MISS (the #159 doctrine, see the header): never
+			-- substitute the other dub group silently — list what the
+			-- episode ACTUALLY carries (DUB first, the fixed canonical
+			-- order of the two-group table, no extra fetches).
+			local carriers = {}
+			for _, name in ipairs({ AUDIO_DUB, AUDIO_SUB }) do
+				if type(embeds[name]) == "table" and #embeds[name] > 0 then
+					carriers[#carriers + 1] = name
+				end
+			end
+			if #carriers == 0 then
+				-- the ONLY dub wall with no ask behind it: the server
+				-- list carries no link rows at all — a data-shape
+				-- fact, not a caller mistake.
+				anicli.fail("not_found", "episode " .. raw_id .. " carries no dub in its server groups")
+			end
+			anicli.fail("not_found", "episode " .. raw_id .. ' carries no dub "' .. dub ..
+				'" (episode dubs: ' .. table.concat(carriers, ", ") .. ')')
 		end
 
 		-- Each link-id walks the chain server resolver → megaplay page →

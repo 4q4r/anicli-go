@@ -437,6 +437,13 @@ func akManifestToken(t *testing.T, srv *akTestServer) string {
 	return ""
 }
 
+// TestAniKotoResolveStreamUnknownDub pins the ask-first dub-miss
+// doctrine (#159 port — the round-2 shape walled the miss
+// invalid_input, a caller-mistake class the tui dubNotCarriedFailure
+// predicate cannot see): a dub outside the SUB/DUB server groups
+// walls typed ErrNotFound whose message names the requested dub and
+// LISTS the groups the episode actually carries — DUB first, the
+// fixed canonical order of the two-group table.
 func TestAniKotoResolveStreamUnknownDub(t *testing.T) {
 	t.Parallel()
 
@@ -449,8 +456,42 @@ func TestAniKotoResolveStreamUnknownDub(t *testing.T) {
 	}
 
 	_, err = p.ResolveStream(context.Background(), episodes[0], "Дубляж")
-	if err == nil || !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Errorf("err = %v, want ErrInvalidInput", err)
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "Дубляж"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if got := "(episode dubs: DUB, SUB)"; !strings.Contains(msg, got) {
+		t.Errorf("message = %q, want %q (the fixed-order carrier list)", msg, got)
+	}
+}
+
+// TestAniKotoResolveStreamZeroDubsIsTypedWall pins the zero-dubs
+// edge: a server list whose groups carry no link rows at all walls
+// typed ErrNotFound with the marker but NO carrier list (a data-shape
+// fact, not a caller mistake).
+func TestAniKotoResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ajax/server/list", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":200,"result":"<div class=\"servers\"></div>"}`))
+	})
+	p := luaProvider(t, "anikoto", muxHost(t, mux))
+
+	ep := contracts.Episode{Num: "1", RawID: akFixtureEpisodeRawID(t)}
+	_, err := p.ResolveStream(context.Background(), ep, "SUB")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the zero-dubs wall)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "carries no dub") {
+		t.Errorf("message = %q, want the typed marker", msg)
+	}
+	if strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want no carrier list on the zero-dubs wall", msg)
 	}
 }
 

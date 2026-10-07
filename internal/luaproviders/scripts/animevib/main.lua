@@ -36,6 +36,28 @@
 -- to the Go avSerialPage/avSeriaEmbed), and mirrors hosting the
 -- player under a subpath keep their prefix (the substring the
 -- extractor gate matches on rides along).
+--
+-- DUB FALLBACK DOCTRINE (fix-round 2 of #158, 2026-10-07 — owner
+-- review requested): the site carries up to 48 dubs via PER-EPISODE
+-- translation tables, and dub coverage genuinely varies episode to
+-- episode — a dub watched on episode 1 legitimately may not serve
+-- episode 3. streams() therefore NEVER walls on a missing dub: when
+-- the requested dub is absent from the episode's table (dropped from
+-- the translations select, or its per-episode coverage ends before
+-- this episode), the resolve falls back to the episode's FIRST
+-- available dub in the deterministic episodes() table order — the
+-- embed dub first, then the select order (the same order episodes()
+-- merges the per-episode tables under) — and attributes the RESOLVED
+-- dub in dub_name. The fallback batch rides the same bounded-
+-- parallel get_batch as episodes() (MAX_TRANSLATION_PARALLEL). The
+-- ONLY remaining walls: a malformed raw_id (invalid_input, the
+-- fresh-sandbox contract) and an episode that NO dub carries at all
+-- (not_found — a data-shape fact, not a caller mistake). The dub
+-- name matched here is the provider's OWN bare name (the kodik
+-- select's data-title, what episodes() merges under); the merged-
+-- session "[prov] " track tag is stripped at the Go provider
+-- boundary (python extract_best_source parity, tui realEpisode /
+-- downloadOne / api streams-resolve).
 
 local base_url = "https://www.animevib.ru"
 
@@ -140,6 +162,18 @@ local function parse_serial_page(body)
 	end)
 
 	return { title = title, translations = translations, episodes = episodes }
+end
+
+-- page_embeds lists the seria embeds of ONE parsed serial page that
+-- carry the episode num (the per-dub resolve unit).
+local function page_embeds(prefix, page, num)
+	local embeds = {}
+	for _, ep in ipairs(page.episodes) do
+		if ep.num == num then
+			embeds[#embeds + 1] = seria_embed(prefix, ep.id, ep.hash)
+		end
+	end
+	return embeds
 end
 
 return {
@@ -291,13 +325,19 @@ return {
 		local resp = anicli.http.get(page)
 		local embed = parse_embed(anicli.html.parse(resp.body):find("iframe.player-shar[src]"):attr("src"), page)
 
-		local embeds
+		local embeds, resolved_dub
 		if embed.kind == "video" then
 			embeds = { embed.url }
+			resolved_dub = dub
 		else
-			-- the dub's serial page: translations select → the chosen
-			-- dub's media id/hash → its own per-episode seria hashes
+			-- the embed page IS a translation serial page (the embed
+			-- dub's own) — parse it once; it is the fallback's first
+			-- deterministic candidate.
 			local main = parse_serial_page(anicli.http.get(embed.url).body)
+
+			-- the requested dub by EXACT bare name (the kodik select's
+			-- data-title; the merged "[prov] " track tag is stripped
+			-- at the Go provider boundary)
 			local target
 			for _, tr in ipairs(main.translations) do
 				if tr.title == dub then
@@ -305,18 +345,72 @@ return {
 					break
 				end
 			end
-			if not target then
-				anicli.fail("invalid_input", "episode " .. num .. " carries no dub \"" .. dub .. "\"")
+			local target_is_embed = target ~= nil and target.id == embed.id and target.hash == embed.hash
+
+			-- Stage 1 — the candidates already in hand, walked in the
+			-- episodes() table order: the requested dub first (it owns
+			-- the playback when its own page carries the episode), then
+			-- the embed dub.
+			local candidates = {}
+			local function add_candidate(tr, page)
+				candidates[#candidates + 1] = { tr = tr, page = page }
 			end
-			local dub_page = parse_serial_page(anicli.http.get(serial_page(embed.prefix, target.id, target.hash)).body)
-			embeds = {}
-			for _, ep in ipairs(dub_page.episodes) do
-				if ep.num == num then
-					embeds[#embeds + 1] = seria_embed(embed.prefix, ep.id, ep.hash)
+			if target then
+				if target_is_embed then
+					add_candidate(target, main) -- the embed dub IS the requested dub
+				else
+					add_candidate(target, parse_serial_page(anicli.http.get(serial_page(embed.prefix, target.id, target.hash)).body))
 				end
 			end
-			if #embeds == 0 then
-				anicli.fail("not_found", "dub \"" .. dub .. "\" carries no episode " .. num)
+			if not target_is_embed then
+				add_candidate({ id = embed.id, hash = embed.hash, title = main.title }, main)
+			end
+
+			local function walk()
+				for _, cand in ipairs(candidates) do
+					local ep_embeds = page_embeds(embed.prefix, cand.page, num)
+					if #ep_embeds > 0 then
+						return ep_embeds, cand.tr.title
+					end
+				end
+				return nil, nil
+			end
+
+			embeds, resolved_dub = walk()
+
+			if not embeds then
+				-- Stage 2 — DUB FALLBACK (fix-round 2 of #158, see the
+				-- header doctrine): the requested dub is not in this
+				-- episode's table (absent from the select, or its
+				-- per-episode coverage ends before this episode).
+				-- Bounded-parallel page fetch per remaining translation
+				-- (the episodes() fan-out) in the select order; a
+				-- failed (transport-level) fetch contributes nothing —
+				-- one dead dub team must not kill the fallback.
+				local urls, metas = {}, {}
+				for _, tr in ipairs(main.translations) do
+					local is_target = target ~= nil and tr.id == target.id and tr.hash == target.hash
+					local is_embed = tr.id == embed.id and tr.hash == embed.hash
+					if not is_target and not is_embed then
+						urls[#urls + 1] = serial_page(embed.prefix, tr.id, tr.hash)
+						metas[#metas + 1] = tr
+					end
+				end
+				local batch = anicli.http.get_batch(urls, MAX_TRANSLATION_PARALLEL)
+				for i, res in ipairs(batch) do
+					if not res.error then
+						add_candidate(metas[i], parse_serial_page(res.body))
+					end
+				end
+				embeds, resolved_dub = walk()
+			end
+
+			if not embeds then
+				-- the ONLY dub wall that remains: NO dub carries this
+				-- episode at all — a data-shape fact, not a caller
+				-- mistake.
+				anicli.fail("not_found", "episode " .. num .. " carries no dub from any of its " ..
+					#main.translations .. " translations")
 			end
 		end
 
@@ -324,6 +418,6 @@ return {
 		if not ok then
 			anicli.fail("extract_failed", tostring(links))
 		end
-		return { dub_name = dub, links = links }
+		return { dub_name = resolved_dub, links = links }
 	end,
 }

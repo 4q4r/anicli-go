@@ -163,6 +163,23 @@ func providerIDFromTrackKey(trackKey, defaultSource string) string {
 	return defaultSource
 }
 
+// dubNameFromTrackKey strips the "[source] " tag off a merged track
+// key (python extract_best_source's provider_dub_name,
+// cli/stream_resolver.py:174: re.sub(r"^\[.*?\]\s*", "", dub_key)) —
+// the provider consumes its own bare dub name, the same bare names
+// its episodes listing merges under. A bare key passes through
+// unchanged. Without the strip the lua scripts' bare-name dub
+// comparison could never match the tagged form — the typed wall on
+// every episode (#158 fix-round 2, the live owner report).
+func dubNameFromTrackKey(trackKey string) string {
+	if strings.HasPrefix(trackKey, "[") {
+		if idx := strings.Index(trackKey, "]"); idx > 0 {
+			return strings.TrimSpace(trackKey[idx+1:])
+		}
+	}
+	return trackKey
+}
+
 // streamType normalizes the stream kind hint (python _stream_type).
 func streamType(url, hinted string) string {
 	switch strings.ToLower(strings.TrimSpace(hinted)) {

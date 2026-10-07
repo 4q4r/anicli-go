@@ -57,6 +57,63 @@ func avKodikWorld(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// avKodikVariedWorld serves the post → serial flow where the per-
+// episode dub tables genuinely VARY. The Amazing Dubbing translation
+// (kodik media id 62160 — a real select entry of the capture) dropped
+// every episode after 2: animevib_kodik_serial_truncated.html is the
+// AniDUB capture's page shape re-titled, episode rows ≥3 removed.
+// Modes:
+//
+//   - "amazing-missing": the embed dub JAM (62118) carries the full
+//     1–12 range — the fallback resolves from the already-fetched
+//     embed page, no batch.
+//   - "embed-missing": JAM serves the truncated page while AniDUB
+//     (62137) keeps the full capture — the fallback must walk the
+//     bounded-parallel batch in the select order until AniDUB.
+//   - "all-truncated": every translation serves the truncated page —
+//     the zero-dubs wall.
+func avKodikVariedWorld(t *testing.T, mode string) *httptest.Server {
+	t.Helper()
+	jamPage := func() []byte {
+		if mode == "embed-missing" || mode == "all-truncated" {
+			return fixture(t, "animevib_kodik_serial_truncated.html")
+		}
+		return fixture(t, "animevib_kodik_serial.html")
+	}
+	otherPage := func() []byte {
+		return fixture(t, "animevib_kodik_serial_truncated.html")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/2937-n84b-dandadan-1.html":
+			body := bytes.ReplaceAll(fixture(t, "animevib_post_serial.html"),
+				[]byte("//kodikplayer.com/"), []byte("//"+r.Host+"/kodik/"))
+			_, _ = w.Write(body) //nolint:gosec // trusted testdata fixture, host-rewritten for offline use
+		case strings.HasPrefix(r.URL.Path, "/kodik/serial/62118/"):
+			_, _ = w.Write(jamPage())
+		case strings.HasPrefix(r.URL.Path, "/kodik/serial/62137/"):
+			if mode == "embed-missing" {
+				_, _ = w.Write(fixture(t, "animevib_kodik_serial_anidub.html"))
+			} else {
+				_, _ = w.Write(fixture(t, "animevib_kodik_serial_truncated.html"))
+			}
+		case strings.HasPrefix(r.URL.Path, "/kodik/serial/"):
+			// every other translation — including the truncated
+			// Amazing Dubbing page (62160) and the whole fallback
+			// batch — serves the truncated capture.
+			_, _ = w.Write(otherPage())
+		case strings.HasPrefix(r.URL.Path, "/kodik/seria/"):
+			_, _ = w.Write(fixture(t, "animevib_kodik_seria.html"))
+		case r.URL.Path == "/ftor":
+			_, _ = w.Write([]byte(`{"links": {"720": [{"src": "https://cdn.example/video/ep1.m3u8"}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func TestAnimeVibSearch(t *testing.T) {
 	t.Parallel()
 
@@ -352,24 +409,97 @@ func TestAnimeVibResolveStream(t *testing.T) {
 	}
 }
 
-// TestAnimeVibResolveStreamUnknownDubIsTypedWall pins the caller-bug
-// wall (wave A review F2, animedia precedent): a dub the serial page
-// does not carry is typed ErrInvalidInput. The fresh-sandbox resolve
-// re-derives before the dub lookup — the world serves the flow.
-func TestAnimeVibResolveStreamUnknownDubIsTypedWall(t *testing.T) {
+// TestAnimeVibResolveStreamDubMissingOnEpisodeFallsBack pins the
+// per-episode dub-variance fallback (fix-round 2 of #158): animevib
+// carries up to 48 dubs via PER-EPISODE translation tables, and a dub
+// watched on episode 1 legitimately may not serve episode 3 — the
+// requested dub's own page (62160) stopped at episode 2, so the
+// resolve must fall back to the episode's FIRST available dub in the
+// deterministic episodes() table order (the embed dub JAM first) and
+// attribute the RESOLVED dub in dub_name, never wall the playback.
+// Live 2026-10-07: Amazing Dubbing exists under that exact bare name
+// in the Dandadan-1 select and carries ep3 — the owner-reported wall
+// was the merged "[prov] " track tag reaching this comparison (the
+// Go boundary strip is pinned in the tui/api suites).
+func TestAnimeVibResolveStreamDubMissingOnEpisodeFallsBack(t *testing.T) {
 	t.Parallel()
 
-	world := avKodikWorld(t)
+	world := avKodikVariedWorld(t, "amazing-missing")
 	p := luaProvider(t, "animevib", world.URL)
 
-	rawID, err := luaStateJSON(world.URL+"/2937-n84b-dandadan-1.html", "1")
+	rawID, err := luaStateJSON(world.URL+"/2937-n84b-dandadan-1.html", "3")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
+	stream, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "3", RawID: rawID, RawEmbeds: map[string][]string{}}, "Amazing Dubbing")
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
+	}
+	// The fallback resolved the embed dub JAM (first in the episodes()
+	// table order, carrying ep3) — the attribution must say so.
+	if stream.DubName != "JAM" {
+		t.Errorf("DubName = %q, want the resolved fallback dub %q", stream.DubName, "JAM")
+	}
+	src, ok := stream.Links["720"]
+	if !ok {
+		t.Fatalf("Links = %v, want a 720 entry from the kodik extractor", stream.Links)
+	}
+	if src.URL != "https://cdn.example/video/ep1.m3u8" {
+		t.Errorf("720 URL = %q, want the extractor's resolved link", src.URL)
+	}
+}
+
+// TestAnimeVibResolveStreamZeroDubsIsTypedWall pins the surviving
+// typed wall (fix-round 2 of #158): when NO translation of the
+// episode carries it at all — here the requested dub is absent from
+// the select AND every translation page stopped at episode 2 — the
+// resolve walls typed ErrNotFound. The wall is a data-shape fact, not
+// a caller mistake: never ErrInvalidInput, and the fallback must
+// exhaust before it fires.
+func TestAnimeVibResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	world := avKodikVariedWorld(t, "all-truncated")
+	p := luaProvider(t, "animevib", world.URL)
+
+	rawID, err := luaStateJSON(world.URL+"/2937-n84b-dandadan-1.html", "3")
 	if err != nil {
 		t.Fatalf("state json: %v", err)
 	}
 	_, err = p.ResolveStream(context.Background(),
-		contracts.Episode{Num: "1", RawID: rawID, RawEmbeds: map[string][]string{}}, "NoSuchDub")
-	if !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Fatalf("err = %v, want ErrInvalidInput", err)
+		contracts.Episode{Num: "3", RawID: rawID, RawEmbeds: map[string][]string{}}, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestAnimeVibResolveStreamFallbackWalksBatchInSelectOrder pins the
+// fallback's batch leg: the EMBED dub itself stopped at episode 2
+// (nothing in hand carries the episode), so the resolve must
+// bounded-parallel-fetch the remaining translations and walk them in
+// the select order until AniDUB (62137, the full capture) — the
+// deterministic episodes() table order, never a completion-order pick.
+func TestAnimeVibResolveStreamFallbackWalksBatchInSelectOrder(t *testing.T) {
+	t.Parallel()
+
+	world := avKodikVariedWorld(t, "embed-missing")
+	p := luaProvider(t, "animevib", world.URL)
+
+	rawID, err := luaStateJSON(world.URL+"/2937-n84b-dandadan-1.html", "3")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
+	stream, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "3", RawID: rawID, RawEmbeds: map[string][]string{}}, "JAM")
+	if err != nil {
+		t.Fatalf("ResolveStream: %v", err)
+	}
+	if stream.DubName != "AniDUB" {
+		t.Errorf("DubName = %q, want the first select-order dub carrying ep3 %q", stream.DubName, "AniDUB")
+	}
+	if len(stream.Links) == 0 {
+		t.Fatalf("Links = %v, want the extractor's entries", stream.Links)
 	}
 }
 

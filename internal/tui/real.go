@@ -341,6 +341,15 @@ func (s *realEpisode) ResolveStream(ctx context.Context, providerID string, epis
 	// extract_best_source step). Without it the lua scripts decode the
 	// prefixed bytes and crash on the first byte of the provider id.
 	episode.RawID = episode.ProviderRawID(providerID)
+	// The same python function's dub half (#158 fix-round 2):
+	// stream_resolver.py:174 strips the merged track tag —
+	// provider_dub_name = re.sub(r"^\[.*?\]\s*", "", dub_key) — before
+	// provider.resolve_stream. The remembered-dub scoped resolve hands
+	// "[prov] dub" track keys here; the scripts compare the provider's
+	// own bare dub names (the kodik data-title) and could never match
+	// the tagged form — the typed wall on every episode, the live
+	// owner report. A bare dubID passes through unchanged.
+	dubID = stripProviderTag(dubID)
 	return p.ResolveStream(ctx, episode, dubID)
 }
 
@@ -846,7 +855,11 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	// leg the video provider's state).
 	videoEpisode := task.Episode
 	videoEpisode.RawID = task.Episode.ProviderRawID(task.ProviderID)
-	stream, err := p.ResolveStream(ctx, videoEpisode, task.DubID)
+	// The dub-name half of the python extract_best_source
+	// decomposition (#158 fix-round 2): the task DubID is the merged
+	// "[prov] dub" track key (stampResolvedDub); the provider consumes
+	// its own bare dub name, python stream_resolver.py:174 parity.
+	stream, err := p.ResolveStream(ctx, videoEpisode, stripProviderTag(task.DubID))
 	if err != nil {
 		return "", fmt.Errorf("tui: download: resolve: %w", err)
 	}
@@ -862,7 +875,10 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		if ap, ok := c.registry.Get(providerOfTrackKey(audioKey)); ok {
 			audioEpisode := task.Episode
 			audioEpisode.RawID = task.Episode.ProviderRawID(providerOfTrackKey(audioKey))
-			audioStream, err := ap.ResolveStream(ctx, audioEpisode, audioKey)
+			// The same track-key strip as the video leg — the audio
+			// key is a "[prov] dub" track key by the same contract
+			// (#158 fix-round 2).
+			audioStream, err := ap.ResolveStream(ctx, audioEpisode, stripProviderTag(audioKey))
 			if err == nil && len(audioStream.Links) > 0 {
 				best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
 				audio = &best

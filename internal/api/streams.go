@@ -166,9 +166,12 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 	// extract_best_source): the provider consumes its OWN bare raw id,
 	// never the composed "source:rawid" form — the prefixed bytes'
 	// first byte is what crashed the animevib json.decode live (#157).
+	// The same function's dub half (#158 fix-round 2): the provider
+	// consumes its own bare dub name, never the "[prov] dub" track
+	// tag.
 	videoEpisode := episode
 	videoEpisode.RawID = episode.ProviderRawID(req.SourceID)
-	videoStream, err := provider.ResolveStream(r.Context(), videoEpisode, req.VideoKey)
+	videoStream, err := provider.ResolveStream(r.Context(), videoEpisode, dubNameFromTrackKey(req.VideoKey))
 	if err != nil || len(videoStream.Links) == 0 {
 		writeAPIError(w, r, &apiError{
 			Code:    "all_candidates_failed",
@@ -202,7 +205,10 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 			// leak to it (#157 review).
 			audioEpisode.RawID = ""
 		}
-		audioStream, err := audioProvider.ResolveStream(r.Context(), audioEpisode, *req.AudioKey)
+		// The audio key is a "[prov] dub" track key by the same
+		// contract — the bare dub name rides the same strip (#158
+		// fix-round 2).
+		audioStream, err := audioProvider.ResolveStream(r.Context(), audioEpisode, dubNameFromTrackKey(*req.AudioKey))
 		if err != nil || len(audioStream.Links) == 0 {
 			writeAPIError(w, r, &apiError{
 				Code:    "all_candidates_failed",

@@ -250,8 +250,9 @@ IDs, pinned order, and fixtures per provider.
   code never parses a player page that a factory extractor already covers.
 - **Cloudflare ladder** — every client carries the CF retry ladder; re-challenging hosts
   escalate to the stealth-Chromium solver on demand.
-- **Extensible** — user scripts in Lua register alongside the built-ins
-  (see [Lua Provider SDK](#-lua-provider-sdk)).
+- **Extensible** — user scripts in Lua register in place of the bundled
+  scripts when the id matches, or append at the roster tail when it
+  doesn't (see [Lua Provider SDK](#-lua-provider-sdk)).
 
 The live health gate is `make parity` (see [Provider Roster](#-provider-roster)).
 
@@ -454,7 +455,7 @@ manager:
 | :-- | :-- |
 | Windows | `winget install -e --id shinchiro.mpv` + `winget install -e --id Gyan.FFmpeg` when winget exists; otherwise `choco install mpvio ffmpeg -y`; with neither manager — an offer to install Chocolatey first (its official installer) |
 | macOS | `brew install mpv ffmpeg`; without Homebrew — an offer to run the official Homebrew installer first |
-| Linux | `sudo apt install mpv ffmpeg` / `sudo dnf install mpv ffmpeg` (enables RPM Fusion first) / `sudo pacman -S mpv ffmpeg` / `sudo zypper install mpv ffmpeg` — the first detected manager; none detected prints per-distro manual commands |
+| Linux | `sudo apt install mpv ffmpeg` / `sudo dnf install --exclude='openh264*' mpv ffmpeg` (enables RPM Fusion first) / `sudo pacman -S mpv ffmpeg` / `sudo zypper install mpv ffmpeg` — the first detected manager; none detected prints per-distro manual commands |
 
 - **Interactive sessions only** — the `Установить? [Y/n]` prompt appears
   only when stdin is a terminal. Under systemd, docker or a pipe anicli

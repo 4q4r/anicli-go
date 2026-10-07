@@ -331,6 +331,123 @@ func TestAniTokyoResolveStreamUnknownDub(t *testing.T) {
 	}
 }
 
+// aniTokyoDubWorld serves a minimal RalodePlayer release page where
+// per-episode dub coverage GENUINELY VARIES: AnimeVost carries only
+// episode 1, AniStar carries episodes 1 and 2 (the inline-blob shape
+// of the wrapperless test, two dubs wide).
+func aniTokyoDubWorld(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `<html><script>RalodePlayer.init({`+
+			`"A":{"name":"AnimeVost","items":{"1":{"aname":"1 серия","lssort":"1","scode":"<iframe src=\"/video.php?id=1&cat=1\">"}}},`+
+			`"B":{"name":"AniStar","items":{`+
+			`"1":{"aname":"1 серия","lssort":"1","scode":"<iframe src=\"/video.php?id=2&cat=1\">"},`+
+			`"2":{"aname":"2 серия","lssort":"2","scode":"<iframe src=\"/video.php?id=3&cat=1\">"}}`+
+			`}},{})</script></html>`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestAniTokyoResolveStreamDubMissTypesCarriers pins the ask-first
+// dub-miss doctrine (#159 port): a dub the episode does not carry
+// walls typed ErrNotFound whose message names the requested dub and
+// LISTS the dubs the episode actually carries — the actionable
+// payload (the TUI opens its dub menu over it; headless callers
+// re-request with a listed dub). NEVER a silent substitution. The
+// carrier order is byte-sorted: the row.refs table is a Lua map.
+func TestAniTokyoResolveStreamDubMissTypesCarriers(t *testing.T) {
+	t.Parallel()
+
+	srv := aniTokyoDubWorld(t)
+	p := luaProvider(t, "anitokyo", srv.URL)
+
+	// Episode 2: AnimeVost watched on episode 1 legitimately does not
+	// serve episode 2 — the only carrier is AniStar.
+	rawID := luaStateJSONOf(srv.URL+"/anime/8681-dandadan-tv.html", "2")
+	_, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "2", RawID: rawID, RawEmbeds: map[string][]string{}}, "AnimeVost")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "AnimeVost"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if !strings.Contains(msg, "(episode dubs: AniStar)") {
+		t.Errorf("message = %q, want the episode's carrier list naming AniStar", msg)
+	}
+
+	// Episode 1 carries both dubs; the byte-sorted list pins the
+	// deterministic order.
+	rawID1 := luaStateJSONOf(srv.URL+"/anime/8681-dandadan-tv.html", "1")
+	_, err = p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawID: rawID1, RawEmbeds: map[string][]string{}}, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if got := "(episode dubs: AniStar, AnimeVost)"; !strings.Contains(err.Error(), got) {
+		t.Errorf("message = %q, want %q (the sorted carrier list)", err.Error(), got)
+	}
+}
+
+// TestAniTokyoResolveStreamZeroDubsIsTypedWall pins the zero-dubs
+// edge: an episode number the page's blob does not list at all walls
+// typed ErrNotFound — a data-shape fact, not a caller mistake — with
+// the typed marker but NO carrier list (there is nothing to list).
+func TestAniTokyoResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv := aniTokyoDubWorld(t)
+	p := luaProvider(t, "anitokyo", srv.URL)
+
+	rawID := luaStateJSONOf(srv.URL+"/anime/8681-dandadan-tv.html", "9")
+	_, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "9", RawID: rawID, RawEmbeds: map[string][]string{}}, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the zero-dubs wall)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "carries no dub") {
+		t.Errorf("message = %q, want the typed marker", msg)
+	}
+	if strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want no carrier list on the zero-dubs wall", msg)
+	}
+}
+
+// TestAniTokyoResolveStreamGarbageStateIsTypedWall pins the typed
+// wall for ANY raw_id byte sequence (the #157 class): merged-convention
+// prefix bytes, plain non-json text, shape-drifted state JSON and the
+// empty id must surface as ErrInvalidInput — never the raw
+// json.decode VM error through to the user.
+func TestAniTokyoResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv := aniTokyoDubWorld(t)
+	p := luaProvider(t, "anitokyo", srv.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `anitokyo:{"n":"1","u":"` + srv.URL + `/anime/x.html"}`},
+		{"plain non-json text", "about:blank"},
+		{"state json missing the u leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID, RawEmbeds: map[string][]string{}}, "AnimeVost")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
 // TestAniTokyoResolveStreamWrapperless pins the dead-wrapper path: a
 // video.php answer without any player iframe is the typed extract wall,
 // never a silent zero-link success.

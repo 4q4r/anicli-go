@@ -341,6 +341,102 @@ func TestAniStarGetEpisodesNoPlayer(t *testing.T) {
 	}
 }
 
+// TestAniStarResolveStreamDubMissTypesCarriers pins the ask-first
+// dub-miss doctrine (#159 port): a dub the episode does not carry
+// walls typed ErrNotFound whose message names the requested dub and
+// LISTS the dubs the state actually carries (the e/d table keys,
+// byte-sorted — a Lua map has no order). The scan is fetch-free: the
+// state IS the carrier table, so the handler must never be reached.
+// The stable marker `carries no dub "X" (episode dubs: …)` is what
+// the tui dubNotCarriedFailure predicate keys on.
+func TestAniStarResolveStreamDubMissTypesCarriers(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the carrier scan must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "anistar", srv.URL)
+
+	rawID := `{"n":"1","p":"` + srv.URL + `/player.php","d":{"AniStar":["101"],"Ancord":["102"]}}`
+	_, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawID: rawID}, "AnimeVost")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "AnimeVost"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if got := "(episode dubs: Ancord, AniStar)"; !strings.Contains(msg, got) {
+		t.Errorf("message = %q, want %q (the sorted carrier list)", msg, got)
+	}
+}
+
+// TestAniStarResolveStreamZeroDubsIsTypedWall pins the zero-dubs
+// edge: a state whose dub tables carry no dub at all walls typed
+// ErrNotFound with the marker but NO carrier list (a data-shape fact,
+// not a caller mistake).
+func TestAniStarResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the carrier scan must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "anistar", srv.URL)
+
+	_, err := p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawID: `{"n":"1","e":{}}`}, "AniStar")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the zero-dubs wall)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "carries no dub") {
+		t.Errorf("message = %q, want the typed marker", msg)
+	}
+	if strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want no carrier list on the zero-dubs wall", msg)
+	}
+}
+
+// TestAniStarResolveStreamGarbageStateIsTypedWall pins the typed wall
+// for ANY raw_id byte sequence (the #157 class): merged-convention
+// prefix bytes, plain non-json text, state JSON carrying neither the
+// e nor the d table, a non-table e leg, and the empty id must
+// surface as ErrInvalidInput — never the raw json.decode VM error
+// through to the user.
+func TestAniStarResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a malformed state must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "anistar", srv.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `anistar:{"n":"1","d":{}}`},
+		{"plain non-json text", "about:blank"},
+		{"state json carrying neither leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"non-table e leg", `{"n":"1","e":"legacy-ref"}`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID}, "AniStar")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
 // TestAniStarResolveStream pins the stream resolution: the media_id
 // fragment keys the fresh player page fetch, the files[] HLS ladder
 // wins the quality keys, files_mp4[] fills the gaps, every source

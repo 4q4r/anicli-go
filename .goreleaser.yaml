@@ -48,3 +48,66 @@ changelog:
       - "^test:"
       - "^chore:"
       - "^Merge"
+
+# Publish channels (#156) — wired but inert: every pipe ships with
+# skip_upload: true until the one-time owner-side setup lands (AUR account +
+# SSH key, 4q4r/homebrew-tap repo, winget-pkgs fork + PAT). The outputs are
+# still built into dist/ on every release and are inspectable per release;
+# activate a channel by flipping its skip_upload to false.
+# Docs: customization/publish/{aur,homebrew_casks,winget}, package/nfpm.
+
+nfpms:
+  - id: packages
+    package_name: anicli-go
+    # Mirrors the raw-binary naming: anicli-go_<ver>_<os>_<arch>.<deb|rpm>.
+    file_name_template: "{{.PackageName}}_{{.Version}}_{{.Os}}_{{.Arch}}"
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    maintainer: 4q4r
+    homepage: https://github.com/4q4r/anicli-go
+    description: Anime browser & downloader TUI (anilibria)
+    license: MIT
+
+aurs:
+  - name: anicli-go-bin
+    homepage: https://github.com/4q4r/anicli-go
+    description: Anime browser & downloader TUI (anilibria)
+    license: MIT
+    maintainers:
+      - 4q4r
+    # Passphraseless AUR SSH key; only needed once skip_upload flips to false.
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_url: ssh://aur@aur.archlinux.org/anicli-go-bin.git
+    # makepkg saves aliased sources under the alias name (ArchWiki: PKGBUILD
+    # `source=('<name>::<uri>')`), so the default package() — which references
+    # the URL basename — would not find the binary. Install the aliased
+    # per-arch source instead; $CARCH is x86_64/aarch64.
+    package: 'install -Dm755 "./${pkgname}_${pkgver}_${CARCH}.binary" "${pkgdir}/usr/bin/anicli"'
+    skip_upload: true
+
+homebrew_casks:
+  - name: anicli-go
+    repository:
+      owner: 4q4r
+      name: homebrew-tap
+    homepage: https://github.com/4q4r/anicli-go
+    description: Anime browser & downloader TUI (anilibria)
+    binaries: [anicli]
+    skip_upload: true
+
+winget:
+  - name: anicli-go
+    publisher: 4q4r
+    homepage: https://github.com/4q4r/anicli-go
+    short_description: Anime browser & downloader TUI (anilibria)
+    license: MIT
+    repository:
+      owner: 4q4r
+      name: winget-pkgs
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+    skip_upload: true

@@ -274,7 +274,18 @@ return {
 	end,
 
 	streams = function(raw_id, dub)
-		local state = anicli.json.decode(raw_id)
+		-- The state guard: raw_id is ALWAYS this script's own {n, u}
+		-- json (the fresh-sandbox contract above), but any other byte
+		-- sequence — a caller composing the merged prov:id convention
+		-- without decomposing it (#157), a stale history record — must
+		-- surface typed, never as the raw json.decode VM error through
+		-- to the user (the anitokyo blob-decode guard precedent).
+		local ok, state = pcall(anicli.json.decode, raw_id)
+		if not ok or type(state) ~= "table" or type(state.u) ~= "string" or state.u == "" then
+			anicli.fail("invalid_input",
+				"episode raw_id is not the {n, u} state json: \"" ..
+				string.sub(tostring(raw_id), 1, 64) .. "\"")
+		end
 		local num, page = tostring(state.n), state.u
 
 		local resp = anicli.http.get(page)

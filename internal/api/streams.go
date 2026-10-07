@@ -162,7 +162,13 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	videoStream, err := provider.ResolveStream(r.Context(), episode, req.VideoKey)
+	// The python decomposition (cli/stream_resolver.py
+	// extract_best_source): the provider consumes its OWN bare raw id,
+	// never the composed "source:rawid" form — the prefixed bytes'
+	// first byte is what crashed the animevib json.decode live (#157).
+	videoEpisode := episode
+	videoEpisode.RawID = episode.ProviderRawID(req.SourceID)
+	videoStream, err := provider.ResolveStream(r.Context(), videoEpisode, req.VideoKey)
 	if err != nil || len(videoStream.Links) == 0 {
 		writeAPIError(w, r, &apiError{
 			Code:    "all_candidates_failed",
@@ -185,7 +191,18 @@ func (a *App) handleStreamsResolve(w http.ResponseWriter, r *http.Request) {
 				audioProvider = ap
 			}
 		}
-		audioStream, err := audioProvider.ResolveStream(r.Context(), episode, *req.AudioKey)
+		audioEpisode := episode
+		if audioProviderID == req.SourceID {
+			audioEpisode.RawID = episode.ProviderRawID(req.SourceID)
+		} else {
+			// A genuinely foreign audio provider has no raw id in this
+			// single-source request: python's decomposition loop-miss
+			// yields "" and the provider resolves from the embed link
+			// or fails typed — the video source's state must never
+			// leak to it (#157 review).
+			audioEpisode.RawID = ""
+		}
+		audioStream, err := audioProvider.ResolveStream(r.Context(), audioEpisode, *req.AudioKey)
 		if err != nil || len(audioStream.Links) == 0 {
 			writeAPIError(w, r, &apiError{
 				Code:    "all_candidates_failed",

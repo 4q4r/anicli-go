@@ -6,6 +6,8 @@
 // (snake_case) so captured fixtures and API payloads stay interchangeable.
 package contracts
 
+import "strings"
+
 // SourceType classifies how suitable a source's content is for the
 // user's language preferences — NOT what the provider literally
 // offers on the wire. The wanted audio languages are EN/JA/RU.
@@ -57,6 +59,28 @@ type Episode struct {
 	RawID string `json:"raw_id"`
 	// RawEmbeds maps dub name -> list of raw embed URLs.
 	RawEmbeds map[string][]string `json:"raw_embeds,omitempty"`
+}
+
+// ProviderRawID decomposes the merged-session RawID convention into the
+// named provider's own raw id. The session merge composes
+// "prov1:id1|prov2:id2" (tui MergeEpisodeLists; the api streams/resolve
+// handler builds the single-source form "source:rawid"), and the
+// python resolve loop strips the called provider's part with
+// part.split(":", 1)[1] before provider.resolve_stream
+// (cli/stream_resolver.py extract_best_source) — the decomposition
+// step whose absence handed "animevib:{...}" verbatim to the lua
+// scripts, whose json.decode then crashed on the first byte 'a'
+// (issue #157). A raw id carrying no matching "prov:" part — the bare
+// provider-local ids direct callers pass — returns unchanged: the
+// python loop's empty-string fallback would break them.
+func (e Episode) ProviderRawID(providerID string) string {
+	prefix := providerID + ":"
+	for _, part := range strings.Split(e.RawID, "|") {
+		if id, ok := strings.CutPrefix(part, prefix); ok && id != "" {
+			return id
+		}
+	}
+	return e.RawID
 }
 
 // VideoSource is a concrete playable link with a quality label.

@@ -55,6 +55,7 @@ and an interface in English or Russian.
 - [Screenshots](#-screenshots)
 - [Provider Roster](#-provider-roster)
 - [Access Points](#-access-points)
+- [Packaging](#-packaging)
 - [License](#-license)
 
 ---
@@ -909,6 +910,27 @@ of the 30 registered providers answer.
 | Config directory | `~/.config/anicli/` | `settings.toml`, `providers/`, `locales/` |
 | Outbound APIs | Shikimori, MyAnimeList, AniSkip/AnimeSkip | tracker sync + skips; opt-in |
 | Sources | 30 built-in sites + user Lua providers | see [Provider Roster](#-provider-roster) |
+
+---
+
+## 📦 Packaging
+
+Every release ships raw binaries plus `.deb`/`.rpm` packages as release
+assets. The AUR, Homebrew-tap and winget channels are already wired in
+`.goreleaser.yaml` and build their outputs (PKGBUILD, cask, manifests) into
+`dist/` on each release, but stay inert (`skip_upload: true`) until the
+one-time owner-side setups land — each activates by flipping its
+`skip_upload` back to `false`.
+
+| Channel | Status | Install (once live) |
+| :-- | :-- | :-- |
+| Raw binaries | shipped | `anicli-go_<ver>_<os>_<arch>` from the release page |
+| `.deb` / `.rpm` | shipped | `sudo dpkg -i anicli-go_*_linux_amd64.deb` / `sudo dnf install ./anicli-go_*_linux_amd64.rpm` |
+| AUR — `anicli-go-bin` | planned | `yay -S anicli-go-bin` |
+| Homebrew tap — `4q4r/homebrew-tap` | planned | `brew install 4q4r/tap/anicli-go` |
+| winget — `4q4r.anicli-go` | planned | `winget install -e --id 4q4r.anicli-go` |
+
+Full apt/dnf repositories and Chocolatey are deferred until there is demand.
 
 ---
 

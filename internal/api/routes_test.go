@@ -211,13 +211,18 @@ func TestStreamsResolveHappyPath(t *testing.T) {
 	p := &episodesProvider{
 		fakeProvider: fakeProvider{id: "fake"},
 		sourceType:   contracts.SourceTypeBoth,
+		// Provider-native BARE dub names: the resolve handler strips
+		// the merged "[prov] " track tag before the call (#158
+		// fix-round 2, python extract_best_source parity) — the same
+		// split a real provider lives with (its episodes listing
+		// merges under tagged keys, its resolve consumes bare names).
 		streams: map[string]contracts.MediaStream{
 			"Dub V": {DubName: "Dub V", Links: map[string]contracts.VideoSource{
 				"1080": {URL: "https://cdn.example/v1080.m3u8", Quality: "1080", Type: "m3u8"},
 				"720":  {URL: "https://cdn.example/v720.m3u8", Quality: "720", Type: "m3u8", Headers: map[string]string{"Referer": "https://fake.example"}},
 				"480":  {URL: "https://cdn.example/v480.mp4", Quality: "480", Type: "mp4"},
 			}},
-			"[other] Dub A": {DubName: "Dub A", Links: map[string]contracts.VideoSource{
+			"Dub A": {DubName: "Dub A", Links: map[string]contracts.VideoSource{
 				"192": {URL: "https://cdn.example/a192.mp4?expires=4102444800", Quality: "192", Type: "mp4"},
 			}},
 		},
@@ -384,10 +389,12 @@ type rawIDRecorder struct {
 	fakeProvider
 	links  bool
 	gotRaw []string
+	gotDub []string
 }
 
 func (p *rawIDRecorder) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
 	p.gotRaw = append(p.gotRaw, episode.RawID)
+	p.gotDub = append(p.gotDub, dubID)
 	if !p.links {
 		return contracts.MediaStream{DubName: dubID, Links: map[string]contracts.VideoSource{}}, nil
 	}
@@ -445,6 +452,57 @@ func TestStreamsResolveDecomposesPrefixedRawID(t *testing.T) {
 	// yields "" — no state leak across providers.
 	if len(audio.gotRaw) != 1 || audio.gotRaw[0] != "" {
 		t.Fatalf("audio provider got RawID %q, want \"\" (the python loop-miss)", audio.gotRaw)
+	}
+}
+
+// TestStreamsResolveStripsTrackTagFromKeys pins the dub half of the
+// python extract_best_source decomposition on the API surface
+// (fix-round 2 of #158): the api server routes through the same
+// extract_best_source (api_server.py _api_resolve_streams →
+// attempt_extraction), whose line 174 strips the merged track tag —
+// re.sub(r"^\[.*?\]\s*", "", dub_key) — before every
+// provider.resolve_stream, on BOTH legs. The Go port passed the keys
+// verbatim: a client replaying the merged-session key
+// "[animevib] Amazing Dubbing" handed the lua script a name its bare
+// dub comparison could never match. A bare key passes through
+// unchanged (the direct-callers contract).
+func TestStreamsResolveStripsTrackTagFromKeys(t *testing.T) {
+	t.Parallel()
+
+	video := &rawIDRecorder{fakeProvider: fakeProvider{id: "fake"}, links: true}
+	audio := &rawIDRecorder{fakeProvider: fakeProvider{id: "other"}}
+	app := newTestApp(t)
+	reg := providers.NewEmptyRegistry()
+	if err := reg.Register(video); err != nil {
+		t.Fatalf("register video provider: %v", err)
+	}
+	if err := reg.Register(audio); err != nil {
+		t.Fatalf("register audio provider: %v", err)
+	}
+	app.registry = reg
+	h := app.Router()
+	auth := authHeader(t, h)
+
+	rec, payload := doJSON(t, h, http.MethodPost, "/api/v1/streams/resolve", `{
+		"source_id": "fake",
+		"episode_num": "3",
+		"episode_raw_id": "{\"n\":\"3\",\"u\":\"https://www.animevib.ru/1.html\"}",
+		"video_key": "[animevib] Amazing Dubbing",
+		"audio_key": "[other] AniLib",
+		"urls_video": ["https://embed.example/v1"],
+		"urls_audio": ["https://embed.example/a1"]
+	}`, auth)
+	// The linkless audio recorder lands the handler's honest 502 —
+	// the resolve reached both providers.
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("resolve = %d: %v", rec.Code, payload)
+	}
+
+	if len(video.gotDub) != 1 || video.gotDub[0] != "Amazing Dubbing" {
+		t.Fatalf("video provider got dubID %q, want the bare %q", video.gotDub, "Amazing Dubbing")
+	}
+	if len(audio.gotDub) != 1 || audio.gotDub[0] != "AniLib" {
+		t.Fatalf("audio provider got dubID %q, want the bare %q", audio.gotDub, "AniLib")
 	}
 }
 

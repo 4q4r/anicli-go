@@ -49,11 +49,11 @@ changelog:
       - "^chore:"
       - "^Merge"
 
-# Publish channels (#156) — wired but inert: every pipe ships with
-# skip_upload: true until the one-time owner-side setup lands (AUR account +
-# SSH key, 4q4r/homebrew-tap repo, winget-pkgs fork + PAT). The outputs are
-# still built into dist/ on every release and are inspectable per release;
-# activate a channel by flipping its skip_upload to false.
+# Publish channels (#156) — live: the homebrew tap (4q4r/homebrew-tap) and
+# the winget fork (4q4r/winget-pkgs, PRd against microsoft/winget-pkgs) are
+# set up and publish on every tagged release. aurs alone stays inert with
+# skip_upload: true (AUR registration suspended upstream); flip it to
+# activate. Outputs are also built into dist/ per release and inspectable.
 # Docs: customization/publish/{aur,homebrew_casks,winget}, package/nfpm.
 
 nfpms:
@@ -93,7 +93,6 @@ homebrew_casks:
     homepage: https://github.com/4q4r/anicli-go
     description: Anime browser & downloader TUI (anilibria)
     binaries: [anicli]
-    skip_upload: true
 
 winget:
   - name: anicli-go
@@ -110,4 +109,3 @@ winget:
           owner: microsoft
           name: winget-pkgs
           branch: master
-    skip_upload: true

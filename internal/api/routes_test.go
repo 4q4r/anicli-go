@@ -506,6 +506,50 @@ func TestStreamsResolveStripsTrackTagFromKeys(t *testing.T) {
 	}
 }
 
+// TestStreamsResolveSurfacesProviderErrorDetail pins the headless
+// actionable payload (fix-round 3 of #158): when the provider fails
+// with a typed ProviderError — the scripts' «episode carries no dub
+// "X" (episode dubs: …)» wall — the resolve response must carry the
+// provider's compact cause in details.provider_error, so a headless
+// client can re-request with a LISTED dub. The code/message stay the
+// pinned python contract (all_candidates_failed / "Unable to resolve
+// video streams"); only the detail is new.
+func TestStreamsResolveSurfacesProviderErrorDetail(t *testing.T) {
+	providerErr := contracts.WrapProvider("animevib", contracts.OpResolveStream, 0,
+		fmt.Errorf("%w: anicli:not_found:episode 3 carries no dub \"Amazing Dubbing\" (episode dubs: JAM)",
+			contracts.ErrNotFound))
+	p := &episodesProvider{
+		fakeProvider: fakeProvider{id: "fake"},
+		sourceType:   contracts.SourceTypeBoth,
+		streamErr: map[string]error{
+			"Amazing Dubbing": providerErr,
+		},
+	}
+	app := newEpisodesApp(t, p)
+	h := app.Router()
+	auth := authHeader(t, h)
+
+	rec, payload := doJSON(t, h, http.MethodPost, "/api/v1/streams/resolve", `{
+		"source_id": "fake",
+		"episode_num": "3",
+		"episode_raw_id": "{\"n\":\"3\",\"u\":\"https://www.animevib.ru/1.html\"}",
+		"video_key": "Amazing Dubbing",
+		"urls_video": ["https://embed.example/v1"]
+	}`, auth)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("resolve = %d: %v", rec.Code, payload)
+	}
+	errObj, _ := payload["error"].(map[string]any)
+	if errObj["code"] != "all_candidates_failed" {
+		t.Fatalf("code = %v, want the pinned python contract", errObj["code"])
+	}
+	details, _ := errObj["details"].(map[string]any)
+	reason, _ := details["provider_error"].(string)
+	if !strings.Contains(reason, `carries no dub "Amazing Dubbing"`) || !strings.Contains(reason, "(episode dubs: JAM)") {
+		t.Fatalf("details.provider_error = %q, want the actionable carrier list", reason)
+	}
+}
+
 // fakeShiki is a test double for the ShikiClient interface.
 type fakeShiki struct {
 	rates        []shikimori.UserRate

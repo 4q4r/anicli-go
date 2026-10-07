@@ -17,10 +17,11 @@ import (
 
 // fakeEpisode implements EpisodeService.
 type fakeEpisode struct {
-	episodes map[string][]contracts.Episode
-	streams  map[string]contracts.MediaStream
-	errs     map[string]error
-	langs    map[string]string
+	episodes  map[string][]contracts.Episode
+	streams   map[string]contracts.MediaStream
+	errs      map[string]error
+	langs     map[string]string
+	streamErr map[string]error // per-dub typed resolve failures
 }
 
 func (f *fakeEpisode) GetEpisodes(_ context.Context, providerID, _ string) ([]contracts.Episode, error) {
@@ -40,6 +41,9 @@ func (f *fakeEpisode) HydrateDubs(_ context.Context, _ string, episode contracts
 }
 
 func (f *fakeEpisode) ResolveStream(_ context.Context, _ string, _ contracts.Episode, dubID string) (contracts.MediaStream, error) {
+	if err, ok := f.streamErr[dubID]; ok {
+		return contracts.MediaStream{}, err
+	}
 	if s, ok := f.streams[dubID]; ok {
 		return s, nil
 	}

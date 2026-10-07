@@ -37,27 +37,30 @@
 -- player under a subpath keep their prefix (the substring the
 -- extractor gate matches on rides along).
 --
--- DUB FALLBACK DOCTRINE (fix-round 2 of #158, 2026-10-07 — owner
--- review requested): the site carries up to 48 dubs via PER-EPISODE
--- translation tables, and dub coverage genuinely varies episode to
--- episode — a dub watched on episode 1 legitimately may not serve
--- episode 3. streams() therefore NEVER walls on a missing dub: when
--- the requested dub is absent from the episode's table (dropped from
--- the translations select, or its per-episode coverage ends before
--- this episode), the resolve falls back to the episode's FIRST
--- available dub in the deterministic episodes() table order — the
--- embed dub first, then the select order (the same order episodes()
--- merges the per-episode tables under) — and attributes the RESOLVED
--- dub in dub_name. The fallback batch rides the same bounded-
--- parallel get_batch as episodes() (MAX_TRANSLATION_PARALLEL). The
--- ONLY remaining walls: a malformed raw_id (invalid_input, the
--- fresh-sandbox contract) and an episode that NO dub carries at all
--- (not_found — a data-shape fact, not a caller mistake). The dub
--- name matched here is the provider's OWN bare name (the kodik
--- select's data-title, what episodes() merges under); the merged-
--- session "[prov] " track tag is stripped at the Go provider
--- boundary (python extract_best_source parity, tui realEpisode /
--- downloadOne / api streams-resolve).
+-- DUB-MISS SEMANTICS (fix-round 3 of #158 — the round-2 silent
+-- first-dub swap was REJECTED as not python parity): animevib
+-- carries up to 48 dubs via PER-EPISODE translation tables, and dub
+-- coverage genuinely varies episode to episode — a dub watched on
+-- episode 1 legitimately may not serve episode 3. streams() NEVER
+-- substitutes another dub: when the requested dub is absent from the
+-- episode's table (dropped from the translations select, or its
+-- per-episode coverage ends before this episode), the resolve walls
+-- typed not_found whose message LISTS the dubs the episode ACTUALLY
+-- carries (verified per translation page, in the deterministic
+-- episodes() table order: the embed dub first, then the select
+-- order; the scan rides the same bounded-parallel get_batch as
+-- episodes()). That list is the actionable payload — python
+-- resolve_dubs_smart parity: the TUI prints «⚠ Прошлые настройки
+-- недоступны» and opens its dub menu (the user decides); headless
+-- API clients re-request with a listed dub. The dub name matched
+-- here is the provider's OWN bare name (the kodik select's
+-- data-title, what episodes() merges under); the merged-session
+-- "[prov] " track tag is stripped at the Go provider boundary
+-- (python extract_best_source parity, tui realEpisode / downloadOne
+-- / api streams-resolve). Remaining walls: a malformed raw_id
+-- (invalid_input, the fresh-sandbox contract) and an episode that NO
+-- dub carries at all (not_found — a data-shape fact, not a caller
+-- mistake).
 
 local base_url = "https://www.animevib.ru"
 
@@ -325,14 +328,12 @@ return {
 		local resp = anicli.http.get(page)
 		local embed = parse_embed(anicli.html.parse(resp.body):find("iframe.player-shar[src]"):attr("src"), page)
 
-		local embeds, resolved_dub
+		local embeds
 		if embed.kind == "video" then
 			embeds = { embed.url }
-			resolved_dub = dub
 		else
 			-- the embed page IS a translation serial page (the embed
-			-- dub's own) — parse it once; it is the fallback's first
-			-- deterministic candidate.
+			-- dub's own) — parse it once.
 			local main = parse_serial_page(anicli.http.get(embed.url).body)
 
 			-- the requested dub by EXACT bare name (the kodik select's
@@ -347,46 +348,33 @@ return {
 			end
 			local target_is_embed = target ~= nil and target.id == embed.id and target.hash == embed.hash
 
-			-- Stage 1 — the candidates already in hand, walked in the
-			-- episodes() table order: the requested dub first (it owns
-			-- the playback when its own page carries the episode), then
-			-- the embed dub.
-			local candidates = {}
-			local function add_candidate(tr, page)
-				candidates[#candidates + 1] = { tr = tr, page = page }
-			end
+			-- Happy path — the requested dub must EXIST in the select:
+			-- a dub the select does not list is already a miss (the
+			-- scan below), never the embed dub's page by default —
+			-- that would be the silent substitution the doctrine
+			-- forbids. When the requested dub IS the embed dub, the
+			-- already-parsed page serves (no refetch).
 			if target then
-				if target_is_embed then
-					add_candidate(target, main) -- the embed dub IS the requested dub
-				else
-					add_candidate(target, parse_serial_page(anicli.http.get(serial_page(embed.prefix, target.id, target.hash)).body))
+				local dub_page = main
+				if not target_is_embed then
+					dub_page = parse_serial_page(anicli.http.get(serial_page(embed.prefix, target.id, target.hash)).body)
 				end
+				embeds = page_embeds(embed.prefix, dub_page, num)
 			end
-			if not target_is_embed then
-				add_candidate({ id = embed.id, hash = embed.hash, title = main.title }, main)
-			end
-
-			local function walk()
-				for _, cand in ipairs(candidates) do
-					local ep_embeds = page_embeds(embed.prefix, cand.page, num)
-					if #ep_embeds > 0 then
-						return ep_embeds, cand.tr.title
-					end
+			if not embeds or #embeds == 0 then
+				-- DUB MISS (fix-round 3, see the header semantics):
+				-- never substitute another dub silently — scan what
+				-- the episode ACTUALLY carries and wall with the
+				-- actionable carrier list (python resolve_dubs_smart
+				-- parity: the caller re-asks, the user decides).
+				-- Bounded-parallel page fetch per remaining
+				-- translation (the episodes() fan-out) in the select
+				-- order; a failed (transport-level) fetch contributes
+				-- nothing — one dead dub team must not kill the scan.
+				local available = {}
+				if not target_is_embed and #page_embeds(embed.prefix, main, num) > 0 then
+					available[#available + 1] = main.title
 				end
-				return nil, nil
-			end
-
-			embeds, resolved_dub = walk()
-
-			if not embeds then
-				-- Stage 2 — DUB FALLBACK (fix-round 2 of #158, see the
-				-- header doctrine): the requested dub is not in this
-				-- episode's table (absent from the select, or its
-				-- per-episode coverage ends before this episode).
-				-- Bounded-parallel page fetch per remaining translation
-				-- (the episodes() fan-out) in the select order; a
-				-- failed (transport-level) fetch contributes nothing —
-				-- one dead dub team must not kill the fallback.
 				local urls, metas = {}, {}
 				for _, tr in ipairs(main.translations) do
 					local is_target = target ~= nil and tr.id == target.id and tr.hash == target.hash
@@ -398,19 +386,20 @@ return {
 				end
 				local batch = anicli.http.get_batch(urls, MAX_TRANSLATION_PARALLEL)
 				for i, res in ipairs(batch) do
-					if not res.error then
-						add_candidate(metas[i], parse_serial_page(res.body))
+					if not res.error and #page_embeds(embed.prefix, parse_serial_page(res.body), num) > 0 then
+						available[#available + 1] = metas[i].title
 					end
 				end
-				embeds, resolved_dub = walk()
-			end
 
-			if not embeds then
-				-- the ONLY dub wall that remains: NO dub carries this
-				-- episode at all — a data-shape fact, not a caller
-				-- mistake.
-				anicli.fail("not_found", "episode " .. num .. " carries no dub from any of its " ..
-					#main.translations .. " translations")
+				if #available == 0 then
+					-- the ONLY dub wall with no ask behind it: NO dub
+					-- carries this episode at all — a data-shape fact,
+					-- not a caller mistake.
+					anicli.fail("not_found", "episode " .. num .. " carries no dub from any of its " ..
+						#main.translations .. " translations")
+				end
+				anicli.fail("not_found", 'episode ' .. num .. ' carries no dub "' .. dub ..
+					'" (episode dubs: ' .. table.concat(available, ", ") .. ')')
 			end
 		end
 
@@ -418,6 +407,6 @@ return {
 		if not ok then
 			anicli.fail("extract_failed", tostring(links))
 		end
-		return { dub_name = resolved_dub, links = links }
+		return { dub_name = dub, links = links }
 	end,
 }

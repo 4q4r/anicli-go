@@ -27,18 +27,11 @@ archives:
   - id: anicli
     ids:
       - anicli
-    # tarball everywhere; zip for windows (Explorer-friendly).
-    formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
+    # Raw binaries as release assets, no tar.gz/zip wrapping (#154).
+    # `files:` is ignored in binary mode; docs: customization/package/archives.
+    formats: [binary]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    files:
-      - LICENSE
-      - README.md
-      - THIRD-PARTY-NOTICES.md
-      - settings.example.toml
 
 checksum:
   name_template: "checksums.txt"

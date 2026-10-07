@@ -391,6 +391,13 @@ func TestAniKadoResolveStream(t *testing.T) {
 	}
 }
 
+// TestAniKadoResolveStreamUnknownDubIsTypedWall pins the ask-first
+// dub-miss doctrine (#159 port — the round-2 shape walled the miss
+// invalid_input, a caller-mistake class the tui dubNotCarriedFailure
+// predicate cannot see): a dub the episode does not carry walls typed
+// ErrNotFound whose message names the requested dub and LISTS the
+// dubs the episode actually carries (the rebuilt translator table's
+// keys, byte-sorted — a Lua map has no order).
 func TestAniKadoResolveStreamUnknownDubIsTypedWall(t *testing.T) {
 	t.Parallel()
 
@@ -409,8 +416,110 @@ func TestAniKadoResolveStreamUnknownDubIsTypedWall(t *testing.T) {
 	ep := contracts.Episode{Num: "1", RawID: rawID}
 
 	_, err = p.ResolveStream(context.Background(), ep, "Ancord")
-	if !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Fatalf("err = %v, want contracts.ErrInvalidInput wrap", err)
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "Ancord"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if !strings.Contains(msg, "(episode dubs: Silver AniAge)") {
+		t.Errorf("message = %q, want the episode's carrier list", msg)
+	}
+}
+
+// TestAniKadoResolveStreamMovieDubMissListsServiceDub pins the movie
+// branch of the doctrine (#159): the embed-state resolve carries the
+// single service dub, so a miss walls typed ErrNotFound listing
+// AniKado — the actionable payload even on the zero-fetch branch.
+func TestAniKadoResolveStreamMovieDubMissListsServiceDub(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the embed-state resolve must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "anikado", srv.URL)
+
+	embed := akEmbedStateJSON(t, "1", "https://kodikplayer.com/video/113757/15dee/720p")
+	ep := contracts.Episode{Num: "1", RawID: embed}
+
+	_, err := p.ResolveStream(context.Background(), ep, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "NoSuchDub"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if !strings.Contains(msg, "(episode dubs: AniKado)") {
+		t.Errorf("message = %q, want the service dub listed", msg)
+	}
+}
+
+// TestAniKadoResolveStreamZeroDubsIsTypedWall pins the zero-dubs
+// edge: an episode page whose re-fetch carries no translator rows at
+// all walls typed ErrNotFound (a data-shape fact, not a caller
+// mistake) with the marker but NO carrier list.
+func TestAniKadoResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<html><body>episode shell, no translator rows</body></html>`))
+	})
+	p := luaProvider(t, "anikado", srv.URL)
+
+	page := srv.URL + "/572-piraty-chernoj-laguny/episode-1.html"
+	rawID, err := luaStateJSON(page, "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
+	_, err = p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawID: rawID}, "Silver AniAge")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the zero-dubs wall)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "carries no dub") {
+		t.Errorf("message = %q, want the typed marker", msg)
+	}
+	if strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want no carrier list on the zero-dubs wall", msg)
+	}
+}
+
+// TestAniKadoResolveStreamGarbageStateIsTypedWall pins the typed wall
+// for ANY raw_id byte sequence (the #157 class): merged-convention
+// prefix bytes, plain non-json text, state JSON carrying neither the
+// u nor the e leg, and the empty id must surface as ErrInvalidInput —
+// never the raw json.decode VM error through to the user.
+func TestAniKadoResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a malformed state must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "anikado", srv.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `anikado:{"n":"1","u":"` + srv.URL + `/ep.html"}`},
+		{"plain non-json text", "about:blank"},
+		{"state json carrying neither leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID}, "AniKado")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
 	}
 }
 

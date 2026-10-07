@@ -155,3 +155,77 @@ func TestScopedResolveDubMissZeroDubsKeepsFailSoft(t *testing.T) {
 		t.Fatal("a dub miss with zero linked dubs must not open an empty ask")
 	}
 }
+
+// TestScopedResolveDubMissPredicateIsProviderAgnostic proves the
+// settle predicate generalizes past animevib (#159): the typed miss
+// of EVERY state-carrying sibling — the standardized
+// `carries no dub "X" (episode dubs: …)` not_found wall — opens the
+// dub menu, while the same miss typed with the OLD wrong class
+// (invalid_input, the round-2 anikado/anikoto/animedia shape) keeps
+// the fail-soft fall-through. The predicate keys on the typed class +
+// the stable marker pair, never on provider-specific text.
+func TestScopedResolveDubMissPredicateIsProviderAgnostic(t *testing.T) {
+	// One typed miss per sibling, exactly the message the script
+	// walls after the #159 port (the carrier list riding along).
+	misses := map[string]error{
+		"anitokyo": fmt.Errorf("%w: anicli:not_found:episode 2 carries no dub \"AnimeVost\" (episode dubs: AniStar)",
+			contracts.ErrNotFound),
+		"animiku": fmt.Errorf("%w: anicli:not_found:episode 1 carries no dub \"NoSuchDub\" (episode dubs: MC Entertainment, Silver AniAge)",
+			contracts.ErrNotFound),
+		"anikado": fmt.Errorf("%w: anicli:not_found:episode 1 carries no dub \"Ancord\" (episode dubs: Silver AniAge)",
+			contracts.ErrNotFound),
+		"anikoto": fmt.Errorf("%w: anicli:not_found:episode 23918:abc carries no dub \"Дубляж\" (episode dubs: DUB, SUB)",
+			contracts.ErrNotFound),
+		"anistar": fmt.Errorf("%w: anicli:not_found:episode 1 carries no dub \"AnimeVost\" (episode dubs: Ancord, AniStar)",
+			contracts.ErrNotFound),
+		"animedia": fmt.Errorf("%w: anicli:not_found:episode 1 carries no dub \"NoSuchDub\" (episode dubs: СВ-Дубль, Animedia)",
+			contracts.ErrNotFound),
+	}
+	for prov, miss := range misses {
+		t.Run(prov, func(t *testing.T) {
+			s, cmd := dubMissSession(t, miss)
+			msg := cmd()
+			_scr, _ := s.Update(msg)
+			ss := _scr.(*sessionScreen)
+
+			if ss.state != sessionStateRedub {
+				t.Fatalf("state after the %s dub-miss settle = %v, want the dub menu", prov, ss.state)
+			}
+			if got := ss.status; !strings.Contains(got, "Previous settings unavailable") {
+				t.Fatalf("status = %q, want the python warning", got)
+			}
+			// The missed dub itself is never offered.
+			for _, c := range ss.redubList.Menu().Items {
+				if c.ID == BackID {
+					continue
+				}
+				if v, ok := c.Value.(string); ok && v == "[animego] Дубль 1" {
+					t.Fatalf("dub menu offers the missed dub %q", v)
+				}
+			}
+		})
+	}
+
+	// The old wrong-class shapes (the round-2 anikado, anikoto and
+	// animedia walls) must NOT open the menu — the fail-soft
+	// fall-through stands.
+	wrongClass := []string{
+		"anikado",
+		"anikoto",
+		"animedia",
+	}
+	for _, prov := range wrongClass {
+		t.Run("wrong-class/"+prov, func(t *testing.T) {
+			miss := fmt.Errorf("%w: anicli:invalid_input:episode 1 carries no dub \"NoSuchDub\"",
+				contracts.ErrInvalidInput)
+			s, cmd := dubMissSession(t, miss)
+			msg := cmd()
+			_scr, _ := s.Update(msg)
+			ss := _scr.(*sessionScreen)
+
+			if ss.state == sessionStateRedub {
+				t.Fatalf("the %s invalid_input miss must not open the dub menu", prov)
+			}
+		})
+	}
+}

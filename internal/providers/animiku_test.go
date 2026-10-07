@@ -288,6 +288,120 @@ func TestAnimikuSearchTransportError(t *testing.T) {
 	}
 }
 
+// animikuDubWorld serves the bridge answer with ONE episode carrying
+// TWO dubs (the roundtrip world, two translators wide) — the minimal
+// carrier-scan surface.
+func animikuDubWorld(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/engine/ajax/controller.php" {
+			_, _ = fmt.Fprint(w,
+				`<li class="b-translator__item" data-this_translator="757">MC Entertainment</li>`+
+					`<li class="b-translator__item" data-this_translator="2835">Silver AniAge</li>`+
+					`<li class="b-simple_episode__item" data-this_episode="1" data-this_translator="757" data-this_link="//kodikplayer.com/serial/7485/h/720p?episode=1">Серия 1</li>`+
+					`<li class="b-simple_episode__item" data-this_episode="1" data-this_translator="2835" data-this_link="//kodikplayer.com/serial/7486/h/720p?episode=1">Серия 1</li>`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `<html></html>`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestAnimikuResolveStreamDubMissTypesCarriers pins the ask-first
+// dub-miss doctrine (#159 port): a dub the episode does not carry
+// walls typed ErrNotFound whose message names the requested dub and
+// LISTS the dubs the episode actually carries (the g.refs keys,
+// byte-sorted — a Lua map has no order). The stable marker
+// `carries no dub "X" (episode dubs: …)` is what the tui
+// dubNotCarriedFailure predicate keys on.
+func TestAnimikuResolveStreamDubMissTypesCarriers(t *testing.T) {
+	t.Parallel()
+
+	srv := animikuDubWorld(t)
+	p := luaProvider(t, "animiku", srv.URL)
+
+	episode := contracts.Episode{Num: "1", RawID: `{"id":"9134","n":"1"}`}
+	_, err := p.ResolveStream(context.Background(), episode, "NoSuchDub")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "NoSuchDub"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	if got := "(episode dubs: MC Entertainment, Silver AniAge)"; !strings.Contains(msg, got) {
+		t.Errorf("message = %q, want %q (the sorted carrier list)", msg, got)
+	}
+}
+
+// TestAnimikuResolveStreamZeroDubsIsTypedWall pins the zero-dubs
+// edge: an episode the bridge answer no longer lists (the grid moved
+// on) walls typed ErrNotFound with the marker but NO carrier list.
+func TestAnimikuResolveStreamZeroDubsIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	// First answer carries episodes 1–2; the resolve-time re-answer
+	// dropped episode 1 entirely (the fresh-sandbox re-derive sees
+	// the rotated grid).
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/engine/ajax/controller.php" {
+			_, _ = fmt.Fprint(w, `<li class="b-translator__item" data-this_translator="757">MC Entertainment</li>`+
+				`<li class="b-simple_episode__item" data-this_episode="2" data-this_translator="757" data-this_link="`+srv.URL+`/kodik/serial/7485/h/720p?episode=2">Серия 2</li>`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `<html></html>`)
+	}))
+	t.Cleanup(srv.Close)
+	p := luaProvider(t, "animiku", srv.URL)
+
+	episode := contracts.Episode{Num: "1", RawID: `{"id":"9134","n":"1"}`}
+	_, err := p.ResolveStream(context.Background(), episode, "MC Entertainment")
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (the zero-dubs wall)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "carries no dub") {
+		t.Errorf("message = %q, want the typed marker", msg)
+	}
+	if strings.Contains(msg, "episode dubs:") {
+		t.Errorf("message = %q, want no carrier list on the zero-dubs wall", msg)
+	}
+}
+
+// TestAnimikuResolveStreamGarbageStateIsTypedWall pins the typed wall
+// for ANY raw_id byte sequence (the #157 class): merged-convention
+// prefix bytes, plain non-json text, state JSON missing the id leg
+// and the empty id must surface as ErrInvalidInput — never the raw
+// json.decode VM error through to the user.
+func TestAnimikuResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv := animikuDubWorld(t)
+	p := luaProvider(t, "animiku", srv.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `animiku:{"n":"1","id":"9134"}`},
+		{"plain non-json text", "about:blank"},
+		{"state json missing the id leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID, RawEmbeds: map[string][]string{}}, "MC Entertainment")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
 // TestAnimikuResolveStreamKodikRoundTrip covers the resolve branch:
 // streams() re-POSTs the bridge from the {n,id} RawID state (the
 // fresh-sandbox re-derive), picks the dub's protocol-relative kodik

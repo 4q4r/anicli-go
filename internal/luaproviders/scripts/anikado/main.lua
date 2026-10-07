@@ -42,17 +42,40 @@
 --     query, including the site's doubled ?hide_selectors=true quirk
 --     — passes through verbatim.
 --
--- Typed walls (kept from the compiled provider):
+-- Typed walls (kept from the compiled provider, corrected by the
+-- #159 doctrine port):
 --   - a title page with neither episode anchors nor a kodik tab
 --     iframe is not_found (an empty list would fake a healthy title
 --     with no episodes);
 --   - an episode page without translator rows is extract_failed
---     naming the episode (the site's own player would render an empty
---     iframe there);
---   - a dub the episode does not carry is invalid_input (a caller
---     bug); an embed no extractor yields links for is extract_failed
---     (a non-kodik embed such as the tomion tab's host, which also
+--     naming the episode at LISTING time (the site's own player
+--     would render an empty iframe there); at RESOLVE time the same
+--     shape is the not_found zero-dubs wall;
+--   - a dub the episode does not carry is the ask-first not_found
+--     miss (see DUB-MISS SEMANTICS below), never the caller-mistake
+--     class the round-2 shape used — the tui dubNotCarriedFailure
+--     predicate keys on the not_found class + the `carries no dub`
+--     marker, so the scoped resolve opens the ask-first dub menu;
+--   - an embed no extractor yields links for is extract_failed (a
+--     non-kodik embed such as the tomion tab's host, which also
 --     404s outside its frame context).
+--
+-- DUB-MISS SEMANTICS (the #159 doctrine port — the animevib
+-- fix-round-3 semantics, one format across the state-carrying
+-- scripts): streams() NEVER substitutes another dub. When the
+-- requested dub is absent from the episode's translator table, the
+-- resolve walls typed not_found whose message LISTS the dubs the
+-- episode ACTUALLY carries — the rebuilt table's keys, byte-sorted
+-- (a Lua map has no order; the sort is the deterministic canonical
+-- form the TUI dub menu and headless re-asks consume). The stable
+-- marker is `carries no dub "X" (episode dubs: A, B, …)`. Movies
+-- carry the single service dub, so a movie miss lists AniKado. A
+-- translator-rowless page at resolve time → the not_found zero-dubs
+-- wall (the same marker, no list). A malformed raw_id — the merged
+-- "prov:{json}" bytes a caller composing the convention without
+-- decomposing it hands over (#157), a stale history record, a state
+-- carrying neither the u nor the e leg — is the typed invalid_input
+-- wall, never the raw json.decode VM error.
 --
 -- Known walls, documented not hidden: the title page's two fallback
 -- player tabs are NOT resolvable anonymously — the vkg tab is a
@@ -240,7 +263,20 @@ return {
 	end,
 
 	streams = function(raw_id, dub)
-		local state = anicli.json.decode(raw_id)
+		-- The state guard: raw_id is ALWAYS this script's own
+		-- {n, u} (series) or {n, e} (movie) json (the fresh-sandbox
+		-- contract); any other byte sequence — the merged prov:id
+		-- convention composed without decomposing it (#157), a stale
+		-- history record — surfaces typed invalid_input, never the
+		-- raw json.decode VM error (the animevib guard).
+		local ok, state = pcall(anicli.json.decode, raw_id)
+		local has_u = type(state) == "table" and type(state.u) == "string" and state.u ~= ""
+		local has_e = type(state) == "table" and type(state.e) == "string" and state.e ~= ""
+		if not ok or type(state) ~= "table" or (not has_u and not has_e) then
+			anicli.fail("invalid_input",
+				"episode raw_id is not the {n, u} or {n, e} state json: \"" ..
+				string.sub(tostring(raw_id), 1, 64) .. "\"")
+		end
 		local num = tostring(state.n)
 
 		-- Movies: the embed-state resolve — the /video/ embed rides
@@ -248,7 +284,11 @@ return {
 		-- zero-fetch movie resolve kept).
 		if state.e ~= nil and state.e ~= "" then
 			if dub ~= SERVICE_DUB then
-				anicli.fail("invalid_input", "episode " .. num .. " carries no dub \"" .. dub .. "\"")
+				-- the movie's only dub is the service dub — the ask
+				-- names it (the #159 doctrine: the miss walls with
+				-- the actionable carrier list, never a substitution).
+				anicli.fail("not_found", "episode " .. num .. ' carries no dub "' .. dub ..
+					'" (episode dubs: ' .. SERVICE_DUB .. ')')
 			end
 			local ok, links = pcall(anicli.extract, { state.e })
 			if not ok then
@@ -262,9 +302,23 @@ return {
 		local embeds = collect_translator_rows(anicli.html.parse(anicli.http.get(state.u).body))
 		local links = embeds[dub]
 		if links == nil or #links == 0 then
-			-- A dub the episode does not carry is a caller bug (the
-			-- typed ErrInvalidInput semantics).
-			anicli.fail("invalid_input", "episode " .. num .. " carries no dub \"" .. dub .. "\"")
+			if next(embeds) == nil then
+				-- the ONLY dub wall with no ask behind it: the page
+				-- carries no translator rows at all — a data-shape
+				-- fact, not a caller mistake.
+				anicli.fail("not_found", "episode " .. num .. " carries no dub in its translator rows")
+			end
+			-- DUB MISS (the #159 doctrine, see the header): never
+			-- substitute another dub silently — list what the episode
+			-- ACTUALLY carries (the rebuilt table, no extra fetches)
+			-- in the byte-sorted order.
+			local carriers = {}
+			for name in pairs(embeds) do
+				carriers[#carriers + 1] = name
+			end
+			table.sort(carriers)
+			anicli.fail("not_found", "episode " .. num .. ' carries no dub "' .. dub ..
+				'" (episode dubs: ' .. table.concat(carriers, ", ") .. ')')
 		end
 
 		local ok, sources = pcall(anicli.extract, links)

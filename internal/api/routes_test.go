@@ -372,6 +372,82 @@ func TestStreamsResolveFailures(t *testing.T) {
 	}
 }
 
+// rawIDRecorder records the RawID every ResolveStream call receives —
+// the decomposition pin for the streams/resolve handler (#157). The
+// handler composes the python-parity request episode
+// ("source:rawid"), and the python resolve loop strips the called
+// provider's own part before provider.resolve_stream
+// (cli/stream_resolver.py extract_best_source) — the step the Go port
+// skipped, handing "animevib:{...}" to the lua scripts whose
+// json.decode crashed on the first byte 'a'.
+type rawIDRecorder struct {
+	fakeProvider
+	links  bool
+	gotRaw []string
+}
+
+func (p *rawIDRecorder) ResolveStream(_ context.Context, episode contracts.Episode, dubID string) (contracts.MediaStream, error) {
+	p.gotRaw = append(p.gotRaw, episode.RawID)
+	if !p.links {
+		return contracts.MediaStream{DubName: dubID, Links: map[string]contracts.VideoSource{}}, nil
+	}
+	return contracts.MediaStream{DubName: dubID, Links: map[string]contracts.VideoSource{
+		"720": {URL: "https://cdn.example/720.m3u8", Quality: "720"},
+	}}, nil
+}
+
+// TestStreamsResolveDecomposesPrefixedRawID pins both resolve legs:
+// the video provider receives its own bare part of the composed raw
+// id (the merged bytes' first byte 'a' is what crashed animevib
+// live), and a genuinely foreign audio provider receives NO raw id —
+// python's decomposition loop-miss ("", extract_best_source) — the
+// video source's state must never leak across providers. The response
+// status is irrelevant to the pin (the recorders' link maps decide
+// it); the recorded raw ids are the contract.
+func TestStreamsResolveDecomposesPrefixedRawID(t *testing.T) {
+	t.Parallel()
+
+	video := &rawIDRecorder{fakeProvider: fakeProvider{id: "fake"}, links: true}
+	audio := &rawIDRecorder{fakeProvider: fakeProvider{id: "other"}}
+	app := newTestApp(t)
+	reg := providers.NewEmptyRegistry()
+	if err := reg.Register(video); err != nil {
+		t.Fatalf("register video provider: %v", err)
+	}
+	if err := reg.Register(audio); err != nil {
+		t.Fatalf("register audio provider: %v", err)
+	}
+	app.registry = reg
+	h := app.Router()
+	auth := authHeader(t, h)
+
+	rec, payload := doJSON(t, h, http.MethodPost, "/api/v1/streams/resolve", `{
+		"source_id": "fake",
+		"episode_num": "1",
+		"episode_raw_id": "{\"n\":\"1\",\"u\":\"https://www.animevib.ru/1.html\"}",
+		"video_key": "JAM",
+		"audio_key": "[other] AniLib",
+		"urls_video": ["https://embed.example/v1"],
+		"urls_audio": ["https://embed.example/a1"]
+	}`, auth)
+	// The linkless audio recorder lands the handler's honest 502 for
+	// the audio track — the resolve DID reach both providers.
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("resolve = %d: %v", rec.Code, payload)
+	}
+
+	want := `{"n":"1","u":"https://www.animevib.ru/1.html"}`
+	if len(video.gotRaw) != 1 || video.gotRaw[0] != want {
+		t.Fatalf("video provider got RawID %q, want the bare %q", video.gotRaw, want)
+	}
+	// The "[other]" audio provider names a different source than the
+	// request's single episode_raw_id carries: python's loop-miss
+	// yields "" — no state leak across providers.
+	if len(audio.gotRaw) != 1 || audio.gotRaw[0] != "" {
+		t.Fatalf("audio provider got RawID %q, want \"\" (the python loop-miss)", audio.gotRaw)
+	}
+}
+
 // fakeShiki is a test double for the ShikiClient interface.
 type fakeShiki struct {
 	rates        []shikimori.UserRate

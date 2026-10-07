@@ -335,6 +335,12 @@ func (s *realEpisode) ResolveStream(ctx context.Context, providerID string, epis
 	if !ok {
 		return contracts.MediaStream{}, fmt.Errorf("tui: unknown provider %q", providerID)
 	}
+	// The merged-session decomposition (#157): the session merge
+	// composes "prov1:id1|prov2:id2" and the provider boundary consumes
+	// the called provider's own bare raw id (the python
+	// extract_best_source step). Without it the lua scripts decode the
+	// prefixed bytes and crash on the first byte of the provider id.
+	episode.RawID = episode.ProviderRawID(providerID)
 	return p.ResolveStream(ctx, episode, dubID)
 }
 
@@ -833,7 +839,14 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		return "", fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
 	}
 
-	stream, err := p.ResolveStream(ctx, task.Episode, task.DubID)
+	// The merged-session decomposition (#157): each resolve leg gets
+	// its own provider-local copy — the audio provider may differ from
+	// the video one, and both decompose from the ORIGINAL merged raw id
+	// (mutating task.Episode for the video leg would leave the audio
+	// leg the video provider's state).
+	videoEpisode := task.Episode
+	videoEpisode.RawID = task.Episode.ProviderRawID(task.ProviderID)
+	stream, err := p.ResolveStream(ctx, videoEpisode, task.DubID)
 	if err != nil {
 		return "", fmt.Errorf("tui: download: resolve: %w", err)
 	}
@@ -847,7 +860,9 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	audioKey := audioKeyOfTask(task)
 	if audioKey != "" && audioKey != task.DubID {
 		if ap, ok := c.registry.Get(providerOfTrackKey(audioKey)); ok {
-			audioStream, err := ap.ResolveStream(ctx, task.Episode, audioKey)
+			audioEpisode := task.Episode
+			audioEpisode.RawID = task.Episode.ProviderRawID(providerOfTrackKey(audioKey))
+			audioStream, err := ap.ResolveStream(ctx, audioEpisode, audioKey)
 			if err == nil && len(audioStream.Links) > 0 {
 				best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
 				audio = &best

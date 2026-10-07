@@ -302,3 +302,75 @@ func TestWrapProvider(t *testing.T) {
 		t.Fatalf("Unwrap of nil-inner ProviderError = %v, want nil", unwrapped)
 	}
 }
+
+// TestEpisodeProviderRawID pins the merged-session RawID decomposition
+// (python extract_best_source port, stream_resolver.py): the merged
+// convention composes "prov1:id1|prov2:id2" (tui MergeEpisodeLists,
+// the api streams/resolve handler), and the python resolve loop strips
+// the called provider's own part before provider.resolve_stream — the
+// step whose absence handed "animevib:{...}" to the lua scripts and
+// crashed them on json.decode's first byte 'a' (issue #157). A raw id
+// carrying no prov: prefix at all (direct provider-local callers) must
+// pass through unchanged — the python loop's "" fallback would break
+// them.
+func TestEpisodeProviderRawID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+		prov string
+		want string
+	}{
+		{
+			name: "merged single provider decomposes",
+			raw:  `animevib:{"n":"1","u":"https://x/1.html"}`,
+			prov: "animevib",
+			want: `{"n":"1","u":"https://x/1.html"}`,
+		},
+		{
+			name: "merged multi provider picks the named one",
+			raw:  `animevib:{"n":"1"}|anilib:42`,
+			prov: "anilib",
+			want: "42",
+		},
+		{
+			name: "urls with colons survive the first-colon cut",
+			raw:  `animevib:https://www.animevib.ru/1.html`,
+			prov: "animevib",
+			want: `https://www.animevib.ru/1.html`,
+		},
+		{
+			name: "prefix-like ids of other providers do not match",
+			raw:  `animevib:{"n":"1"}`,
+			prov: "anilib",
+			want: `animevib:{"n":"1"}`,
+		},
+		{
+			name: "bare provider-local raw id passes through",
+			raw:  "e1",
+			prov: "fake",
+			want: "e1",
+		},
+		{
+			name: "bare url raw id passes through",
+			raw:  "https://www.animevib.ru/1.html",
+			prov: "animevib",
+			want: "https://www.animevib.ru/1.html",
+		},
+		{
+			name: "empty part after the prefix is not a match",
+			raw:  "animevib:",
+			prov: "animevib",
+			want: "animevib:",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := Episode{Num: "1", RawID: tc.raw}
+			if got := ep.ProviderRawID(tc.prov); got != tc.want {
+				t.Fatalf("ProviderRawID(%q) = %q, want %q", tc.prov, got, tc.want)
+			}
+		})
+	}
+}

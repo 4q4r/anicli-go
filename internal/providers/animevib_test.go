@@ -373,6 +373,40 @@ func TestAnimeVibResolveStreamUnknownDubIsTypedWall(t *testing.T) {
 	}
 }
 
+// TestAnimeVibResolveStreamGarbageStateIsTypedWall pins the typed
+// wall for ANY raw_id byte sequence (the owner-reported crash class,
+// issue #157): the merged-session convention bytes —
+// "animevib:{...}", what a caller that composes the prov:id prefix
+// without decomposing it hands the provider, first byte 'a' — and
+// shape-drifted state JSON must surface as the typed ErrInvalidInput
+// wall, never the raw json.decode VM error through to the user.
+func TestAnimeVibResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	world := avKodikWorld(t)
+	p := luaProvider(t, "animevib", world.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `animevib:{"n":"1","u":"` + world.URL + `/2937-n84b-dandadan-1.html"}`},
+		{"plain non-json text", "about:blank"},
+		{"state json missing the u leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID, RawEmbeds: map[string][]string{}}, "JAM")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
 // TestAnimeVibSmokeQuery pins the declared live probe (PR51 mechanism):
 // both shared probes miss this catalog — Black Lagoon is not on
 // animevib [LIVE-VERIFIED 2026-09-25].

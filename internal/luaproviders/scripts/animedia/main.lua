@@ -180,6 +180,26 @@ local function unsupported_player(player)
 		player .. "\" player; no anonymous kodik data on the page")
 end
 
+-- DUB-MISS SEMANTICS (the #159 doctrine port — the animevib
+-- fix-round-3 semantics, one format across the state-carrying
+-- scripts): streams() NEVER substitutes another dub. When the
+-- requested dub matches none of the page's voice buttons, the
+-- resolve walls typed not_found whose message LISTS the dubs the
+-- episode ACTUALLY carries — the parse_dubs set in document order
+-- (the deterministic episodes() order, deduped by the data-voice id
+-- across the repeated PWA/desktop blocks). The stable marker is
+-- `carries no dub "X" (episode dubs: A, B, …)` — the tui
+-- dubNotCarriedFailure predicate keys on the class + marker pair, so
+-- every sibling's miss opens the ask-first flow; the round-2 shape
+-- walled the miss invalid_input (a caller-mistake class the
+-- predicate cannot see). A zero-carrier miss is unreachable by
+-- construction: parse_dubs returns nil when the page carries no
+-- kodik data at all, and that is the unsupported_player wall. A
+-- malformed raw_id — the merged "prov:{json}" bytes a caller
+-- composing the convention without decomposing it hands over
+-- (#157), a stale history record, any non-{n,u} shape — is the
+-- typed invalid_input wall, never the raw json.decode VM error.
+
 -- episode_nums collects the nav anchor data-vid values, deduped
 -- across the repeated blocks; no anchors at all means a
 -- single-embed title (movie): one episode numbered 1.
@@ -260,7 +280,18 @@ return {
 	end,
 
 	streams = function(raw_id, dub)
-		local state = anicli.json.decode(raw_id)
+		-- The state guard: raw_id is ALWAYS this script's own {n, u}
+		-- json (the fresh-sandbox contract); any other byte sequence —
+		-- the merged prov:id convention composed without decomposing
+		-- it (#157), a stale history record — surfaces typed
+		-- invalid_input, never the raw json.decode VM error (the
+		-- animevib guard).
+		local ok, state = pcall(anicli.json.decode, raw_id)
+		if not ok or type(state) ~= "table" or type(state.u) ~= "string" or state.u == "" then
+			anicli.fail("invalid_input",
+				"episode raw_id is not the {n, u} state json: \"" ..
+				string.sub(tostring(raw_id), 1, 64) .. "\"")
+		end
 		local num, page = tostring(state.n), state.u
 
 		local resp = anicli.http.get(page)
@@ -278,9 +309,16 @@ return {
 			end
 		end
 		if not embed then
-			-- a dub the episode does not carry is a caller bug (the
-			-- typed ErrInvalidInput semantics)
-			anicli.fail("invalid_input", "episode " .. num .. " carries no dub \"" .. dub .. "\"")
+			-- DUB MISS (the #159 doctrine, see the header): never
+			-- substitute another dub silently — list what the episode
+			-- ACTUALLY carries (the parse_dubs set, no extra fetches)
+			-- in the document order episodes() iterates.
+			local carriers = {}
+			for _, d in ipairs(dubs) do
+				carriers[#carriers + 1] = d.name
+			end
+			anicli.fail("not_found", "episode " .. num .. ' carries no dub "' .. dub ..
+				'" (episode dubs: ' .. table.concat(carriers, ", ") .. ')')
 		end
 
 		local ok, links = pcall(anicli.extract, { embed })

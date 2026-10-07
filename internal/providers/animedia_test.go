@@ -299,9 +299,14 @@ func TestAniMediaResolveStream(t *testing.T) {
 	}
 }
 
-// TestAniMediaResolveStreamUnknownDubIsTyped pins the typed dub miss:
-// the rebuilt table does not carry the dub (the typed ErrInvalidInput
-// semantics; the page fetch precedes by the fresh-sandbox contract).
+// TestAniMediaResolveStreamUnknownDubIsTyped pins the ask-first
+// dub-miss doctrine (#159 port — the round-2 shape walled the miss
+// invalid_input, a caller-mistake class the tui dubNotCarriedFailure
+// predicate cannot see): a dub outside the page's voice buttons walls
+// typed ErrNotFound whose message names the requested dub and LISTS
+// the dubs the episode actually carries — the voice-button set in
+// document order (the deterministic episodes() order, deduped by the
+// data-voice id across the repeated PWA/desktop blocks).
 func TestAniMediaResolveStreamUnknownDubIsTyped(t *testing.T) {
 	t.Parallel()
 
@@ -322,8 +327,76 @@ func TestAniMediaResolveStreamUnknownDubIsTyped(t *testing.T) {
 		},
 	}
 	_, err = p.ResolveStream(context.Background(), ep, "NoSuchDub")
-	if !errors.Is(err, contracts.ErrInvalidInput) {
-		t.Fatalf("err = %v, want contracts.ErrInvalidInput wrap", err)
+	if !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (never a silent dub substitution)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `carries no dub "NoSuchDub"`) {
+		t.Errorf("message = %q, want the requested dub named", msg)
+	}
+	want := "(episode dubs: СВ-Дубль, Animedia, SHIZA Project, LE-Production, AniLibria.TV, Amber, Ancord, Freedub Studio, oDaletY, Субтитры, SovetRomantica.Subtitles)"
+	if !strings.Contains(msg, want) {
+		t.Errorf("message = %q, want the document-order carrier list %q", msg, want)
+	}
+}
+
+// TestAniMediaResolveStreamNoKodikIsTypedWall pins the zero-dubs
+// surface: a page served through an unsupported player walls typed at
+// the re-parse (the unsupported_player wall) — the parse_dubs
+// contract returns nil there, so the miss wall below always lists at
+// least one carrier; a zero-carrier miss is unreachable by
+// construction.
+func TestAniMediaResolveStreamNoKodikIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture(t, "animedia_anime_rutube.html"))
+	})
+	p := luaProvider(t, "animedia", srv.URL)
+
+	rawID, err := luaStateJSON(srv.URL+"/4368-vrata-shtejna.html", "1")
+	if err != nil {
+		t.Fatalf("state json: %v", err)
+	}
+	_, err = p.ResolveStream(context.Background(),
+		contracts.Episode{Num: "1", RawID: rawID}, "Amber")
+	if !errors.Is(err, contracts.ErrExtractFailed) {
+		t.Fatalf("err = %v, want ErrExtractFailed (the unsupported-player wall)", err)
+	}
+}
+
+// TestAniMediaResolveStreamGarbageStateIsTypedWall pins the typed
+// wall for ANY raw_id byte sequence (the #157 class):
+// merged-convention prefix bytes, plain non-json text, state JSON
+// missing the u leg and the empty id must surface as ErrInvalidInput
+// — never the raw json.decode VM error through to the user.
+func TestAniMediaResolveStreamGarbageStateIsTypedWall(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := fixtureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a malformed state must not fetch anything")
+		http.Error(w, "no fetch expected", http.StatusInternalServerError)
+	})
+	p := luaProvider(t, "animedia", srv.URL)
+
+	cases := []struct {
+		name  string
+		rawID string
+	}{
+		{"merged-convention prefix bytes", `animedia:{"n":"1","u":"` + srv.URL + `/a.html"}`},
+		{"plain non-json text", "about:blank"},
+		{"state json missing the u leg", `{"n":"1"}`},
+		{"state json of the wrong shape", `[1,2,3]`},
+		{"empty raw id", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ResolveStream(context.Background(),
+				contracts.Episode{Num: "1", RawID: tc.rawID}, "Amber")
+			if !errors.Is(err, contracts.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+		})
 	}
 }
 

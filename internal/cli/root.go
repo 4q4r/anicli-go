@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -163,7 +164,10 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// stderr which renders ON TOP of the TUI. Route diagnostics to
 	// a log file instead — including the torrent engine (PR35),
 	// which is wired with the same sink before the deps are built.
-	tuiLog := newTUILogger()
+	// PR162: the log lives in the CONFIG directory (next to
+	// settings.toml, never /tmp), rotates on startup per [log]
+	// rotation and honors the configured level.
+	tuiLog := newTUILogger(settings.Log, filepath.Dir(settingsPath))
 	defer tuiLog.Close()
 
 	// PR110: pick the interface language once, before any screen
@@ -209,17 +213,29 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 }
 
 // newTUILogger builds a file-based logger for the TUI session (stderr
-// would corrupt the alt-screen rendering).
-func newTUILogger() *tuiLogger {
-	path := os.TempDir() + "/anicli-tui.log"
-	// G304: the path is os.TempDir() plus a fixed file name — no
-	// user-controlled component, inclusion is impossible.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // fixed temp-dir log path
+// would corrupt the alt-screen rendering). The path resolves from the
+// [log] section — the config dir by default — and an aged file
+// rotates (anicli-<timestamp>.log) before the fresh one opens. The
+// configured level gates what the handler emits.
+func newTUILogger(cfg config.Log, configDir string) *tuiLogger {
+	path := cfg.ResolveFile(configDir)
+	if _, err := config.RotateLogFile(path, cfg.Rotation, cfg.MaxFiles); err != nil {
+		// A failed rotation must not kill the app: keep logging to
+		// the same file (or discard below if even that fails).
+		slog.Default().Warn("log rotation failed", "path", path, "error", err.Error())
+	}
+	// G304: the path comes from the user's own settings file, joining
+	// the config dir with a fixed name by default.
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o750); mkErr != nil {
+		slog.Default().Warn("log directory unavailable", "path", filepath.Dir(path), "error", mkErr.Error())
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // the path is the user's own [log] config (config-dir join or their explicit file), never request input
 	if err != nil {
 		// Degrade to discard — never stderr inside the TUI.
 		return &tuiLogger{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	}
-	return &tuiLogger{Logger: slog.New(slog.NewTextHandler(f, nil)), f: f}
+	level := config.SlogLevel(cfg.Level)
+	return &tuiLogger{Logger: slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})), f: f}
 }
 
 type tuiLogger struct {

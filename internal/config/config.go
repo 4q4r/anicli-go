@@ -343,6 +343,7 @@ type Discord struct {
 // Settings is the full configuration surface.
 type Settings struct {
 	General   General   `toml:"general"`
+	Log       Log       `toml:"log"`
 	Network   Network   `toml:"network"`
 	Player    Player    `toml:"player"`
 	Shikimori Shikimori `toml:"shikimori"`
@@ -368,6 +369,12 @@ func Default() Settings {
 			// default locale (settings.example.toml and the i18n
 			// Init fallback agree).
 			Locale: "ru",
+		},
+		Log: Log{
+			Level:    "info",
+			File:     "", // empty resolves to <config dir>/anicli.log
+			Rotation: 24 * time.Hour,
+			MaxFiles: 7,
 		},
 		Network: Network{
 			ConnectTimeout: 10 * time.Second,

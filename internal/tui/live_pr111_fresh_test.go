@@ -103,7 +103,7 @@ walk:
 		for _, k := range sortedEmbedKeys(fresh.RawEmbeds) {
 			t.Logf("  %s → %v", k, fresh.RawEmbeds[k])
 		}
-		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, "")
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, "", nil)
 		if err != nil {
 			t.Fatalf("round %d resolve failed: %v (skipped: %v)", n, err, skipped)
 		}

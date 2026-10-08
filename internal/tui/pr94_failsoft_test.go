@@ -7,13 +7,16 @@ package tui
 // providers — naming every failed provider and its reason.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
 // failsoftEpisode overrides fakeEpisode.ResolveStream with per-dub-key
@@ -56,7 +59,7 @@ func TestPR94FailSoftOneProviderBroken(t *testing.T) {
 			"[animego] Дубль 1": contracts.WrapProvider("animego", contracts.OpResolveStream, 400, nil),
 		},
 	}
-	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "")
+	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "", nil)
 	if err != nil {
 		t.Fatalf("one broken provider must not fail the merged resolve, got %v", err)
 	}
@@ -65,6 +68,159 @@ func TestPR94FailSoftOneProviderBroken(t *testing.T) {
 	}
 	if len(skipped) != 1 || skipped[0].Provider != "animego" || skipped[0].Reason != "HTTP 400" {
 		t.Fatalf("skipped = %+v, want [{animego HTTP 400}]", skipped)
+	}
+}
+
+// TestPR161SkipSummaryCompactOneLine: the owner report (#161) — the
+// picker's skip attribution printed the FULL provider error (embed
+// URLs, Lua chunk paths, line numbers, multi-line stack tracebacks)
+// below the stream picker. The summary must render the owner's exact
+// compact format — one line, per-provider class reason, provider id
+// always, nothing path- or traceback-shaped in it:
+//
+//	пропущены: animiku (provider timeout)
+//
+// The full error chain must still exist — it rides the log sink at
+// the resolve seam (TestPR161FullErrorReachesLogSink).
+func TestPR161SkipSummaryCompactOneLine(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("ru"); err != nil {
+		t.Fatalf("Init(ru): %v", err)
+	}
+	// The owner's verbatim timeout chain shape: the Lua classify
+	// wraps the sentinel with the raw VM message — script path, line
+	// number and the GopherLua stack traceback included.
+	animikuTimeout := fmt.Errorf(`provider %q %s: %w: %s`,
+		"animiku", contracts.OpResolveStream, contracts.ErrProviderTimeout,
+		`providers/animiku/main.lua:293: extract: extractor:kodik: context deadline exceeded: Post "https://kodikplayer.com/fto…": 
+stack traceback:
+    [G]: in function 'extract'
+    providers/animiku/main.lua:293 in main chunk
+    [G]: ?`)
+	// The typed extract wall of the same report: a zero-status
+	// ProviderError wrapping the sentinel plus the verbose script
+	// message.
+	yummyExtract := contracts.WrapProvider("yummy", contracts.OpResolveStream, 0,
+		fmt.Errorf("%w: %s", contracts.ErrExtractFailed,
+			"providers/yummy/main.lua:354: context deadline exceeded\nstack traceback:\n    [G]: in function 'extract'\n    providers/yummy/main.lua:354 in main chunk\n    [G]: ?"))
+
+	eps := &failsoftEpisode{
+		fakeEpisode: &fakeEpisode{
+			episodes: testEpisodeSet(),
+			streams: map[string]contracts.MediaStream{
+				"[anilib] AniLib": {Links: map[string]contracts.VideoSource{"720": {URL: "u-720"}}},
+			},
+		},
+		resolveErrs: map[string]error{
+			"[animiku] Дубль 1": animikuTimeout,
+			"[yummy] AniLib":    yummyExtract,
+		},
+	}
+	ep := contracts.Episode{Num: "1", RawEmbeds: map[string][]string{
+		"[animiku] Дубль 1": {"e1"},
+		"[anilib] AniLib":   {"e2"},
+		"[yummy] AniLib":    {"e3"},
+	}}
+
+	entries, skipped, err := resolveAllStreams(context.Background(), eps, ep, "", nil)
+	if err != nil {
+		t.Fatalf("fail-soft must keep the healthy provider's resolve alive, got %v", err)
+	}
+	if len(entries) != 1 || entries[0].DubKey != "[anilib] AniLib" {
+		t.Fatalf("entries = %+v, want the healthy anilib stream only", entries)
+	}
+	if len(skipped) != 2 || skipped[0].Provider != "animiku" || skipped[1].Provider != "yummy" {
+		t.Fatalf("skipped = %+v, want [animiku yummy] in consulted order", skipped)
+	}
+
+	// The owner's authoritative ru screen line, one line, compact.
+	wantRU := "пропущены: animiku (provider timeout), yummy (extract error)"
+	if got := skippedSummary(skipped); got != wantRU {
+		t.Fatalf("ru summary = %q, want %q", got, wantRU)
+	}
+	for _, banned := range []string{"\n", ".lua", "stack traceback", "providers/", "kodikplayer", "deadline"} {
+		if strings.Contains(skippedSummary(skipped), banned) {
+			t.Fatalf("ru summary leaks %q: %q", banned, skippedSummary(skipped))
+		}
+	}
+
+	// The en table carries the same composition (skipped: {list}).
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
+	wantEN := "skipped: animiku (provider timeout), yummy (extract error)"
+	if got := skippedSummary(skipped); got != wantEN {
+		t.Fatalf("en summary = %q, want %q", got, wantEN)
+	}
+}
+
+// TestPR161FullErrorReachesLogSink: debugging fidelity (#161) — the
+// compact screen line must not cost the full chain. The complete
+// provider error (chunk paths, line numbers, stack traceback) lands
+// in the wired slog sink at the same seam: fail loud in logs,
+// compact in the UI.
+func TestPR161FullErrorReachesLogSink(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	animikuTimeout := fmt.Errorf(`provider %q %s: %w: %s`,
+		"animiku", contracts.OpResolveStream, contracts.ErrProviderTimeout,
+		`providers/animiku/main.lua:293: extract: extractor:kodik: context deadline exceeded: Post "https://kodikplayer.com/fto…": 
+stack traceback:
+    [G]: in function 'extract'
+    providers/animiku/main.lua:293 in main chunk
+    [G]: ?`)
+	eps := &failsoftEpisode{
+		fakeEpisode: &fakeEpisode{episodes: testEpisodeSet()},
+		resolveErrs: map[string]error{
+			"[animiku] Дубль 1": animikuTimeout,
+		},
+	}
+	ep := contracts.Episode{Num: "1", RawEmbeds: map[string][]string{
+		"[animiku] Дубль 1": {"e1"},
+	}}
+
+	_, skipped, err := resolveAllStreams(context.Background(), eps, ep, "", log)
+	if err == nil {
+		t.Fatal("all providers broken must still fail the merged resolve")
+	}
+	if len(skipped) != 1 || skipped[0].Provider != "animiku" || skipped[0].Reason != "provider timeout" {
+		t.Fatalf("skipped = %+v, want [{animiku provider timeout}]", skipped)
+	}
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("the full provider error never reached the log sink")
+	}
+	for _, want := range []string{"animiku", "provider timeout", "resolve_stream", "stack traceback", "kodikplayer"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log sink missing %q; logged:\n%s", want, logged)
+		}
+	}
+}
+
+// TestCompactReasonTotality: characterization pins for the two
+// guarantees the #161 classifier leans on — an UNCLASSIFIED error
+// (raw VM failure: no sentinel, no status) summarizes to the
+// path-free fallback label, never the raw chain, and an untyped
+// context deadline summarizes to the timeout class like its typed
+// sibling. Both branches were built test-first via the #161 pins;
+// these lock the residual behavior.
+func TestCompactReasonTotality(t *testing.T) {
+	rawVM := fmt.Errorf(`provider "animiku" resolve_stream: providers/animiku/main.lua:293: attempt to index a nil value
+stack traceback:
+    [G]: ?`)
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"raw vm fallback is path-free", rawVM, "resolve failed"},
+		{"untyped deadline is a timeout", context.DeadlineExceeded, "provider timeout"},
+		{"timeout wraps the class", fmt.Errorf("provider %q %s: %w", "kodik", "request", contracts.ErrProviderTimeout), "provider timeout"},
+	}
+	for _, tc := range cases {
+		if got := compactResolveReason(tc.err); got != tc.want {
+			t.Errorf("%s: compactResolveReason = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -91,7 +247,7 @@ func TestPR94FailSoftAllBrokenNamesEveryProvider(t *testing.T) {
 			"[anilib] AniLib":   contracts.WrapProvider("anilib", contracts.OpResolveStream, 0, contracts.ErrExtractFailed),
 		},
 	}
-	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "")
+	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "", nil)
 	if err == nil {
 		t.Fatal("all providers broken must fail the merged resolve")
 	}
@@ -104,7 +260,9 @@ func TestPR94FailSoftAllBrokenNamesEveryProvider(t *testing.T) {
 	}
 	// sortedEmbedKeys puts [anilib] AniLib before [animego] Дубль 1 —
 	// attribution follows the consulted order, not completion order.
-	want := "streams not fetched: anilib (extract failed), animego (HTTP 503)"
+	// #161: the typed extract wall summarizes to its class label
+	// («extract error») — the raw chain rides the log sink.
+	want := "streams not fetched: anilib (extract error), animego (HTTP 503)"
 	if err.Error() != want {
 		t.Fatalf("err = %q, want %q", err.Error(), want)
 	}
@@ -132,7 +290,7 @@ func TestPR94FailSoftSuccessButEmptyLinksPlusFailure(t *testing.T) {
 			"[animego] Дубль 1": contracts.WrapProvider("animego", contracts.OpResolveStream, 400, nil),
 		},
 	}
-	_, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "")
+	_, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "", nil)
 	var typed *errResolveFailed
 	if !errors.As(err, &typed) {
 		t.Fatalf("err = %v, want the typed all-failed error", err)
@@ -157,7 +315,7 @@ func TestPR94FailSoftNoFailuresNoEntries(t *testing.T) {
 			},
 		},
 	}
-	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "")
+	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "", nil)
 	if err == nil || err.Error() != "streams not found" {
 		t.Fatalf("err = %v, want %q", err, "streams not found")
 	}
@@ -181,7 +339,7 @@ func TestPR94FailSoftScopedSuccessNoSkipped(t *testing.T) {
 			"[animego] Дубль 1": contracts.WrapProvider("animego", contracts.OpResolveStream, 400, nil),
 		},
 	}
-	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "[anilib] AniLib")
+	entries, skipped, err := resolveAllStreams(context.Background(), eps, pr94Embeds(), "[anilib] AniLib", nil)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("scoped healthy resolve must succeed, got %v / %+v", err, entries)
 	}
@@ -305,7 +463,8 @@ func TestPR94ScopedFailureAllBrokenNamesAll(t *testing.T) {
 	if ss3.state != sessionStateMenu {
 		t.Fatalf("state = %v, want the menu after the all-broken verdict", ss3.state)
 	}
-	for _, want := range []string{"animego (HTTP 400)", "anilib (extract failed)"} {
+	// #161: the typed extract wall summarizes to «extract error».
+	for _, want := range []string{"animego (HTTP 400)", "anilib (extract error)"} {
 		if !strings.Contains(ss3.status, want) {
 			t.Fatalf("status = %q, want the %s attribution", ss3.status, want)
 		}

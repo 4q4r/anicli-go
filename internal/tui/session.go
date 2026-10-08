@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1408,7 +1409,7 @@ func (s *sessionScreen) beginStreamResolve(scope string) (Screen, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
 		fresh := hydrateEpisodeFresh(ctx, deps, ep)
-		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, scope)
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, scope, deps.Log)
 		// The skip verdict is stream-independent — it fetches here so
 		// the note is ready at launch (PR61). Best-effort: a failure
 		// degrades the note, never the resolve.
@@ -1471,7 +1472,12 @@ func (e *errResolveFailed) Unwrap() []error { return e.causes }
 // compactResolveReason renders a resolve error as the short reason
 // for the summary line: the HTTP status when the provider reported
 // one — including a status wrapped deep inside a textual extract
-// chain — else the wrapped cause, else the error itself.
+// chain — else the typed verdict's class label, else the generic
+// fallback. #161: the Lua provider chains carry script paths, line
+// numbers and multi-line stack tracebacks; the screen line takes
+// only the path-free class label (the owner's authoritative format:
+// «пропущены: animiku (provider timeout)») — the full error chain
+// rides the log sink at the resolve seam.
 func compactResolveReason(err error) string {
 	var pe *contracts.ProviderError
 	if errors.As(err, &pe) {
@@ -1484,11 +1490,29 @@ func compactResolveReason(err error) string {
 		if errors.As(pe.Err, &deep) && deep.StatusCode > 0 {
 			return "HTTP " + strconv.Itoa(deep.StatusCode)
 		}
-		if pe.Err != nil {
-			return pe.Err.Error()
-		}
 	}
-	return err.Error()
+	// Typed verdicts summarize to their class: the labels are short
+	// fixed tokens (same register as the HTTP ones) — never the raw
+	// wrap-chain text, which for script providers embeds the VM
+	// traceback.
+	switch {
+	case errors.Is(err, contracts.ErrProviderTimeout),
+		errors.Is(err, context.DeadlineExceeded):
+		return "provider timeout"
+	case errors.Is(err, contracts.ErrExtractFailed):
+		return "extract error"
+	case errors.Is(err, contracts.ErrNotFound):
+		return "no streams"
+	case errors.Is(err, contracts.ErrGeoBlocked):
+		return "geo blocked"
+	case errors.Is(err, contracts.ErrProvider403):
+		return "forbidden"
+	case errors.Is(err, contracts.ErrAllCandidatesFailed):
+		return "all candidates failed"
+	case errors.Is(err, contracts.ErrInvalidInput):
+		return "invalid input"
+	}
+	return "resolve failed"
 }
 
 // failureList renders skip records as «prov (reason), prov (reason)».
@@ -1534,7 +1558,12 @@ func composeStatusNote(existing, note string) string {
 //   - zero entries across ALL providers → the typed
 //     *errResolveFailed naming every failed provider + reason;
 //   - zero entries with zero failures → «потоки не найдены».
-func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string) ([]streamEntry, []resolveFailure, error) {
+//
+// log is the diagnostics sink (production wires the TUI file logger);
+// nil skips logging (hermetic tests). #161: the screen carries only
+// the compact class reason — every full provider error lands here,
+// at the same seam, so debugging fidelity never depends on the UI.
+func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Episode, scope string, log *slog.Logger) ([]streamEntry, []resolveFailure, error) {
 	targets := make([]string, 0, len(ep.RawEmbeds))
 	for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
 		if scope != "" && k != scope {
@@ -1599,6 +1628,12 @@ func resolveAllStreams(ctx context.Context, eps EpisodeService, ep contracts.Epi
 		if !seen[prov] {
 			seen[prov] = true
 			failures = append(failures, resolveFailure{Provider: prov, Reason: compactResolveReason(err)})
+		}
+		// #161: fail loud in logs, compact in the UI — the full chain
+		// (paths, Lua line numbers, stack traceback) reaches the sink
+		// for every failed dub key, per provider id.
+		if log != nil {
+			log.Warn("stream resolve: provider skipped", "provider", prov, "dub", k, "err", err)
 		}
 		causes = append(causes, err)
 	}
@@ -3050,10 +3085,41 @@ func stripProviderTag(key string) string {
 // per-episode dub-table class). The message, not just the sentinel:
 // the same scripts use not_found for other data-shape walls (a
 // vanished post page) where the dub menu would be a lie.
+//
+// The message is sought through the whole unwrap chain (#161): the
+// merged resolve wraps per-provider causes in *errResolveFailed whose
+// own rendered text carries only the compact class reasons — the raw
+// script message lives in the causes.
 func dubNotCarriedFailure(err error) bool {
-	return err != nil &&
-		errors.Is(err, contracts.ErrNotFound) &&
-		strings.Contains(err.Error(), "carries no dub")
+	if err == nil || !errors.Is(err, contracts.ErrNotFound) {
+		return false
+	}
+	return chainContains(err, "carries no dub")
+}
+
+// chainContains reports whether any error of the unwrap tree — the
+// error itself, its Unwrap() error, or its Unwrap() []error causes —
+// renders the substring. The single-Unwrap hop mirrors errors.Unwrap;
+// the joined form (errors.Join, *errResolveFailed) fans out over the
+// causes.
+func chainContains(err error, substr string) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), substr) {
+		return true
+	}
+	if next := errors.Unwrap(err); next != nil {
+		return chainContains(next, substr)
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if chainContains(cause, substr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasLinkedEmbeds reports whether any track key carries actual links

@@ -66,6 +66,10 @@ func liveDeps(t *testing.T) (*RealDeps, *Deps) {
 	if err != nil {
 		t.Fatalf("build live deps: %v", err)
 	}
+	// Production wires Deps.Log onto the file logger after the deps
+	// build (cli/root.go); the live harness mirrors it so flows that
+	// log through deps.Log behave identically under the probe.
+	real.Deps.Log = log
 	t.Cleanup(real.Close)
 	return real, real.Deps
 }
@@ -179,7 +183,7 @@ func TestLivePR61MergedStreams(t *testing.T) {
 	// quality-sorted list — no provider gate. PR94: broken providers
 	// degrade fail-soft — their skip records print as the honest
 	// summary instead of aborting the merge.
-	entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, "")
+	entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, "", nil)
 	if err != nil {
 		t.Fatalf("merged resolve: %v", err)
 	}

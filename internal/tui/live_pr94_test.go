@@ -91,7 +91,11 @@ func TestLivePR94FailSoftSummary(t *testing.T) {
 	}
 	t.Logf("episode %q consulted dub keys: %v", ep.Num, sortedEmbedKeys(ep.RawEmbeds))
 
-	entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, "")
+	// The production wiring passes the deps logger (the file sink):
+	// the same seam logs every full provider error while the screen
+	// line stays compact (#161). The live probe mirrors it so the
+	// run's log shows both forms side by side.
+	entries, skipped, err := resolveAllStreams(ctx, deps.Episode, ep, "", deps.Log)
 	if err != nil {
 		var typed *errResolveFailed
 		if !errors.As(err, &typed) {

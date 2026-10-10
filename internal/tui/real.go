@@ -125,10 +125,17 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	// the shikimori transport (AniList/Kitsu/anisearch/anidb).
 	metaManager := metadata.NewManager(metadata.DefaultProviders(shikiNet), nil, nil)
 
+	// PR163: mpv's stdout/stderr carries the real failure reasons
+	// ("Failed to open …", HTTP 403) — route every line into the file
+	// logger. #163 hid them behind an unwired sink: the TUI showed a
+	// bare "exit status 2" and anicli.log carried nothing from mpv.
+	mpvPlayer := player.New(player.Options{Bin: settings.Player.Path})
+	mpvPlayer.SetLog(func(line string) { logf(o.logger).Info("player: mpv", "output", line) })
+
 	real := &realCore{
 		registry: registry,
 		store:    store,
-		player:   player.New(player.Options{Bin: settings.Player.Path}),
+		player:   mpvPlayer,
 		skips:    skip.NewManager(settings.Skip, shikiNet),
 		dl:       download.New(download.Options{FFmpeg: "ffmpeg"}),
 		shiki: shikimori.New(settings.Shikimori, shikiNet, nil,

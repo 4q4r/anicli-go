@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +15,11 @@ import (
 
 // stubSource is the test-double mpv: mode "sleep30" (default) sleeps
 // 30s and exits 0 on SIGTERM, "trapterm" additionally ignores SIGTERM
-// (SIGKILL escalation), "exitnow" exits immediately with status 1,
-// "printslow" dumps 400 log lines then exits after 600ms (pump race).
+// (SIGKILL escalation), "failexit2" exits immediately with status 2
+// (the transient file-error class — retried to exhaustion),
+// "failinit" exits 1 (deterministic init failure — fail fast),
+// "failopen" prints mpv's failure lines then exits 2, "printslow"
+// dumps 400 log lines then exits after 600ms (pump race).
 const stubSource = `package main
 
 import (
@@ -31,7 +35,51 @@ func main() {
 	if len(os.Args) > 1 {
 		mode = os.Args[len(os.Args)-1]
 	}
-	if mode == "exitnow" {
+	if mode == "exit0now" {
+		// Exits 0 within the warmup window (PR163): every attempt
+		// leaves lastErr nil — the exhaustion error must stay well
+		// formed instead of rendering %!w(<nil>).
+		os.Exit(0)
+	}
+	if mode == "dumpargv" {		// PR163 root-cause pin: print the child argv so the test can
+		// assert the binary path is NOT duplicated into the playlist
+		// (the exec.Command(name, args...) argv[0] contract). Sleeps
+		// past the test warmup so the launch counts as survived.
+		for _, a := range os.Args {
+			fmt.Printf("argv: %s\n", a)
+		}
+		time.Sleep(600 * time.Millisecond)
+		os.Exit(0)
+	}
+	if mode == "failexit2" {
+		os.Exit(2)
+	}
+	if mode == "failopen" {
+		// The mpv file-error shape (PR163): exit 2 with the real
+		// failure reason on stderr.
+		fmt.Fprintln(os.Stderr, "[ffmpeg] http: HTTP Error 403: Forbidden")
+		fmt.Fprintln(os.Stderr, "Failed to open https://cdn.example/ep.m3u8.")
+		os.Exit(2)
+	}
+	if mode == "lateopen" {
+		// The survived-warmup failure shape (PR163): real mpv often
+		// dies AFTER the warmup window (TLS/HTTP retries take
+		// seconds) — the natural-exit path must carry the tail too.
+		time.Sleep(600 * time.Millisecond)
+		fmt.Fprintln(os.Stderr, "Failed to open https://cdn.example/ep.m3u8.")
+		os.Exit(2)
+	}
+	if mode == "failinit" {
+		// The mpv init-error shape (PR163): exit 1 — a deterministic
+		// option/config failure. Each launch appends to the log file
+		// named by STUB_LAUNCH_LOG so tests can count attempts.
+		fmt.Fprintln(os.Stderr, "[cplayer] Bad option: --definitely-not-an-option")
+		if p := os.Getenv("STUB_LAUNCH_LOG"); p != "" {
+			if f, ferr := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); ferr == nil {
+				fmt.Fprintln(f, "launch")
+				_ = f.Close()
+			}
+		}
 		os.Exit(1)
 	}
 	if mode == "exitsoon" {
@@ -364,7 +412,7 @@ func TestPlayImmediateExitRetries(t *testing.T) {
 	p.maxRetries = 2
 
 	start := time.Now()
-	err := p.Play(context.Background(), Request{URL: "exitnow"})
+	err := p.Play(context.Background(), Request{URL: "failexit2"})
 	if err == nil {
 		t.Fatal("Play with instantly-exiting binary returned nil, want retry-exhausted error")
 	}
@@ -373,6 +421,145 @@ func TestPlayImmediateExitRetries(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("retries took %v, want fast", elapsed)
+	}
+}
+
+// TestPlayErrorCarriesMpvStderrTail (PR163): launch exhaustion must
+// carry mpv's own stderr tail, not a bare "exit status 2" — the
+// actionable-errors doctrine. The owner's report (yummy playback,
+// "all launch attempts failed after 5 attempts: exit status 2") hid
+// mpv's actual failure reason ("Failed to open …") behind a swallowed
+// log sink.
+func TestPlayErrorCarriesMpvStderrTail(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlayer(buildStub(t))
+	p.maxRetries = 2
+
+	err := p.Play(context.Background(), Request{URL: "failopen"})
+	if !errors.Is(err, ErrLaunchExhausted) {
+		t.Fatalf("Play err = %v, want ErrLaunchExhausted", err)
+	}
+	if !strings.Contains(err.Error(), "Failed to open https://cdn.example/ep.m3u8.") {
+		t.Errorf("exhaustion error must carry mpv's stderr tail, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP Error 403") {
+		t.Errorf("exhaustion error must carry the mpv diagnostic lines, got %q", err)
+	}
+}
+
+// TestPlayInitFailureFailsFast (PR163): mpv exit code 1 means "error
+// initializing mpv" (unknown option, config failure) — a deterministic
+// failure retrying cannot fix. The launch must stop after ONE attempt
+// and surface the typed ErrLaunchInit with mpv's stderr tail, instead
+// of hammering the same failing launch five times.
+func TestPlayInitFailureFailsFast(t *testing.T) {
+	launchLog := filepath.Join(t.TempDir(), "launches")
+	t.Setenv("STUB_LAUNCH_LOG", launchLog)
+
+	p := newTestPlayer(buildStub(t))
+
+	start := time.Now()
+	err := p.Play(context.Background(), Request{URL: "failinit"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Play with an init-failing binary returned nil, want error")
+	}
+	if !errors.Is(err, ErrLaunchInit) {
+		t.Fatalf("Play err = %v, want ErrLaunchInit", err)
+	}
+	if errors.Is(err, ErrLaunchExhausted) {
+		t.Errorf("a deterministic init failure must not surface as launch exhaustion: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Bad option: --definitely-not-an-option") {
+		t.Errorf("init error must carry mpv's stderr tail, got %q", err)
+	}
+	data, rerr := os.ReadFile(launchLog) //nolint:gosec // the path is our own t.TempDir() file, never user input
+	if rerr != nil {
+		t.Fatalf("read launch log: %v", rerr)
+	}
+	if n := strings.Count(string(data), "launch"); n != 1 {
+		t.Errorf("deterministic init failure launched mpv %d times, want exactly 1", n)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("init failure took %v, want fast (no retries)", elapsed)
+	}
+}
+
+// TestPlayArgvNotDuplicated (PR163 root cause): BuildArgs returns the
+// full argv WITH the binary as its first element (the goldens pin
+// that), and Player.start hands it to exec.Command(p.bin, args...) —
+// whose contract PREPENDS the path again. The duplicated path became
+// mpv's first playlist entry: mpv tried to play the player binary
+// itself ("Playing: /usr/bin/mpv" → "Failed to recognize file
+// format"), poisoned the session's error flag, and every playback
+// exited 2/3 regardless of the stream's health. The child argv must
+// carry the binary path exactly ONCE.
+func TestPlayArgvNotDuplicated(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlayer(buildStub(t))
+	var mu sync.Mutex
+	var lines []string
+	p.SetLog(func(line string) {
+		mu.Lock()
+		lines = append(lines, line)
+		mu.Unlock()
+	})
+	if err := p.Play(context.Background(), Request{URL: "dumpargv"}); err != nil {
+		t.Fatalf("Play: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	binOccurrences := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "argv: ") && strings.Count(line, buildStub(t)) > 0 {
+			binOccurrences++
+		}
+	}
+	if binOccurrences != 1 {
+		t.Errorf("child argv carries the binary path %d times (argv lines: %v), want exactly 1",
+			binOccurrences, lines)
+	}
+}
+
+// TestPlayLateFailureCarriesMpvStderrTail (PR163): a process that
+// survives the warmup window and then dies with a failure (the real
+// mpv shape — TLS/HTTP retries take seconds) exits through the
+// natural-exit path; that error must carry mpv's stderr tail too,
+// not a bare "exit status 2".
+func TestPlayLateFailureCarriesMpvStderrTail(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlayer(buildStub(t))
+	err := p.Play(context.Background(), Request{URL: "lateopen"})
+	if err == nil {
+		t.Fatal("a failed natural exit returned nil, want error")
+	}
+	if errors.Is(err, ErrLaunchExhausted) {
+		t.Fatalf("a survived-warmup exit must not surface as exhaustion: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Failed to open https://cdn.example/ep.m3u8.") {
+		t.Errorf("natural-exit error must carry mpv's stderr tail, got %q", err)
+	}
+}
+
+// TestPlayWarmupCleanExitExhaustionWellFormed (PR163): when every
+// attempt exits 0 within the warmup window, lastErr stays nil — the
+// exhaustion error must not render a %!w(<nil>) verb.
+func TestPlayWarmupCleanExitExhaustionWellFormed(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlayer(buildStub(t))
+	p.maxRetries = 2
+	err := p.Play(context.Background(), Request{URL: "exit0now"})
+	if !errors.Is(err, ErrLaunchExhausted) {
+		t.Fatalf("Play err = %v, want ErrLaunchExhausted", err)
+	}
+	if strings.Contains(err.Error(), "%!w") {
+		t.Errorf("exhaustion error is malformed for a nil last error: %q", err)
 	}
 }
 

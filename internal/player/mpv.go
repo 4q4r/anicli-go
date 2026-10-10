@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,21 @@ const (
 	defaultWarmup     = 2 * time.Second
 	defaultRetryDelay = 1 * time.Second
 	defaultTermGrace  = 3 * time.Second
+)
+
+// mpvExitInit is mpv's documented init-failure exit code ("error
+// initializing mpv", including unknown options) — a deterministic
+// failure no retry can fix (PR163 classification; exit 2 = "file
+// couldn't be played" stays retryable as the transient class).
+const mpvExitInit = 1
+
+// The stderr tail embedded into launch errors (PR163 actionable
+// errors): the last lines of mpv's own output — "Failed to open …",
+// "HTTP Error 403" — are the only clue a user gets when playback
+// fails. Bounded so a chatty mpv cannot balloon the message.
+const (
+	mpvTailLines   = 6
+	mpvTailLineMax = 200
 )
 
 // ErrBinaryNotFound reports a missing player binary (fail-loud typed
@@ -35,6 +52,11 @@ func (e *ErrBinaryNotFound) Error() string {
 // warmup window.
 var ErrLaunchExhausted = errors.New("player: all launch attempts failed")
 
+// ErrLaunchInit reports that mpv exited with its init-failure code
+// (exit 1: unknown option, config failure) — a deterministic failure
+// no retry can fix (PR163).
+var ErrLaunchInit = errors.New("player: mpv failed to initialize")
+
 // LogFunc receives mpv stdout lines (python lifecycle manager printed
 // them; the UI wires its own renderer).
 type LogFunc func(line string)
@@ -48,6 +70,12 @@ type Player struct {
 	termGrace  time.Duration
 	maxRetries int
 	onLog      LogFunc
+
+	// tailMu guards tail, the bounded recent-output ring the launch
+	// errors embed (PR163). Filled from mpv's own output only — the
+	// player's own lifecycle lines stay out.
+	tailMu sync.Mutex
+	tail   []string
 }
 
 // New builds the player; zero Options fall back to the ported
@@ -97,6 +125,7 @@ func (p *Player) SetLog(fn LogFunc) { p.onLog = fn }
 func (p *Player) Play(ctx context.Context, req Request) error {
 	args := BuildArgs(req, p.launchOpts())
 	defer p.cleanupChapters(req.ChaptersFile)
+	p.resetTail()
 
 	var lastErr error
 	for attempt := 1; attempt <= p.maxRetries; attempt++ {
@@ -120,6 +149,16 @@ func (p *Player) Play(ctx context.Context, req Request) error {
 			p.logLine(fmt.Sprintf("mpv exited during warmup (attempt %d/%d): %v",
 				attempt, p.maxRetries, err))
 			lastErr = err
+			// PR163 classification: mpv exit 1 = "error initializing
+			// mpv" (unknown option, broken config) — deterministic,
+			// so hammering the same launch cannot help. Exit 2 ("file
+			// couldn't be played") covers the transient class and
+			// keeps the python retry budget.
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && exitErr.ExitCode() == mpvExitInit {
+				return fmt.Errorf("%w: %w; mpv output: %s",
+					ErrLaunchInit, err, p.stderrTail())
+			}
 			if !sleepCtx(ctx, p.retryDelay) {
 				return ctx.Err()
 			}
@@ -138,7 +177,21 @@ func (p *Player) Play(ctx context.Context, req Request) error {
 			}
 		}
 	}
-	return fmt.Errorf("%w after %d attempts: %w", ErrLaunchExhausted, p.maxRetries, lastErr)
+	var exhausted error
+	if lastErr != nil {
+		exhausted = fmt.Errorf("%w after %d attempts: %w", ErrLaunchExhausted, p.maxRetries, lastErr)
+	} else {
+		// Every attempt exited 0 within the warmup window: no
+		// underlying error exists, and a %w with nil renders
+		// %!w(<nil>) (PR163).
+		exhausted = fmt.Errorf("%w after %d attempts", ErrLaunchExhausted, p.maxRetries)
+	}
+	// PR163: the error carries mpv's own last output lines — the bare
+	// "exit status 2" told the owner nothing actionable.
+	if tail := p.stderrTail(); tail != "" {
+		return fmt.Errorf("%w; mpv output: %s", exhausted, tail)
+	}
+	return exhausted
 }
 
 // launchOpts renders the subset of Options BuildArgs consumes.
@@ -146,10 +199,22 @@ func (p *Player) launchOpts() Options {
 	return Options{Bin: p.bin, Timeout: p.opts.Timeout, Profile: p.opts.Profile}
 }
 
-// mapExit is the exit-verdict seam; it is currently the identity.
-// Wait already reports clean exits as nil, and the cancellation paths
-// return ctx.Err() directly, so no translation is needed here.
+// mapExit is the exit-verdict seam for a natural (survived-warmup)
+// exit. Clean exits pass through as nil; a failed exit carries mpv's
+// own stderr tail (PR163) and the exit-1 init classification, so the
+// user sees the failure reason instead of a bare "exit status 2".
 func (p *Player) mapExit(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == mpvExitInit {
+		return fmt.Errorf("%w: %w; mpv output: %s",
+			ErrLaunchInit, err, p.stderrTail())
+	}
+	if tail := p.stderrTail(); tail != "" {
+		return fmt.Errorf("%w; mpv output: %s", err, tail)
+	}
 	return err
 }
 
@@ -158,6 +223,40 @@ func (p *Player) logLine(line string) {
 	if p.onLog != nil {
 		p.onLog(line)
 	}
+}
+
+// rememberTail appends one mpv output line to the bounded error tail.
+func (p *Player) rememberTail(line string) {
+	if line == "" {
+		return
+	}
+	if len(line) > mpvTailLineMax {
+		line = line[:mpvTailLineMax]
+	}
+	p.tailMu.Lock()
+	defer p.tailMu.Unlock()
+	p.tail = append(p.tail, line)
+	if len(p.tail) > mpvTailLines {
+		p.tail = p.tail[len(p.tail)-mpvTailLines:]
+	}
+}
+
+// resetTail clears the ring for a fresh launch round.
+func (p *Player) resetTail() {
+	p.tailMu.Lock()
+	defer p.tailMu.Unlock()
+	p.tail = nil
+}
+
+// stderrTail renders the recent mpv output as one joined line; empty
+// when the player said nothing.
+func (p *Player) stderrTail() string {
+	p.tailMu.Lock()
+	defer p.tailMu.Unlock()
+	if len(p.tail) == 0 {
+		return ""
+	}
+	return strings.Join(p.tail, " | ")
 }
 
 // cleanupChapters removes the chapters file if it still exists
@@ -183,7 +282,13 @@ func (p *Player) start(ctx context.Context, args []string) (*process, error) {
 		return nil, &ErrBinaryNotFound{Bin: p.bin}
 	}
 
-	cmd := exec.Command(p.bin, args...) //nolint:gosec // bin/args are config-derived, not request input
+	// BuildArgs returns the full display argv WITH the binary as its
+	// first element (the goldens pin that shape). exec.Command already
+	// installs its name argument as argv[0], so the slice is consumed
+	// WITHOUT the leading bin — passing it verbatim duplicated the
+	// path as mpv's first playlist file ("Playing: /usr/bin/mpv"),
+	// which poisoned every playback session's error flag (PR163).
+	cmd := exec.Command(p.bin, args[1:]...) //nolint:gosec // bin/args are config-derived, not request input
 	// python start_new_session=True: detach into its own process group
 	// so group signals do not hit the CLI (platform-specific; see
 	// mpv_unix.go / mpv_windows.go).
@@ -223,13 +328,17 @@ func (p *Player) pump(stdout io.ReadCloser) {
 				if idx < 0 {
 					break
 				}
-				p.logLine(string(trimCR(line[:idx])))
+				text := string(trimCR(line[:idx]))
+				p.rememberTail(text)
+				p.logLine(text)
 				line = line[idx+1:]
 			}
 		}
 		if err != nil {
 			if len(line) > 0 {
-				p.logLine(string(trimCR(line)))
+				text := string(trimCR(line))
+				p.rememberTail(text)
+				p.logLine(text)
 			}
 			_ = stdout.Close()
 			return

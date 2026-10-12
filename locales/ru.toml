@@ -157,6 +157,13 @@
 "download.dub_not_chosen" = "⚠ Озвучка не выбрана — выберите какую качать"
 "download.skip_verdict" = "пропущена"
 "download.skipped_dubs" = "пропущены: {eps} (нет озвучки {dub})"
+"download.audio_skip_verdict" = "нет отмеченных озвучек"
+"download.skipped_audio_set" = "пропущены: {eps} (нет отмеченных озвучек)"
+"download.row_dropped" = "без отмеченных: {dubs}"
+"download.content_title" = "Режим загрузки:"
+"download.content_video_audio" = "🎬 Видео+аудио (по умолчанию)"
+"download.content_video_only" = "🎞 Только видео"
+"download.content_audio_only" = "🎵 Только аудио (по озвучке)"
 
 # ---- экран сессии ----
 "session.refreshing_sources" = "Обновляю источники…"
@@ -182,6 +189,7 @@
 "session.no_dubs" = "Нет доступных озвучек"
 "session.resolving_streams" = "Ищу потоки…"
 "session.pick_stream" = "Выберите поток (качество · озвучка · провайдер):"
+"session.pick_stream_hint" = "Пробел — отметить озвучку для загрузки · d — дорожка по умолчанию"
 "session.no_streams" = "Потоки не найдены"
 "session.buffer_cancelled" = "Буферизация отменена"
 "session.buffer_preparing" = "Буферизация: подготовка…"

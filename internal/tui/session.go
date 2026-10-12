@@ -59,6 +59,10 @@ const (
 	sessionStateInfoRewatches  sessionState = "info_rewatches"
 	sessionStateDownloadRange  sessionState = "download_range"
 	sessionStateDownloadMode   sessionState = "download_mode"
+	// sessionStateDownloadContent is the PR165 content-mode picker
+	// («видео+аудио» / «только видео» / «только аудио») between the
+	// range prompt and the foreground/background pick.
+	sessionStateDownloadContent sessionState = "download_content"
 	// sessionStateDownloadDub is the #164 ask-first dub picker of the
 	// download flow: a batch started without a chosen dub opens it
 	// BEFORE anything downloads — the pick drives the whole batch,
@@ -343,17 +347,31 @@ type sessionScreen struct {
 	// infoList/statusList/modeList persist their submenus for the
 	// whole substate visit: rebuilding per keypress reset the cursor
 	// and made Enter always resolve Back (C2).
-	infoList   *PinList    // «Изменить инфо» submenu
-	statusList *PinList    // RU status picker
-	modeList   *PinList    // download mode picker
-	rangeInput *TextPrompt // download range + info numeric fields
-	infoPrompt *TextPrompt // score / rewatches entry
+	infoList    *PinList    // «Изменить инфо» submenu
+	statusList  *PinList    // RU status picker
+	modeList    *PinList    // download mode picker
+	contentList *PinList    // PR165 download content-mode picker
+	rangeInput  *TextPrompt // download range + info numeric fields
+	infoPrompt  *TextPrompt // score / rewatches entry
 
 	downloadEpisodes []string
+	// downloadContentMode is the PR165 content mode picked for the
+	// pending batch: "video_audio" (default), "video_only" or
+	// "audio_only".
+	downloadContentMode string
 	// downloadAskMode remembers the mode picked BEFORE the #164
 	// ask-first dub menu opened; the menu's pick resumes the batch in
 	// that mode. "" whenever the menu is not open.
 	downloadAskMode string
+	// markedAudio is the PR165 ordered download audio set: the dub
+	// keys SPACE-marked in the merged stream picker, in marking order.
+	// Every batch episode muxes the whole set; "" (nil) keeps today's
+	// single-audio semantics.
+	markedAudio []string
+	// defaultAudio is the marked key carrying the default disposition
+	// ("" = the earliest marked). A non-empty set always has exactly
+	// one default.
+	defaultAudio string
 	// streamEntries cache the merged picker entries between the
 	// resolve settle and the pick (Back from the audio prompt returns
 	// to the list without re-resolving).
@@ -970,6 +988,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleInfoNumericKey(key)
 	case sessionStateDownloadRange:
 		return s.handleDownloadRangeKey(key)
+	case sessionStateDownloadContent:
+		return s.handleDownloadContentKey(key)
 	case sessionStateDownloadMode:
 		return s.handleDownloadModeKey(key)
 	case sessionStateDownloadDub:
@@ -1983,6 +2003,88 @@ func (s *sessionScreen) buildStreamList() {
 		})
 	}
 	s.qualityList = NewPinList(NewMenu(i18n.T("session.pick_stream"), i18n.T("session.no_streams"), choices...), defaultListHeight)
+	s.applyStreamMarkers()
+}
+
+// applyStreamMarkers paints the PR165 download marks onto the picker:
+// ★ on the default-disposition row, ● on the other rows of the marked
+// dubs (a dub's quality rows share the mark — the audio set is per
+// dub).
+func (s *sessionScreen) applyStreamMarkers() {
+	if s.qualityList == nil {
+		return
+	}
+	for i, e := range s.streamEntries {
+		switch {
+		case e.DubKey == s.defaultAudio:
+			s.qualityList.SetMarker(i, "★")
+		case containsDub(s.markedAudio, e.DubKey):
+			s.qualityList.SetMarker(i, "●")
+		}
+	}
+}
+
+// containsDub reports whether the dub key is in the marked set.
+func containsDub(set []string, key string) bool {
+	for _, k := range set {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleMarkedAudio flips the dub's membership in the ordered marked
+// set and repairs the default invariant: a non-empty set always has
+// exactly one default — the first marked audio unless `d` moved it;
+// unmarking the default (or the default leaving the set) promotes the
+// earliest remaining marked key.
+func (s *sessionScreen) toggleMarkedAudio(key string) {
+	if containsDub(s.markedAudio, key) {
+		kept := s.markedAudio[:0:0]
+		for _, k := range s.markedAudio {
+			if k != key {
+				kept = append(kept, k)
+			}
+		}
+		s.markedAudio = kept
+		if s.defaultAudio == key {
+			s.defaultAudio = ""
+			if len(s.markedAudio) > 0 {
+				s.defaultAudio = s.markedAudio[0]
+			}
+		}
+		return
+	}
+	s.markedAudio = append(s.markedAudio, key)
+	if s.defaultAudio == "" {
+		// The FIRST marked audio is the default track.
+		s.defaultAudio = key
+	}
+}
+
+// markDefault moves the default disposition onto the cursor row's dub
+// (`d`); pressing `d` on the default hands it back to the earliest
+// remaining marked dub. A `d` on an unmarked row is a no-op (the
+// mandate binds the key to MARKED rows only).
+func (s *sessionScreen) markDefault(key string) {
+	if !containsDub(s.markedAudio, key) {
+		return
+	}
+	if s.defaultAudio == key {
+		s.defaultAudio = ""
+		for _, k := range s.markedAudio {
+			if k != key {
+				s.defaultAudio = k
+				break
+			}
+		}
+		if s.defaultAudio == "" {
+			s.defaultAudio = key // the sole marked row stays the default
+		}
+		return
+	}
+	s.defaultAudio = key
 }
 
 // streamEntryLabel renders one merged-list row: quality first, then
@@ -2007,9 +2109,25 @@ func (s *sessionScreen) streamEntryLabel(e streamEntry) string {
 // handleQualityKey resolves the stream pick (PR61): the entry records
 // video dub + quality; a fresh session continues to the audio prompt
 // (python's second prompt), a remembered audio dub plays directly.
+// PR165: SPACE toggles the row's dub into the download audio set and
+// `d` moves the default disposition (the CheckList multiselect
+// pattern); the playback Enter path is untouched.
 func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.qualityList.HandleKey(key) {
 		return s, nil
+	}
+	if cursor := s.qualityList.Cursor(); cursor >= 0 && cursor < len(s.streamEntries) {
+		dub := s.streamEntries[cursor].DubKey
+		switch key.Code { //nolint:exhaustive // the marking keys only
+		case tea.KeySpace:
+			s.toggleMarkedAudio(dub)
+			s.applyStreamMarkers()
+			return s, nil
+		case 'd':
+			s.markDefault(dub)
+			s.applyStreamMarkers()
+			return s, nil
+		}
 	}
 	resolved := ResolveKey(s.qualityList.Menu(), s.qualityList.Cursor(), key)
 	if resolved == nil {
@@ -2603,6 +2721,43 @@ func (s *sessionScreen) handleDownloadRangeKey(key tea.KeyPressMsg) (Screen, tea
 		s.setStatus(i18n.T("download.range_empty"))
 		return s, nil
 	}
+	s.setState(sessionStateDownloadContent)
+	s.buildContentModeList()
+	return s, nil
+}
+
+// buildContentModeList renders the PR165 content-mode picker: the
+// three download shapes, видео+аудио first (the default, as today).
+func (s *sessionScreen) buildContentModeList() {
+	s.contentList = NewPinList(NewMenu(i18n.T("download.content_title"), "", []Choice{
+		{ID: "video_audio", Label: i18n.T("download.content_video_audio"), Value: "video_audio"},
+		{ID: "video_only", Label: i18n.T("download.content_video_only"), Value: "video_only"},
+		{ID: "audio_only", Label: i18n.T("download.content_audio_only"), Value: "audio_only"},
+	}...), defaultListHeight)
+}
+
+// handleDownloadContentKey resolves the content-mode pick and moves to
+// the execution-mode menu; Back returns to the session menu.
+func (s *sessionScreen) handleDownloadContentKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.contentList == nil {
+		s.buildContentModeList()
+	}
+	if s.contentList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.contentList.Menu(), s.contentList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.setState(sessionStateMenu)
+		return s, nil
+	}
+	mode, _ := resolved.(string)
+	if mode == "" {
+		mode = "video_audio"
+	}
+	s.downloadContentMode = mode
 	s.setState(sessionStateDownloadMode)
 	s.buildModeList()
 	return s, nil
@@ -2655,6 +2810,17 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 	for _, num := range s.downloadEpisodes {
 		episodes = append(episodes, s.episodes[num])
 	}
+	content := s.downloadContentMode
+	if content == "" {
+		content = "video_audio"
+	}
+	// The PR165 marked audio set rides every video+аудио task: every
+	// episode muxes the whole set (per-episode resolution inside the
+	// batch); the other modes resolve the chosen dub alone.
+	var audioSet []string
+	if content == "video_audio" && len(s.markedAudio) > 0 {
+		audioSet = append([]string(nil), s.markedAudio...)
+	}
 	// The dub is resolved PER EPISODE inside the command (PR64 #3):
 	// the remembered dub first, per-episode fallback otherwise (the
 	// strict mode pins the picked dub alone) — the tasks leave this
@@ -2662,11 +2828,14 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 	tasks := make([]DownloadTask, 0, len(episodes))
 	for _, ep := range episodes {
 		tasks = append(tasks, DownloadTask{
-			AnimeTitle:  BestDisplayTitle(s.group),
-			EpisodeNum:  ep.Num,
-			ShikimoriID: s.shikimoriID(),
-			Episode:     ep,
-			Quality:     s.lastQuality,
+			AnimeTitle:   BestDisplayTitle(s.group),
+			EpisodeNum:   ep.Num,
+			ShikimoriID:  s.shikimoriID(),
+			Episode:      ep,
+			Quality:      s.lastQuality,
+			Mode:         content,
+			AudioSet:     audioSet,
+			DefaultAudio: s.defaultAudio,
 		})
 	}
 	switch mode {
@@ -3097,7 +3266,7 @@ func (s *sessionScreen) View() tea.View {
 		// the dub-menu rendering.
 		body = themedList(s.redubList)
 	case sessionStateQuality:
-		body = themedList(s.qualityList)
+		body = themedList(s.qualityList) + "\n" + theme.StatusLine.Render(i18n.T("session.pick_stream_hint"))
 	case sessionStateFormat:
 		body = themedList(s.formatList)
 	case sessionStateBuffering:
@@ -3121,6 +3290,11 @@ func (s *sessionScreen) View() tea.View {
 		body = s.infoPrompt.View().Content
 	case sessionStateDownloadRange:
 		body = s.rangeInput.View().Content
+	case sessionStateDownloadContent:
+		if s.contentList == nil {
+			s.buildContentModeList()
+		}
+		body = theme.Title.Render(i18n.T("download.content_title")) + "\n\n" + s.contentList.Render()
 	case sessionStateDownloadMode:
 		if s.modeList == nil {
 			s.buildModeList()

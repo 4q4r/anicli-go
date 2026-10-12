@@ -143,6 +143,11 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		settings: settings,
 		log:      logf(o.logger),
 	}
+	// The codec prober is the same downloader (ffprobe seam); the
+	// split field keeps the test fakes narrow (PR165).
+	if d, ok := real.dl.(*download.Downloader); ok {
+		real.prober = d
+	}
 
 	// PR43 C: the buffered watch pipeline. Playlists ride their own
 	// netclient (browser parity + proxy + CF solver); media bytes
@@ -259,7 +264,8 @@ type realCore struct {
 	store          *storage.Store
 	player         *player.Player
 	skips          *skip.Manager
-	dl             *download.Downloader
+	dl             mediaDownloader
+	prober         codecProber
 	buffered       *buffered.Downloader
 	shiki          *shikimori.Client
 	mal            *mal.Client
@@ -269,6 +275,19 @@ type realCore struct {
 	// skip verdict is logged, so «вшиваются ли скипы?» is answerable
 	// from the log); nil degrades to discard.
 	log *slog.Logger
+}
+
+// mediaDownloader is the ffmpeg leg seam (PR165): the concrete
+// *download.Downloader in production, a capturing fake in tests.
+type mediaDownloader interface {
+	Download(ctx context.Context, in download.CommandInput) error
+}
+
+// codecProber probes stream codec names for the container decision
+// (PR165); the concrete *download.Downloader implements it via
+// ffprobe.
+type codecProber interface {
+	ProbeCodec(ctx context.Context, kind string, src contracts.VideoSource) (string, error)
 }
 
 // streamingHTTPClient builds the media-byte transport of the buffered
@@ -817,9 +836,12 @@ func (s *realDownload) recall(id string) (DownloadTask, bool) {
 	return task, ok
 }
 
-// downloadTaskID builds the dedupe key of one download.
+// downloadTaskID builds the dedupe key of one download. The PR165
+// content mode is part of the identity: the same episode may download
+// as video+аудио, only-video and only-audio without the tasks
+// colliding (a resubmit replaces its own shape only).
 func downloadTaskID(task DownloadTask) string {
-	return fmt.Sprintf("%s|%s|%s|%s", task.AnimeTitle, task.EpisodeNum, task.DubID, task.Quality)
+	return fmt.Sprintf("%s|%s|%s|%s|%s", task.AnimeTitle, task.EpisodeNum, task.DubID, task.Quality, task.Mode)
 }
 
 // logger normalizes the optional diagnostics sink: nil degrades to a
@@ -849,6 +871,16 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 // skips, merge via ffmpeg, index the result (python
 // handle_download_flow foreground path). The written file path
 // returns to the caller (the PR64 #3 per-episode report).
+//
+// PR165: the content mode dispatches the shape. video+аудио (the
+// default, "" included) keeps the legacy single-audio command when no
+// marked audio set rides the task; with one, the marked dubs mux onto
+// the video in ONE pass (research §2.1) and the container follows the
+// decision table (mkv unless video+single AAC). Only video muxes for
+// «только видео» (container by the probed video codec); «только
+// аудио» bit-extracts the chosen dub's audio into its native
+// container (never a re-encode) and stays out of the offline index —
+// the index rows promise a playable video episode.
 func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, error) {
 	p, ok := c.registry.Get(task.ProviderID)
 	if !ok {
@@ -870,27 +902,18 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	if err != nil {
 		return "", fmt.Errorf("tui: download: resolve: %w", err)
 	}
+
+	mode := download.Mode(task.Mode)
+
+	// «только аудио»: the CHOSEN dub's audio alone, codec-preserving.
+	if mode == download.ModeAudioOnly {
+		return c.downloadAudioOnly(ctx, task, stream)
+	}
+
 	quality := pickQuality(stream.Links, task.Quality)
 	video, ok := stream.Links[quality]
 	if !ok {
 		return "", fmt.Errorf("tui: download: quality %q unavailable", quality)
-	}
-
-	var audio *contracts.VideoSource
-	audioKey := audioKeyOfTask(task)
-	if audioKey != "" && audioKey != task.DubID {
-		if ap, ok := c.registry.Get(providerOfTrackKey(audioKey)); ok {
-			audioEpisode := task.Episode
-			audioEpisode.RawID = task.Episode.ProviderRawID(providerOfTrackKey(audioKey))
-			// The same track-key strip as the video leg — the audio
-			// key is a "[prov] dub" track key by the same contract
-			// (#158 fix-round 2).
-			audioStream, err := ap.ResolveStream(ctx, audioEpisode, stripProviderTag(audioKey))
-			if err == nil && len(audioStream.Links) > 0 {
-				best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
-				audio = &best
-			}
-		}
 	}
 
 	// The python-parity bake: the episode's skips resolve to an
@@ -898,52 +921,91 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	// verdict is logged either way (PR74 — the owner could never tell
 	// whether chapters were baked; pre-PR61 every fetch failed
 	// silently here).
-	chaptersFile := ""
-	switch {
-	case task.ShikimoriID <= 0 || c.skips == nil:
-		c.logger().Info("download: title unbound; chapters not baked",
-			"episode", task.Episode.Num)
-	default:
-		bundle, err := c.skips.Resolve(ctx, skip.ResolveRequest{
-			ShikimoriID: task.ShikimoriID,
-			EpisodeNum:  EpisodeSortKey(task.Episode.Num),
-		})
-		switch {
-		case err != nil:
-			c.logger().Warn("download: skips unavailable; chapters not baked",
-				"episode", task.Episode.Num, "error", err)
-		case bundle.Empty():
-			c.logger().Info("download: skips not found; chapters not baked",
-				"episode", task.Episode.Num, "details", bundle.Details)
-		default:
-			path, werr := bundle.WriteChaptersFile(os.TempDir())
-			if werr != nil {
-				c.logger().Warn("download: chapters file write failed; chapters not baked",
-					"episode", task.Episode.Num, "error", werr)
-				break
-			}
-			chaptersFile = path
-			defer func() { _ = os.Remove(path) }()
-			c.logger().Info("download: chapters baked",
-				"episode", task.Episode.Num, "provider", bundle.ProviderID,
-				"types", bundle.ChapterTypes, "chapters", len(bundle.Intervals))
-		}
+	chaptersFile := c.resolveChaptersFile(ctx, task)
+	if chaptersFile != "" {
+		defer func() { _ = os.Remove(chaptersFile) }()
 	}
 
 	outDir := filepath.Join(c.downloadRoot(), download.CleanTitleForFS(task.AnimeTitle))
-	name := fmt.Sprintf("EP_%s_%s_%sp.mp4",
-		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), quality)
-	outPath := filepath.Join(outDir, name)
 
 	input := download.CommandInput{
 		Video:        video,
-		Audio:        audio,
 		ChaptersFile: chaptersFile,
-		OutputPath:   outPath,
 		Title:        i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
 	}
+
+	var ext string
+	switch {
+	case mode == download.ModeVideoOnly:
+		// Research §2.2: mp4 only for the registered set, else mkv;
+		// a failed probe degrades to the universal mkv.
+		ext = "mkv"
+		if c.prober != nil {
+			if codec, err := c.prober.ProbeCodec(ctx, "v", video); err == nil {
+				ext = download.ContainerFor(download.ModeVideoOnly, codec, nil)
+			} else {
+				c.logger().Warn("download: video codec probe failed; falling back to mkv",
+					"episode", task.Episode.Num, "error", err)
+			}
+		}
+		input.Mode = download.ModeVideoOnly
+	case len(task.AudioSet) > 0:
+		tracks, dropped, terr := c.resolveAudioTracks(ctx, task)
+		if terr != nil {
+			return "", terr
+		}
+		if len(dropped) > 0 {
+			// Mandate #7, download-time half: a dub dead at download
+			// time drops for THIS episode (the resolve phase already
+			// typed the same verdict for the report).
+			c.logger().Warn("download: marked dubs dropped at download time",
+				"episode", task.Episode.Num, "dubs", dropped)
+		}
+		ext = c.multiAudioExtension(ctx, task.Episode.Num, video, tracks)
+		input.Mode = download.ModeVideoAudio
+		input.Tracks = tracks
+	default:
+		// The legacy path stays byte-identical: the video's own audio
+		// (or the remembered separate-audio pair), the mp4 name.
+		var audio *contracts.VideoSource
+		audioKey := audioKeyOfTask(task)
+		if audioKey != "" && audioKey != task.DubID {
+			if ap, ok := c.registry.Get(providerOfTrackKey(audioKey)); ok {
+				audioEpisode := task.Episode
+				audioEpisode.RawID = task.Episode.ProviderRawID(providerOfTrackKey(audioKey))
+				// The same track-key strip as the video leg — the audio
+				// key is a "[prov] dub" track key by the same contract
+				// (#158 fix-round 2).
+				audioStream, err := ap.ResolveStream(ctx, audioEpisode, stripProviderTag(audioKey))
+				if err == nil && len(audioStream.Links) > 0 {
+					best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
+					audio = &best
+				}
+			}
+		}
+		input.Audio = audio
+		ext = "mp4"
+	}
+
+	name := fmt.Sprintf("EP_%s_%s_%sp.%s",
+		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), quality, ext)
+	outPath := filepath.Join(outDir, name)
+	input.OutputPath = outPath
+
 	if err := c.dl.Download(ctx, input); err != nil {
 		return "", err
+	}
+
+	if mode == download.ModeVideoOnly || len(task.AudioSet) > 0 {
+		// PR165 scope note: the marked-set and video-only files keep
+		// the offline index untouched — index rows exist for the
+		// legacy episode shape (single video+audio pair per key) and
+		// a multi-track row would promise offline playback the
+		// player does not model yet. The file lands in the same
+		// directory and the report carries its path.
+		c.logger().Info("download: file written; offline index not updated (PR165 shape)",
+			"episode", task.Episode.Num, "path", outPath)
+		return outPath, nil
 	}
 
 	var animeID *int64
@@ -952,6 +1014,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 			animeID = &rec.ID
 		}
 	}
+	audioKey := audioKeyOfTask(task)
 	key := audioKey
 	if key == "" {
 		key = task.DubID
@@ -967,6 +1030,163 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		return "", err
 	}
 	return outPath, nil
+}
+
+// resolveAudioTracks resolves every PR165 marked dub into a mux track
+// (provider-local decomposition, best quality, per-track language and
+// title metadata). A dub the episode's provider cannot resolve right
+// now drops (mandate #7: the episode muxes the dubs it carries);
+// a set where NOTHING carried is the typed error — never a silent
+// video-only file.
+func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([]download.AudioTrack, []string, error) {
+	tracks := make([]download.AudioTrack, 0, len(task.AudioSet))
+	var dropped []string
+	for _, key := range task.AudioSet {
+		prov := providerOfTrackKey(key)
+		ap, ok := c.registry.Get(prov)
+		if !ok {
+			dropped = append(dropped, key)
+			continue
+		}
+		audioEpisode := task.Episode
+		audioEpisode.RawID = task.Episode.ProviderRawID(prov)
+		// The same track-key strip as the video leg — the audio
+		// key is a "[prov] dub" track key by the same contract
+		// (#158 fix-round 2).
+		audioStream, err := ap.ResolveStream(ctx, audioEpisode, stripProviderTag(key))
+		if err != nil || len(audioStream.Links) == 0 {
+			dropped = append(dropped, key)
+			continue
+		}
+		best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
+		tracks = append(tracks, download.AudioTrack{
+			Source:  best,
+			Lang:    download.LangToISO639_2(c.registry.ContentLanguage(prov)),
+			Title:   stripProviderTag(key),
+			Default: key == task.DefaultAudio,
+		})
+	}
+	if len(tracks) == 0 {
+		return nil, dropped, fmt.Errorf("tui: download: none of the marked dubs resolved for ep %s", task.Episode.Num)
+	}
+	// The default-disposition invariant repairs here: exactly one
+	// track is the default. "" means the FIRST marked track, and a
+	// default that DROPPED with its dub falls back to the first
+	// carried track — the mux never ships defaultless.
+	hasDefault := false
+	for _, tr := range tracks {
+		if tr.Default {
+			hasDefault = true
+			break
+		}
+	}
+	if !hasDefault {
+		tracks[0].Default = true
+	}
+	return tracks, dropped, nil
+}
+
+// multiAudioExtension decides the mux container per the research
+// table: ≥2 tracks ⇒ mkv unconditionally (no probes needed); a single
+// track probes the video and audio codecs (mp4 only for video +
+// AAC); a failed probe degrades to the universal mkv.
+func (c *realCore) multiAudioExtension(ctx context.Context, episode string, video contracts.VideoSource, tracks []download.AudioTrack) string {
+	if len(tracks) > 1 {
+		return "mkv"
+	}
+	if c.prober == nil {
+		return "mkv"
+	}
+	audioCodec, err := c.prober.ProbeCodec(ctx, "a", tracks[0].Source)
+	if err != nil {
+		c.logger().Warn("download: audio codec probe failed; falling back to mkv",
+			"episode", episode, "error", err)
+		return "mkv"
+	}
+	videoCodec, err := c.prober.ProbeCodec(ctx, "v", video)
+	if err != nil {
+		c.logger().Warn("download: video codec probe failed; falling back to mkv",
+			"episode", episode, "error", err)
+		return "mkv"
+	}
+	return download.ContainerFor(download.ModeVideoAudio, videoCodec, []string{audioCodec})
+}
+
+// downloadAudioOnly bit-extracts the chosen dub's audio (research
+// §2.3: -vn -c:a copy — never a re-encode) into the codec's native
+// container. The file stays out of the offline index: index rows
+// promise a playable video episode (VideoKey is required), and an
+// audio-only row would surface a broken entry in offline playback.
+func (c *realCore) downloadAudioOnly(ctx context.Context, task DownloadTask, stream contracts.MediaStream) (string, error) {
+	if len(stream.Links) == 0 {
+		return "", fmt.Errorf("tui: download: quality %q unavailable", task.Quality)
+	}
+	best := stream.Links[sortedQualityDesc(stream.Links)[0]]
+
+	ext := "mka"
+	if c.prober != nil {
+		if codec, err := c.prober.ProbeCodec(ctx, "a", best); err == nil {
+			ext = download.ContainerFor(download.ModeAudioOnly, "", []string{codec})
+		} else {
+			c.logger().Warn("download: audio codec probe failed; falling back to mka",
+				"episode", task.Episode.Num, "error", err)
+		}
+	}
+
+	outDir := filepath.Join(c.downloadRoot(), download.CleanTitleForFS(task.AnimeTitle))
+	name := fmt.Sprintf("EP_%s_%s.%s",
+		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), ext)
+	outPath := filepath.Join(outDir, name)
+
+	input := download.CommandInput{
+		Mode:       download.ModeAudioOnly,
+		Audio:      &best,
+		OutputPath: outPath,
+		Title:      i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
+	}
+	if err := c.dl.Download(ctx, input); err != nil {
+		return "", err
+	}
+	c.logger().Info("download: audio-only file written; offline index not updated (audio-only shape)",
+		"episode", task.Episode.Num, "path", outPath, "codec_ext", ext)
+	return outPath, nil
+}
+
+// resolveChaptersFile extracts the skip-bake of the download path:
+// the FFMETADATA file path for the mux ("" when nothing to bake).
+func (c *realCore) resolveChaptersFile(ctx context.Context, task DownloadTask) string {
+	if task.ShikimoriID <= 0 || c.skips == nil {
+		c.logger().Info("download: title unbound; chapters not baked",
+			"episode", task.Episode.Num)
+		return ""
+	}
+	bundle, err := c.skips.Resolve(ctx, skip.ResolveRequest{
+		ShikimoriID: task.ShikimoriID,
+		EpisodeNum:  EpisodeSortKey(task.Episode.Num),
+	})
+	switch {
+	case err != nil:
+		c.logger().Warn("download: skips unavailable; chapters not baked",
+			"episode", task.Episode.Num, "error", err)
+		return ""
+	case bundle.Empty():
+		c.logger().Info("download: skips not found; chapters not baked",
+			"episode", task.Episode.Num, "details", bundle.Details)
+		return ""
+	default:
+		path, werr := bundle.WriteChaptersFile(os.TempDir())
+		if werr != nil {
+			c.logger().Warn("download: chapters file write failed; chapters not baked",
+				"episode", task.Episode.Num, "error", werr)
+			return ""
+		}
+		c.logger().Info("download: chapters baked",
+			"episode", task.Episode.Num, "provider", bundle.ProviderID,
+			"types", bundle.ChapterTypes, "chapters", len(bundle.Intervals))
+		// The mux consumes the file during the ffmpeg run; the
+		// caller removes it after the download settles.
+		return path
+	}
 }
 
 // audioKeyOfTask recovers the separate audio dub of a task (the

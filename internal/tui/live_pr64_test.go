@@ -107,8 +107,13 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 	ss.rangeInput.typeText(s.order[0] + "-" + rotated)
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadContent {
+		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
 	next, cmd := ss.Update(enter()) // «Передний план»
 	if cmd == nil {

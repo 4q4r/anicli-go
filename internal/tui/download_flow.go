@@ -113,6 +113,14 @@ type downloadEpisodeReport struct {
 	// the chosen dub: skipped, never substituted. The renderer folds
 	// these rows into the one compact «пропущены» attribution line.
 	SkipDub string
+	// DroppedAudio names the PR165 marked dubs this episode does not
+	// carry: the episode still downloads with video + the dubs it
+	// has, and the report row names the drop loudly.
+	DroppedAudio []string
+	// SkipAudioSet marks an episode carrying NONE of the marked dubs:
+	// skipped entirely (never a silent video-only file), folded into
+	// the compact audio-set attribution line.
+	SkipAudioSet bool
 }
 
 // resolveDownloadDub resolves ONE range episode's dub with the PR63
@@ -139,6 +147,14 @@ func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, p
 	hctx, hcancel := context.WithTimeout(ctx, downloadHydrateBudget)
 	ep = hydrateEpisodeFresh(hctx, deps, ep)
 	hcancel()
+	return resolveDownloadDubHydrated(ctx, deps, ep, preferred, strict)
+}
+
+// resolveDownloadDubHydrated is the candidate walk over an ALREADY
+// hydrated episode (PR165: the batch hydrates once per episode and
+// reuses the embeds for the marked-audio probes). Semantics identical
+// to resolveDownloadDub's post-hydration half.
+func resolveDownloadDubHydrated(ctx context.Context, deps *Deps, ep contracts.Episode, preferred string, strict bool) string {
 	candidates := make([]string, 0, len(ep.RawEmbeds)+1)
 	if strict {
 		// #164: the picked dub or nothing — never a substitute.
@@ -168,6 +184,30 @@ func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, p
 		}
 	}
 	return ""
+}
+
+// resolveMarkedAudioSet probes one episode's PR165 marked audio set
+// on the hydrated embeds: every key is probed independently (fresh
+// streams, the same per-probe budget) and a key the episode does not
+// carry drops. Returns the carried keys and the dropped names — an
+// empty carried set means the episode muxes nothing of the user's
+// selection (the caller skips it, never a silent video-only file).
+func resolveMarkedAudioSet(ctx context.Context, deps *Deps, ep contracts.Episode, keys []string) (carried, dropped []string) {
+	for _, key := range keys {
+		if len(ep.RawEmbeds[key]) == 0 {
+			dropped = append(dropped, key)
+			continue
+		}
+		pctx, pcancel := context.WithTimeout(ctx, downloadProbeBudget)
+		entries, _, err := resolveAllStreams(pctx, deps.Episode, ep, key, deps.Log)
+		pcancel()
+		if err != nil || len(entries) == 0 {
+			dropped = append(dropped, key)
+			continue
+		}
+		carried = append(carried, key)
+	}
+	return carried, dropped
 }
 
 // hydrateForDownload was the watch flow's gated hydration round; the
@@ -236,7 +276,12 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 		done int
 	)
 	_ = netclient.Parallel(ctx, items, downloadResolveFanout, func(ctx context.Context, it indexedTask) error {
-		dub := resolveDownloadDub(ctx, deps, it.task.Episode, preferred, strict)
+		// PR165: ONE fresh hydration per episode feeds both the dub
+		// walk and the marked-audio probes.
+		hctx, hcancel := context.WithTimeout(ctx, downloadHydrateBudget)
+		ep := hydrateEpisodeFresh(hctx, deps, it.task.Episode)
+		hcancel()
+		dub := resolveDownloadDubHydrated(ctx, deps, ep, preferred, strict)
 		mu.Lock()
 		defer mu.Unlock()
 		done++
@@ -248,6 +293,20 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 			}
 			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Err: errNoViableDub}
 			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.no_dubs_verdict")))
+			return nil
+		}
+		if len(it.task.AudioSet) > 0 {
+			carried, dropped := resolveMarkedAudioSet(ctx, deps, ep, it.task.AudioSet)
+			if len(carried) == 0 {
+				// None of the marked dubs is on this episode: the
+				// episode skips with the compact attribution — never
+				// a silent video-only file (mandate #7).
+				stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub, SkipAudioSet: true}
+				emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.audio_skip_verdict")))
+				return nil
+			}
+			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub, DroppedAudio: dropped}
+			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, dub))
 			return nil
 		}
 		stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub}
@@ -268,10 +327,16 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 	ok, firstErr := 0, error(nil)
 	for i, task := range tasks {
 		stub := stubs[i]
-		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err, SkipDub: stub.SkipDub}
+		report[i] = downloadEpisodeReport{
+			Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err,
+			SkipDub: stub.SkipDub, DroppedAudio: stub.DroppedAudio,
+			SkipAudioSet: stub.SkipAudioSet,
+		}
 		switch {
 		case stub.SkipDub != "":
 			continue // #164: the chosen dub is absent — skipped, never substituted
+		case stub.SkipAudioSet:
+			continue // #165: none of the marked dubs is on this episode — skipped
 		case stub.Err != nil:
 			if firstErr == nil {
 				firstErr = stub.Err
@@ -308,8 +373,12 @@ func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadT
 	queued := 0
 	for i, task := range tasks {
 		stub := stubs[i]
-		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err, SkipDub: stub.SkipDub}
-		if stub.Err != nil || stub.SkipDub != "" {
+		report[i] = downloadEpisodeReport{
+			Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err,
+			SkipDub: stub.SkipDub, DroppedAudio: stub.DroppedAudio,
+			SkipAudioSet: stub.SkipAudioSet,
+		}
+		if stub.Err != nil || stub.SkipDub != "" || stub.SkipAudioSet {
 			continue
 		}
 		stamped := task
@@ -347,18 +416,53 @@ func renderSkippedDubs(report []downloadEpisodeReport) string {
 		"eps": strings.Join(runs, ", "), "dub": dub})
 }
 
+// renderSkippedAudioSet composes the #165 compact audio-set
+// attribution: one line, the run-compressed episodes carrying NONE of
+// the marked dubs — the #161 «пропущены:» shape. "" when the report
+// has no audio-set skips.
+func renderSkippedAudioSet(report []downloadEpisodeReport) string {
+	skipped := make([]string, 0, len(report))
+	for _, r := range report {
+		if !r.SkipAudioSet {
+			continue
+		}
+		skipped = append(skipped, r.Episode)
+	}
+	if len(skipped) == 0 {
+		return ""
+	}
+	runs := truncateRuns(episodeRuns(skipped))
+	return i18n.T("download.skipped_audio_set", i18n.Vals{
+		"eps": strings.Join(runs, ", ")})
+}
+
+// renderDroppedSuffix renders the loud per-episode degradation note:
+// the marked dubs the episode downloaded WITHOUT (compact bare dub
+// names, the #161 attribution style). "" when nothing dropped.
+func renderDroppedSuffix(dropped []string) string {
+	if len(dropped) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(dropped))
+	for _, key := range dropped {
+		names = append(names, stripProviderTag(key))
+	}
+	return i18n.T("download.row_dropped", i18n.Vals{"dubs": strings.Join(names, ", ")})
+}
+
 // renderDownloadSettle composes the foreground settle line: the
 // headline plus the compact per-episode report. The all-failed
 // headline carries the first error verbatim — the pre-PR64
 // «Ошибка загрузки: …» contract (review fix 6); the typed no-dub
 // verdict stays on its per-episode line. Strict #164 skips render as
 // the one compact «пропущены» line and fold the headline into the
-// partial form — a batch that only skipped is not an error.
+// partial form — a batch that only skipped is not an error. #165
+// audio-set skips fold into their own compact line the same way.
 func renderDownloadSettle(msg downloadSettledMsg) string {
 	var b strings.Builder
 	skips := 0
 	for _, r := range msg.report {
-		if r.SkipDub != "" {
+		if r.SkipDub != "" || r.SkipAudioSet {
 			skips++
 		}
 	}
@@ -380,10 +484,14 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 	if skip := renderSkippedDubs(msg.report); skip != "" {
 		fmt.Fprintf(&b, "\n%s", skip)
 	}
+	if skip := renderSkippedAudioSet(msg.report); skip != "" {
+		fmt.Fprintf(&b, "\n%s", skip)
+	}
 	for _, r := range msg.report {
-		if r.SkipDub != "" {
-			continue // the compact skip line already carries it
+		if r.SkipDub != "" || r.SkipAudioSet {
+			continue // the compact skip lines already carry them
 		}
+		dropped := renderDroppedSuffix(r.DroppedAudio)
 		b.WriteString("\n")
 		switch {
 		case r.Err != nil && r.Dub != "":
@@ -394,9 +502,15 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 		case r.Path != "":
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_path", i18n.Vals{
 				"ep": r.Episode, "dub": r.Dub, "path": r.Path}))
+			if dropped != "" {
+				fmt.Fprintf(&b, " (%s)", dropped)
+			}
 		default:
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_done", i18n.Vals{
 				"ep": r.Episode, "dub": r.Dub}))
+			if dropped != "" {
+				fmt.Fprintf(&b, " (%s)", dropped)
+			}
 		}
 	}
 	return b.String()
@@ -416,9 +530,12 @@ func renderBackgroundQueued(msg backgroundQueuedMsg) string {
 	if skip := renderSkippedDubs(msg.report); skip != "" {
 		fmt.Fprintf(&b, "\n%s", skip)
 	}
+	if skip := renderSkippedAudioSet(msg.report); skip != "" {
+		fmt.Fprintf(&b, "\n%s", skip)
+	}
 	for _, r := range msg.report {
-		if r.SkipDub != "" {
-			continue // the compact skip line already carries it
+		if r.SkipDub != "" || r.SkipAudioSet {
+			continue // the compact skip lines already carry them
 		}
 		b.WriteString("\n")
 		if r.Err != nil {
@@ -427,6 +544,9 @@ func renderBackgroundQueued(msg backgroundQueuedMsg) string {
 		}
 		fmt.Fprintf(&b, "%s", i18n.T("download.row_background", i18n.Vals{
 			"ep": r.Episode, "dub": r.Dub}))
+		if dropped := renderDroppedSuffix(r.DroppedAudio); dropped != "" {
+			fmt.Fprintf(&b, " (%s)", dropped)
+		}
 	}
 	return b.String()
 }

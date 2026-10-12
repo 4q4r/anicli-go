@@ -232,6 +232,17 @@ type DownloadTask struct {
 	DubID string
 	// Quality is the preferred resolution label.
 	Quality string
+	// Mode is the PR165 content mode: "video_audio" ("" behaves the
+	// same), "video_only" or "audio_only".
+	Mode string
+	// AudioSet is the ordered marked audio dub keys muxed onto the
+	// video (video+аудио mode with a multi-audio selection); empty
+	// keeps today's single-audio semantics. The other modes ignore
+	// it — audio-only resolves the chosen DubID alone.
+	AudioSet []string
+	// DefaultAudio is the AudioSet key carrying the default
+	// disposition; "" = the first AudioSet key.
+	DefaultAudio string
 }
 
 // DownloadResult reports one finished (or failed) download.

@@ -151,6 +151,11 @@
 "download.mode_background" = "🔁 Background (keep working)"
 "download.starting_foreground" = "Downloading {count} episodes (foreground)…"
 "download.resolving_dubs" = "Resolving dubs for {count} episodes…"
+"download.pick_dub" = "Dub to download:"
+"download.no_dubs" = "No dubs available"
+"download.dub_not_chosen" = "⚠ No dub chosen — pick the one to download"
+"download.skip_verdict" = "skipped"
+"download.skipped_dubs" = "skipped: {eps} (no dub {dub})"
 
 # ---- session screen -------------------------------------------------------------------
 "session.refreshing_sources" = "Refreshing sources…"

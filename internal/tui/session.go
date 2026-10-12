@@ -59,6 +59,11 @@ const (
 	sessionStateInfoRewatches  sessionState = "info_rewatches"
 	sessionStateDownloadRange  sessionState = "download_range"
 	sessionStateDownloadMode   sessionState = "download_mode"
+	// sessionStateDownloadDub is the #164 ask-first dub picker of the
+	// download flow: a batch started without a chosen dub opens it
+	// BEFORE anything downloads — the pick drives the whole batch,
+	// Back aborts with nothing downloaded.
+	sessionStateDownloadDub sessionState = "download_dub"
 )
 
 // sessionScreenID is the session screen identity.
@@ -345,6 +350,10 @@ type sessionScreen struct {
 	infoPrompt *TextPrompt // score / rewatches entry
 
 	downloadEpisodes []string
+	// downloadAskMode remembers the mode picked BEFORE the #164
+	// ask-first dub menu opened; the menu's pick resumes the batch in
+	// that mode. "" whenever the menu is not open.
+	downloadAskMode string
 	// streamEntries cache the merged picker entries between the
 	// resolve settle and the pick (Back from the audio prompt returns
 	// to the list without re-resolving).
@@ -963,6 +972,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleDownloadRangeKey(key)
 	case sessionStateDownloadMode:
 		return s.handleDownloadModeKey(key)
+	case sessionStateDownloadDub:
+		return s.handleDownloadDubKey(key)
 	case sessionStatePlaying:
 		return s, nil
 	default:
@@ -995,6 +1006,12 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	case sessionStateRedub:
 		// PR95: Esc from the dub menu — back to the action menu
 		// unchanged (no reset, no relaunch).
+		s.setState(sessionStateMenu)
+		return s, nil
+	case sessionStateDownloadDub:
+		// #164: Esc from the ask-first dub menu aborts the download —
+		// nothing was started; back to the session menu clean.
+		s.downloadAskMode = ""
 		s.setState(sessionStateMenu)
 		return s, nil
 	case sessionStateMenu, sessionStatePlaying:
@@ -2610,13 +2627,38 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	}
 	mode, _ := resolved.(string)
 	s.setState(sessionStateMenu)
+	// #164 ask-first: a batch without a chosen dub never starts on a
+	// default. The dub menu opens instead (the playback ask-first
+	// settle, PR #11: typed note + menu); the pick resumes the batch,
+	// Back aborts with nothing downloaded.
+	if s.videoDub == "" {
+		s.downloadAskMode = mode
+		// The ask note only explains a choice the menu offers; on an
+		// empty union the empty state speaks alone (review round 2).
+		if s.openDownloadDubMenu() {
+			s.setStatus(i18n.T("download.dub_not_chosen"))
+		}
+		return s, nil
+	}
+	return s.startRangeDownload(mode, false)
+}
+
+// startRangeDownload dispatches the picked range batch in the given
+// mode. The strict #164 form (the ask-first menu pick) resolves the
+// picked dub ALONE per episode — episodes not carrying it are skipped
+// with the compact attribution, never substituted. A remembered dub
+// keeps the PR63 smart rotation (python resolve_dubs_smart parity).
+func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, tea.Cmd) {
+	deps := s.deps
+	preferred := s.videoDub
 	episodes := make([]contracts.Episode, 0, len(s.downloadEpisodes))
 	for _, num := range s.downloadEpisodes {
 		episodes = append(episodes, s.episodes[num])
 	}
 	// The dub is resolved PER EPISODE inside the command (PR64 #3):
-	// the remembered dub first, per-episode fallback otherwise — the
-	// tasks leave this handler without a dub stamp.
+	// the remembered dub first, per-episode fallback otherwise (the
+	// strict mode pins the picked dub alone) — the tasks leave this
+	// handler without a dub stamp.
 	tasks := make([]DownloadTask, 0, len(episodes))
 	for _, ep := range episodes {
 		tasks = append(tasks, DownloadTask{
@@ -2627,8 +2669,6 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 			Quality:     s.lastQuality,
 		})
 	}
-	deps := s.deps
-	preferred := s.videoDub
 	switch mode {
 	case "foreground":
 		count := len(tasks)
@@ -2640,18 +2680,83 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 		return s, tea.Batch(
 			safeCmd(sessionScreenID, func() tea.Msg {
 				defer close(progCh)
-				return runForegroundDownload(context.Background(), deps, tasks, preferred, progCh)
+				return runForegroundDownload(context.Background(), deps, tasks, preferred, strict, progCh)
 			}),
 			waitDownloadProgress(progCh, gen),
 		)
 	case "background":
 		s.setStatus(i18n.T("download.resolving_dubs", i18n.Vals{"count": strconv.Itoa(len(tasks))}))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {
-			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred)
+			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred, strict)
 		})
 	default:
 		return s, nil
 	}
+}
+
+// openDownloadDubMenu opens the #164 ask-first dub menu: every dub
+// key the BATCH's episodes carry at listing time (the union, in the
+// established sortedEmbedKeys order), the PR95 menu shape over the
+// PR11 settle semantics. The pick drives the whole batch (the strict
+// resolve); Back aborts with nothing downloaded. The listing-level
+// union can only offer choices, never guarantee them: an episode
+// whose fresh resolve proves the picked dub absent is skipped with
+// the compact attribution.
+//
+// Reports whether the union is non-empty: an empty union renders only
+// the honest «Нет доступных озвучек» empty state, and the caller must
+// NOT stamp the ask note on top of it — the pair would contradict
+// (review round 2).
+func (s *sessionScreen) openDownloadDubMenu() bool {
+	union := map[string][]string{}
+	for _, num := range s.downloadEpisodes {
+		for k, v := range s.episodes[num].RawEmbeds {
+			if len(v) == 0 {
+				continue
+			}
+			union[k] = v
+		}
+	}
+	choices := make([]Choice, 0, len(union))
+	for _, key := range sortedEmbedKeys(union) {
+		choices = append(choices, Choice{
+			ID:    key,
+			Label: s.dubLabel(key) + " · " + providerOfTrackKey(key),
+			Value: key,
+		})
+	}
+	s.redubList = NewPinList(NewMenu(i18n.T("download.pick_dub"), i18n.T("download.no_dubs"), choices...), defaultListHeight)
+	s.setState(sessionStateDownloadDub)
+	return len(union) > 0
+}
+
+// handleDownloadDubKey drives the #164 ask-first dub menu: the pick
+// becomes the remembered dub and starts the STRICT batch in the mode
+// picked before the menu opened; Back aborts — nothing downloaded.
+func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.redubList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.redubList.Menu(), s.redubList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.downloadAskMode = ""
+		s.setState(sessionStateMenu)
+		return s, nil
+	}
+	dub, _ := resolved.(string)
+	s.videoDub = dub
+	mode := s.downloadAskMode
+	s.downloadAskMode = ""
+	// The batch leaves the ask menu (review round 2): the menu must
+	// not render dead under the batch and its settle — the session
+	// menu is the owning surface, exactly like the remembered-dub
+	// path. A stranded menu turned Enter-after-settle into the
+	// previously-unreachable silent-nothing default (PR41 B2).
+	s.setState(sessionStateMenu)
+	return s.startRangeDownload(mode, true)
 }
 
 // buildModeList renders the foreground/background picker once per
@@ -2986,6 +3091,10 @@ func (s *sessionScreen) View() tea.View {
 	case sessionStateDubAudio:
 		body = themedList(s.dubList)
 	case sessionStateRedub:
+		body = themedList(s.redubList)
+	case sessionStateDownloadDub:
+		// #164: the ask-first dub menu shares the redub list field and
+		// the dub-menu rendering.
 		body = themedList(s.redubList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList)

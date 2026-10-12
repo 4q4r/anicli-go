@@ -139,7 +139,7 @@ func TestDownloadLadderResolvesFresh(t *testing.T) {
 			"[kodik] Kodik": {"https://embed/stale"},
 		},
 	}
-	if got := resolveDownloadDub(context.Background(), deps, ep, ""); got == "" {
+	if got := resolveDownloadDub(context.Background(), deps, ep, "", false); got == "" {
 		t.Fatal("download ladder found no viable dub")
 	}
 	rec := fix.lastResolve()

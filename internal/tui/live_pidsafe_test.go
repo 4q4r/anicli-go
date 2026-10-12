@@ -61,6 +61,12 @@ func (p *pidsafePlayer) ResolveSkips(context.Context, int64, float64) (string, f
 	return "", func() {}, "", nil
 }
 
+// LastPosition: the live probe launches mpv directly (no IPC
+// tracking) — no position ever available (#166 degrade path).
+func (p *pidsafePlayer) LastPosition() (string, float64, bool) {
+	return "", 0, false
+}
+
 // Play launches the real mpv, registers the child's handle and blocks
 // until mpv exits or the bounded lifetime expires — then terminates
 // the child strictly through that handle. Counters move AFTER a

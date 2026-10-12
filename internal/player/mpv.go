@@ -76,6 +76,14 @@ type Player struct {
 	// player's own lifecycle lines stay out.
 	tailMu sync.Mutex
 	tail   []string
+
+	// posMu guards the #166 position tracker: the final time-pos
+	// observed over the launch's IPC socket, retained after the
+	// process exits for the redub resume. See ipc.go.
+	posMu      sync.Mutex
+	lastPosURL string
+	lastPos    float64
+	lastPosOK  bool
 }
 
 // New builds the player; zero Options fall back to the ported
@@ -123,12 +131,28 @@ func (p *Player) SetLog(fn LogFunc) { p.onLog = fn }
 //     Play then returns the context error;
 //   - the chapters file is removed on every exit path.
 func (p *Player) Play(ctx context.Context, req Request) error {
+	// #166: per-launch IPC socket for position tracking. Generation
+	// failure (a full temp volume) degrades to a plain launch — the
+	// redub then relaunches without --start, playback is unaffected.
+	sock, sockDir, sockErr := newIPCSocketDir()
+	if sockErr != nil {
+		p.logLine(fmt.Sprintf("player: ipc: socket dir unavailable (%v), launching without position tracking", sockErr))
+	} else if sock != "" {
+		req.IPCSocket = sock
+		defer func() { _ = os.RemoveAll(sockDir) }()
+	}
+	p.resetPosition(req.URL)
 	args := BuildArgs(req, p.launchOpts())
 	defer p.cleanupChapters(req.ChaptersFile)
 	p.resetTail()
 
 	var lastErr error
 	for attempt := 1; attempt <= p.maxRetries; attempt++ {
+		if req.IPCSocket != "" {
+			// A previous attempt's mpv may have left the socket file
+			// behind (SIGKILL) — the next attempt's bind must be clean.
+			_ = os.Remove(req.IPCSocket)
+		}
 		proc, err := p.start(ctx, args)
 		if err != nil {
 			var notFound *ErrBinaryNotFound
@@ -140,6 +164,9 @@ func (p *Player) Play(ctx context.Context, req Request) error {
 				return ctx.Err()
 			}
 			continue
+		}
+		if req.IPCSocket != "" {
+			go p.watchPosition(req.IPCSocket, proc)
 		}
 
 		// Warmup window: did it stay alive?
@@ -274,6 +301,9 @@ func (p *Player) cleanupChapters(path string) {
 type process struct {
 	cmd  *exec.Cmd
 	wait chan error // buffered; receives the Wait verdict exactly once
+	// exited closes when the process has been reaped (Wait returned);
+	// the IPC watcher polls it without consuming the wait channel.
+	exited chan struct{}
 }
 
 // start spawns the process group and begins pumping stdout.
@@ -304,13 +334,15 @@ func (p *Player) start(ctx context.Context, args []string) (*process, error) {
 		return nil, fmt.Errorf("player: start %s: %w", p.bin, err)
 	}
 
-	proc := &process{cmd: cmd, wait: make(chan error, 1)}
+	proc := &process{cmd: cmd, wait: make(chan error, 1), exited: make(chan struct{})}
 	go func() {
 		// Drain the pipe to EOF before Wait: Wait closes it on
 		// process exit, which would drop log lines still buffered
 		// inside (os/exec pipe contract).
 		p.pump(stdout)
-		proc.wait <- cmd.Wait()
+		err := cmd.Wait()
+		close(proc.exited)
+		proc.wait <- err
 	}()
 	return proc, nil
 }

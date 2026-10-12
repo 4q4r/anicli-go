@@ -62,6 +62,10 @@ type fakePlayback struct {
 	// playHook runs before the request is recorded; returning an error
 	// fails the play (tests capture at-play-time file state here).
 	playHook func(PlayRequest) error
+	// #166 position-tracker scripting: what LastPosition reports.
+	lastURL string
+	lastPos float64
+	lastOK  bool
 }
 
 func (f *fakePlayback) ResolveSkips(_ context.Context, shikimoriID int64, _ float64) (string, func(), string, error) {
@@ -81,6 +85,11 @@ func (f *fakePlayback) Play(ctx context.Context, req PlayRequest) error {
 	}
 	f.played = append(f.played, req)
 	return f.err
+}
+
+// LastPosition replays the scripted tracker verdict (#166).
+func (f *fakePlayback) LastPosition() (string, float64, bool) {
+	return f.lastURL, f.lastPos, f.lastOK
 }
 
 var _ PlaybackService = (*fakePlayback)(nil)

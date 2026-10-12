@@ -478,13 +478,24 @@ func (s *realPlayback) Play(ctx context.Context, req PlayRequest) error {
 		defer s.presence.Clear()
 	}
 	return s.player.Play(ctx, player.Request{
-		URL:          req.URL,
-		AudioURL:     req.AudioURL,
-		Title:        req.Title,
-		Headers:      req.Headers,
-		ExtraMPVOpts: req.ExtraMPVOpts,
-		ChaptersFile: req.ChaptersFile,
+		URL:           req.URL,
+		AudioURL:      req.AudioURL,
+		Title:         req.Title,
+		Headers:       req.Headers,
+		ExtraMPVOpts:  req.ExtraMPVOpts,
+		ChaptersFile:  req.ChaptersFile,
+		StartPosition: req.StartPosition,
 	})
+}
+
+// LastPosition surfaces the player's #166 position tracker: the final
+// time-pos observed over the launch's IPC socket, with the URL it
+// belongs to. A nil player (skip-note tests) reads invalid.
+func (s *realPlayback) LastPosition() (string, float64, bool) {
+	if s.player == nil {
+		return "", 0, false
+	}
+	return s.player.LastPosition()
 }
 
 // --- HistoryService ---

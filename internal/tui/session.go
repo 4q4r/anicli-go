@@ -366,6 +366,14 @@ type sessionScreen struct {
 	// «Сменить озвучку»: its settle opens the dub menu instead of the
 	// quality picker (PR95).
 	redubPending bool
+	// redubStart carries the #166 redub resume: the playback position
+	// captured at the pick (LastPosition, guarded by the replaced
+	// dub's URL) with the episode it belongs to. The relaunch passes
+	// it as StartPosition; the launch consumes it. The episode guard
+	// keeps a position from ever resuming a different episode if a
+	// resolve failure leaves it unconsumed across navigation.
+	redubStart   float64
+	redubStartEp string
 	// redubList is the dub-selection menu (PR95).
 	redubList *PinList
 	// pickedVideo is the entry chosen from the merged list; doPlay
@@ -1939,8 +1947,20 @@ func (s *sessionScreen) handleRedubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 // removal: the settle's fast path auto-launches the fresh result). A
 // dub the rotation dropped falls to the scoped-error fallback (the
 // merged resolve of the rest, PR94).
+//
+// #166 (the owner's «требовалось просто озвучку поменять»): the pick
+// captures the tracked playback position of the dub being REPLACED so
+// the relaunch continues from it instead of restarting the episode.
+// The URL guard ties the position to this episode's current playback;
+// no capture (fresh session, degraded tracker) and the relaunch
+// starts from zero — the redub itself can never fail or block here.
 func (s *sessionScreen) pickRedub(dub string) (Screen, tea.Cmd) {
 	s.videoDub, s.audioDub = dub, dub
+	if s.deps != nil && s.deps.Playback != nil {
+		if url, pos, ok := s.deps.Playback.LastPosition(); ok && url == s.pickedVideo.URL {
+			s.redubStart, s.redubStartEp = pos, s.currentEpisode()
+		}
+	}
 	return s.beginStreamResolve(dub)
 }
 
@@ -2095,10 +2115,24 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 		s.status += " " + i18n.T("session.progress_save_failed", i18n.Vals{"err": saveErr.Error()})
 	}
 	play := s.playCmd()
+	// #166: the resume position is one-shot — the snapshot above
+	// carries it into the launching doPlay; the live model drops it so
+	// no later launch can replay a stale value.
+	s.redubStart, s.redubStartEp = 0, ""
 	if sync != nil {
 		return s, tea.Batch(play, sync)
 	}
 	return s, play
+}
+
+// resumeStart returns the captured redub position for the episode
+// being launched; zero for any other episode (a position may never
+// resume a different one) and for non-redub launches.
+func (s *sessionScreen) resumeStart(epNum string) float64 {
+	if s.redubStartEp != "" && s.redubStartEp == epNum {
+		return s.redubStart
+	}
+	return 0
 }
 
 // parseWatchEpisode reads the episode counter for the progress push;
@@ -2301,14 +2335,15 @@ func (s *sessionScreen) doPlay() tea.Msg {
 		return playedMsg{err: errNoPlayback}
 	}
 	err = s.deps.Playback.Play(ctx, PlayRequest{
-		URL:          video.URL,
-		AudioURL:     audioURL,
-		Title:        title,
-		Headers:      video.Headers,
-		ExtraMPVOpts: video.ExtraMPVOpts,
-		ChaptersFile: chapters,
-		AnimeTitle:   BestDisplayTitle(s.group),
-		EpisodeNum:   ep.Num,
+		URL:           video.URL,
+		AudioURL:      audioURL,
+		Title:         title,
+		Headers:       video.Headers,
+		ExtraMPVOpts:  video.ExtraMPVOpts,
+		ChaptersFile:  chapters,
+		StartPosition: s.resumeStart(ep.Num),
+		AnimeTitle:    BestDisplayTitle(s.group),
+		EpisodeNum:    ep.Num,
 	})
 	if err != nil {
 		return playedMsg{err: err}

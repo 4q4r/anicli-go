@@ -23,12 +23,69 @@ import (
 const stubSource = `package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// serveIPC answers the socket like mpv's JSON IPC: success to any
+// command line, then observed time-pos property changes. Multiple
+// dials (a retrying tracker) each get the full sequence — the last
+// observed value stays deterministic at 30.
+func serveIPC(args []string) {
+	sock := ""
+	for _, a := range args {
+		if strings.HasPrefix(a, "--input-ipc-server=") {
+			sock = strings.TrimPrefix(a, "--input-ipc-server=")
+		}
+	}
+	fmt.Printf("ipc: %s\n", sock)
+	if sock == "" {
+		os.Exit(3)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		fmt.Printf("ipc-listen: %v\n", err)
+		os.Exit(3)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveIPCConn(conn)
+		}
+	}()
+}
+
+func serveIPCConn(conn net.Conn) {
+	defer conn.Close()
+	for {
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			return
+		}
+		var cmd struct {
+			Command []interface{}
+		}
+		if json.Unmarshal([]byte(line), &cmd) != nil {
+			continue
+		}
+		fmt.Fprint(conn, "{\"error\":\"success\",\"request_id\":1}\n")
+		for _, pos := range []string{"10", "20", "30"} {
+			time.Sleep(120 * time.Millisecond)
+			fmt.Fprintf(conn,
+				"{\"event\":\"property-change\",\"id\":1,\"name\":\"time-pos\",\"data\":%s}\n", pos)
+		}
+	}
+}
 
 func main() {
 	mode := "sleep30"
@@ -92,6 +149,23 @@ func main() {
 		}
 		time.Sleep(600 * time.Millisecond)
 		os.Exit(0)
+	}
+	if mode == "ipcserve" {
+		// #166 hermetic IPC fake: binds the --input-ipc-server socket
+		// from the spawned argv exactly like mpv, replies success to
+		// every command line, then pushes three property-change
+		// time-pos events (10 → 20 → 30) so the tracker's final value
+		// is deterministic. Prints "ipc: <socket>" so the test can
+		// verify the socket dir cleanup after Play returns.
+		serveIPC(os.Args)
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM)
+		go func() {
+			<-sig
+			os.Exit(0)
+		}()
+		time.Sleep(30 * time.Second)
+		return
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM)

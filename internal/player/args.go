@@ -8,6 +8,7 @@ package player
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,14 @@ type Request struct {
 	// ChaptersFile is an FFMETADATA path; it is deleted once the
 	// player exits (python lifecycle cleanup).
 	ChaptersFile string
+	// StartPosition resumes playback at N seconds (#166): the redub
+	// relaunch passes the captured time-pos of the dub being replaced
+	// so the episode continues instead of restarting. Zero (no
+	// captured position) emits nothing.
+	StartPosition float64
+	// IPCSocket is the per-launch --input-ipc-server path the Player
+	// generates for position tracking (#166); empty omits the flag.
+	IPCSocket string
 }
 
 // BuildArgs renders the mpv argv (python _build_command, ported
@@ -78,9 +87,22 @@ func BuildArgs(req Request, opts Options) []string {
 		parts = append(parts, "--profile="+opts.Profile)
 	}
 	// PR113: mpv writes its watch-later file on quit, so replaying
-	// the same episode resumes from the saved position natively —
-	// no position tracking on the Go side.
+	// the same episode resumes from the saved position natively
+	// (watch-later is keyed by the media URL — a redub's different
+	// dub URL restores nothing, hence #166 below).
 	parts = append(parts, "--save-position-on-quit")
+	// #166: a captured playback position (the redub resume) beats the
+	// from-zero restart; mpv accepts fractional seconds.
+	if req.StartPosition > 0 {
+		parts = append(parts, "--start="+strconv.FormatFloat(req.StartPosition, 'f', -1, 64))
+	}
+	// #166: the per-launch IPC socket the position tracker reads
+	// time-pos from (the Player fills it; empty on Windows — the
+	// named-pipe transport is out of stdlib reach, the launch
+	// degrades to no position capture).
+	if req.IPCSocket != "" {
+		parts = append(parts, "--input-ipc-server="+req.IPCSocket)
+	}
 	if req.AudioURL != "" && req.AudioURL != req.URL {
 		parts = append(parts, "--audio-file="+req.AudioURL)
 	}

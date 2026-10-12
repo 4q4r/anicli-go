@@ -67,8 +67,12 @@ func serveIPC(args []string) {
 
 func serveIPCConn(conn net.Conn) {
 	defer conn.Close()
+	// One reader for the connection's lifetime (review N2): a fresh
+	// bufio.Reader per ReadString call would buffer ahead and drop
+	// every byte past the first line.
+	in := bufio.NewReader(conn)
 	for {
-		line, err := bufio.NewReader(conn).ReadString('\n')
+		line, err := in.ReadString('\n')
 		if err != nil {
 			return
 		}

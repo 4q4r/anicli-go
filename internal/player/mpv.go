@@ -79,8 +79,12 @@ type Player struct {
 
 	// posMu guards the #166 position tracker: the final time-pos
 	// observed over the launch's IPC socket, retained after the
-	// process exits for the redub resume. See ipc.go.
+	// process exits for the redub resume. playGen is the generation
+	// gate (review M1): each Play resets the tracker and hands its
+	// watcher the generation — a superseded watcher's late events are
+	// dropped instead of mixing into the fresh round. See ipc.go.
 	posMu      sync.Mutex
+	playGen    uint64
 	lastPosURL string
 	lastPos    float64
 	lastPosOK  bool
@@ -141,7 +145,7 @@ func (p *Player) Play(ctx context.Context, req Request) error {
 		req.IPCSocket = sock
 		defer func() { _ = os.RemoveAll(sockDir) }()
 	}
-	p.resetPosition(req.URL)
+	playGen := p.resetPosition(req.URL)
 	args := BuildArgs(req, p.launchOpts())
 	defer p.cleanupChapters(req.ChaptersFile)
 	p.resetTail()
@@ -166,7 +170,7 @@ func (p *Player) Play(ctx context.Context, req Request) error {
 			continue
 		}
 		if req.IPCSocket != "" {
-			go p.watchPosition(req.IPCSocket, proc)
+			go p.watchPosition(playGen, req.IPCSocket, proc)
 		}
 
 		// Warmup window: did it stay alive?

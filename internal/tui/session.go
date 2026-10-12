@@ -2128,6 +2128,12 @@ func (s *sessionScreen) launchPlayback() (Screen, tea.Cmd) {
 // resumeStart returns the captured redub position for the episode
 // being launched; zero for any other episode (a position may never
 // resume a different one) and for non-redub launches.
+//
+// M3 (owner decision pending): a redub after the episode played to
+// its NATURAL end resumes at ≈duration — mpv starts and immediately
+// finishes. Left as-is for now (harmless: the player just closes);
+// the candidate behaviors are clamping below the duration or ignoring
+// positions past it. Do not "fix" silently — the owner owns the call.
 func (s *sessionScreen) resumeStart(epNum string) float64 {
 	if s.redubStartEp != "" && s.redubStartEp == epNum {
 		return s.redubStart

@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,9 +49,12 @@ func TestPlayTracksPositionOverIPC(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
+			// Snapshot under the lock, Fatalf outside it — Goexit on
+			// Fatalf would skip the deferred Unlock (review N1).
 			mu.Lock()
-			t.Fatalf("position never reached 30, last=(%v, %v); log: %v", pos, ok, lines)
+			last := fmt.Sprintf("last=(%v, %v); log: %v", pos, ok, lines)
 			mu.Unlock()
+			t.Fatalf("position never reached 30, %s", last)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

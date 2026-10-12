@@ -94,6 +94,27 @@ func TestContainerForVideoAudio(t *testing.T) {
 	}
 }
 
+// TestContainerForVideoAudioRequiresMP4SafeVideo pins the review
+// round-2 fix (M1): the mp4 branch needs BOTH halves of the research
+// §1.1 rule — a single AAC audio AND an MP4-safe video codec
+// (h264/hevc/av1/vp9, the set video-only already uses). ffmpeg
+// n9.0.2 silently muxes mpeg2video+aac into mp4 with tiny player
+// support; the code must be provably correct where the muxer is not.
+func TestContainerForVideoAudioRequiresMP4SafeVideo(t *testing.T) {
+	t.Parallel()
+
+	for _, codec := range []string{"mpeg2video", "unknown", ""} {
+		if got := ContainerFor(ModeVideoAudio, codec, []string{"aac"}); got != "mkv" {
+			t.Errorf("video_audio(%q + aac) = %q, want mkv", codec, got)
+		}
+	}
+	for _, codec := range []string{"h264", "hevc", "av1", "vp9"} {
+		if got := ContainerFor(ModeVideoAudio, codec, []string{"aac"}); got != "mp4" {
+			t.Errorf("video_audio(%q + aac) = %q, want mp4", codec, got)
+		}
+	}
+}
+
 // TestBuildMuxCommandVideoMultiAudio pins the PR164 §2.1 template:
 // one -i per input (video + each marked audio), -map 0:v:0 plus one
 // -map i:a:0 per audio, -c:v copy -c:a copy, EXACTLY one explicit

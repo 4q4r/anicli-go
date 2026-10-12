@@ -839,7 +839,11 @@ func (s *realDownload) recall(id string) (DownloadTask, bool) {
 // downloadTaskID builds the dedupe key of one download. The PR165
 // content mode is part of the identity: the same episode may download
 // as video+аудио, only-video and only-audio without the tasks
-// colliding (a resubmit replaces its own shape only).
+// colliding (a resubmit replaces its own shape only). The AudioSet is
+// deliberately NOT part of the key (review N5): a resubmit of the
+// same episode/mode with a different marked set replaces the queued
+// parts last-writer-wins — acceptable, since a resubmit IS the
+// user's newer intent.
 func downloadTaskID(task DownloadTask) string {
 	return fmt.Sprintf("%s|%s|%s|%s|%s", task.AnimeTitle, task.EpisodeNum, task.DubID, task.Quality, task.Mode)
 }

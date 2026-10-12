@@ -94,7 +94,11 @@ func ContainerFor(mode Mode, videoCodec string, audioCodecs []string) string {
 		switch {
 		case len(audioCodecs) > 1:
 			return "mkv"
-		case len(audioCodecs) == 1 && audioCodecs[0] == "aac":
+		case len(audioCodecs) == 1 && audioCodecs[0] == "aac" && mp4SafeVideoCodecs[videoCodec]:
+			// The single mp4-safe mux case needs BOTH halves of the
+			// research §1.1 rule: one AAC audio AND an mp4-registered
+			// video codec (M1 — the muxer silently accepts
+			// mpeg2video+aac in mp4; tiny player support).
 			return "mp4"
 		default:
 			return "mkv"

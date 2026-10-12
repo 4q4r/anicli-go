@@ -167,6 +167,107 @@ func TestPR164AskFirstPickedDubDrivesBatch(t *testing.T) {
 	}
 }
 
+// TestPR164AskFirstPickSettlesOnMenuSurface (review round 2, blocker):
+// the pick must LEAVE the ask menu — the batch and its settle run on
+// the session menu surface, the same owner surface the remembered-dub
+// path uses. A stranded menu would render dead for the whole batch
+// and turn Enter-after-settle into the previously-unreachable
+// silent-nothing default (PR41 B2: never silently nothing); the next
+// Enter re-opens the download prompt instead — visible, and never a
+// second batch.
+func TestPR164AskFirstPickSettlesOnMenuSurface(t *testing.T) {
+	s, dl := pr164AskSession(t)
+	ss := openDownloadAsk(t, s, false)
+
+	ss.redubList.Jump(1) // [animego] Дубль 1
+	next, cmd := ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if cmd == nil {
+		t.Fatal("the dub pick must dispatch the download batch")
+	}
+	if ss.state != sessionStateMenu {
+		t.Fatalf("the pick must return to the session menu, got %v", ss.state)
+	}
+
+	var settled downloadSettledMsg
+	for _, m := range runLaunchBatch(t, cmd) {
+		if d, ok := m.(downloadSettledMsg); ok {
+			settled = d
+		}
+	}
+	applied, _ := ss.Update(settled)
+	ss = applied.(*sessionScreen)
+	if ss.state != sessionStateMenu {
+		t.Fatalf("the settle must land on the session menu, got %v", ss.state)
+	}
+	if !contains(ss.status, "skipped: 2–3 (no dub [animego] Дубль 1)") {
+		t.Fatalf("the settle report must render on the menu surface:\n%s", ss.status)
+	}
+
+	// Enter-after-settle: a visible surface (the download prompt
+	// re-entry), never a second batch, never a silent nothing.
+	downloads := len(dl.downloads)
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadRange {
+		t.Fatalf("enter after the settle must open a visible surface, got %v", ss.state)
+	}
+	if len(dl.downloads) != downloads {
+		t.Fatalf("enter after the settle must not re-dispatch, got %d downloads", len(dl.downloads))
+	}
+}
+
+// pr164LazySession builds a loaded session whose listing knows NO
+// dubs (empty RawEmbeds everywhere — the lazy-provider shape).
+func pr164LazySession(t *testing.T) (*sessionScreen, *fakeDownload) {
+	t.Helper()
+	deps := &Deps{
+		Episode: &fakeEpisode{
+			episodes: map[string][]contracts.Episode{
+				"animego": {
+					{Num: "1", RawID: "a1", RawEmbeds: map[string][]string{}},
+					{Num: "2", RawID: "a2", RawEmbeds: map[string][]string{}},
+				},
+			},
+		},
+		Download: &fakeDownload{},
+		Log:      testLogger(),
+	}
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	return s, deps.Download.(*fakeDownload)
+}
+
+// TestPR164AskFirstEmptyUnionSuppressesWarning (review round 2): an
+// empty dub union renders the honest «Нет доступных озвучек» empty
+// state ALONE — the «⚠ Озвучка не выбрана» ask note must not pair
+// with it (a contradictory pair begs a choice the menu cannot offer).
+func TestPR164AskFirstEmptyUnionSuppressesWarning(t *testing.T) {
+	s, dl := pr164LazySession(t)
+	ss := openDownloadAsk(t, s, false)
+
+	if ss.state != sessionStateDownloadDub {
+		t.Fatalf("the empty-union ask menu must still open, got %v", ss.state)
+	}
+	v := ss.View().Content
+	if !contains(v, "No dubs available") {
+		t.Fatalf("the empty state must render:\n%s", v)
+	}
+	if contains(v, "No dub chosen") {
+		t.Fatalf("the ask warning must be suppressed on an empty union:\n%s", v)
+	}
+	if len(dl.downloads) != 0 || len(dl.submitted) != 0 {
+		t.Fatalf("nothing may download, got %d downloads/%d submitted",
+			len(dl.downloads), len(dl.submitted))
+	}
+	next, _ := ss.Update(esc())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateMenu {
+		t.Fatalf("cancel must return to the menu, got %v", ss.state)
+	}
+}
+
 // TestPR164AskFirstPickRememberedForBackground: ask-first covers the
 // background mode too — the picked mode survives the menu and the
 // batch queues strictly (carrying episodes only, the picked dub).

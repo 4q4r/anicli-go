@@ -2633,10 +2633,10 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	// Back aborts with nothing downloaded.
 	if s.videoDub == "" {
 		s.downloadAskMode = mode
-		warn := i18n.T("download.dub_not_chosen")
-		s.openDownloadDubMenu()
-		if warn != "" {
-			s.setStatus(warn)
+		// The ask note only explains a choice the menu offers; on an
+		// empty union the empty state speaks alone (review round 2).
+		if s.openDownloadDubMenu() {
+			s.setStatus(i18n.T("download.dub_not_chosen"))
 		}
 		return s, nil
 	}
@@ -2702,7 +2702,12 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 // union can only offer choices, never guarantee them: an episode
 // whose fresh resolve proves the picked dub absent is skipped with
 // the compact attribution.
-func (s *sessionScreen) openDownloadDubMenu() {
+//
+// Reports whether the union is non-empty: an empty union renders only
+// the honest «Нет доступных озвучек» empty state, and the caller must
+// NOT stamp the ask note on top of it — the pair would contradict
+// (review round 2).
+func (s *sessionScreen) openDownloadDubMenu() bool {
 	union := map[string][]string{}
 	for _, num := range s.downloadEpisodes {
 		for k, v := range s.episodes[num].RawEmbeds {
@@ -2722,6 +2727,7 @@ func (s *sessionScreen) openDownloadDubMenu() {
 	}
 	s.redubList = NewPinList(NewMenu(i18n.T("download.pick_dub"), i18n.T("download.no_dubs"), choices...), defaultListHeight)
 	s.setState(sessionStateDownloadDub)
+	return len(union) > 0
 }
 
 // handleDownloadDubKey drives the #164 ask-first dub menu: the pick
@@ -2744,6 +2750,12 @@ func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.C
 	s.videoDub = dub
 	mode := s.downloadAskMode
 	s.downloadAskMode = ""
+	// The batch leaves the ask menu (review round 2): the menu must
+	// not render dead under the batch and its settle — the session
+	// menu is the owning surface, exactly like the remembered-dub
+	// path. A stranded menu turned Enter-after-settle into the
+	// previously-unreachable silent-nothing default (PR41 B2).
+	s.setState(sessionStateMenu)
 	return s.startRangeDownload(mode, true)
 }
 

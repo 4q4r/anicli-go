@@ -324,6 +324,11 @@ func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadT
 // line, the run-compressed episode labels, the dub they lack — the
 // #161 «пропущены:» shape (compact, nothing path-shaped, no
 // per-episode flood). "" when the report has no skips.
+//
+// The dub label reads the LAST skip row safely: a strict batch has a
+// single chosen dub — resolveDownloadDubs stamps the same SkipDub
+// (the menu pick) on every skip it types — so one label names the
+// whole run (invariant, review round 2).
 func renderSkippedDubs(report []downloadEpisodeReport) string {
 	skipped := make([]string, 0, len(report))
 	dub := ""

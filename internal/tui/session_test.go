@@ -653,10 +653,21 @@ func TestSessionDownloadRange(t *testing.T) {
 	if len(ss.downloadEpisodes) != 2 {
 		t.Fatalf("range 1-2 must select two episodes, got %v", ss.downloadEpisodes)
 	}
-	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+	if ss.state != sessionStateDownloadContent {
+		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
 	}
 	v := ss.View().Content
+	if !strings.Contains(v, "Video+Audio") || !strings.Contains(v, "Video only") || !strings.Contains(v, "Audio only") {
+		t.Fatalf("the content modes must be offered:\n%s", v)
+	}
+	// The default pick («Video+Audio», the first row) opens the
+	// execution-mode menu with its Foreground/Background pair.
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
+	}
+	v = ss.View().Content
 	if !strings.Contains(v, "Foreground") || !strings.Contains(v, "Background") {
 		t.Fatalf("download modes must be offered:\n%s", v)
 	}
@@ -836,8 +847,13 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	ss.rangeInput.typeText("1-2")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadContent {
+		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
 	// The cursor starts on «Передний план» (first item), Enter
 	// dispatches.
@@ -893,7 +909,8 @@ func TestSessionDownloadBackgroundSubmits(t *testing.T) {
 	ss.rangeInput.typeText("1")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(down()) // «Фон»
+	next, _ = ss.Update(enter())  // видео+аудио, the default first row
+	next, _ = next.Update(down()) // «Фон»
 	next, cmd := next.Update(enter())
 	if cmd == nil {
 		t.Fatalf("the background pick must dispatch the resolution")
@@ -931,6 +948,8 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 	ss := next.(*sessionScreen)
 	ss.rangeInput.typeText("1")
 	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	next, _ = ss.Update(enter()) // видео+аудио, the default first row
 	ss = next.(*sessionScreen)
 	next, cmd := ss.Update(enter())
 	var settled downloadSettledMsg

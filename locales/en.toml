@@ -156,6 +156,13 @@
 "download.dub_not_chosen" = "⚠ No dub chosen — pick the one to download"
 "download.skip_verdict" = "skipped"
 "download.skipped_dubs" = "skipped: {eps} (no dub {dub})"
+"download.audio_skip_verdict" = "no marked audios"
+"download.skipped_audio_set" = "skipped: {eps} (no marked audios)"
+"download.row_dropped" = "without marked: {dubs}"
+"download.content_title" = "Download mode:"
+"download.content_video_audio" = "🎬 Video+Audio (default)"
+"download.content_video_only" = "🎞 Video only"
+"download.content_audio_only" = "🎵 Audio only (per dub)"
 
 # ---- session screen -------------------------------------------------------------------
 "session.refreshing_sources" = "Refreshing sources…"
@@ -181,6 +188,7 @@
 "session.no_dubs" = "No dubs available"
 "session.resolving_streams" = "Looking for streams…"
 "session.pick_stream" = "Pick a stream (quality · dub · provider):"
+"session.pick_stream_hint" = "Space — mark a dub for the download audio set · d — default track"
 "session.no_streams" = "Streams not found"
 "session.buffer_cancelled" = "Buffering cancelled"
 "session.buffer_preparing" = "Buffering: preparing…"

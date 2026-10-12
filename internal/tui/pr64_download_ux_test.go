@@ -289,9 +289,10 @@ func pr64RotatingSession(t *testing.T, dead map[string]bool) (*sessionScreen, *f
 	return s, deps.Download.(*fakeDownload)
 }
 
-// driveDownloadRange types the range and picks the mode; for
-// «Передний план» it settles the returned command and applies the
-// settle message, returning it with the post-settle status.
+// driveDownloadRange types the range, picks the видео+аудио default
+// content mode and picks the execution mode; for «Передний план» it
+// settles the returned command and applies the settle message,
+// returning it with the post-settle status.
 func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.Msg, string) {
 	t.Helper()
 	s.list.Jump(sessionActionIndex(s, "download"))
@@ -303,8 +304,13 @@ func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.M
 	ss.rangeInput.typeText(rng)
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadContent {
+		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
 	if mode == "background" {
 		ss.modeList.Jump(1)

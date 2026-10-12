@@ -54,7 +54,8 @@ func pr164AskSession(t *testing.T) (*sessionScreen, *fakeDownload) {
 }
 
 // openDownloadAsk drives the real path to the ask-first surface:
-// «Скачать серии» → the range 1-3 → the mode pick (cursor on
+// «Скачать серии» → the range 1-3 → the content-mode pick (the
+// видео+аудио default) → the execution mode pick (cursor on
 // foreground unless jumpBackground).
 func openDownloadAsk(t *testing.T, s *sessionScreen, jumpBackground bool) *sessionScreen {
 	t.Helper()
@@ -67,8 +68,13 @@ func openDownloadAsk(t *testing.T, s *sessionScreen, jumpBackground bool) *sessi
 	ss.rangeInput.typeText("1-3")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadContent {
+		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("after the range the mode menu opens, got %v", ss.state)
+		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
 	if jumpBackground {
 		ss.modeList.Jump(1)

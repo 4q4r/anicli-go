@@ -41,11 +41,19 @@ type Options struct {
 
 // CommandInput is one download request.
 type CommandInput struct {
+	// Mode selects the download shape; "" behaves as ModeVideoAudio
+	// (the default, as today).
+	Mode Mode
 	// Video is the video source (URL or local path).
 	Video contracts.VideoSource
 	// Audio is an optional separate audio source; equal URLs are
-	// treated as absent (python guard).
+	// treated as absent (python guard). Audio-only mode consumes it
+	// as THE media source.
 	Audio *contracts.VideoSource
+	// Tracks are the marked audio inputs of the multi-audio mux
+	// (video+аудио mode with a non-empty set); empty keeps today's
+	// single-audio semantics.
+	Tracks []AudioTrack
 	// ChaptersFile embeds FFMETADATA chapters into the output
 	// (FEATURE E: offline playback never re-looks-up skip times).
 	ChaptersFile string
@@ -66,11 +74,23 @@ type Command struct {
 	TempPath string
 }
 
-// BuildCommand renders the ffmpeg argv (python download_episode
-// command construction): base flags, per-input headers, video and
-// optional audio inputs, optional chapters input with -map_metadata,
-// stream copy and title metadata. The output is the .part temp file.
+// BuildCommand renders the ffmpeg argv. The default shape (no mode,
+// no tracks) is the python download_episode command construction:
+// base flags, per-input headers, video and optional audio inputs,
+// optional chapters input with -map_metadata, stream copy and title
+// metadata. The PR165 modes dispatch to the research templates:
+// video + marked audio set → the multi-input mux, video-only and
+// audio-only the §2.2/§2.3 shapes. The output is the .part temp file.
 func BuildCommand(in CommandInput) Command {
+	switch {
+	case in.Mode == ModeVideoOnly:
+		return Command{Args: buildVideoOnlyArgs(in), OutputPath: in.OutputPath, TempPath: TempPathFor(in.OutputPath)}
+	case in.Mode == ModeAudioOnly:
+		return Command{Args: buildAudioOnlyArgs(in), OutputPath: in.OutputPath, TempPath: TempPathFor(in.OutputPath)}
+	case len(in.Tracks) > 0:
+		return Command{Args: buildMuxArgs(in, in.Tracks), OutputPath: in.OutputPath, TempPath: TempPathFor(in.OutputPath)}
+	}
+
 	out := in.OutputPath
 	args := []string{"-y", "-hide_banner", "-loglevel", "error"}
 

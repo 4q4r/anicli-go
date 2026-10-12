@@ -83,6 +83,11 @@ type PlaybackService interface {
 	ResolveSkips(ctx context.Context, shikimoriID int64, episode float64) (path string, cleanup func(), note string, err error)
 	// Play launches mpv and blocks until it exits.
 	Play(ctx context.Context, req PlayRequest) error
+	// LastPosition reports the #166 position tracker's final value:
+	// the launch URL it belongs to, the seconds, and whether any
+	// position was observed. The redub pick resumes with it only
+	// when the URL matches the dub being replaced.
+	LastPosition() (url string, seconds float64, ok bool)
 }
 
 // PlayRequest is one playback invocation (player.Request flattened).
@@ -93,6 +98,10 @@ type PlayRequest struct {
 	Headers      map[string]string
 	ExtraMPVOpts []string
 	ChaptersFile string
+	// StartPosition resumes at N seconds (#166): the redub relaunch
+	// passes the position captured from the dub being replaced; zero
+	// launches from the beginning.
+	StartPosition float64
 	// AnimeTitle and EpisodeNum feed the optional Discord Rich
 	// Presence (PR115): the clean title and episode of the watched
 	// anime (Title itself is the decorated mpv window title).

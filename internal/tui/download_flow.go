@@ -24,17 +24,11 @@ import (
 // not render a multi-KB status line (review fix 5).
 const availabilityMaxRuns = 8
 
-// describeAvailableEpisodes renders the compact availability line of
-// the download-range prompt (PR64 #2): the count plus the real
-// available set — consecutive episodes collapsed into runs, gaps and
-// non-numeric labels listed as-is, so the user never guesses what
-// exists before typing a range. The caller's order is preserved —
-// the session passes its merged (display) order. More than
-// availabilityMaxRuns runs truncate to the first ones plus «… +N ещё».
-func describeAvailableEpisodes(order []string) string {
-	if len(order) == 0 {
-		return i18n.T("download.no_episodes")
-	}
+// episodeRuns collapses an ordered label list: consecutive numeric
+// labels into runs («2–5»), non-numeric labels as-is, the caller's
+// order preserved. Shared by the availability line and the #164 skip
+// attribution.
+func episodeRuns(order []string) []string {
 	runs := make([]string, 0, len(order))
 	for i := 0; i < len(order); {
 		n, err := strconv.Atoi(order[i])
@@ -58,10 +52,31 @@ func describeAvailableEpisodes(order []string) string {
 		}
 		i = j
 	}
+	return runs
+}
+
+// truncateRuns caps a rendered run list: a pathological many-gap
+// merge (1100+ gappy episodes, dozens of junk labels) must not render
+// a multi-KB line (review fix 5) — the first runs plus «… +N ещё».
+func truncateRuns(runs []string) []string {
 	if len(runs) > availabilityMaxRuns {
 		hidden := len(runs) - availabilityMaxRuns
 		runs = append(runs[:availabilityMaxRuns], i18n.T("download.more_runs", i18n.Vals{"count": strconv.Itoa(hidden)}))
 	}
+	return runs
+}
+
+// describeAvailableEpisodes renders the compact availability line of
+// the download-range prompt (PR64 #2): the count plus the real
+// available set — consecutive episodes collapsed into runs, gaps and
+// non-numeric labels listed as-is, so the user never guesses what
+// exists before typing a range. The caller's order is preserved —
+// the session passes its merged (display) order.
+func describeAvailableEpisodes(order []string) string {
+	if len(order) == 0 {
+		return i18n.T("download.no_episodes")
+	}
+	runs := truncateRuns(episodeRuns(order))
 	return i18n.T("download.available", i18n.Vals{
 		"count": strconv.Itoa(len(order)), "runs": strings.Join(runs, ", ")})
 }
@@ -94,6 +109,10 @@ type downloadEpisodeReport struct {
 	Path string
 	// Err is the failure (resolution or download); nil on success.
 	Err error
+	// SkipDub marks a strict #164 batch episode that does not carry
+	// the chosen dub: skipped, never substituted. The renderer folds
+	// these rows into the one compact «пропущены» attribution line.
+	SkipDub string
 }
 
 // resolveDownloadDub resolves ONE range episode's dub with the PR63
@@ -106,21 +125,35 @@ type downloadEpisodeReport struct {
 // the episode's cached ones). Returns "" when no dub is viable — the
 // caller types the failure instead of skipping silently.
 //
+// The strict #164 mode (the ask-first menu pick) forbids the
+// rotation: the picked dub alone drives the episode. A dub the fresh
+// hydration proves absent skips the episode without a probe; a dub
+// present but dead probes alone and types the failure — an episode
+// never falls back to a dub the user did not choose.
+//
 // The machinery is the watch flow's own: liveness = a scoped
 // resolveAllStreams success, hydration = hydrateEpisodeFresh — with
 // the watch flow's budgeting too: hydration and each probe are
 // independently bounded (review fix 1).
-func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, preferred string) string {
+func resolveDownloadDub(ctx context.Context, deps *Deps, ep contracts.Episode, preferred string, strict bool) string {
 	hctx, hcancel := context.WithTimeout(ctx, downloadHydrateBudget)
 	ep = hydrateEpisodeFresh(hctx, deps, ep)
 	hcancel()
 	candidates := make([]string, 0, len(ep.RawEmbeds)+1)
-	if preferred != "" {
+	if strict {
+		// #164: the picked dub or nothing — never a substitute.
+		if len(ep.RawEmbeds[preferred]) == 0 {
+			return ""
+		}
 		candidates = append(candidates, preferred)
-	}
-	for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
-		if k != preferred && len(ep.RawEmbeds[k]) > 0 {
-			candidates = append(candidates, k)
+	} else {
+		if preferred != "" {
+			candidates = append(candidates, preferred)
+		}
+		for _, k := range sortedEmbedKeys(ep.RawEmbeds) {
+			if k != preferred && len(ep.RawEmbeds[k]) > 0 {
+				candidates = append(candidates, k)
+			}
 		}
 	}
 	for _, cand := range candidates {
@@ -184,8 +217,11 @@ func downloadProgressLine(done, total int, episode, verdict string) string {
 // fails, so one episode's error cannot cancel its siblings — the
 // watch-flow fan-out rule). The returned report stubs are in EPISODE
 // order regardless of completion order; each settled episode emits a
-// resolve tick (nil channel = silent).
-func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, progCh chan<- string) []downloadEpisodeReport {
+// resolve tick (nil channel = silent). The strict #164 mode types a
+// not-carrying episode as a skip (SkipDub) instead of the
+// no-viable-dub error — the batch summary attributes the skips
+// compactly, nothing substitutes.
+func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool, progCh chan<- string) []downloadEpisodeReport {
 	type indexedTask struct {
 		idx  int
 		task DownloadTask
@@ -200,11 +236,16 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 		done int
 	)
 	_ = netclient.Parallel(ctx, items, downloadResolveFanout, func(ctx context.Context, it indexedTask) error {
-		dub := resolveDownloadDub(ctx, deps, it.task.Episode, preferred)
+		dub := resolveDownloadDub(ctx, deps, it.task.Episode, preferred, strict)
 		mu.Lock()
 		defer mu.Unlock()
 		done++
 		if dub == "" {
+			if strict {
+				stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, SkipDub: preferred}
+				emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.skip_verdict")))
+				return nil
+			}
 			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Err: errNoViableDub}
 			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.no_dubs_verdict")))
 			return nil
@@ -221,14 +262,17 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 // heavy leg), typing every episode's verdict in the report. A dead
 // episode never aborts its siblings; every settled episode ticks the
 // progress channel.
-func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, progCh chan<- string) downloadSettledMsg {
-	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, progCh)
+func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool, progCh chan<- string) downloadSettledMsg {
+	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, strict, progCh)
 	report := make([]downloadEpisodeReport, len(tasks))
 	ok, firstErr := 0, error(nil)
 	for i, task := range tasks {
 		stub := stubs[i]
-		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err}
-		if stub.Err != nil {
+		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err, SkipDub: stub.SkipDub}
+		switch {
+		case stub.SkipDub != "":
+			continue // #164: the chosen dub is absent — skipped, never substituted
+		case stub.Err != nil:
 			if firstErr == nil {
 				firstErr = stub.Err
 			}
@@ -256,15 +300,16 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 // queueBackgroundDownloads resolves the range's dubs bounded-parallel
 // BEFORE queueing, so the background manager never receives a task
 // whose dub is dead on its episode. The settle types the verdicts in
-// episode order.
-func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string) backgroundQueuedMsg {
-	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, nil)
+// episode order. The strict #164 mode leaves the not-carrying
+// episodes unqueued with the skip attribution on their report rows.
+func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool) backgroundQueuedMsg {
+	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, strict, nil)
 	report := make([]downloadEpisodeReport, len(tasks))
 	queued := 0
 	for i, task := range tasks {
 		stub := stubs[i]
-		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err}
-		if stub.Err != nil {
+		report[i] = downloadEpisodeReport{Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err, SkipDub: stub.SkipDub}
+		if stub.Err != nil || stub.SkipDub != "" {
 			continue
 		}
 		stamped := task
@@ -275,14 +320,47 @@ func queueBackgroundDownloads(ctx context.Context, deps *Deps, tasks []DownloadT
 	return backgroundQueuedMsg{queued: queued, total: len(tasks), report: report}
 }
 
+// renderSkippedDubs composes the #164 compact skip attribution: one
+// line, the run-compressed episode labels, the dub they lack — the
+// #161 «пропущены:» shape (compact, nothing path-shaped, no
+// per-episode flood). "" when the report has no skips.
+func renderSkippedDubs(report []downloadEpisodeReport) string {
+	skipped := make([]string, 0, len(report))
+	dub := ""
+	for _, r := range report {
+		if r.SkipDub == "" {
+			continue
+		}
+		skipped = append(skipped, r.Episode)
+		dub = r.SkipDub
+	}
+	if len(skipped) == 0 {
+		return ""
+	}
+	runs := truncateRuns(episodeRuns(skipped))
+	return i18n.T("download.skipped_dubs", i18n.Vals{
+		"eps": strings.Join(runs, ", "), "dub": dub})
+}
+
 // renderDownloadSettle composes the foreground settle line: the
 // headline plus the compact per-episode report. The all-failed
 // headline carries the first error verbatim — the pre-PR64
 // «Ошибка загрузки: …» contract (review fix 6); the typed no-dub
-// verdict stays on its per-episode line.
+// verdict stays on its per-episode line. Strict #164 skips render as
+// the one compact «пропущены» line and fold the headline into the
+// partial form — a batch that only skipped is not an error.
 func renderDownloadSettle(msg downloadSettledMsg) string {
 	var b strings.Builder
+	skips := 0
+	for _, r := range msg.report {
+		if r.SkipDub != "" {
+			skips++
+		}
+	}
 	switch {
+	case msg.err == nil && skips > 0:
+		fmt.Fprintf(&b, "%s", i18n.T("download.settle_partial", i18n.Vals{
+			"count": strconv.Itoa(msg.count), "total": strconv.Itoa(msg.total)}))
 	case msg.err == nil:
 		fmt.Fprintf(&b, "%s", i18n.T("download.settle_ok", i18n.Vals{"count": strconv.Itoa(msg.count)}))
 	case msg.count > 0:
@@ -294,7 +372,13 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 			fmt.Fprintf(&b, " — %v", msg.err)
 		}
 	}
+	if skip := renderSkippedDubs(msg.report); skip != "" {
+		fmt.Fprintf(&b, "\n%s", skip)
+	}
 	for _, r := range msg.report {
+		if r.SkipDub != "" {
+			continue // the compact skip line already carries it
+		}
 		b.WriteString("\n")
 		switch {
 		case r.Err != nil && r.Dub != "":
@@ -314,7 +398,8 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 }
 
 // renderBackgroundQueued composes the background settle line: the
-// queued headline plus the per-episode dub typing.
+// queued headline plus the per-episode dub typing, with the #164
+// skips on the compact attribution line.
 func renderBackgroundQueued(msg backgroundQueuedMsg) string {
 	var b strings.Builder
 	if msg.queued == msg.total {
@@ -323,7 +408,13 @@ func renderBackgroundQueued(msg backgroundQueuedMsg) string {
 		fmt.Fprintf(&b, "%s", i18n.T("download.bg_queued_partial", i18n.Vals{
 			"count": strconv.Itoa(msg.queued), "total": strconv.Itoa(msg.total)}))
 	}
+	if skip := renderSkippedDubs(msg.report); skip != "" {
+		fmt.Fprintf(&b, "\n%s", skip)
+	}
 	for _, r := range msg.report {
+		if r.SkipDub != "" {
+			continue // the compact skip line already carries it
+		}
 		b.WriteString("\n")
 		if r.Err != nil {
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_no_dubs", i18n.Vals{"ep": r.Episode}))

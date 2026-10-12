@@ -615,7 +615,7 @@ func TestDownloadDubBudgetsArePerPhase(t *testing.T) {
 		"[animego] AniLib":  {"w1v"},
 	}}
 
-	dub := resolveDownloadDub(context.Background(), deps, ep, "[animego] Дубль 1")
+	dub := resolveDownloadDub(context.Background(), deps, ep, "[animego] Дубль 1", false)
 	if dub != "[animego] AniLib" {
 		t.Fatalf("the fallback candidate must still be probed after a slow first probe, got %q", dub)
 	}
@@ -705,7 +705,7 @@ func TestDownloadProgressLines(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		settled = runForegroundDownload(context.Background(), s.deps, tasks, preferred, ch)
+		settled = runForegroundDownload(context.Background(), s.deps, tasks, preferred, false, ch)
 		close(ch)
 	}()
 	var lines []string

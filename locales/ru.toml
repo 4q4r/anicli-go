@@ -152,6 +152,11 @@
 "download.mode_background" = "🔁 Фон (продолжить работу)"
 "download.starting_foreground" = "Загрузка {count} серий (передний план)…"
 "download.resolving_dubs" = "Разрешаю озвучки для {count} серий…"
+"download.pick_dub" = "Озвучка для загрузки:"
+"download.no_dubs" = "Нет доступных озвучек"
+"download.dub_not_chosen" = "⚠ Озвучка не выбрана — выберите какую качать"
+"download.skip_verdict" = "пропущена"
+"download.skipped_dubs" = "пропущены: {eps} (нет озвучки {dub})"
 
 # ---- экран сессии ----
 "session.refreshing_sources" = "Обновляю источники…"

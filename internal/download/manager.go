@@ -208,23 +208,27 @@ func (m *Manager) worker(rec *managerRecord) {
 	if err != nil {
 		msg := err.Error()
 		m.settleGen(rec, StateFailed, msg, 0)
-		m.runComplete(rec.task, false, err)
+		m.runComplete(rec, false, err)
 		return
 	}
 	m.settleGen(rec, StateDone, "", 100)
-	m.runComplete(rec.task, true, nil)
+	m.runComplete(rec, true, nil)
 }
 
 // runComplete invokes the task callback; callback errors are recorded
 // on the task without changing the download verdict (python appended
-// "| callback error").
-func (m *Manager) runComplete(task Task, success bool, dlErr error) {
+// "| callback error"). The write is generation-gated (PR #21 review):
+// after settleGen the id accepts a replacement Submit, so the lookup
+// by ID alone could hand the superseded run's callback error to the
+// record its replacement now owns.
+func (m *Manager) runComplete(rec *managerRecord, success bool, dlErr error) {
+	task := rec.task
 	if task.OnComplete == nil {
 		return
 	}
 	if err := task.OnComplete(success, task.OutputPath); err != nil {
 		m.mu.Lock()
-		if live, ok := m.tasks[task.ID]; ok {
+		if live, ok := m.tasks[task.ID]; ok && live.gen == rec.gen {
 			suffix := "callback error: " + err.Error()
 			if live.task.Err != "" {
 				suffix = live.task.Err + " | " + suffix
@@ -236,26 +240,13 @@ func (m *Manager) runComplete(task Task, success bool, dlErr error) {
 	}
 }
 
-// settle writes a terminal state.
-func (m *Manager) settle(id string, state State, msg string, progress float64) {
-	m.mu.Lock()
-	if live, ok := m.tasks[id]; ok {
-		live.task.State = state
-		live.task.Err = msg
-		if progress > 0 {
-			live.task.Progress = progress
-		}
-		if state == StateDone {
-			live.task.Progress = 100
-		}
-	}
-	m.mu.Unlock()
-	m.emit(Event{TaskID: id, State: state, Progress: progress, Err: msg})
-}
-
 // settleGen is settle bound to a generation: a superseded worker's
 // terminal state never clobbers the record its replacement owns
-// (169-F).
+// (169-F). The write happens under the same lock hold as the
+// generation check (PR #21 review): a Submit replacing the record
+// between a check-then-relookup would receive the superseded worker's
+// final state — reachable on the ctx.Done path, where a queued task
+// is not ErrTaskActive-protected.
 func (m *Manager) settleGen(rec *managerRecord, state State, msg string, progress float64) {
 	m.mu.Lock()
 	live, ok := m.tasks[rec.task.ID]
@@ -263,8 +254,16 @@ func (m *Manager) settleGen(rec *managerRecord, state State, msg string, progres
 		m.mu.Unlock()
 		return
 	}
+	live.task.State = state
+	live.task.Err = msg
+	if progress > 0 {
+		live.task.Progress = progress
+	}
+	if state == StateDone {
+		live.task.Progress = 100
+	}
 	m.mu.Unlock()
-	m.settle(rec.task.ID, state, msg, progress)
+	m.emit(Event{TaskID: rec.task.ID, State: state, Progress: progress, Err: msg})
 }
 
 // Task returns a snapshot of one task.

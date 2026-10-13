@@ -1794,3 +1794,29 @@ func TestSessionCancelMidResolveCleansChaptersFile(t *testing.T) {
 		t.Fatalf("the stale settle must remove its chapters file, got %d survivors", n)
 	}
 }
+
+// TestMoveEpisodeReselectKeepsPickedVideo (PR #21 review): re-picking
+// the CURRENT episode in the jump list must not retire its picked
+// stream — a redub of the same episode would otherwise lose the
+// pickedVideo the position tracker matches against. A real episode
+// change still retires it (169-B).
+func TestMoveEpisodeReselectKeepsPickedVideo(t *testing.T) {
+	picked := contracts.VideoSource{URL: "https://example/stream.m3u8"}
+	s := &sessionScreen{currentIdx: 2, pickedVideo: picked}
+
+	s.moveEpisode(2) // reselect the current episode
+	if s.currentIdx != 2 {
+		t.Fatalf("currentIdx = %d, want 2", s.currentIdx)
+	}
+	if s.pickedVideo.URL != picked.URL {
+		t.Fatalf("reselecting the current episode retired pickedVideo: %+v", s.pickedVideo)
+	}
+
+	s.moveEpisode(3) // a real episode change
+	if s.currentIdx != 3 {
+		t.Fatalf("currentIdx = %d, want 3", s.currentIdx)
+	}
+	if s.pickedVideo.URL != "" {
+		t.Fatalf("episode change must retire pickedVideo: %+v", s.pickedVideo)
+	}
+}

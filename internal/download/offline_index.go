@@ -173,8 +173,10 @@ type indexPayload struct {
 //
 // Reading MUTATES on a malformed document (169-E): the broken file is
 // renamed .corrupt-<ts> for manual recovery, so the next writer starts
-// fresh. Corrupt backups accumulate without retention (review m3) —
-// prune by hand if a title dir collects them.
+// fresh; a failed backup rename surfaces as an error and leaves the
+// document untouched (PR #21 review). Corrupt backups accumulate
+// without retention (review m3) — prune by hand if a title dir
+// collects them.
 func LoadSnapshot(titleDir string) (Snapshot, error) {
 	index := filepath.Join(titleDir, IndexFilename)
 	data, err := os.ReadFile(index) //nolint:gosec // path built from caller-provided dir
@@ -190,9 +192,15 @@ func LoadSnapshot(titleDir string) (Snapshot, error) {
 		// 169-E: an unparseable document (a crash mid-write) is kept
 		// as a timestamped .corrupt backup — the data stays available
 		// for manual recovery instead of being overwritten by the
-		// next upsert. Best-effort: the fresh index starts either way.
+		// next upsert. The backup rename must succeed before the
+		// fresh index starts (PR #21 review): with the malformed file
+		// still at the canonical path, the next UpsertEntry would
+		// overwrite the corrupt evidence and restart over unknown
+		// bytes, so a failed rename surfaces as an error instead.
 		stamped := fmt.Sprintf("%s.corrupt-%s", index, time.Now().UTC().Format("20060102T150405.000000000"))
-		_ = os.Rename(index, stamped)
+		if rerr := os.Rename(index, stamped); rerr != nil {
+			return Snapshot{}, fmt.Errorf("offline index: back up corrupt %s: %w", index, rerr)
+		}
 		return Snapshot{TitleDir: titleDir, Entries: []Entry{}}, nil
 	}
 

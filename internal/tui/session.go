@@ -1067,8 +1067,14 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 // pickedVideo would make the #166 redub URL guard match the old
 // episode's tracked position and stamp it onto the new one (169-B:
 // «--start=24:10 of episode 1 onto episode 2») — a captured position
-// may only ever resume the episode it was captured in.
+// may only ever resume the episode it was captured in. Reselecting
+// the CURRENT episode (jump list) is a no-op: retiring the stream
+// there would lose the position tracking a same-episode redub needs
+// (PR #21 review).
 func (s *sessionScreen) moveEpisode(idx int) {
+	if idx == s.currentIdx {
+		return
+	}
 	s.currentIdx = idx
 	s.pickedVideo = contracts.VideoSource{}
 }

@@ -85,31 +85,44 @@ func RotateLogFile(path string, rotation time.Duration, maxFiles int) (rotated b
 
 // pruneRotated removes the oldest anicli-*.log siblings beyond
 // maxFiles (0 or negative disables pruning).
+//
+// 169-H: the enumeration is os.ReadDir + plain prefix/ext matching —
+// filepath.Glob reads [ and ] as a character class, so a bracketed
+// directory path never matched anything and the graveyard grew
+// forever. Entries that cannot be stated (a dangling symlink, a file
+// vanished mid-prune) are skipped, and the prune bound is clamped to
+// the survivor count: the raw files[:len-maxFiles] went negative and
+// panicked at startup.
 func pruneRotated(path string, maxFiles int) error {
 	if maxFiles <= 0 {
 		return nil
 	}
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read log dir %s: %w", dir, err)
+	}
 	base := filepath.Base(path)
 	prefix := strings.TrimSuffix(base, filepath.Ext(base)) + "-"
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), prefix+"*"+filepath.Ext(path)))
-	if err != nil {
-		return fmt.Errorf("glob rotated logs: %w", err)
-	}
-	if len(matches) <= maxFiles {
-		return nil
-	}
+	ext := filepath.Ext(path)
 
 	type aged struct {
 		path string
 		mod  time.Time
 	}
-	files := make([]aged, 0, len(matches))
-	for _, m := range matches {
-		st, err := os.Stat(m)
-		if err != nil {
-			continue // vanished mid-prune: skip
+	files := make([]aged, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ext) {
+			continue
 		}
-		files = append(files, aged{path: m, mod: st.ModTime()})
+		info, err := e.Info()
+		if err != nil {
+			continue // vanished or dangling mid-prune: skip
+		}
+		files = append(files, aged{path: filepath.Join(dir, e.Name()), mod: info.ModTime()})
+	}
+	if len(files) <= maxFiles {
+		return nil // nothing beyond the cap (169-H: the unclamped slice went negative here)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
 

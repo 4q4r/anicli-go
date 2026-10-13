@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -261,5 +262,123 @@ max_files_typo = 3
 	}
 	if !strings.Contains(err.Error(), "log.max_files_typo") {
 		t.Fatalf("the unknown-key error must name the key path: %v", err)
+	}
+}
+
+// seedRotated seeds n rotated files with distinct mtimes (oldest
+// first) and returns the log path inside dir.
+func seedRotated(t *testing.T, dir string, n int) string {
+	t.Helper()
+	logPath := filepath.Join(dir, "anicli.log")
+	now := time.Now()
+	for i := 1; i <= n; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("anicli-2026-01-%02dT000000.log", i))
+		if err := os.WriteFile(p, []byte(p), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stamp := now.Add(-time.Duration(n+1-i) * time.Hour)
+		if err := os.Chtimes(p, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(logPath, []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(logPath, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return logPath
+}
+
+// TestRotatePruneSkipsDanglingEntries (169-H): rotated entries that
+// cannot be Stat'ed (a dangling symlink, a file vanished mid-prune)
+// were skipped from the survivor list — with fewer real survivors than
+// maxFiles the slice bound files[:len-maxFiles] went NEGATIVE and
+// panicked AT STARTUP (root.go calls RotateLogFile before any
+// recover). No panic below the cap, and correct pruning above it.
+func TestRotatePruneSkipsDanglingEntries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no panic below the cap", func(t *testing.T) {
+		dir := t.TempDir()
+		logPath := seedRotated(t, dir, 1)
+		for _, name := range []string{"anicli-2026-01-05T000000.log", "anicli-2026-01-06T000000.log"} {
+			if err := os.Symlink(filepath.Join(dir, "vanished.log"), filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// RED today: files[:1-2] panics at startup.
+		if _, err := RotateLogFile(logPath, 1*time.Hour, 2); err != nil {
+			t.Fatalf("RotateLogFile: %v", err)
+		}
+		if _, err := os.Stat(logPath); err != nil {
+			t.Fatalf("the current log must survive: %v", err)
+		}
+	})
+
+	t.Run("prunes correctly above the cap", func(t *testing.T) {
+		dir := t.TempDir()
+		logPath := seedRotated(t, dir, 4)
+		for _, name := range []string{"anicli-2026-01-05T000000.log", "anicli-2026-01-06T000000.log"} {
+			if err := os.Symlink(filepath.Join(dir, "vanished.log"), filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if _, err := RotateLogFile(logPath, 1*time.Hour, 2); err != nil {
+			t.Fatalf("RotateLogFile: %v", err)
+		}
+		// Count REAL files only — dangling entries may remain on disk.
+		remaining, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var real []string
+		for _, e := range remaining {
+			if strings.HasPrefix(e.Name(), "anicli-") && strings.HasSuffix(e.Name(), ".log") {
+				if info, err := e.Info(); err == nil && info.Mode()&os.ModeSymlink == 0 {
+					real = append(real, e.Name())
+				}
+			}
+		}
+		if len(real) != 2 {
+			t.Fatalf("real rotated files after prune = %v, want the 2 newest", real)
+		}
+		for _, name := range real {
+			if strings.Contains(name, "2026-01-01") || strings.Contains(name, "2026-01-02") {
+				t.Fatalf("the oldest real rotated file survived: %v", real)
+			}
+		}
+	})
+}
+
+// TestRotatePruneBracketDir (169-H): filepath.Glob reads [ and ] as a
+// character class, so a bracketed directory path never matched and the
+// graveyard grew forever. Enumeration + plain string matching prunes
+// there too.
+func TestRotatePruneBracketDir(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "season [2026]")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	logPath := seedRotated(t, dir, 4)
+
+	if _, err := RotateLogFile(logPath, 1*time.Hour, 2); err != nil {
+		t.Fatalf("RotateLogFile: %v", err)
+	}
+	remaining, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, e := range remaining {
+		if strings.HasPrefix(e.Name(), "anicli-") && strings.HasSuffix(e.Name(), ".log") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("rotated files after prune = %d, want 2 (the glob shape never matched here)", count)
 	}
 }

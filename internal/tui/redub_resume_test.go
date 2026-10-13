@@ -112,3 +112,43 @@ func TestRedubForeignPositionIgnored(t *testing.T) {
 		t.Fatalf("a foreign position must not resume: %+v", got)
 	}
 }
+
+// TestRedubAfterEpisodeJumpStartsFresh (169-B): «Перейти к серии»
+// moves currentIdx but the picked stream belonged to the OLD episode —
+// the stale pickedVideo matched the LastPosition URL guard, the pick
+// captured episode 1's position and stamped it with the NEW episode
+// number, and the episode-2 redub launched with episode 1's --start.
+// A position may only ever resume the episode it was captured in.
+func TestRedubAfterEpisodeJumpStartsFresh(t *testing.T) {
+	pb := &fakePlayback{lastURL: "v1080", lastPos: 187.5, lastOK: true}
+	s := redubResumeSession(t, pb) // episode 1 current; pickedVideo = ep1's stream
+
+	// «Перейти к серии» → pick episode 2.
+	s.setState(sessionStateEpisodeList)
+	s.buildEpisodeList()
+	for i, c := range s.episodeList.Menu().Items {
+		if c.ID == "2" {
+			s.episodeList.Jump(i)
+			break
+		}
+	}
+	next, _ := s.handleEpisodeListKey(enter())
+	ss := next.(*sessionScreen)
+	if ss.currentEpisode() != "2" {
+		t.Fatalf("current episode after the jump = %q, want 2", ss.currentEpisode())
+	}
+
+	// Redub on the NEW episode: the tracked position belongs to the
+	// old episode's playback — it must not leak into this launch.
+	_, play := driveRedubPick(t, ss)
+	if pm, ok := play().(playedMsg); !ok || pm.err != nil {
+		t.Fatalf("playback must succeed, got %T %v", play(), pm.err)
+	}
+	got := pb.played
+	if len(got) != 1 {
+		t.Fatalf("played = %d requests, want 1", len(got))
+	}
+	if got[0].StartPosition != 0 {
+		t.Fatalf("redub after an episode jump StartPosition = %v, want 0 (the captured position belonged to episode 1)", got[0].StartPosition)
+	}
+}

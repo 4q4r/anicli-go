@@ -1062,6 +1062,17 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	}
 }
 
+// moveEpisode re-points the session at another episode and retires
+// the picked stream: it belonged to the PREVIOUS episode. A stale
+// pickedVideo would make the #166 redub URL guard match the old
+// episode's tracked position and stamp it onto the new one (169-B:
+// «--start=24:10 of episode 1 onto episode 2») — a captured position
+// may only ever resume the episode it was captured in.
+func (s *sessionScreen) moveEpisode(idx int) {
+	s.currentIdx = idx
+	s.pickedVideo = contracts.VideoSource{}
+}
+
 // handleMenuKey drives the action menu.
 func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.list.HandleKey(key) {
@@ -1080,7 +1091,7 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.startWatch()
 	case "next":
 		if s.currentIdx < len(s.order)-1 {
-			s.currentIdx++
+			s.moveEpisode(s.currentIdx + 1)
 			s.buildActionMenu()
 			// python parity (PR63 #2): the pick falls through into
 			// resolve_dubs_smart + extract_and_play — the next episode
@@ -1091,7 +1102,7 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	case "prev":
 		if s.currentIdx > 0 {
-			s.currentIdx--
+			s.moveEpisode(s.currentIdx - 1)
 			s.buildActionMenu()
 		}
 		return s, nil
@@ -2573,7 +2584,7 @@ func (s *sessionScreen) handleEpisodeListKey(key tea.KeyPressMsg) (Screen, tea.C
 	s.episodeFilter.clear()
 	for i, n := range s.order {
 		if n == num {
-			s.currentIdx = i
+			s.moveEpisode(i)
 			break
 		}
 	}

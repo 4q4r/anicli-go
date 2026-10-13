@@ -38,7 +38,7 @@ func TestManagerBoundedConcurrency(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	for i := range 6 {
-		_ = m.Submit(Task{ID: string(rune('a' + i)), Title: "T", EpisodeNum: "1", OutputPath: "/x"})
+		_, _ = m.Submit(Task{ID: string(rune('a' + i)), Title: "T", EpisodeNum: "1", OutputPath: "/x"})
 	}
 
 	waitFor(t, 3*time.Second, func() bool { return len(m.AllTasks()) == 6 && allState(m, StateDone) })
@@ -66,8 +66,8 @@ func TestManagerStatesAndEvents(t *testing.T) {
 	m := NewManager(2, dl)
 	defer func() { _ = m.Close() }()
 
-	ok := m.Submit(Task{ID: "ok", Title: "A", EpisodeNum: "1", OutputPath: "/a"})
-	bad := m.Submit(Task{ID: "bad", Title: "B", EpisodeNum: "2", OutputPath: "/b"})
+	ok, _ := m.Submit(Task{ID: "ok", Title: "A", EpisodeNum: "1", OutputPath: "/a"})
+	bad, _ := m.Submit(Task{ID: "bad", Title: "B", EpisodeNum: "2", OutputPath: "/b"})
 	if ok.State != StateQueued || bad.State != StateQueued {
 		t.Fatalf("initial states = %s/%s, want queued", ok.State, bad.State)
 	}
@@ -189,8 +189,10 @@ func TestManagerCloseCancelsRunning(t *testing.T) {
 	}
 }
 
-// TestManagerDuplicateIDOverwrites pins the python map semantics: a
-// duplicate id replaces the tracked task.
+// TestManagerDuplicateIDOverwrites (169-F contract): a resubmit of a
+// QUEUED id replaces the payload (the newer intent wins, still not
+// started); the tracked map stays one-entry-per-id. The RUNNING
+// rejection is pinned separately.
 func TestManagerDuplicateIDOverwrites(t *testing.T) {
 	t.Parallel()
 
@@ -201,11 +203,17 @@ func TestManagerDuplicateIDOverwrites(t *testing.T) {
 	m := NewManager(1, dl)
 	defer func() { _ = m.Close() }()
 
-	first := m.Submit(Task{ID: "dup", Title: "first"})
+	first, err := m.Submit(Task{ID: "dup", Title: "first"})
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
 	if first.Title != "first" {
 		t.Fatalf("first submit = %+v", first)
 	}
-	second := m.Submit(Task{ID: "dup", Title: "second"})
+	second, err := m.Submit(Task{ID: "dup", Title: "second"})
+	if err != nil {
+		t.Fatalf("queued resubmit must replace, got %v", err)
+	}
 	if second.Title != "second" {
 		t.Errorf("duplicate submit = %+v, want replacement", second)
 	}
@@ -235,4 +243,90 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not reached before timeout")
+}
+
+// TestAdvManagerDuplicateIDDoubleRun (169-F): a resubmit with the same
+// id while the original is queued replaced the tracked record, and BOTH
+// workers re-read it — the live repro ran v1×0 and v2×2 (two ffmpeg on
+// one .part plus a rename race, the original silently dropped). The
+// newer intent must win the QUEUED slot and run EXACTLY once.
+func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var outputs []string
+	dl := func(_ context.Context, task Task, _ func(float64)) error {
+		mu.Lock()
+		outputs = append(outputs, task.OutputPath)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+	m := NewManager(1, dl)
+	defer func() { _ = m.Close() }()
+
+	m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
+	m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		n := len(outputs)
+		mu.Unlock()
+		if n >= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(60 * time.Millisecond) // let any double-run surface
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(outputs) != 1 {
+		t.Fatalf("invocations = %v (%d), want exactly one — never a double-run", outputs, len(outputs))
+	}
+	if outputs[0] != "v2.mp4" {
+		t.Fatalf("ran %q, want the newer intent v2.mp4", outputs[0])
+	}
+}
+
+// TestAdvManagerSubmitRejectsWhileRunning (169-F): a resubmit of a
+// RUNNING id is rejected with a typed error — an honest «уже
+// скачивается» instead of two ffmpeg on one .part.
+func TestAdvManagerSubmitRejectsWhileRunning(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	dl := func(ctx context.Context, task Task, _ func(float64)) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	}
+	m := NewManager(1, dl)
+	// release FIRST, then Close: a deferred Close would wait on runners
+	// still blocked in the runner when the test aborts early.
+	t.Cleanup(func() {
+		close(release)
+		_ = m.Close()
+	})
+
+	m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
+	<-started
+
+	if _, err := m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"}); err == nil {
+		t.Fatal("resubmitting a RUNNING id must fail")
+	} else {
+		var active *ErrTaskActive
+		if !errors.As(err, &active) || active.ID != "ep" {
+			t.Fatalf("err = %v, want *ErrTaskActive naming the id", err)
+		}
+	}
+	tk, ok := m.Task("ep")
+	if !ok || tk.State != StateRunning || tk.OutputPath != "v1.mp4" {
+		t.Fatalf("running task = %+v (ok=%v), want v1.mp4 untouched", tk, ok)
+	}
 }

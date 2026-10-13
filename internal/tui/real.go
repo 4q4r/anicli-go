@@ -824,11 +824,17 @@ func (s *realDownload) Submit(task DownloadTask) {
 	}
 	s.parts[id] = task
 	s.mu.Unlock()
-	s.manager.Submit(download.Task{
+	if _, err := s.manager.Submit(download.Task{
 		ID:         id,
 		Title:      task.AnimeTitle,
 		EpisodeNum: task.EpisodeNum,
-	})
+	}); err != nil {
+		// 169-F: the same id is already downloading — the running task
+		// stays authoritative (the banner shows it), the resubmit is a
+		// logged no-op and never a second ffmpeg on the same .part.
+		s.core.logger().Warn("download: resubmit rejected, task already running",
+			"id", id, "error", err.Error())
+	}
 }
 
 func (s *realDownload) ActiveBanner() string {

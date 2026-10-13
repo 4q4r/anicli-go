@@ -79,10 +79,6 @@ func Solve(challenge Challenge) (int, string, error) {
 	}
 	zeroBytes := challenge.Rules.Difficulty / 2
 	halfZero := challenge.Rules.Difficulty%2 == 1
-	required := zeroBytes
-	if halfZero {
-		required++
-	}
 	for nonce := 0; nonce <= MaxPoWIterations; nonce++ {
 		sum := sha256.Sum256([]byte(challenge.Challenge.RandomData + strconv.Itoa(nonce)))
 		if !leadingZeroHex(sum[:], zeroBytes, halfZero) {

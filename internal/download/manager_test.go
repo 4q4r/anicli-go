@@ -117,13 +117,13 @@ func TestManagerOnComplete(t *testing.T) {
 	m := NewManager(1, dl)
 	defer func() { _ = m.Close() }()
 
-	m.Submit(Task{ID: "a", OutputPath: "/a", OnComplete: func(ok bool, path string) error {
+	_, _ = m.Submit(Task{ID: "a", OutputPath: "/a", OnComplete: func(ok bool, path string) error {
 		mu.Lock()
 		results[path] = ok
 		mu.Unlock()
 		return nil
 	}})
-	m.Submit(Task{ID: "b", OutputPath: "/b"})
+	_, _ = m.Submit(Task{ID: "b", OutputPath: "/b"})
 
 	waitFor(t, 3*time.Second, func() bool {
 		mu.Lock()
@@ -141,7 +141,7 @@ func TestManagerClearFinished(t *testing.T) {
 	m := NewManager(2, dl)
 	defer func() { _ = m.Close() }()
 
-	m.Submit(Task{ID: "a"})
+	_, _ = m.Submit(Task{ID: "a"})
 	waitFor(t, 3*time.Second, func() bool {
 		tk, _ := m.Task("a")
 		return tk.State == StateDone
@@ -170,7 +170,7 @@ func TestManagerCloseCancelsRunning(t *testing.T) {
 		return ctx.Err()
 	}
 	m := NewManager(1, dl)
-	m.Submit(Task{ID: "a"})
+	_, _ = m.Submit(Task{ID: "a"})
 	<-started
 
 	done := make(chan struct{})
@@ -265,8 +265,8 @@ func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
 	m := NewManager(1, dl)
 	defer func() { _ = m.Close() }()
 
-	m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
-	m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"})
+	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
+	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -314,7 +314,7 @@ func TestAdvManagerSubmitRejectsWhileRunning(t *testing.T) {
 		_ = m.Close()
 	})
 
-	m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
+	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
 	<-started
 
 	if _, err := m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"}); err == nil {

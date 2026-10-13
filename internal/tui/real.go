@@ -822,13 +822,26 @@ func (s *realDownload) Submit(task DownloadTask) {
 			delete(s.parts, partID)
 		}
 	}
+	// The parts swap is atomic with Manager.Submit (PR #21 review):
+	// storing first and restoring on rejection keeps the RUNNING
+	// task's payload authoritative — its worker recall()s the parts,
+	// and a rejected resubmit must never swap them underneath it.
+	previous, hadPrevious := s.parts[id]
 	s.parts[id] = task
-	s.mu.Unlock()
-	if _, err := s.manager.Submit(download.Task{
+	_, err := s.manager.Submit(download.Task{
 		ID:         id,
 		Title:      task.AnimeTitle,
 		EpisodeNum: task.EpisodeNum,
-	}); err != nil {
+	})
+	if err != nil {
+		if hadPrevious {
+			s.parts[id] = previous
+		} else {
+			delete(s.parts, id)
+		}
+	}
+	s.mu.Unlock()
+	if err != nil {
 		// 169-F: the same id is already downloading — the running task
 		// stays authoritative (the banner shows it), the resubmit is a
 		// logged no-op and never a second ffmpeg on the same .part.

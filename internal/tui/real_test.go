@@ -208,3 +208,49 @@ func TestRealHistoryBindSource(t *testing.T) {
 		t.Fatalf("title must survive and correction flag drop: %+v", got)
 	}
 }
+
+// TestRealDownloadRejectKeepsRunningParts (PR #21 review): Submit
+// stored the resubmitted parts BEFORE Manager.Submit — an ErrTaskActive
+// rejection left the RUNNING worker's recall(id) reading the rejected
+// payload (the AudioSet is deliberately not part of the dedupe key,
+// N5, so two payloads can share one id). The running task's parts stay
+// authoritative: rejection restores the previous entry.
+func TestRealDownloadRejectKeepsRunningParts(t *testing.T) {
+	running := DownloadTask{
+		AnimeTitle: "A", EpisodeNum: "1", DubID: "d", Quality: "720",
+		AudioSet: []string{"voice-1"},
+	}
+	rejected := DownloadTask{
+		AnimeTitle: "A", EpisodeNum: "1", DubID: "d", Quality: "720",
+		AudioSet: []string{"voice-2"},
+	}
+	if downloadTaskID(running) != downloadTaskID(rejected) {
+		t.Fatalf("test premise broken: the payloads must share the dedupe id")
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	manager := download.NewManager(1, func(_ context.Context, _ download.Task, _ func(float64)) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	})
+	bridge := &realDownload{manager: manager, core: &realCore{}}
+	defer func() {
+		close(release)
+		_ = manager.Close()
+	}()
+
+	bridge.Submit(running)
+	<-started // the running task is past the queued→running store
+
+	bridge.Submit(rejected) // same id, RUNNING ⇒ ErrTaskActive no-op
+
+	got, ok := bridge.recall(downloadTaskID(running))
+	if !ok {
+		t.Fatal("running task's parts vanished")
+	}
+	if len(got.AudioSet) != 1 || got.AudioSet[0] != "voice-1" {
+		t.Fatalf("recall returned the REJECTED payload: %+v, want the running task's %+v", got, running)
+	}
+}

@@ -486,8 +486,11 @@ func TestProbeCodecUsesConfiguredFFmpegLocation(t *testing.T) {
 	if _, err := d.ProbeCodec(context.Background(), "a", contracts.VideoSource{URL: "u"}); err != nil {
 		t.Fatalf("ProbeCodec: %v", err)
 	}
-	if gotBin != "/opt/ffmpeg/bin/ffprobe" {
-		t.Fatalf("probe bin = %q, want the configured ffmpeg's sibling ffprobe", gotBin)
+	// The sibling path goes through filepath (probeBin uses
+	// filepath.Join), so the expectation is built the same way — a
+	// literal would fail on Windows separators (PR #21 review).
+	if want := filepath.Join(filepath.Dir("/opt/ffmpeg/bin/ffmpeg"), "ffprobe"); gotBin != want {
+		t.Fatalf("probe bin = %q, want the configured ffmpeg's sibling ffprobe %q", gotBin, want)
 	}
 
 	bare := New(Options{FFmpeg: "ffmpeg"})

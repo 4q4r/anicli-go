@@ -435,3 +435,62 @@ func TestAdvManagerSubmitRejectSnapshotRace(t *testing.T) {
 		t.Fatalf("rejected snapshot = %+v, want the RUNNING task v1.mp4 (never the resubmit's payload)", snap)
 	}
 }
+
+// TestAdvManagerStaleCallbackNoClobber (PR #21 review): runComplete
+// looked the record up by ID only. After settleGen marked a run done,
+// a Submit with the same id is accepted (the id is no longer running),
+// and the OLD run's failing OnComplete then appended its
+// "callback error" onto the REPLACEMENT's record. The interleave below
+// is deterministic: the stale callback itself resubmits the id and
+// blocks until the replacement fully settled — once newSettled closes,
+// the stale error write is the only mutation left, so the assertion is
+// not racy.
+func TestAdvManagerStaleCallbackNoClobber(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(2, func(_ context.Context, _ Task, _ func(float64)) error {
+		return nil
+	})
+	defer func() { _ = m.Close() }()
+
+	resubmitted := make(chan struct{})
+	newSettled := make(chan struct{})
+	_, _ = m.Submit(Task{ID: "x", OutputPath: "old", OnComplete: func(bool, string) error {
+		// The settled record (StateDone) takes the replace path: the
+		// replacement owns the id from here on.
+		_, _ = m.Submit(Task{ID: "x", OutputPath: "new", OnComplete: func(bool, string) error {
+			close(newSettled)
+			return nil
+		}})
+		close(resubmitted)
+		<-newSettled
+		return errors.New("stale boom")
+	}})
+
+	select {
+	case <-resubmitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnComplete never ran")
+	}
+	select {
+	case <-newSettled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement never settled")
+	}
+	// Grace for the stale write: the superseded callback returns right
+	// after newSettled closes, and the unguarded write lands within
+	// microseconds — far inside this sleep.
+	time.Sleep(100 * time.Millisecond)
+
+	got, ok := m.Task("x")
+	if !ok {
+		t.Fatal("record vanished")
+	}
+	if got.Err != "" {
+		t.Fatalf("stale callback polluted the resubmitted record: Err=%q state=%s output=%s",
+			got.Err, got.State, got.OutputPath)
+	}
+	if got.OutputPath != "new" {
+		t.Fatalf("output = %q, want the replacement's payload", got.OutputPath)
+	}
+}

@@ -1,9 +1,12 @@
 package download
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -254,4 +257,131 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestOfflineIndexConcurrentUpserts (169-E): 40 concurrent upserts must
+// all survive. The LoadSnapshot→merge→writeIndex round was unserialized
+// and non-atomic — 36–38 of 40 concurrent upserts were lost to the
+// read-modify-write races, and a crash mid-write swallowed the document
+// as an empty fresh index.
+func TestOfflineIndexConcurrentUpserts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for i := 1; i <= 40; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("EP_%d.mp4", i)), []byte("media"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 40)
+	for i := 1; i <= 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			err := UpsertEntry(dir, EntryInput{
+				EpisodeNum: strconv.Itoa(i),
+				VideoKey:   "v",
+				AudioKey:   "a",
+				Quality:    720,
+				FilePath:   filepath.Join(dir, fmt.Sprintf("EP_%d.mp4", i)),
+			})
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent upsert: %v", err)
+	}
+	snap, err := LoadSnapshot(dir)
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	if len(snap.Entries) != 40 {
+		t.Fatalf("entries after 40 concurrent upserts = %d, want 40 (every upsert must survive)", len(snap.Entries))
+	}
+}
+
+// TestOfflineIndexCorruptBackupOnUpsert (169-E): an unparseable index
+// document must be kept as a .corrupt-<timestamp> backup before the
+// next upsert starts fresh — the data stays recoverable by hand
+// instead of being silently overwritten.
+func TestOfflineIndexCorruptBackupOnUpsert(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	broken := []byte("{ this was a crash-truncated index")
+	if err := os.WriteFile(filepath.Join(dir, IndexFilename), broken, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "EP_1.mp4"), []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UpsertEntry(dir, EntryInput{
+		EpisodeNum: "1",
+		VideoKey:   "v",
+		AudioKey:   "a",
+		Quality:    720,
+		FilePath:   filepath.Join(dir, "EP_1.mp4"),
+	}); err != nil {
+		t.Fatalf("UpsertEntry: %v", err)
+	}
+
+	backups, err := filepath.Glob(filepath.Join(dir, IndexFilename+".corrupt-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf(".corrupt backups = %v, want exactly one", backups)
+	}
+	kept, err := os.ReadFile(backups[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kept) != string(broken) {
+		t.Fatalf("backup content = %q, want the original broken bytes %q", kept, broken)
+	}
+
+	snap, err := LoadSnapshot(dir)
+	if err != nil {
+		t.Fatalf("fresh LoadSnapshot: %v", err)
+	}
+	if len(snap.Entries) != 1 {
+		t.Fatalf("fresh index entries = %d, want 1", len(snap.Entries))
+	}
+}
+
+// TestOfflineIndexWriteLeavesNoTempFiles (169-E): the index is written
+// through a same-dir temp file + rename; no staging file may survive a
+// completed write (a crash mid-write leaves the OLD document intact,
+// never a half-written one at the canonical path).
+func TestOfflineIndexWriteLeavesNoTempFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "EP_1.mp4"), []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertEntry(dir, EntryInput{
+		EpisodeNum: "1",
+		VideoKey:   "v",
+		AudioKey:   "a",
+		Quality:    720,
+		FilePath:   filepath.Join(dir, "EP_1.mp4"),
+	}); err != nil {
+		t.Fatalf("UpsertEntry: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != IndexFilename && e.Name() != "EP_1.mp4" {
+			t.Errorf("stray file %q survived the index write", e.Name())
+		}
+	}
 }

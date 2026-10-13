@@ -384,7 +384,7 @@ func TestHeaderArgsStripsCRLF(t *testing.T) {
 	t.Parallel()
 
 	args := headerArgs(map[string]string{
-		"X-Injected": "yes\r\nGET /smuggled HTTP/1.1\r\nHost: evil",
+		"X-Injected":        "yes\r\nGET /smuggled HTTP/1.1\r\nHost: evil",
 		"X-Key\r\nX-Forged": "v",
 	})
 	if len(args) != 2 {

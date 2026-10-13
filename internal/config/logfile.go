@@ -115,9 +115,12 @@ func pruneRotated(path string, maxFiles int) error {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ext) {
 			continue
 		}
-		info, err := e.Info()
+		// os.Stat FOLLOWS the link: a dangling symlink skips here just
+		// like a file vanished mid-prune (an lstat would admit it as a
+		// fresh mtime and evict real logs instead).
+		info, err := os.Stat(filepath.Join(dir, e.Name()))
 		if err != nil {
-			continue // vanished or dangling mid-prune: skip
+			continue
 		}
 		files = append(files, aged{path: filepath.Join(dir, e.Name()), mod: info.ModTime()})
 	}

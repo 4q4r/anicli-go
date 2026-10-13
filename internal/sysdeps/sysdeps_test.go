@@ -444,3 +444,49 @@ func TestEveryReferencedDepsKeyExists(t *testing.T) {
 		}
 	}
 }
+
+// TestEnsureStartupNonTTYBootstrapPrintsFollowUp (169-C): the non-TTY
+// bootstrap flow must print BOTH command sets — the manager bootstrap
+// AND the follow-up mpv/ffmpeg install. planFor() re-probing the same
+// Looker saw the manager still missing, returned the same plan and
+// suppressed the follow-up by titleKey equality; the next-step
+// commands are static per OS and need no probe.
+func TestEnsureStartupNonTTYBootstrapPrintsFollowUp(t *testing.T) {
+	bundle(t, "ru")
+	var out bytes.Buffer
+	look := &fakeLook{tools: map[string]bool{}} // no brew, no mpv/ffmpeg
+	run := &runFlip{look: look}
+	env := Env{Out: &out, Look: look.look, Run: run.run, In: strings.NewReader("y\ny\n"), InTTY: false, GOOS: "darwin"}
+	notices := EnsureStartup(env)
+	got := out.String()
+	if !strings.Contains(got, "raw.githubusercontent.com/Homebrew/install") {
+		t.Errorf("output missing the brew bootstrap command:\n%s", got)
+	}
+	if !strings.Contains(got, "brew install mpv ffmpeg") {
+		t.Errorf("non-TTY bootstrap flow missing the follow-up install commands:\n%s", got)
+	}
+	if len(run.calls) != 0 {
+		t.Fatalf("runner called under non-TTY: %v, want never", run.calls)
+	}
+	if len(notices) == 0 {
+		t.Fatal("notices empty, want the missing-deps warning")
+	}
+}
+
+// TestEnsureStartupNonTTYBootstrapPrintsFollowUpWindows pins the same
+// contract for the Chocolatey bootstrap on windows.
+func TestEnsureStartupNonTTYBootstrapPrintsFollowUpWindows(t *testing.T) {
+	bundle(t, "ru")
+	var out bytes.Buffer
+	look := &fakeLook{tools: map[string]bool{}} // no winget/choco, no mpv/ffmpeg
+	run := &runFlip{look: look}
+	env := Env{Out: &out, Look: look.look, Run: run.run, In: strings.NewReader("y\ny\n"), InTTY: false, GOOS: "windows"}
+	EnsureStartup(env)
+	got := out.String()
+	if !strings.Contains(got, "community.chocolatey.org/install.ps1") {
+		t.Errorf("output missing the choco bootstrap command:\n%s", got)
+	}
+	if !strings.Contains(got, "choco install mpvio ffmpeg -y") {
+		t.Errorf("non-TTY bootstrap flow missing the follow-up install commands:\n%s", got)
+	}
+}

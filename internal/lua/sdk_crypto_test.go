@@ -66,9 +66,9 @@ func TestSDKCryptoAESCBDecrypt(t *testing.T) {
 	t.Parallel()
 
 	e, _, _ := newSDKEngine(t, nil)
-	key := "0123456789abcdef0123456789abcdef" // raw 32 bytes
-	iv := "fedcba9876543210"                  // raw 16 bytes
-	ct := aesCBCEncrypt(t, []byte(key), []byte(iv), []byte(`{"file":"https://cdn.example/master.m3u8"}`))
+	key := "0123456789abcdef0123456789abcdef"                                                             // raw 32 bytes
+	iv := "fedcba9876543210"                                                                              // raw 16 bytes
+	ct := aesCBCEncrypt(t, []byte(key), []byte(iv), []byte(`{"file":"https://cdn.example/master.m3u8"}`)) //nolint:gosec // test fixture: deterministic IV required for the byte-exact golden comparison
 
 	got, err := evalSDK(t, e, fmt.Sprintf(
 		`return anicli.crypto.aes_cbc_decrypt(%q, %q, %s)`, key, iv, luaBytesLiteral(ct)))
@@ -89,7 +89,7 @@ func TestSDKCryptoAESCBDecryptRejectsBadPadding(t *testing.T) {
 
 	// A ciphertext whose final block carries no valid PKCS7 tail must
 	// raise, never return padded garbage.
-	ct := aesCBCEncrypt(t, []byte(key), []byte(iv), []byte("sixteen-byte msg"))
+	ct := aesCBCEncrypt(t, []byte(key), []byte(iv), []byte("sixteen-byte msg")) //nolint:gosec // test fixture: deterministic IV required for the byte-exact golden comparison
 	truncated := ct[:len(ct)-1] + "\x00"
 	if _, err := evalSDK(t, e, fmt.Sprintf(
 		`local ok = pcall(anicli.crypto.aes_cbc_decrypt, %q, %q, %s)

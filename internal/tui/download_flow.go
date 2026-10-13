@@ -115,7 +115,9 @@ type downloadEpisodeReport struct {
 	SkipDub string
 	// DroppedAudio names the PR165 marked dubs this episode does not
 	// carry: the episode still downloads with video + the dubs it
-	// has, and the report row names the drop loudly.
+	// has, and the report row names the drop loudly. Merges the
+	// resolve-phase drops with the dubs that died between the resolve
+	// and the download (M2).
 	DroppedAudio []string
 	// SkipAudioSet marks an episode carrying NONE of the marked dubs:
 	// skipped entirely (never a silent video-only file), folded into
@@ -346,7 +348,7 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 		stamped := task
 		stampResolvedDub(&stamped, stub.Dub)
 		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, stub.Dub+"…"))
-		path, err := deps.Download.Download(ctx, stamped)
+		path, dlDropped, err := deps.Download.Download(ctx, stamped)
 		if err != nil {
 			report[i].Err = err
 			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_error", i18n.Vals{"err": err.Error()})))
@@ -356,6 +358,9 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 			continue
 		}
 		report[i].Path = path
+		// M2: the dubs that died between the resolve and the download
+		// land on the same row, in the same established suffix.
+		report[i].DroppedAudio = mergeDroppedAudio(report[i].DroppedAudio, dlDropped)
 		ok++
 		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_done")))
 	}
@@ -448,6 +453,31 @@ func renderDroppedSuffix(dropped []string) string {
 		names = append(names, stripProviderTag(key))
 	}
 	return i18n.T("download.row_dropped", i18n.Vals{"dubs": strings.Join(names, ", ")})
+}
+
+// mergeDroppedAudio unions the resolve-phase and download-time (M2)
+// drop lists in order without duplicates: a dub dead at BOTH phases
+// (the download re-resolves the whole marked set) must not render
+// twice on the row suffix.
+func mergeDroppedAudio(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	merged := make([]string, 0, len(base)+len(extra))
+	for _, key := range base {
+		if !seen[key] {
+			seen[key] = true
+			merged = append(merged, key)
+		}
+	}
+	for _, key := range extra {
+		if !seen[key] {
+			seen[key] = true
+			merged = append(merged, key)
+		}
+	}
+	return merged
 }
 
 // renderDownloadSettle composes the foreground settle line: the

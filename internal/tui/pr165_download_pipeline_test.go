@@ -5,8 +5,9 @@ package tui
 // with the default mark and the mkv extension, video-only probes the
 // video codec for the container, audio-only bit-extracts into the
 // probed codec's native container (and stays out of the offline
-// index), and a marked set that resolves to NOTHING is a typed error —
-// never a silent video-only file.
+// index), and a marked set that resolves to NOTHING degrades to a
+// video-only mux with the dropped dubs returned loudly (M2 — the
+// report row names them; the file is never a SILENT video-only one).
 
 import (
 	"context"
@@ -87,7 +88,7 @@ func TestDownloadOneMultiAudioMuxPinsTracks(t *testing.T) {
 	dl := &capturingDownloader{}
 	c, rec := pr165Core(t, dl, &stubProber{video: "h264", audio: "aac"})
 
-	_, err := c.downloadOne(context.Background(), pr165MuxTask())
+	_, _, err := c.downloadOne(context.Background(), pr165MuxTask())
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestDownloadOneMultiAudioSingleAACTracksProbesToMP4(t *testing.T) {
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Second Dub"}
 	task.DefaultAudio = ""
-	_, err := c.downloadOne(context.Background(), task)
+	_, _, err := c.downloadOne(context.Background(), task)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestDownloadOneVideoOnlyProbesContainer(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "video_only"
 	task.AudioSet = nil
-	if _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	in := dl.inputs[0]
@@ -173,7 +174,7 @@ func TestDownloadOneVideoOnlyProbesContainer(t *testing.T) {
 
 	dl2 := &capturingDownloader{}
 	c2, _ := pr165Core(t, dl2, &stubProber{video: "mpeg2video"})
-	if _, err := c2.downloadOne(context.Background(), task); err != nil {
+	if _, _, err := c2.downloadOne(context.Background(), task); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	if !strings.HasSuffix(dl2.inputs[0].OutputPath, ".mkv") {
@@ -194,7 +195,7 @@ func TestDownloadOneAudioOnlyNativeContainer(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "audio_only"
 	task.AudioSet = nil
-	path, err := c.downloadOne(context.Background(), task)
+	path, _, err := c.downloadOne(context.Background(), task)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -238,30 +239,107 @@ func (p *deniedDubProvider) ResolveStream(_ context.Context, _ contracts.Episode
 	}}, nil
 }
 
-// TestDownloadOneMultiAudioAllDroppedIsTypedError pins the honest
-// failure: a marked set where NOTHING resolved for the episode errors
-// out — the file is never silently written video-only.
-func TestDownloadOneMultiAudioAllDroppedIsTypedError(t *testing.T) {
+// TestDownloadOneMultiAudioPartialDropReportsDropped pins the M2
+// report half of mandate #7: a dub dead at download time drops AND
+// rides the returned dropped list, so the report row can name it —
+// the drop is never invisible between the resolve and the download.
+func TestDownloadOneMultiAudioPartialDropReportsDropped(t *testing.T) {
 	t.Parallel()
 
 	dl := &capturingDownloader{}
 	reg := providers.NewEmptyRegistry()
 	if err := reg.Register(&deniedDubProvider{id: "animevib", allowed: map[string]bool{
-		"Amazing Dubbing": true, // the video dub resolves; the marked set does not
+		"Amazing Dubbing": true,
+		"Second Dub":      true,
 	}}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	c := &realCore{registry: reg, dl: dl, prober: &stubProber{video: "h264"}, log: testLogger()}
 
 	task := pr165MuxTask()
-	task.AudioSet = []string{"[animevib] Ghost Dub"} // the episode does not carry it
+	task.AudioSet = []string{"[animevib] Amazing Dubbing", "[animevib] Ghost Dub"}
 	task.DefaultAudio = ""
-	_, err := c.downloadOne(context.Background(), task)
-	if err == nil || !strings.Contains(err.Error(), "none of the marked dubs") {
-		t.Fatalf("an all-dropped set must be a typed error, got %v", err)
+	path, dropped, err := c.downloadOne(context.Background(), task)
+	if err != nil {
+		t.Fatalf("downloadOne: %v", err)
 	}
-	if len(dl.inputs) != 0 {
-		t.Fatalf("no ffmpeg run may happen, got %+v", dl.inputs)
+	if path == "" {
+		t.Fatalf("the episode downloads, got an empty path")
+	}
+	if len(dropped) != 1 || dropped[0] != "[animevib] Ghost Dub" {
+		t.Fatalf("the download-time drop must ride the result, got %v", dropped)
+	}
+}
+
+// TestDownloadOneNoDropReturnsCleanResult pins the no-drop shape: a
+// marked set that fully resolves returns the path and NO dropped
+// names — the report row stays exactly as before.
+func TestDownloadOneNoDropReturnsCleanResult(t *testing.T) {
+	t.Parallel()
+
+	dl := &capturingDownloader{}
+	c, _ := pr165Core(t, dl, &stubProber{video: "h264", audio: "aac"})
+
+	path, dropped, err := c.downloadOne(context.Background(), pr165MuxTask())
+	if err != nil {
+		t.Fatalf("downloadOne: %v", err)
+	}
+	if path == "" {
+		t.Fatalf("the episode downloads, got an empty path")
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("a fully carried set must drop nothing, got %v", dropped)
+	}
+}
+
+// TestDownloadOneMultiAudioAllDroppedDegradesToVideoOnlyLoudly pins
+// the M2 edge: EVERY marked dub dead at download time no longer fails
+// the episode (the video leg is already resolved) — the mux degrades
+// to video-only (probed container, no tracks) and the dropped list
+// names them all. The loud half of mandate #7: a video-only file,
+// never a silent one — and it still stays out of the offline index
+// (the marked-set shape).
+func TestDownloadOneMultiAudioAllDroppedDegradesToVideoOnlyLoudly(t *testing.T) {
+	t.Parallel()
+
+	dl := &capturingDownloader{}
+	sinkLog, buf := captureLogger()
+	reg := providers.NewEmptyRegistry()
+	if err := reg.Register(&deniedDubProvider{id: "animevib", allowed: map[string]bool{
+		"Amazing Dubbing": true, // only the video dub resolves
+	}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	c := &realCore{registry: reg, dl: dl, prober: &stubProber{video: "h264"}, log: sinkLog}
+
+	task := pr165MuxTask()
+	task.AudioSet = []string{"[animevib] Ghost Dub", "[animevib] Second Ghost"}
+	task.DefaultAudio = ""
+	path, dropped, err := c.downloadOne(context.Background(), task)
+	if err != nil {
+		t.Fatalf("an all-dropped set must degrade, not fail: %v", err)
+	}
+	if path == "" {
+		t.Fatalf("the video-only file is written, got an empty path")
+	}
+	if len(dropped) != 2 || dropped[0] != "[animevib] Ghost Dub" || dropped[1] != "[animevib] Second Ghost" {
+		t.Fatalf("every dead dub must ride the result, got %v", dropped)
+	}
+	if len(dl.inputs) != 1 {
+		t.Fatalf("one ffmpeg run expected, got %d", len(dl.inputs))
+	}
+	in := dl.inputs[0]
+	if in.Mode != download.ModeVideoOnly {
+		t.Errorf("the mux must degrade to video-only, got %v", in.Mode)
+	}
+	if len(in.Tracks) != 0 || in.Audio != nil {
+		t.Errorf("the degraded file must carry no audio: %+v", in)
+	}
+	if !strings.HasSuffix(in.OutputPath, ".mp4") {
+		t.Errorf("the h264 video-only container must be mp4, got %q", in.OutputPath)
+	}
+	if !strings.Contains(buf.String(), "offline index not updated") {
+		t.Errorf("the degraded marked-set file must keep the offline-index skip log:\n%s", buf.String())
 	}
 }
 
@@ -284,7 +362,7 @@ func TestDownloadOneMultiAudioPartialDropMuxesTheRest(t *testing.T) {
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Amazing Dubbing", "[animevib] Second Dub", "[animevib] Ghost Dub"}
 	task.DefaultAudio = "[animevib] Ghost Dub" // dropped → the invariant repairs
-	if _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	in := dl.inputs[0]
@@ -310,7 +388,7 @@ func TestDownloadOneProbeFailureDegradesToMKV(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "video_only"
 	task.AudioSet = nil
-	if _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
 		t.Fatalf("a probe failure must not fail the download, got %v", err)
 	}
 	if !strings.HasSuffix(dl.inputs[0].OutputPath, ".mkv") {

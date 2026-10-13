@@ -404,6 +404,150 @@ func TestPR165PerEpisodeDroppedRowRenders(t *testing.T) {
 	}
 }
 
+// droppingDownload fails marked dubs at DOWNLOAD time (the M2
+// window): the resolve phase carried them, the download leg drops
+// them — the only source of the row suffix in the pins below.
+type droppingDownload struct {
+	fakeDownload
+	dropped []string
+}
+
+func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, error) {
+	path, _, err := f.fakeDownload.Download(ctx, task)
+	return path, f.dropped, err
+}
+
+// mergedEpisodeOne runs the session merge for one animego episode and
+// returns the merged episode 1 (the tagged-embed shape the resolve
+// probes and the report flow consume).
+func mergedEpisodeOne(t *testing.T, deps *Deps) contracts.Episode {
+	t.Helper()
+	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u1", SourceID: "animego"}}
+	s := NewSessionScreen(deps, group[0], group)
+	s.loadEpisodesSync()
+	return s.episodes["1"]
+}
+
+// downloadTimeDropDeps builds a one-episode session whose resolve
+// phase carries BOTH marked dubs (nothing drops at resolve) while the
+// download service reports the given download-time drops.
+func downloadTimeDropDeps(dropped []string) *Deps {
+	return &Deps{
+		Episode: &fakeEpisode{
+			episodes: map[string][]contracts.Episode{
+				"animego": {
+					{Num: "1", RawID: "a1", RawEmbeds: map[string][]string{
+						"Дубль 1": {"u1v"}, "AniDub": {"u1x"},
+					}},
+				},
+			},
+			streams: map[string]contracts.MediaStream{
+				"[animego] Дубль 1": {Links: map[string]contracts.VideoSource{"720": {URL: "v-go"}}},
+				"[animego] AniDub":  {Links: map[string]contracts.VideoSource{"720": {URL: "x-go"}}},
+			},
+		},
+		Download: &droppingDownload{dropped: dropped},
+		Log:      testLogger(),
+	}
+}
+
+// TestDownloadTimeDropLandsOnReportRow pins M2 end to end: a dub the
+// resolve phase carried but the download leg dropped lands on the
+// path row in the established suffix («without marked: …») — a
+// download-time drop is never invisible. The no-drop row stays
+// unchanged.
+func TestDownloadTimeDropLandsOnReportRow(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
+	deps := downloadTimeDropDeps([]string{"[animego] AniDub"})
+	marked := []string{"[animego] Дубль 1", "[animego] AniDub"}
+	tasks := []DownloadTask{
+		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps), AudioSet: marked},
+	}
+
+	ch := make(chan string, 64)
+	var settled downloadSettledMsg
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		settled = runForegroundDownload(context.Background(), deps, tasks, "[animego] Дубль 1", false, ch)
+		close(ch)
+	}()
+	for range ch {
+	}
+	<-done
+
+	if settled.err != nil || settled.count != 1 {
+		t.Fatalf("the episode downloads: err %v count %d", settled.err, settled.count)
+	}
+	if len(settled.report[0].DroppedAudio) != 1 || settled.report[0].DroppedAudio[0] != "[animego] AniDub" {
+		t.Fatalf("the download-time drop must merge into the report, got %v", settled.report[0].DroppedAudio)
+	}
+	status := renderDownloadSettle(settled)
+	if !strings.Contains(status, "without marked: AniDub") {
+		t.Fatalf("the path row must name the download-time drop:\n%s", status)
+	}
+
+	// The no-drop twin: the same flow without download-time drops
+	// keeps the row suffix-free.
+	deps2 := downloadTimeDropDeps(nil)
+	tasks2 := []DownloadTask{
+		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps2), AudioSet: marked},
+	}
+	ch2 := make(chan string, 64)
+	done2 := make(chan struct{})
+	var settled2 downloadSettledMsg
+	go func() {
+		defer close(done2)
+		settled2 = runForegroundDownload(context.Background(), deps2, tasks2, "[animego] Дубль 1", false, ch2)
+		close(ch2)
+	}()
+	for range ch2 {
+	}
+	<-done2
+	status2 := renderDownloadSettle(settled2)
+	if strings.Contains(status2, "without marked") {
+		t.Fatalf("a no-drop download must keep the row clean:\n%s", status2)
+	}
+}
+
+// TestAllDroppedAtDownloadRowNamesEveryDub pins the M2 edge wording:
+// every marked dub dead at download time leaves the video-only file
+// and the row names them all in the established suffix.
+func TestAllDroppedAtDownloadRowNamesEveryDub(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
+	deps := downloadTimeDropDeps([]string{"[animego] Дубль 1", "[animego] AniDub"})
+	marked := []string{"[animego] Дубль 1", "[animego] AniDub"}
+	tasks := []DownloadTask{
+		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps), AudioSet: marked},
+	}
+
+	ch := make(chan string, 64)
+	var settled downloadSettledMsg
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		settled = runForegroundDownload(context.Background(), deps, tasks, "[animego] Дубль 1", false, ch)
+		close(ch)
+	}()
+	for range ch {
+	}
+	<-done
+
+	if settled.err != nil || settled.count != 1 {
+		t.Fatalf("the episode downloads video-only: err %v count %d", settled.err, settled.count)
+	}
+	status := renderDownloadSettle(settled)
+	if !strings.Contains(status, "without marked: Дубль 1, AniDub") {
+		t.Fatalf("the video-only row must name every dropped dub:\n%s", status)
+	}
+}
+
 // TestPR165AudioOnlyModeSkipsAudioSet pins the mode semantics: the
 // «только аудио» batch resolves the CHOSEN dub (ask-first doctrine)
 // and carries no audio set — one codec-preserving file per episode.

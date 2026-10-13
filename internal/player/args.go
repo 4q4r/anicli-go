@@ -125,6 +125,12 @@ func BuildArgs(req Request, opts Options) []string {
 	parts = append(parts,
 		"--msg-level=all=error",
 		"--no-ytdl",
+		// 169-I: the URL is a bare positional; a provider URL starting
+		// with '-' otherwise parses as an mpv OPTION (last-wins
+		// overrides, a hostile --input-ipc-server, or --version instead
+		// of playback). `--` ends mpv's option parsing — everything
+		// after it is a playlist file.
+		"--",
 		req.URL,
 	)
 	return parts

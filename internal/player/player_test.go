@@ -268,6 +268,7 @@ func TestBuildArgsOnlineGolden(t *testing.T) {
 		"--vf=flip",
 		"--msg-level=all=error",
 		"--no-ytdl",
+		"--",
 		"https://cdn.example/ep.m3u8",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -318,6 +319,7 @@ func TestBuildArgsOfflineGolden(t *testing.T) {
 		"--cursor-autohide=1000",
 		"--msg-level=all=error",
 		"--no-ytdl",
+		"--",
 		"/downloads/Anime/Anime - 1.mp4",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -727,5 +729,28 @@ func TestPlayLogPumpDeliversAllOutput(t *testing.T) {
 	defer mu.Unlock()
 	if delivered != 400 {
 		t.Errorf("log lines delivered = %d, want 400 (pipe must drain before Wait)", delivered)
+	}
+}
+
+// TestBuildArgsEndOfOptionsGuard (169-I): the URL is a bare positional
+// argument — a provider URL starting with '-' became an mpv OPTION
+// (live repro: a hostile --input-ipc-server=/attacker/path was created;
+// --version printed the version and exited 0; mpv options are
+// last-wins). mpv's `--` guard ends option parsing: everything after
+// it is a playlist file, whatever it looks like.
+func TestBuildArgsEndOfOptionsGuard(t *testing.T) {
+	t.Parallel()
+
+	got := BuildArgs(Request{URL: "--version"}, Options{Bin: "mpv"})
+	if last := got[len(got)-1]; last != "--version" {
+		t.Fatalf("the hostile URL must stay the final argv element, got %v", got)
+	}
+	if guard := got[len(got)-2]; guard != "--" {
+		t.Fatalf("argv must end `-- <url>` (mpv end-of-options), got %v", got)
+	}
+	for i, a := range got[:len(got)-2] {
+		if a == "--" {
+			t.Fatalf("more than one -- guard (index %d): %v", i, got)
+		}
 	}
 }

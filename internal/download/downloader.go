@@ -136,8 +136,13 @@ func TempPathFor(out string) string {
 	return strings.TrimSuffix(out, ext) + TempSuffix + ext
 }
 
-// headerArgs renders per-input HTTP headers (python _build_headers_args:
-// one -headers pair per header, CRLF-terminated).
+// headerArgs renders per-input HTTP headers as ONE -headers pair:
+// ffmpeg honors only the LAST -headers argument, so the python shape
+// (one pair per header) silently dropped every header but the final
+// one — all headers are CRLF-joined inside a single value instead.
+// CR/LF is stripped from keys and values first: the value is a
+// newline-joined blob, and an embedded CRLF would smuggle extra header
+// lines (or whole extra requests) into the HTTP exchange.
 func headerArgs(headers map[string]string) []string {
 	if len(headers) == 0 {
 		return nil
@@ -147,11 +152,22 @@ func headerArgs(headers map[string]string) []string {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var args []string
+	var joined strings.Builder
 	for _, k := range keys {
-		args = append(args, "-headers", k+": "+headers[k]+"\r\n")
+		joined.WriteString(stripCRLF(k))
+		joined.WriteString(": ")
+		joined.WriteString(stripCRLF(headers[k]))
+		joined.WriteString("\r\n")
 	}
-	return args
+	return []string{"-headers", joined.String()}
+}
+
+// stripCRLF removes CR and LF bytes from one header key/value.
+func stripCRLF(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 // runner executes ffmpeg; swapped by tests.

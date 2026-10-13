@@ -318,3 +318,95 @@ func runCmd(ctx context.Context, bin string, args []string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// countArgPairs counts "-flag value" occurrences in an argv.
+func countArgPairs(args []string, flag string) int {
+	n := 0
+	for _, a := range args {
+		if a == flag {
+			n++
+		}
+	}
+	return n
+}
+
+// TestHeaderArgsSingleArgument (169-A): ffmpeg honors only the LAST
+// -headers argument — a multi-header map rendered as one pair per
+// header silently dropped every header but the final one (live-verified
+// against ffmpeg n9.0.2 on a local HTTP server: only Header2 arrived).
+// The map must render ONE -headers pair carrying every header
+// CRLF-joined inside a single value.
+func TestHeaderArgsSingleArgument(t *testing.T) {
+	t.Parallel()
+
+	args := headerArgs(map[string]string{
+		"Referer":    "https://ref.example/",
+		"User-Agent": "anicli/1",
+	})
+	if got := countArgPairs(args, "-headers"); got != 1 {
+		t.Fatalf("-headers pairs = %d (argv %v), want exactly one", got, args)
+	}
+	value := args[1]
+	for _, want := range []string{"Referer: https://ref.example/\r\n", "User-Agent: anicli/1\r\n"} {
+		if !strings.Contains(value, want) {
+			t.Errorf("joined value %q missing %q", value, want)
+		}
+	}
+}
+
+// TestHeaderArgsBuildCommandSinglePair (169-A integration): the full
+// download argv carries one -headers pair per input, however many
+// headers the provider attached.
+func TestHeaderArgsBuildCommandSinglePair(t *testing.T) {
+	t.Parallel()
+
+	cmd := BuildCommand(CommandInput{
+		Video: contracts.VideoSource{
+			URL: "https://cdn/v.m3u8",
+			Headers: map[string]string{
+				"Referer":    "https://r/",
+				"User-Agent": "ua",
+				"Origin":     "https://o",
+			},
+		},
+		OutputPath: "/t/out.mp4",
+	})
+	if got := countArgPairs(cmd.Args, "-headers"); got != 1 {
+		t.Fatalf("video-input -headers pairs = %d (argv %v), want 1", got, cmd.Args)
+	}
+}
+
+// TestHeaderArgsStripsCRLF (169-J): CR/LF inside a header key or value
+// must never reach the ffmpeg argv — -headers lines are joined
+// verbatim, so an embedded CRLF smuggles extra header lines (and, with
+// a path-shaped payload, whole extra requests) into the HTTP exchange.
+func TestHeaderArgsStripsCRLF(t *testing.T) {
+	t.Parallel()
+
+	args := headerArgs(map[string]string{
+		"X-Injected": "yes\r\nGET /smuggled HTTP/1.1\r\nHost: evil",
+		"X-Key\r\nX-Forged": "v",
+	})
+	if len(args) != 2 {
+		t.Fatalf("argv = %v, want one -headers pair", args)
+	}
+	value := args[1]
+	// Every remaining CRLF is a pair terminator: splitting the joined
+	// blob on CRLF yields exactly one line per header (never more) and
+	// no line carries an interior break.
+	lines := strings.Split(value, "\r\n")
+	if len(lines) != 3 { // two header lines + the trailing-terminator empty
+		t.Fatalf("rendered -headers value splits into %d lines (%q), want 2 header lines", len(lines), value)
+	}
+	for i, line := range lines[:len(lines)-1] {
+		if line == "" {
+			t.Fatalf("header line %d vanished (an interior break survived): %q", i, value)
+		}
+		if strings.ContainsAny(line, "\r\n") {
+			t.Fatalf("line %d carries an interior break: %q", i, line)
+		}
+	}
+	if strings.Contains(value, "GET /smuggled\r\n") || strings.Contains(value, "X-Forged\r\n") {
+		t.Fatalf("an injected line survived as its own header: %q", value)
+	}
+}

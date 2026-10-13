@@ -77,7 +77,7 @@ func TestAESEncryptMatchesPython(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := AESEncrypt(tt.plain, tt.key, aesIV)
+			got, err := AESEncrypt(tt.plain, tt.key, aesIV) //nolint:gosec // test fixture: deterministic IV required for the byte-exact golden comparison
 			if err != nil {
 				t.Fatalf("AESEncrypt: %v", err)
 			}

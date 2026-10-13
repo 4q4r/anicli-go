@@ -803,7 +803,7 @@ type realDownload struct {
 	parts map[string]DownloadTask
 }
 
-func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string, error) {
+func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string, []string, error) {
 	return s.core.downloadOne(ctx, task)
 }
 
@@ -878,14 +878,17 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 	if !ok {
 		return fmt.Errorf("tui: download: task %q lost its parts", task.ID)
 	}
-	_, err := c.downloadOne(ctx, parts) // the background runner needs no path
+	_, _, err := c.downloadOne(ctx, parts) // the background runner needs no path or drop list
 	return err
 }
 
 // downloadOne performs the full pipeline: resolve stream, resolve
 // skips, merge via ffmpeg, index the result (python
 // handle_download_flow foreground path). The written file path
-// returns to the caller (the PR64 #3 per-episode report).
+// returns to the caller (the PR64 #3 per-episode report) together
+// with the marked dubs that died BETWEEN the resolve and the download
+// (M2: the report row names them in the established «без отмеченных:
+// …» suffix — a download-time drop is never invisible).
 //
 // PR165: the content mode dispatches the shape. video+аудио (the
 // default, "" included) keeps the legacy single-audio command when no
@@ -896,10 +899,10 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 // аудио» bit-extracts the chosen dub's audio into its native
 // container (never a re-encode) and stays out of the offline index —
 // the index rows promise a playable video episode.
-func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, error) {
+func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, []string, error) {
 	p, ok := c.registry.Get(task.ProviderID)
 	if !ok {
-		return "", fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
+		return "", nil, fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
 	}
 
 	// The merged-session decomposition (#157): each resolve leg gets
@@ -915,20 +918,21 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	// its own bare dub name, python stream_resolver.py:174 parity.
 	stream, err := p.ResolveStream(ctx, videoEpisode, stripProviderTag(task.DubID))
 	if err != nil {
-		return "", fmt.Errorf("tui: download: resolve: %w", err)
+		return "", nil, fmt.Errorf("tui: download: resolve: %w", err)
 	}
 
 	mode := download.Mode(task.Mode)
 
 	// «только аудио»: the CHOSEN dub's audio alone, codec-preserving.
 	if mode == download.ModeAudioOnly {
-		return c.downloadAudioOnly(ctx, task, stream)
+		path, err := c.downloadAudioOnly(ctx, task, stream)
+		return path, nil, err
 	}
 
 	quality := pickQuality(stream.Links, task.Quality)
 	video, ok := stream.Links[quality]
 	if !ok {
-		return "", fmt.Errorf("tui: download: quality %q unavailable", quality)
+		return "", nil, fmt.Errorf("tui: download: quality %q unavailable", quality)
 	}
 
 	// The python-parity bake: the episode's skips resolve to an
@@ -949,25 +953,23 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		Title:        i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
 	}
 
+	// dropped carries the marked dubs that died between the resolve
+	// and the download (M2): it rides the result so the report row
+	// names the loss.
+	var dropped []string
 	var ext string
 	switch {
 	case mode == download.ModeVideoOnly:
 		// Research §2.2: mp4 only for the registered set, else mkv;
 		// a failed probe degrades to the universal mkv.
-		ext = "mkv"
-		if c.prober != nil {
-			if codec, err := c.prober.ProbeCodec(ctx, "v", video); err == nil {
-				ext = download.ContainerFor(download.ModeVideoOnly, codec, nil)
-			} else {
-				c.logger().Warn("download: video codec probe failed; falling back to mkv",
-					"episode", task.Episode.Num, "error", err)
-			}
-		}
+		ext = c.videoOnlyExtension(ctx, task.Episode.Num, video)
 		input.Mode = download.ModeVideoOnly
 	case len(task.AudioSet) > 0:
-		tracks, dropped, terr := c.resolveAudioTracks(ctx, task)
+		var tracks []download.AudioTrack
+		var terr error
+		tracks, dropped, terr = c.resolveAudioTracks(ctx, task)
 		if terr != nil {
-			return "", terr
+			return "", nil, terr
 		}
 		if len(dropped) > 0 {
 			// Mandate #7, download-time half: a dub dead at download
@@ -975,6 +977,19 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 			// typed the same verdict for the report).
 			c.logger().Warn("download: marked dubs dropped at download time",
 				"episode", task.Episode.Num, "dubs", dropped)
+		}
+		if len(tracks) == 0 {
+			// EVERY marked dub died between the resolve and the
+			// download: the video leg is already resolved, so the
+			// mux degrades to video-only (the same probed container
+			// rule) instead of failing the episode — and the dropped
+			// list rides the result so the report row names the loss
+			// loudly (M2: a video-only file, never a SILENT one).
+			c.logger().Warn("download: every marked dub dropped at download time; muxing video-only",
+				"episode", task.Episode.Num, "dubs", dropped)
+			ext = c.videoOnlyExtension(ctx, task.Episode.Num, video)
+			input.Mode = download.ModeVideoOnly
+			break
 		}
 		ext = c.multiAudioExtension(ctx, task.Episode.Num, video, tracks)
 		input.Mode = download.ModeVideoAudio
@@ -1008,7 +1023,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	input.OutputPath = outPath
 
 	if err := c.dl.Download(ctx, input); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	if mode == download.ModeVideoOnly || len(task.AudioSet) > 0 {
@@ -1017,10 +1032,12 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		// legacy episode shape (single video+audio pair per key) and
 		// a multi-track row would promise offline playback the
 		// player does not model yet. The file lands in the same
-		// directory and the report carries its path.
+		// directory and the report carries its path. The all-dropped
+		// video-only degradation (M2) lands here too: the marked set
+		// still rides the task.
 		c.logger().Info("download: file written; offline index not updated (PR165 shape)",
 			"episode", task.Episode.Num, "path", outPath)
-		return outPath, nil
+		return outPath, dropped, nil
 	}
 
 	var animeID *int64
@@ -1042,17 +1059,35 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		Quality:    qualityIntOf(quality),
 		FilePath:   outPath,
 	}); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return outPath, nil
+	return outPath, dropped, nil
+}
+
+// videoOnlyExtension decides the container of a video-only mux
+// (research §2.2): mp4 only for the registered codec set, else the
+// universal mkv; a failed probe degrades to mkv. Shared by the
+// «только видео» mode and the all-dropped M2 degradation.
+func (c *realCore) videoOnlyExtension(ctx context.Context, episode string, video contracts.VideoSource) string {
+	if c.prober == nil {
+		return "mkv"
+	}
+	codec, err := c.prober.ProbeCodec(ctx, "v", video)
+	if err != nil {
+		c.logger().Warn("download: video codec probe failed; falling back to mkv",
+			"episode", episode, "error", err)
+		return "mkv"
+	}
+	return download.ContainerFor(download.ModeVideoOnly, codec, nil)
 }
 
 // resolveAudioTracks resolves every PR165 marked dub into a mux track
 // (provider-local decomposition, best quality, per-track language and
 // title metadata). A dub the episode's provider cannot resolve right
 // now drops (mandate #7: the episode muxes the dubs it carries);
-// a set where NOTHING carried is the typed error — never a silent
-// video-only file.
+// a set where NOTHING carried returns an empty track list with every
+// dropped name — the caller degrades to video-only and the report row
+// names the loss loudly (M2: a video-only file, never a SILENT one).
 func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([]download.AudioTrack, []string, error) {
 	tracks := make([]download.AudioTrack, 0, len(task.AudioSet))
 	var dropped []string
@@ -1082,7 +1117,7 @@ func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([
 		})
 	}
 	if len(tracks) == 0 {
-		return nil, dropped, fmt.Errorf("tui: download: none of the marked dubs resolved for ep %s", task.Episode.Num)
+		return nil, dropped, nil
 	}
 	// The default-disposition invariant repairs here: exactly one
 	// track is the default. "" means the FIRST marked track, and a

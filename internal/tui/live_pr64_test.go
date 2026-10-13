@@ -34,9 +34,9 @@ type recordingDownload struct {
 	tasks []DownloadTask
 }
 
-func (r *recordingDownload) Download(_ context.Context, task DownloadTask) (string, error) {
+func (r *recordingDownload) Download(_ context.Context, task DownloadTask) (string, []string, error) {
 	r.tasks = append(r.tasks, task)
-	return "/live-proof/EP_" + task.EpisodeNum + "_" + task.DubID + ".mp4", nil
+	return "/live-proof/EP_" + task.EpisodeNum + "_" + task.DubID + ".mp4", nil, nil
 }
 
 func (r *recordingDownload) Submit(task DownloadTask) {

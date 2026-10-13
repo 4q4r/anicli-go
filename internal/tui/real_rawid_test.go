@@ -127,7 +127,7 @@ func TestDownloadOneStripsTrackTagFromDubID(t *testing.T) {
 	}
 	c := &realCore{registry: reg}
 
-	_, err := c.downloadOne(context.Background(), DownloadTask{
+	_, _, err := c.downloadOne(context.Background(), DownloadTask{
 		ProviderID: "animevib",
 		DubID:      "[animevib] Amazing Dubbing",
 		Episode: contracts.Episode{
@@ -160,7 +160,7 @@ func TestDownloadOneDecomposesMergedRawID(t *testing.T) {
 	}
 	c := &realCore{registry: reg}
 
-	_, err := c.downloadOne(context.Background(), DownloadTask{
+	_, _, err := c.downloadOne(context.Background(), DownloadTask{
 		ProviderID: "animevib",
 		DubID:      "JAM",
 		Episode: contracts.Episode{

@@ -30,7 +30,11 @@ type Task struct {
 	// ID is the caller-assigned unique key. Resubmitting an id whose
 	// task is QUEUED replaces the payload (the newer intent wins,
 	// still not started); resubmitting a RUNNING id is rejected with
-	// *ErrTaskActive (169-F — never two downloads on one id).
+	// *ErrTaskActive (169-F — never two downloads on one id). The
+	// fast-resubmit outcome (replace vs reject) depends on the worker
+	// scheduling: a resubmit racing the queued→running transition of
+	// the previous submit may land on either side, both are safe
+	// (exactly one download runs, the newer payload when replace wins).
 	ID string
 	// Title is the display title.
 	Title string
@@ -143,8 +147,13 @@ func (m *Manager) Submit(task Task) (Task, error) {
 
 	m.mu.Lock()
 	if existing, ok := m.tasks[task.ID]; ok && existing.task.State == StateRunning {
+		// 169-B1: snapshot UNDER the lock — the post-unlock copy of
+		// existing.task raced the running worker's mutex-protected
+		// writes (settle/progress): an unpaired read the race detector
+		// flags on every overlap.
+		snap := existing.task
 		m.mu.Unlock()
-		return existing.task, &ErrTaskActive{ID: task.ID}
+		return snap, &ErrTaskActive{ID: task.ID}
 	}
 	m.gen++
 	rec := &managerRecord{task: task, gen: m.gen}

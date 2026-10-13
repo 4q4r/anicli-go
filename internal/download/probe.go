@@ -58,6 +58,12 @@ func parseCodecName(data []byte) string {
 // Options.FFmpeg): a custom ffmpeg location ships its own ffprobe next
 // to it, so the probe follows the configured directory; a bare binary
 // name keeps PATH resolution (production wires "ffmpeg").
+//
+// Windows: os/exec resolves the PATHEXT extension for a path that
+// contains separators (lookExtensions — present since Go 1.19,
+// refined in Go 1.22; NOT a 1.23+ feature), so the sibling-derived
+// path finds ffprobe.exe; the bare-name shape goes through LookPath,
+// which applies PATHEXT the same way.
 func (d *Downloader) probeBin() string {
 	if dir := filepath.Dir(d.ffmpeg); dir != "." {
 		return filepath.Join(dir, "ffprobe")

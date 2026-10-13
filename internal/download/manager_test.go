@@ -193,15 +193,33 @@ func TestManagerCloseCancelsRunning(t *testing.T) {
 // QUEUED id replaces the payload (the newer intent wins, still not
 // started); the tracked map stays one-entry-per-id. The RUNNING
 // rejection is pinned separately.
+//
+// Determinism (169-M1): a filler task holds the only slot (its dl
+// signals `started` from inside), so worker1 provably cannot reach the
+// StateRunning store before Submit#2 — the replace path is taken
+// regardless of goroutine scheduling. Close then cancels the ctx and
+// the queued ep workers exit from the semaphore select without
+// running.
 func TestManagerDuplicateIDOverwrites(t *testing.T) {
 	t.Parallel()
 
-	dl := func(context.Context, Task, func(float64)) error {
-		time.Sleep(50 * time.Millisecond)
+	started := make(chan struct{}, 1)
+	gate := make(chan struct{})
+	dl := func(_ context.Context, task Task, _ func(float64)) error {
+		if task.ID == "filler" {
+			started <- struct{}{}
+			<-gate
+		}
 		return nil
 	}
 	m := NewManager(1, dl)
-	defer func() { _ = m.Close() }()
+	defer func() {
+		close(gate)
+		_ = m.Close()
+	}()
+
+	_, _ = m.Submit(Task{ID: "filler"})
+	<-started
 
 	first, err := m.Submit(Task{ID: "dup", Title: "first"})
 	if err != nil {
@@ -217,8 +235,14 @@ func TestManagerDuplicateIDOverwrites(t *testing.T) {
 	if second.Title != "second" {
 		t.Errorf("duplicate submit = %+v, want replacement", second)
 	}
-	if n := len(m.AllTasks()); n != 1 {
-		t.Errorf("tasks = %d, want 1", n)
+	dups := 0
+	for _, tk := range m.AllTasks() {
+		if tk.ID == "dup" {
+			dups++
+		}
+	}
+	if dups != 1 {
+		t.Errorf("dup tasks = %d, want 1 (one-entry-per-id)", dups)
 	}
 }
 
@@ -250,12 +274,32 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 // workers re-read it — the live repro ran v1×0 and v2×2 (two ffmpeg on
 // one .part plus a rename race, the original silently dropped). The
 // newer intent must win the QUEUED slot and run EXACTLY once.
+//
+// Determinism (169-M1): a FILLER task occupies the only concurrency
+// slot before the submits — its dl signals `started` from inside, so
+// the slot is provably held and worker1 blocks at the semaphore select
+// (it can never reach the StateRunning store): Submit#2 observes
+// QUEUED and takes the replace path regardless of scheduling. Closing
+// the filler's gate then releases the slot while the ctx is still
+// live, so exactly one ep worker acquires at a time: the superseded
+// one exits on the generation check and its own release hands the slot
+// to the other — exactly one download of v2, in either acquisition
+// order. (Raw m.sem fill/release was tried and rejected: a token
+// received before a worker reaches its select lets Close's Done branch
+// win the select and the run silently never happens.)
 func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
 	t.Parallel()
 
+	gate := make(chan struct{})
+	started := make(chan struct{}, 1)
 	var mu sync.Mutex
 	var outputs []string
 	dl := func(_ context.Context, task Task, _ func(float64)) error {
+		if task.ID == "filler" {
+			started <- struct{}{}
+			<-gate
+			return nil
+		}
 		mu.Lock()
 		outputs = append(outputs, task.OutputPath)
 		mu.Unlock()
@@ -265,9 +309,16 @@ func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
 	m := NewManager(1, dl)
 	defer func() { _ = m.Close() }()
 
+	_, _ = m.Submit(Task{ID: "filler"})
+	<-started // the slot is held; every later submit can only queue
+
 	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
 	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"})
 
+	close(gate) // filler returns → its release hands the slot onward
+	// Wait for the run itself: Close must not cancel before the ep
+	// worker has left the semaphore select, or the Done branch would
+	// win the select and the run would never happen.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		mu.Lock()
@@ -276,9 +327,9 @@ func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
 		if n >= 1 || time.Now().After(deadline) {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
-	time.Sleep(60 * time.Millisecond) // let any double-run surface
+	_ = m.Close() // waits for both ep workers: no post-assertion writes
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -293,6 +344,10 @@ func TestAdvManagerDuplicateIDDoubleRun(t *testing.T) {
 // TestAdvManagerSubmitRejectsWhileRunning (169-F): a resubmit of a
 // RUNNING id is rejected with a typed error — an honest «уже
 // скачивается» instead of two ffmpeg on one .part.
+//
+// Deterministic without extra setup (169-M1): the <-started handshake
+// returns only after the worker stored StateRunning (under the mutex,
+// before dl runs), so Submit#2 always observes RUNNING.
 func TestAdvManagerSubmitRejectsWhileRunning(t *testing.T) {
 	t.Parallel()
 
@@ -328,5 +383,55 @@ func TestAdvManagerSubmitRejectsWhileRunning(t *testing.T) {
 	tk, ok := m.Task("ep")
 	if !ok || tk.State != StateRunning || tk.OutputPath != "v1.mp4" {
 		t.Fatalf("running task = %+v (ok=%v), want v1.mp4 untouched", tk, ok)
+	}
+}
+
+// TestAdvManagerSubmitRejectSnapshotRace (169-B1): the RUNNING-reject
+// path copied the task snapshot AFTER m.mu.Unlock() — a whole-struct
+// read with no lock, racing the running worker's mutex-protected
+// writes (settle/progress). This pin keeps the writer side spinning
+// (progress() in a tight loop) while the reject fires, so the overlap
+// window is always open. Run under -race (the suite gate does);
+// without -race the pin is functional-only.
+func TestAdvManagerSubmitRejectSnapshotRace(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	dl := func(ctx context.Context, task Task, progress func(float64)) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return nil
+			default:
+				progress(50) // the writer side of the B1 pair
+			}
+		}
+	}
+	m := NewManager(1, dl)
+	t.Cleanup(func() {
+		close(release)
+		_ = m.Close()
+	})
+
+	_, _ = m.Submit(Task{ID: "ep", OutputPath: "v1.mp4"})
+	<-started
+
+	snap, err := m.Submit(Task{ID: "ep", OutputPath: "v2.mp4"})
+	if err == nil {
+		t.Fatal("resubmitting a RUNNING id must fail")
+	}
+	var active *ErrTaskActive
+	if !errors.As(err, &active) || active.ID != "ep" {
+		t.Fatalf("err = %v, want *ErrTaskActive", err)
+	}
+	if snap.OutputPath != "v1.mp4" {
+		t.Fatalf("rejected snapshot = %+v, want the RUNNING task v1.mp4 (never the resubmit's payload)", snap)
 	}
 }

@@ -170,6 +170,11 @@ type indexPayload struct {
 // LoadSnapshot reads and validates the index: malformed documents read
 // as empty (python silently-ignore cache semantics) and entries whose
 // media file vanished are dropped.
+//
+// Reading MUTATES on a malformed document (169-E): the broken file is
+// renamed .corrupt-<ts> for manual recovery, so the next writer starts
+// fresh. Corrupt backups accumulate without retention (review m3) —
+// prune by hand if a title dir collects them.
 func LoadSnapshot(titleDir string) (Snapshot, error) {
 	index := filepath.Join(titleDir, IndexFilename)
 	data, err := os.ReadFile(index) //nolint:gosec // path built from caller-provided dir

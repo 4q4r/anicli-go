@@ -139,14 +139,18 @@ func BuildArgs(req Request, opts Options) []string {
 // headersToMPVOpts maps headers to mpv arguments: user-agent and
 // referer are popped case-insensitively into their dedicated flags,
 // the rest join into one --http-header-fields entry (python
-// _headers_to_mpv_opts, comma-joined "Key: Value" pairs).
+// _headers_to_mpv_opts, comma-joined "Key: Value" pairs). CR/LF is
+// stripped from keys and values first (169-m2, the download path's
+// 169-J class): the joined field is one argv element, and an embedded
+// CRLF would smuggle extra header lines into every HTTP request mpv
+// makes.
 func headersToMPVOpts(headers map[string]string) []string {
 	if len(headers) == 0 {
 		return nil
 	}
 	remaining := make(map[string]string, len(headers))
 	for k, v := range headers {
-		remaining[k] = v
+		remaining[stripCRLF(k)] = stripCRLF(v)
 	}
 
 	var opts []string
@@ -182,6 +186,15 @@ func popHeader(headers map[string]string, name string) string {
 		}
 	}
 	return ""
+}
+
+// stripCRLF removes CR and LF bytes from one header key/value (the
+// player-side twin of the download package's sanitizer, 169-J/m2).
+func stripCRLF(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 // OfflineTitle composes the offline window title with the [OFFLINE]

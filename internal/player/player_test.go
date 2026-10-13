@@ -754,3 +754,33 @@ func TestBuildArgsEndOfOptionsGuard(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildArgsHeaderCRLFSanitized (169-m2): the provider-controlled
+// header values reach mpv's --http-header-fields, --user-agent and
+// --referrer verbatim — an embedded CRLF smuggled extra header lines
+// into every HTTP request mpv makes (the same argv-level smuggling
+// class the download path fixed in 169-J). Keys and values must be
+// CR/LF-free.
+func TestBuildArgsHeaderCRLFSanitized(t *testing.T) {
+	t.Parallel()
+
+	got := BuildArgs(Request{
+		URL: "https://cdn.example/ep.m3u8",
+		Headers: map[string]string{
+			"User-Agent":  "ua\r\nX-Forged: 1",
+			"X-Injected":  "yes\nGET /smuggled HTTP/1.1",
+			"Refer\r\ner": "https://ref.example/",
+		},
+	}, Options{Bin: "mpv"})
+
+	for _, arg := range got {
+		if strings.HasPrefix(arg, "--http-header-fields=") ||
+			strings.HasPrefix(arg, "--user-agent=") ||
+			strings.HasPrefix(arg, "--referrer=") {
+			value := arg[strings.Index(arg, "=")+1:]
+			if strings.ContainsAny(value, "\r\n") {
+				t.Errorf("%q carries a raw CR/LF", arg)
+			}
+		}
+	}
+}

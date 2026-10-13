@@ -27,6 +27,11 @@ const maxUnixSocketPath = 100
 // the kernel limit forces the short well-known dir). MkdirTemp keeps
 // the name unique and the dir 0700, so the fallback preserves both the
 // no-collision and the not-world-connectable contracts.
+//
+// Known degradation (review m5): systems with a long-TMPDIR default
+// AND no writable /tmp (Termux) lose the IPC position tracker
+// silently — MkdirTemp("/tmp", …) fails and the caller degrades to no
+// position capture; nothing else breaks.
 func newIPCSocketDir() (socket, dir string, err error) {
 	dir, err = os.MkdirTemp("", "anicli-mpv-ipc-")
 	if err != nil {

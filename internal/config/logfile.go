@@ -117,7 +117,12 @@ func pruneRotated(path string, maxFiles int) error {
 		}
 		// os.Stat FOLLOWS the link: a dangling symlink skips here just
 		// like a file vanished mid-prune (an lstat would admit it as a
-		// fresh mtime and evict real logs instead).
+		// fresh mtime and evict real logs instead). Note a symlink TO
+		// A DIRECTORY named like a rotated log passes both the DirEntry
+		// dir check (lstat-based) and the Stat, and os.Remove then
+		// unlinks the link itself — never the target — so such an entry
+		// is a removal candidate like any other rotated name (review
+		// nit).
 		info, err := os.Stat(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue

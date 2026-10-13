@@ -1314,6 +1314,10 @@ func sanitizeFragment(s string) string {
 // ensurePathWithinRoot is the download-path belt (169-D): the composed
 // OutputPath must stay inside the download root even if a provider-
 // controlled fragment ever smuggles separators past the sanitizers.
+// Lexical only — filepath.Rel over the Clean-joined path, no
+// EvalSymlinks; upstream separator sanitization means the belt never
+// trips in the current data flow (review m4), it exists for the case
+// a sanitizer ever regresses.
 func ensurePathWithinRoot(root, path string) error {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

@@ -130,3 +130,53 @@ func TestSolveImpossibleDifficultyFailsLoud(t *testing.T) {
 		t.Fatalf("err = %v, want ErrProvider403", err)
 	}
 }
+
+// TestSolveHostileNegativeDifficulty (169-G): the difficulty arrives
+// from REMOTE JSON and was never clamped — a negative value panicked
+// on the digest slice (difficulty ≤ −2) or vacuously succeeded with
+// nonce 0 and zero real zero digits (−1: zeroBytes truncated to 0,
+// halfZero false). Every non-positive difficulty is a typed
+// hostile-gate failure now.
+func TestSolveHostileNegativeDifficulty(t *testing.T) {
+	t.Parallel()
+
+	for _, d := range []int{-1, -2, -3, -4} {
+		nonce, digest, err := Solve(testChallenge("fast", d, "aa"))
+		if err == nil {
+			t.Fatalf("difficulty %d: Solve = %d/%q, want a typed error", d, nonce, digest)
+		}
+		if !errors.Is(err, contracts.ErrProvider403) {
+			t.Fatalf("difficulty %d: err = %v, want ErrProvider403", d, err)
+		}
+		if !strings.Contains(err.Error(), strconv.Itoa(d)) {
+			t.Fatalf("difficulty %d: err = %v, must name the difficulty", d, err)
+		}
+	}
+}
+
+// TestSolveDifficultyZeroRejected (169-G): difficulty 0 matches every
+// digest by definition — a gate demanding no work is a hostile gate,
+// never a free pass.
+func TestSolveDifficultyZeroRejected(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := Solve(testChallenge("fast", 0, "aa")); !errors.Is(err, contracts.ErrProvider403) {
+		t.Fatalf("difficulty 0: err = %v, want ErrProvider403", err)
+	}
+}
+
+// TestSolveDifficultyBeyondIterationCapFailsFast (169-G): a difficulty
+// whose expected work (16^d hashes) exceeds MaxPoWIterations fails
+// fast with the same typed verdict the exhaustion ladder would reach —
+// naming the cap — instead of grinding the full ladder first.
+func TestSolveDifficultyBeyondIterationCapFailsFast(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := Solve(testChallenge("fast", 7, "aa"))
+	if !errors.Is(err, contracts.ErrProvider403) {
+		t.Fatalf("err = %v, want ErrProvider403", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(MaxPoWIterations)) {
+		t.Fatalf("err = %v, must name the iteration cap", err)
+	}
+}

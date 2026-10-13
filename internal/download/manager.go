@@ -27,8 +27,14 @@ const eventsBuffer = 128
 
 // Task is one background download unit.
 type Task struct {
-	// ID is the caller-assigned unique key; resubmitting an existing
-	// id replaces the tracked task (python map semantics).
+	// ID is the caller-assigned unique key. Resubmitting an id whose
+	// task is QUEUED replaces the payload (the newer intent wins,
+	// still not started); resubmitting a RUNNING id is rejected with
+	// *ErrTaskActive (169-F — never two downloads on one id). The
+	// fast-resubmit outcome (replace vs reject) depends on the worker
+	// scheduling: a resubmit racing the queued→running transition of
+	// the previous submit may land on either side, both are safe
+	// (exactly one download runs, the newer payload when replace wins).
 	ID string
 	// Title is the display title.
 	Title string
@@ -75,7 +81,8 @@ type Manager struct {
 	download Runner
 
 	mu    sync.Mutex
-	tasks map[string]*Task
+	tasks map[string]*managerRecord
+	gen   uint64
 
 	sem    chan struct{}
 	events chan Event
@@ -83,6 +90,16 @@ type Manager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// managerRecord pairs the live task with the generation of the Submit
+// that created it (169-F): a worker is bound to its generation, so a
+// replaced record can never be picked up by the superseded worker —
+// the old shape re-read the REPLACED record and ran the new task's
+// OutputPath concurrently with the replacement's own worker.
+type managerRecord struct {
+	task Task
+	gen  uint64
 }
 
 // NewManager builds the manager. maxConcurrency <= 0 means 1.
@@ -93,7 +110,7 @@ func NewManager(maxConcurrency int, download Runner) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		download: download,
-		tasks:    make(map[string]*Task),
+		tasks:    make(map[string]*managerRecord),
 		sem:      make(chan struct{}, maxConcurrency),
 		events:   make(chan Event, eventsBuffer),
 		ctx:      ctx,
@@ -106,66 +123,96 @@ func NewManager(maxConcurrency int, download Runner) *Manager {
 // queries are the authoritative state.
 func (m *Manager) Events() <-chan Event { return m.events }
 
+// ErrTaskActive reports a resubmit of an id whose task is currently
+// downloading (169-F: the newer intent must never run the same id
+// twice — two ffmpeg on one .part plus a rename race).
+type ErrTaskActive struct {
+	// ID is the id of the running task.
+	ID string
+}
+
+// Error implements error.
+func (e *ErrTaskActive) Error() string {
+	return fmt.Sprintf("download: task %q already running", e.ID)
+}
+
 // Submit queues a task and returns its snapshot. The download starts
-// as soon as a concurrency slot frees up.
-func (m *Manager) Submit(task Task) Task {
+// as soon as a concurrency slot frees up. A resubmit of an id whose
+// task is QUEUED replaces the payload (the newer intent wins, still
+// not started); a resubmit of a RUNNING id is rejected with
+// *ErrTaskActive (169-F).
+func (m *Manager) Submit(task Task) (Task, error) {
 	task.State = StateQueued
 	task.Progress = 0
 
 	m.mu.Lock()
-	stored := task
-	m.tasks[task.ID] = &stored
+	if existing, ok := m.tasks[task.ID]; ok && existing.task.State == StateRunning {
+		// 169-B1: snapshot UNDER the lock — the post-unlock copy of
+		// existing.task raced the running worker's mutex-protected
+		// writes (settle/progress): an unpaired read the race detector
+		// flags on every overlap.
+		snap := existing.task
+		m.mu.Unlock()
+		return snap, &ErrTaskActive{ID: task.ID}
+	}
+	m.gen++
+	rec := &managerRecord{task: task, gen: m.gen}
+	m.tasks[task.ID] = rec
 	m.mu.Unlock()
 
 	m.emit(Event{TaskID: task.ID, State: StateQueued})
 
 	m.wg.Add(1)
-	go m.worker(stored)
-	return task
+	go m.worker(rec)
+	return task, nil
 }
 
-// worker runs one task through the queue.
-func (m *Manager) worker(task Task) {
+// worker runs one task through the queue. The worker is bound to the
+// generation of its Submit: when a newer Submit replaced the record
+// while this one waited, it exits without running or settling — the
+// replacement's own worker owns the id (169-F, no double-run).
+func (m *Manager) worker(rec *managerRecord) {
 	defer m.wg.Done()
 
 	select {
 	case <-m.ctx.Done():
-		m.settle(task.ID, StateFailed, "manager closed", 0)
+		m.settleGen(rec, StateFailed, "manager closed", 0)
 		return
 	case m.sem <- struct{}{}:
 	}
 	defer func() { <-m.sem }()
 
-	// Re-read the live pointer in case a duplicate Submit replaced it.
+	// 169-F: a newer Submit with the same id replaced the record while
+	// this worker waited for its slot — it owns nothing anymore.
 	m.mu.Lock()
-	live, ok := m.tasks[task.ID]
-	if !ok {
+	live, ok := m.tasks[rec.task.ID]
+	if !ok || live.gen != rec.gen {
 		m.mu.Unlock()
 		return
 	}
-	live.State = StateRunning
-	snapshot := *live
+	live.task.State = StateRunning
+	snapshot := live.task
 	m.mu.Unlock()
-	m.emit(Event{TaskID: task.ID, State: StateRunning})
+	m.emit(Event{TaskID: rec.task.ID, State: StateRunning})
 
 	progress := func(percent float64) {
 		m.mu.Lock()
-		if live2, ok := m.tasks[task.ID]; ok {
-			live2.Progress = percent
+		if live2, ok := m.tasks[rec.task.ID]; ok && live2.gen == rec.gen {
+			live2.task.Progress = percent
 		}
 		m.mu.Unlock()
-		m.emit(Event{TaskID: task.ID, State: StateRunning, Progress: percent})
+		m.emit(Event{TaskID: rec.task.ID, State: StateRunning, Progress: percent})
 	}
 
 	err := m.download(m.ctx, snapshot, progress)
 	if err != nil {
 		msg := err.Error()
-		m.settle(task.ID, StateFailed, msg, 0)
-		m.runComplete(task, false, err)
+		m.settleGen(rec, StateFailed, msg, 0)
+		m.runComplete(rec.task, false, err)
 		return
 	}
-	m.settle(task.ID, StateDone, "", 100)
-	m.runComplete(task, true, nil)
+	m.settleGen(rec, StateDone, "", 100)
+	m.runComplete(rec.task, true, nil)
 }
 
 // runComplete invokes the task callback; callback errors are recorded
@@ -179,10 +226,10 @@ func (m *Manager) runComplete(task Task, success bool, dlErr error) {
 		m.mu.Lock()
 		if live, ok := m.tasks[task.ID]; ok {
 			suffix := "callback error: " + err.Error()
-			if live.Err != "" {
-				suffix = live.Err + " | " + suffix
+			if live.task.Err != "" {
+				suffix = live.task.Err + " | " + suffix
 			}
-			live.Err = suffix
+			live.task.Err = suffix
 		}
 		m.mu.Unlock()
 		_ = dlErr
@@ -193,17 +240,31 @@ func (m *Manager) runComplete(task Task, success bool, dlErr error) {
 func (m *Manager) settle(id string, state State, msg string, progress float64) {
 	m.mu.Lock()
 	if live, ok := m.tasks[id]; ok {
-		live.State = state
-		live.Err = msg
+		live.task.State = state
+		live.task.Err = msg
 		if progress > 0 {
-			live.Progress = progress
+			live.task.Progress = progress
 		}
 		if state == StateDone {
-			live.Progress = 100
+			live.task.Progress = 100
 		}
 	}
 	m.mu.Unlock()
 	m.emit(Event{TaskID: id, State: state, Progress: progress, Err: msg})
+}
+
+// settleGen is settle bound to a generation: a superseded worker's
+// terminal state never clobbers the record its replacement owns
+// (169-F).
+func (m *Manager) settleGen(rec *managerRecord, state State, msg string, progress float64) {
+	m.mu.Lock()
+	live, ok := m.tasks[rec.task.ID]
+	if !ok || live.gen != rec.gen {
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	m.settle(rec.task.ID, state, msg, progress)
 }
 
 // Task returns a snapshot of one task.
@@ -214,7 +275,7 @@ func (m *Manager) Task(id string) (Task, bool) {
 	if !ok {
 		return Task{}, false
 	}
-	return *live, true
+	return live.task, true
 }
 
 // AllTasks returns snapshots of every tracked task.
@@ -223,7 +284,7 @@ func (m *Manager) AllTasks() []Task {
 	defer m.mu.Unlock()
 	out := make([]Task, 0, len(m.tasks))
 	for _, live := range m.tasks {
-		out = append(out, *live)
+		out = append(out, live.task)
 	}
 	return out
 }
@@ -246,7 +307,7 @@ func (m *Manager) ClearFinished() int {
 	m.mu.Lock()
 	var removed []string
 	for id, live := range m.tasks {
-		if live.State == StateDone || live.State == StateFailed {
+		if live.task.State == StateDone || live.task.State == StateFailed {
 			removed = append(removed, id)
 		}
 	}

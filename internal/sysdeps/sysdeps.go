@@ -138,7 +138,7 @@ func EnsureStartup(env Env) []string {
 	case len(p.steps) == 0:
 		printManual(env.Out, p)
 	case !env.InTTY:
-		printCommandsNonTTY(env.Out, goos, look, p)
+		printCommandsNonTTY(env.Out, goos, p)
 	default:
 		ran = runPlan(env, goos, look, run, p, 0)
 	}
@@ -192,15 +192,38 @@ const maxBootstrapDepth = 1
 
 // printCommandsNonTTY is the never-block path: the exact actionable
 // commands instead of any prompt — for a bootstrap plan the follow-up
-// install commands are printed too.
-func printCommandsNonTTY(out io.Writer, goos string, look Looker, p plan) {
+// install commands are printed too (from the static per-OS table: a
+// fresh planFor() probe sees the manager still missing on THIS
+// process's PATH and suppressed the follow-up by titleKey equality —
+// 169-C).
+func printCommandsNonTTY(out io.Writer, goos string, p plan) {
 	say(out, i18n.T("deps.nontty_note"))
 	printPlanCommands(out, p)
 	if p.bootstrap {
-		if next := planFor(goos, look); next.titleKey != p.titleKey {
+		if next, ok := bootstrapFollowUp(goos); ok && next.titleKey != p.titleKey {
 			printPlanCommands(out, next)
 		}
 	}
+}
+
+// bootstrapFollowUp returns the install plan that follows a bootstrap
+// once the package manager has landed. The next-step commands are
+// static per OS (the same shapes planFor offers once it finds the
+// manager), so they never depend on a Looker probe.
+func bootstrapFollowUp(goos string) (plan, bool) {
+	switch goos {
+	case "darwin":
+		return plan{
+			titleKey: "deps.offer_brew",
+			steps:    []step{{argv: []string{"brew", "install", "mpv", "ffmpeg"}}},
+		}, true
+	case "windows":
+		return plan{
+			titleKey: "deps.offer_choco",
+			steps:    []step{{argv: []string{"choco", "install", "mpvio", "ffmpeg", "-y"}}},
+		}, true
+	}
+	return plan{}, false
 }
 
 // printPlanCommands renders one plan's commands (and any manual lines)

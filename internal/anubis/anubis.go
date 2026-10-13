@@ -53,24 +53,32 @@ func Solve(challenge Challenge) (int, string, error) {
 		return 0, "", fmt.Errorf("%w: unsupported anubis algorithm %q",
 			contracts.ErrProvider403, challenge.Rules.Algorithm)
 	}
+	// 169-G: the difficulty arrives from REMOTE JSON and must be
+	// clamped before any byte math — a negative value used to panic on
+	// the digest slice (≤ −2) or vacuously succeed with nonce 0 and no
+	// real zero digits (−1: zeroBytes truncated to 0, halfZero false),
+	// and 0 demanded no work at all. A gate demanding no honest work is
+	// a hostile gate, never a pass.
+	if d := challenge.Rules.Difficulty; d <= 0 {
+		return 0, "", fmt.Errorf("%w: hostile anubis gate: difficulty %d out of range",
+			contracts.ErrProvider403, d)
+	}
+	// maxSolvableDifficulty is the largest difficulty whose expected
+	// work (16^d hashes) fits MaxPoWIterations: 16^6 = 2^24. Anything
+	// beyond fails fast with the same typed verdict the exhaustion
+	// ladder would reach — without grinding the full ladder first.
+	const maxSolvableDifficulty = 6
 	// The difficulty counts leading ZERO HEX DIGITS: floor(d/2) zero
 	// bytes plus a zero high nibble on an odd d — checked on the raw
 	// digest bytes, since hex-encoding every candidate dominated the
 	// loop (8s for a difficulty-10 exhaustion on the extraction day;
-	// the digest string is encoded once for the winner). A difficulty
-	// beyond what a 32-byte digest can express never matches — it
-	// exhausts through the same loud path (a hostile gate, not a
-	// panic).
-	zeroBytes := challenge.Rules.Difficulty / 2
-	halfZero := challenge.Rules.Difficulty%2 == 1
-	required := zeroBytes
-	if halfZero {
-		required++
-	}
-	if required > sha256.Size {
+	// the digest string is encoded once for the winner).
+	if challenge.Rules.Difficulty > maxSolvableDifficulty {
 		return 0, "", fmt.Errorf("%w: anubis proof-of-work exceeded %d iterations (difficulty %d)",
 			contracts.ErrProvider403, MaxPoWIterations, challenge.Rules.Difficulty)
 	}
+	zeroBytes := challenge.Rules.Difficulty / 2
+	halfZero := challenge.Rules.Difficulty%2 == 1
 	for nonce := 0; nonce <= MaxPoWIterations; nonce++ {
 		sum := sha256.Sum256([]byte(challenge.Challenge.RandomData + strconv.Itoa(nonce)))
 		if !leadingZeroHex(sum[:], zeroBytes, halfZero) {

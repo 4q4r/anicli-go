@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -169,6 +170,11 @@ type indexPayload struct {
 // LoadSnapshot reads and validates the index: malformed documents read
 // as empty (python silently-ignore cache semantics) and entries whose
 // media file vanished are dropped.
+//
+// Reading MUTATES on a malformed document (169-E): the broken file is
+// renamed .corrupt-<ts> for manual recovery, so the next writer starts
+// fresh. Corrupt backups accumulate without retention (review m3) —
+// prune by hand if a title dir collects them.
 func LoadSnapshot(titleDir string) (Snapshot, error) {
 	index := filepath.Join(titleDir, IndexFilename)
 	data, err := os.ReadFile(index) //nolint:gosec // path built from caller-provided dir
@@ -181,6 +187,12 @@ func LoadSnapshot(titleDir string) (Snapshot, error) {
 
 	var payload indexPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
+		// 169-E: an unparseable document (a crash mid-write) is kept
+		// as a timestamped .corrupt backup — the data stays available
+		// for manual recovery instead of being overwritten by the
+		// next upsert. Best-effort: the fresh index starts either way.
+		stamped := fmt.Sprintf("%s.corrupt-%s", index, time.Now().UTC().Format("20060102T150405.000000000"))
+		_ = os.Rename(index, stamped)
 		return Snapshot{TitleDir: titleDir, Entries: []Entry{}}, nil
 	}
 
@@ -202,9 +214,19 @@ func entryValid(e Entry) bool {
 	return e.EpisodeNum != "" && e.VideoKey != "" && e.AudioKey != "" && e.RelativePath != "" && e.Quality > 0
 }
 
+// indexMu serializes every read-modify-write of the index documents
+// (169-E): UpsertEntry/RemoveEntry/SetEntryChapterTypes/
+// ReconcileSnapshot each run LoadSnapshot→merge→writeIndex, and the
+// unserialized round lost 36–38 of 40 concurrent upserts. The index is
+// a small per-title JSON file; one package mutex is honest and simple.
+var indexMu sync.Mutex
+
 // UpsertEntry adds or updates one entry and rewrites the index in
 // canonical sorted form (python upsert_entry).
 func UpsertEntry(titleDir string, in EntryInput) error {
+	indexMu.Lock()
+	defer indexMu.Unlock()
+
 	if err := os.MkdirAll(titleDir, 0o750); err != nil {
 		return fmt.Errorf("offline index: create %s: %w", titleDir, err)
 	}
@@ -256,6 +278,9 @@ func UpsertEntry(titleDir string, in EntryInput) error {
 // RemoveEntry deletes one entry by its combination key; it reports
 // whether anything was removed.
 func RemoveEntry(titleDir, episodeNum, videoKey, audioKey string, quality int) (bool, error) {
+	indexMu.Lock()
+	defer indexMu.Unlock()
+
 	snapshot, err := LoadSnapshot(titleDir)
 	if err != nil {
 		return false, err
@@ -281,6 +306,9 @@ func RemoveEntry(titleDir, episodeNum, videoKey, audioKey string, quality int) (
 // not adopted (the index is the source of truth) — python
 // reconcile_snapshot.
 func ReconcileSnapshot(titleDir string) (Snapshot, error) {
+	indexMu.Lock()
+	defer indexMu.Unlock()
+
 	snapshot, err := LoadSnapshot(titleDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -294,6 +322,9 @@ func ReconcileSnapshot(titleDir string) (Snapshot, error) {
 // SetEntryChapterTypes updates the markers of one existing entry
 // (python set_entry_chapter_types; lowercased, sorted, unique).
 func SetEntryChapterTypes(titleDir, episodeNum, videoKey, audioKey string, quality int, chapterTypes []string) error {
+	indexMu.Lock()
+	defer indexMu.Unlock()
+
 	normalized := sortedUniqueLower(chapterTypes)
 	if len(normalized) == 0 {
 		return nil
@@ -364,8 +395,17 @@ func writeIndex(titleDir string, entries []Entry) error {
 	}
 
 	path := filepath.Join(titleDir, IndexFilename)
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("offline index: write %s: %w", path, err)
+	// 169-E: stage the document in the same directory (rename stays
+	// on one filesystem) and swap atomically — a crash mid-write can
+	// only lose the staged temp, never leave a truncated document at
+	// the canonical path.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("offline index: stage %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("offline index: swap %s: %w", path, err)
 	}
 	return nil
 }

@@ -824,11 +824,17 @@ func (s *realDownload) Submit(task DownloadTask) {
 	}
 	s.parts[id] = task
 	s.mu.Unlock()
-	s.manager.Submit(download.Task{
+	if _, err := s.manager.Submit(download.Task{
 		ID:         id,
 		Title:      task.AnimeTitle,
 		EpisodeNum: task.EpisodeNum,
-	})
+	}); err != nil {
+		// 169-F: the same id is already downloading — the running task
+		// stays authoritative (the banner shows it), the resubmit is a
+		// logged no-op and never a second ffmpeg on the same .part.
+		s.core.logger().Warn("download: resubmit rejected, task already running",
+			"id", id, "error", err.Error())
+	}
 }
 
 func (s *realDownload) ActiveBanner() string {
@@ -1017,9 +1023,16 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		ext = "mp4"
 	}
 
+	// 169-D: `quality` is a RAW provider-controlled map key (anilib
+	// main.lua links[tostring(q.quality)]) — sanitize it like every
+	// other filename fragment, then the belt below re-checks the
+	// composed path against the download root.
 	name := fmt.Sprintf("EP_%s_%s_%sp.%s",
-		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), quality, ext)
+		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), sanitizeFragment(quality), ext)
 	outPath := filepath.Join(outDir, name)
+	if err := ensurePathWithinRoot(c.downloadRoot(), outPath); err != nil {
+		return "", nil, err
+	}
 	input.OutputPath = outPath
 
 	if err := c.dl.Download(ctx, input); err != nil {
@@ -1187,6 +1200,9 @@ func (c *realCore) downloadAudioOnly(ctx context.Context, task DownloadTask, str
 	name := fmt.Sprintf("EP_%s_%s.%s",
 		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), ext)
 	outPath := filepath.Join(outDir, name)
+	if err := ensurePathWithinRoot(c.downloadRoot(), outPath); err != nil {
+		return "", err
+	}
 
 	input := download.CommandInput{
 		Mode:       download.ModeAudioOnly,
@@ -1293,4 +1309,22 @@ func sanitizeFilename(s string) string {
 // sanitizeFragment keeps only safe filename runes.
 func sanitizeFragment(s string) string {
 	return strings.Trim(unsafePathChars.ReplaceAllString(s, "_"), "_")
+}
+
+// ensurePathWithinRoot is the download-path belt (169-D): the composed
+// OutputPath must stay inside the download root even if a provider-
+// controlled fragment ever smuggles separators past the sanitizers.
+// Lexical only — filepath.Rel over the Clean-joined path, no
+// EvalSymlinks; upstream separator sanitization means the belt never
+// trips in the current data flow (review m4), it exists for the case
+// a sanitizer ever regresses.
+func ensurePathWithinRoot(root, path string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return fmt.Errorf("tui: download: output %s is not inside the download root %s: %w", path, root, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("tui: download: output %s escapes the download root %s", path, root)
+	}
+	return nil
 }

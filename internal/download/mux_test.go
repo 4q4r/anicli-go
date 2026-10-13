@@ -467,3 +467,39 @@ func TestLangToISO639_2(t *testing.T) {
 		}
 	}
 }
+
+// TestProbeCodecUsesConfiguredFFmpegLocation (169-K): ProbeCodec
+// hardcoded "ffprobe" and ignored Options.FFmpeg — a custom ffmpeg
+// location (e.g. /opt/ffmpeg/bin/ffmpeg) probed whatever ffprobe the
+// PATH happened to carry (or none). The probe binary follows the
+// configured binary's directory; a bare binary name keeps PATH
+// resolution (production wires "ffmpeg").
+func TestProbeCodecUsesConfiguredFFmpegLocation(t *testing.T) {
+	t.Parallel()
+
+	d := New(Options{FFmpeg: "/opt/ffmpeg/bin/ffmpeg"})
+	var gotBin string
+	d.run = func(_ context.Context, bin string, _ []string) (string, error) {
+		gotBin = bin
+		return `{"streams":[{"codec_name":"aac"}]}`, nil
+	}
+	if _, err := d.ProbeCodec(context.Background(), "a", contracts.VideoSource{URL: "u"}); err != nil {
+		t.Fatalf("ProbeCodec: %v", err)
+	}
+	if gotBin != "/opt/ffmpeg/bin/ffprobe" {
+		t.Fatalf("probe bin = %q, want the configured ffmpeg's sibling ffprobe", gotBin)
+	}
+
+	bare := New(Options{FFmpeg: "ffmpeg"})
+	var bareBin string
+	bare.run = func(_ context.Context, bin string, _ []string) (string, error) {
+		bareBin = bin
+		return `{"streams":[{"codec_name":"aac"}]}`, nil
+	}
+	if _, err := bare.ProbeCodec(context.Background(), "v", contracts.VideoSource{URL: "u"}); err != nil {
+		t.Fatalf("ProbeCodec: %v", err)
+	}
+	if bareBin != "ffprobe" {
+		t.Fatalf("bare-name probe bin = %q, want PATH-resolved ffprobe", bareBin)
+	}
+}

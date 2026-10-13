@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
@@ -52,13 +53,25 @@ func parseCodecName(data []byte) string {
 	return parsed.Streams[0].CodecName
 }
 
+// probeBin derives the ffprobe binary from the configured ffmpeg
+// binary (169-K — ProbeCodec hardcoded "ffprobe" and ignored
+// Options.FFmpeg): a custom ffmpeg location ships its own ffprobe next
+// to it, so the probe follows the configured directory; a bare binary
+// name keeps PATH resolution (production wires "ffmpeg").
+func (d *Downloader) probeBin() string {
+	if dir := filepath.Dir(d.ffmpeg); dir != "." {
+		return filepath.Join(dir, "ffprobe")
+	}
+	return "ffprobe"
+}
+
 // ProbeCodec returns the codec_name of the source's first stream of
 // the given kind ("a" audio, "v" video) via ffprobe. The runner is
 // the injectable ffmpeg/ffprobe seam; a missing ffprobe binary or a
 // failed probe surfaces as the error (the caller decides the
 // fallback — the download itself never fails on a probe).
 func (d *Downloader) ProbeCodec(ctx context.Context, kind string, src contracts.VideoSource) (string, error) {
-	out, err := d.run(ctx, "ffprobe", ffprobeCodecArgs(kind, src))
+	out, err := d.run(ctx, d.probeBin(), ffprobeCodecArgs(kind, src))
 	if err != nil {
 		return "", fmt.Errorf("download: probe %s codec: %w", kind, err)
 	}

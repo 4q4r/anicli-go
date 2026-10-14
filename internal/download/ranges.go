@@ -469,3 +469,55 @@ func entryForFile(dir, file, label string, byBase map[string]Entry) Entry {
 func SyntheticSourceURL(relDir, rangeID string) string {
 	return "anicli-offline:" + relDir + "#" + rangeID
 }
+
+// SuggestRanges proposes the folder's groupings deterministically:
+// media files grouped by their leading non-digit prefix ("EP_13_x.mkv"
+// → "EP_", "OVA_2.mkv" → "OVA_", "S2E01.mkv" → "S"), one unbound
+// glob binding per group in sorted-prefix order. Digit-leading files
+// carry no prefix and are NOT suggested (they land in the editor's
+// unsorted pool). The result is a disposable suggestion — never
+// auto-saved, the owner shapes it in the binding editor.
+func SuggestRanges(dir string) []RangeBinding {
+	files := ScanMediaFiles(dir)
+	if len(files) == 0 {
+		return nil
+	}
+	prefixes := map[string]struct{}{}
+	for _, file := range files {
+		if p := leadingNonDigitPrefix(file); p != "" {
+			prefixes[p] = struct{}{}
+		}
+	}
+	sorted := make([]string, 0, len(prefixes))
+	for p := range prefixes {
+		sorted = append(sorted, p)
+	}
+	sort.Strings(sorted)
+	out := make([]RangeBinding, 0, len(sorted))
+	for i, prefix := range sorted {
+		title := strings.TrimRight(prefix, "_-. ")
+		if title == "" {
+			title = fmt.Sprintf("range-%d", i+1)
+		}
+		out = append(out, RangeBinding{
+			ID:    fmt.Sprintf("r%d", i+1),
+			Title: title,
+			Match: RangeMatch{Kind: "glob", Patterns: []string{prefix + "*"}},
+		})
+	}
+	return out
+}
+
+// leadingNonDigitPrefix returns the file name's run of leading
+// non-digit characters ("" when the name starts with a digit).
+func leadingNonDigitPrefix(file string) string {
+	end := 0
+	for end < len(file) {
+		r := rune(file[end])
+		if r < 0x80 && r >= '0' && r <= '9' {
+			break
+		}
+		end++
+	}
+	return file[:end]
+}

@@ -446,3 +446,37 @@ func TestSyntheticSourceURL(t *testing.T) {
 		t.Fatalf("empty relDir = %q, want anicli-offline:#s1 (legal, pinned)", got)
 	}
 }
+
+// TestSuggestRanges: the deterministic, disposable group suggestion —
+// files grouped by their leading non-digit prefix, digit-leading
+// files stay out (they land in the editor's unsorted pool).
+func TestSuggestRanges(t *testing.T) {
+	dir := rangesMediaDir(t, "EP_1_a.mkv", "EP_2_a.mkv", "OVA_1.mkv", "001.mkv")
+	got := SuggestRanges(dir)
+	if len(got) != 2 {
+		t.Fatalf("suggestions = %d (%+v), want 2", len(got), got)
+	}
+	if got[0].ID != "r1" || got[0].Title != "EP" {
+		t.Errorf("first = %+v, want r1/EP", got[0])
+	}
+	if got[0].Match.Kind != "glob" || !reflect.DeepEqual(got[0].Match.Patterns, []string{"EP_*"}) {
+		t.Errorf("first match = %+v, want glob EP_*", got[0].Match)
+	}
+	if got[1].ID != "r2" || got[1].Title != "OVA" || !reflect.DeepEqual(got[1].Match.Patterns, []string{"OVA_*"}) {
+		t.Errorf("second = %+v, want r2/OVA glob OVA_*", got[1])
+	}
+	for _, s := range got {
+		if s.ShikimoriID != 0 || s.EpisodeOffset != 0 {
+			t.Errorf("suggestion must ship unbound: %+v", s)
+		}
+	}
+	// The suggested document round-trips through the saver.
+	if err := SaveRanges(t.TempDir(), &RangesFile{Version: 1, Ranges: got}); err != nil {
+		t.Errorf("suggestions must be saveable: %v", err)
+	}
+
+	empty := t.TempDir()
+	if got := SuggestRanges(empty); got != nil {
+		t.Errorf("empty dir = %+v, want nil", got)
+	}
+}

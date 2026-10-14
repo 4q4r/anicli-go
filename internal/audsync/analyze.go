@@ -17,21 +17,26 @@ import (
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
 
-// Reference is one episode's decoded reference: the viable windows of
-// the video's own track (index-aligned to WindowSchedule — a nil entry
-// keeps the pairing when a window could not be decoded) and the video's
-// frame rate for the snap.
+// Reference is one episode's decoded reference: the SCHEDULE (the
+// video's window plan — the donor's search windows follow it, so the
+// per-window refStart−searchStart geometry stays exact regardless of
+// duration differences), the decoded windows (index-aligned; a nil
+// entry keeps the pairing when a window could not be decoded) and the
+// video's frame rate for the snap.
 type Reference struct {
-	Windows [][]float64
-	FPS     float64
+	Schedule []Window
+	Windows  [][]float64
+	FPS      float64
 }
 
-// Reference decodes the video's own-track windows (once per episode)
-// and probes its frame rate. The episode's duration gates the whole
-// analysis: an unreadable duration is ErrNoReference; an episode
-// shorter than MinEpisodeDur yields an EMPTY reference (no windows),
-// which every Offset rejects with ErrNoConfidence — the caller just
-// skips the analysis. All-silent windows are ErrNoReference.
+// Reference decodes the video's own-track audio WHOLE (one pass — the
+// T6 live proof showed input seeking is unreliable on HLS) and slices
+// the scheduled windows locally; it probes the frame rate. The
+// episode's duration gates the whole analysis: an unreadable duration
+// is ErrNoReference; an episode shorter than MinEpisodeDur yields an
+// EMPTY reference (no schedule), which every Offset rejects with
+// ErrNoConfidence — the caller just skips the analysis. All-silent
+// windows are ErrNoReference.
 func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (Reference, error) {
 	dur, err := a.probeDuration(ctx, video)
 	if err != nil {
@@ -46,31 +51,38 @@ func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (
 		fps = f // an unreadable fps is DefaultFPS, never an error
 	}
 
+	samples, err := a.decodeAll(ctx, video)
+	if err != nil {
+		return Reference{}, fmt.Errorf("%w (video decode: %w)", ErrNoReference, err)
+	}
 	windows := make([][]float64, len(schedule))
-	decoded, audible := 0, 0
+	audible := 0
 	for i, w := range schedule {
-		data, _, err := a.exec(ctx, a.ffmpeg, decodeArgs(video, w.RefStart, ReferenceDur))
-		if err != nil {
-			continue // a dead window is not evidence; keep the pairing
+		win := sliceWindow(samples, w.RefStart, ReferenceDur)
+		if win == nil {
+			continue
 		}
-		samples := decodePCM(data)
-		decoded++
-		if rms(samples) >= MinRMS {
+		if rms(win) >= MinRMS {
 			audible++
 		}
-		windows[i] = samples
+		windows[i] = win
 	}
-	if decoded == 0 || audible == 0 {
+	if audible == 0 {
 		return Reference{}, ErrNoReference
 	}
-	return Reference{Windows: windows, FPS: fps}, nil
+	return Reference{Schedule: schedule, Windows: windows, FPS: fps}, nil
 }
 
 // Offset renders one donor's verdict against a Reference within the
-// analysis budget (the timeout kills ffmpeg mid-window). Every failure
-// mode wraps ErrNoConfidence — the analysis NEVER fails a download.
+// analysis budget (the timeout kills ffmpeg mid-window). The search
+// windows ride the REFERENCE's schedule — research §4 ties
+// searchStart to refStart (t−60); re-deriving them from the donor's
+// own duration would skew every window whose index pairs across
+// different durations. The donor's duration probe only gates "long
+// enough to hold every search window". Every failure mode wraps
+// ErrNoConfidence — the analysis NEVER fails a download.
 func (a *Analyzer) Offset(ctx context.Context, ref Reference, dub contracts.VideoSource) (SyncOffset, error) {
-	if len(ref.Windows) == 0 {
+	if len(ref.Windows) == 0 || len(ref.Schedule) != len(ref.Windows) {
 		return SyncOffset{}, ErrNoConfidence
 	}
 	ctx, cancel := context.WithTimeout(ctx, a.budget)
@@ -80,24 +92,52 @@ func (a *Analyzer) Offset(ctx context.Context, ref Reference, dub contracts.Vide
 	if err != nil {
 		return SyncOffset{}, fmt.Errorf("%w (donor duration: %w)", ErrNoConfidence, err)
 	}
-	schedule := WindowSchedule(dur)
-	if schedule == nil {
+	if dur < MinEpisodeDur {
 		return SyncOffset{}, fmt.Errorf("%w (donor too short: %.0fs)", ErrNoConfidence, dur)
 	}
 
-	searchWins := make([][]float64, len(schedule))
-	for i, w := range schedule {
-		data, _, err := a.exec(ctx, a.ffmpeg, decodeArgs(dub, w.SearchStart, SearchDur))
-		if err != nil {
-			continue // a dead window is not evidence; keep the pairing
+	searchWins := make([][]float64, len(ref.Schedule))
+	dubSamples, err := a.decodeAll(ctx, dub)
+	if err != nil {
+		return SyncOffset{}, fmt.Errorf("%w (donor decode: %w)", ErrNoConfidence, err)
+	}
+	for i, w := range ref.Schedule {
+		win := sliceWindow(dubSamples, w.SearchStart, SearchDur)
+		if win == nil {
+			continue // a window past the donor's tail is not evidence
 		}
-		searchWins[i] = decodePCM(data)
+		searchWins[i] = win
 	}
 	off, err := analyzePair(ref.Windows, searchWins, ref.FPS)
 	if err != nil {
 		return SyncOffset{}, err
 	}
 	return off, nil
+}
+
+// decodeAll runs the whole-source analysis decode (8 kHz mono s16le
+// pipe) through the seam.
+func (a *Analyzer) decodeAll(ctx context.Context, src contracts.VideoSource) ([]float64, error) {
+	data, _, err := a.exec(ctx, a.ffmpeg, decodeArgs(src))
+	if err != nil {
+		return nil, err
+	}
+	return decodePCM(data), nil
+}
+
+// sliceWindow cuts [start, start+dur) seconds from decoded samples.
+// A start past the sample count is nil; a short tail keeps what exists
+// (the correlation tolerates a shorter search window).
+func sliceWindow(samples []float64, start, dur float64) []float64 {
+	lo := int(math.Round(start * SampleRate))
+	if lo >= len(samples) {
+		return nil
+	}
+	hi := lo + int(math.Round(dur*SampleRate))
+	if hi > len(samples) {
+		hi = len(samples)
+	}
+	return samples[lo:hi]
 }
 
 // probeDuration / probeFPS run the ffprobe legs through the seam.

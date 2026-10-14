@@ -16,21 +16,30 @@ import (
 func TestDecodeArgs(t *testing.T) {
 	src := contracts.VideoSource{URL: "https://x/v.m3u8", Headers: map[string]string{"Referer": "https://r/"}}
 	want := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-headers", "Referer: https://r/\r\n", "-ss", "90.000", "-t", "180.000",
+		"-headers", "Referer: https://r/\r\n",
 		"-i", "https://x/v.m3u8", "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:"}
-	if got := decodeArgs(src, 90, 180); !reflect.DeepEqual(got, want) {
+	if got := decodeArgs(src); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestDecodeArgsNoHeaders(t *testing.T) {
 	src := contracts.VideoSource{URL: "https://x/v.m3u8"}
-	got := decodeArgs(src, 1.5, 2.25)
+	got := decodeArgs(src)
 	want := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-ss", "1.500", "-t", "2.250",
 		"-i", "https://x/v.m3u8", "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
+	}
+	// The whole-source decode carries NO seek: input -ss is unreliable
+	// on HLS demuxers (the T6 live proof) — windows are sliced from
+	// the samples locally, decode order IS the timeline.
+	for _, banned := range []string{"-ss", "-t"} {
+		for _, a := range got {
+			if a == banned {
+				t.Fatalf("analysis argv carries %s: %q", banned, got)
+			}
+		}
 	}
 }
 

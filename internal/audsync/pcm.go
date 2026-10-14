@@ -13,7 +13,6 @@ package audsync
 import (
 	"encoding/binary"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -49,12 +48,16 @@ func stripCRLF(s string) string {
 
 var crlfReplacer = strings.NewReplacer("\r", "", "\n", "")
 
-// decodeArgs renders the ANALYSIS decode of one window.
-func decodeArgs(src contracts.VideoSource, start, dur float64) []string {
+// decodeArgs renders the ANALYSIS decode: the WHOLE source's audio to
+// the pipe, 8 kHz mono s16le. There is deliberately NO -ss: input
+// seeking is unreliable on HLS demuxers (the T6 live proof — a
+// discontinuous playlist re-decoded the head for every -ss), while a
+// whole decode follows the true decode-order timeline (plan §1.3);
+// the windows are then sliced from the samples locally. A full
+// episode at 8 kHz mono is ~23 MB for 24 minutes.
+func decodeArgs(src contracts.VideoSource) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	args = append(args, headerBlob(src.Headers)...)
-	args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64),
-		"-t", strconv.FormatFloat(dur, 'f', 3, 64))
 	args = append(args, "-i", src.URL, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:")
 	return args
 }

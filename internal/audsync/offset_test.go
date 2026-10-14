@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -49,40 +48,25 @@ func (f *fakeExec) exec(ctx context.Context, bin string, args []string) ([]byte,
 			<-ctx.Done()
 			return nil, "", ctx.Err()
 		}
-		start, dur := spanOf(args)
-		return s16Bytes(f.slice(urlOf(args), start, dur)), "", nil
+		// The whole-source decode: the fake renders the full timeline
+		// of the requested URL (the orchestrator slices the windows).
+		return s16Bytes(f.whole(urlOf(args))), "", nil
 	}
 	return nil, "unscripted argv: " + joined, errors.New("unscripted argv")
 }
 
-// slice cuts the timeline at [start−shift, start−shift+dur) seconds of
-// the given source, zero-filling outside the timeline.
-func (f *fakeExec) slice(url string, start, dur float64) []float64 {
-	n := int(dur * testRate)
-	out := make([]float64, n)
-	shift := f.urlShift[url]
-	s0 := int(math.Round((start - shift) * testRate))
+// whole renders the ENTIRE timeline of one source, shifted by
+// urlShift[URL] seconds (positive = the source lags; the head is
+// silence).
+func (f *fakeExec) whole(url string) []float64 {
+	out := make([]float64, len(f.timeline))
+	zeros := int(math.Round(f.urlShift[url] * testRate))
 	for i := range out {
-		j := s0 + i
-		if j >= 0 && j < len(f.timeline) {
+		if j := i - zeros; j >= 0 {
 			out[i] = f.timeline[j]
 		}
 	}
 	return out
-}
-
-// spanOf extracts the (-ss, -t) pair from a decode argv; urlOf picks
-// the input URL (the argv's last element).
-func spanOf(args []string) (start, dur float64) {
-	for i, a := range args {
-		if a == "-ss" && i+1 < len(args) {
-			start, _ = strconv.ParseFloat(args[i+1], 64)
-		}
-		if a == "-t" && i+1 < len(args) {
-			dur, _ = strconv.ParseFloat(args[i+1], 64)
-		}
-	}
-	return start, dur
 }
 
 func urlOf(args []string) string {
@@ -112,18 +96,16 @@ func TestReferenceDecodesThreeWindowsAndFPS(t *testing.T) {
 	if math.Abs(ref.FPS-24) > 1e-9 {
 		t.Fatalf("fps = %v, want 24", ref.FPS)
 	}
-	// The decode calls carried the scheduled reference starts.
-	starts := map[string]bool{}
+	// ONE whole-source decode feeds all three windows (the windows
+	// are sliced from the samples locally, never re-seeked).
+	decodes := 0
 	for _, call := range fe.calls {
 		if strings.Contains(strings.Join(call, " "), "-f s16le pipe:") {
-			s, _ := spanOf(call)
-			starts[strconv.FormatFloat(s, 'f', -1, 64)] = true
+			decodes++
 		}
 	}
-	for _, want := range []string{"90", "720", "960"} {
-		if !starts[want] {
-			t.Fatalf("decode starts %v missing %v", starts, want)
-		}
+	if decodes != 1 {
+		t.Fatalf("decodes = %d, want 1 (whole-source decode)", decodes)
 	}
 }
 

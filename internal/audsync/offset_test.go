@@ -23,8 +23,10 @@ type fakeExec struct {
 	calls       [][]string
 	timeline    []float64 // s16-scale float samples
 	urlShift    map[string]float64
-	durationErr bool    // duration probes fail
-	sleepURL    string  // decodes of this URL sleep until ctx.Done
+	durationErr bool   // duration probes fail
+	sleepURL    string // decodes of this URL sleep until ctx.Done
+	slowURL     string // decodes of this URL stall slowDur, then deliver (the slow-decode leg)
+	slowDur     time.Duration
 	fps         float64 // reply of the fps probe (NaN → malformed reply)
 }
 
@@ -47,6 +49,13 @@ func (f *fakeExec) exec(ctx context.Context, bin string, args []string) ([]byte,
 		if urlOf(args) == f.sleepURL {
 			<-ctx.Done()
 			return nil, "", ctx.Err()
+		}
+		if urlOf(args) == f.slowURL {
+			select {
+			case <-time.After(f.slowDur):
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
 		}
 		// The whole-source decode: the fake renders the full timeline
 		// of the requested URL (the orchestrator slices the windows).
@@ -151,10 +160,13 @@ func TestOffsetVerdictThroughFakeExec(t *testing.T) {
 	}
 }
 
+// TestOffsetBudgetKillsDecode: a hung donor decode dies within the
+// DecodeBudget as a typed ErrNoConfidence wrap (the decode leg is
+// bounded by the DecodeBudget, not the per-pair analysis Budget).
 func TestOffsetBudgetKillsDecode(t *testing.T) {
 	const dubURL = "https://d/dub.m3u8"
 	fe := &fakeExec{timeline: wobble(1500, 7), urlShift: map[string]float64{}, sleepURL: dubURL}
-	a := New(Options{Exec: fe.exec, Budget: 200 * time.Millisecond})
+	a := New(Options{Exec: fe.exec, Budget: 200 * time.Millisecond, DecodeBudget: 200 * time.Millisecond})
 	ref, err := a.Reference(context.Background(), contracts.VideoSource{URL: "https://v/video.m3u8"})
 	if err != nil {
 		t.Fatalf("Reference: %v", err)
@@ -174,13 +186,76 @@ func TestOffsetBudgetKillsDecode(t *testing.T) {
 	}
 }
 
+// TestReferenceDecodeBudgetKillsDecode: a hung whole-source decode on
+// the REFERENCE leg must die within the DecodeBudget as a typed
+// ErrNoReference wrap — never an unbounded hang (the reference decode
+// previously ran on the bare caller context).
+func TestReferenceDecodeBudgetKillsDecode(t *testing.T) {
+	fe := &fakeExec{timeline: wobble(1500, 7), urlShift: map[string]float64{}, sleepURL: "https://v/video.m3u8"}
+	a := New(Options{Exec: fe.exec, DecodeBudget: 200 * time.Millisecond})
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Reference(context.Background(), contracts.VideoSource{URL: "https://v/video.m3u8"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNoReference) {
+			t.Fatalf("want ErrNoReference wrap, got %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("want the decode-budget deadline inside the wrap, got %v", err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("Reference returned after %v — decode not bounded", el)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reference ignored the decode budget (unbounded decode)")
+	}
+}
+
+// TestOffsetDecodeBudgetLetsSlowDecodeSucceed: the donor decode is the
+// slow leg — longer than the per-pair analysis Budget but within the
+// DecodeBudget — and the offset must still be found, with the exact
+// value the undelayed pair yields (the analysis budget bounds the
+// probes + correlation, never the decode).
+func TestOffsetDecodeBudgetLetsSlowDecodeSucceed(t *testing.T) {
+	const dubURL = "https://d/dub.m3u8"
+	fe := &fakeExec{
+		timeline: wobble(1500, 7),
+		urlShift: map[string]float64{dubURL: 2},
+		slowURL:  dubURL,
+		slowDur:  500 * time.Millisecond,
+	}
+	a := New(Options{Exec: fe.exec, Budget: 200 * time.Millisecond, DecodeBudget: 2 * time.Second})
+	ref, err := a.Reference(context.Background(), contracts.VideoSource{URL: "https://v/video.m3u8"})
+	if err != nil {
+		t.Fatalf("Reference: %v", err)
+	}
+	off, err := a.Offset(context.Background(), ref, contracts.VideoSource{URL: dubURL})
+	if err != nil {
+		t.Fatalf("Offset: %v", err)
+	}
+	if math.Abs(off.Seconds-2) > 0.05 {
+		t.Fatalf("offset = %v, want ≈2 (identical to the undelayed pair)", off.Seconds)
+	}
+	if off.WindowsAgree < 2 || off.Confidence < 1 {
+		t.Fatalf("verdict = %+v", off)
+	}
+}
+
 // TestAnalyzerDefaults pins the Options normalization: empty binaries
 // default to ffmpeg/ffprobe (the sibling rule), empty budget to
-// DefaultBudget, nil exec to the real one.
+// DefaultBudget, empty decode budget to DefaultDecodeBudget, nil exec
+// to the real one.
 func TestAnalyzerDefaults(t *testing.T) {
 	a := New(Options{})
 	if a.ffmpeg != "ffmpeg" || a.ffprobe != "ffprobe" || a.budget != DefaultBudget {
 		t.Fatalf("defaults: %+v", a)
+	}
+	if a.decodeBudget != DefaultDecodeBudget {
+		t.Fatalf("decode budget default = %v, want %v", a.decodeBudget, DefaultDecodeBudget)
 	}
 	if a.exec == nil {
 		t.Fatal("nil Exec must install realExec")

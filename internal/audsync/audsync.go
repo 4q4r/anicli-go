@@ -57,6 +57,9 @@ type Options struct {
 	FFprobe string
 	// Budget bounds ONE pair analysis (Offset); ≤ 0 → DefaultBudget.
 	Budget time.Duration
+	// DecodeBudget bounds ONE whole-source decode (the Reference leg
+	// and the donor decode inside Offset); ≤ 0 → DefaultDecodeBudget.
+	DecodeBudget time.Duration
 	// Exec is the command seam; nil installs realExec.
 	Exec execFunc
 }
@@ -64,10 +67,11 @@ type Options struct {
 // Analyzer runs the detection pipeline: one Reference per episode,
 // one Offset per donor.
 type Analyzer struct {
-	ffmpeg  string
-	ffprobe string
-	budget  time.Duration
-	exec    execFunc
+	ffmpeg       string
+	ffprobe      string
+	budget       time.Duration
+	decodeBudget time.Duration
+	exec         execFunc
 }
 
 // New builds the Analyzer.
@@ -85,14 +89,18 @@ func New(opts Options) *Analyzer {
 	if opts.Budget <= 0 {
 		opts.Budget = DefaultBudget
 	}
+	if opts.DecodeBudget <= 0 {
+		opts.DecodeBudget = DefaultDecodeBudget
+	}
 	if opts.Exec == nil {
 		opts.Exec = realExec
 	}
 	return &Analyzer{
-		ffmpeg:  opts.FFmpeg,
-		ffprobe: opts.FFprobe,
-		budget:  opts.Budget,
-		exec:    opts.Exec,
+		ffmpeg:       opts.FFmpeg,
+		ffprobe:      opts.FFprobe,
+		budget:       opts.Budget,
+		decodeBudget: opts.DecodeBudget,
+		exec:         opts.Exec,
 	}
 }
 
@@ -127,4 +135,9 @@ const (
 	ConfidenceCap = 10.0
 	// DefaultBudget is the per-pair analysis budget.
 	DefaultBudget = 15 * time.Second
+	// DefaultDecodeBudget bounds ONE whole-source decode: a 24-min
+	// episode decodes in 2–4 s at 8 kHz mono, so 120 s covers 2-h
+	// episodes and slow starts while a hung source can no longer
+	// hold the caller indefinitely.
+	DefaultDecodeBudget = 120 * time.Second
 )

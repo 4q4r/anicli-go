@@ -18,6 +18,7 @@ package audsync
 
 import (
 	"errors"
+	"path/filepath"
 	"time"
 )
 
@@ -45,6 +46,55 @@ var (
 	// absent — no reference to correlate against.
 	ErrNoReference = errors.New("audsync: reference track is silent or absent")
 )
+
+// Options customizes the Analyzer.
+type Options struct {
+	// FFmpeg is the ffmpeg binary (default "ffmpeg").
+	FFmpeg string
+	// FFprobe is the ffprobe binary; empty derives the SIBLING of
+	// FFmpeg (a custom ffmpeg location ships its own ffprobe — the
+	// 169-K rule), else "ffprobe".
+	FFprobe string
+	// Budget bounds ONE pair analysis (Offset); ≤ 0 → DefaultBudget.
+	Budget time.Duration
+	// Exec is the command seam; nil installs realExec.
+	Exec execFunc
+}
+
+// Analyzer runs the detection pipeline: one Reference per episode,
+// one Offset per donor.
+type Analyzer struct {
+	ffmpeg  string
+	ffprobe string
+	budget  time.Duration
+	exec    execFunc
+}
+
+// New builds the Analyzer.
+func New(opts Options) *Analyzer {
+	if opts.FFmpeg == "" {
+		opts.FFmpeg = "ffmpeg"
+	}
+	if opts.FFprobe == "" {
+		if dir := filepath.Dir(opts.FFmpeg); dir != "." {
+			opts.FFprobe = filepath.Join(dir, "ffprobe")
+		} else {
+			opts.FFprobe = "ffprobe"
+		}
+	}
+	if opts.Budget <= 0 {
+		opts.Budget = DefaultBudget
+	}
+	if opts.Exec == nil {
+		opts.Exec = realExec
+	}
+	return &Analyzer{
+		ffmpeg:  opts.FFmpeg,
+		ffprobe: opts.FFprobe,
+		budget:  opts.Budget,
+		exec:    opts.Exec,
+	}
+}
 
 // Detection constants (research §1.4 table, verbatim).
 const (

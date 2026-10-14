@@ -16,6 +16,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -487,9 +488,12 @@ func Load(path string) (*Settings, error) {
 // treats everything but an exact "yes"/"no" as ask anyway.
 func normalizeAudioSync(v string) string {
 	switch v {
-	case "yes", "no":
+	case "yes", "no", "ask":
 		return v
 	default:
+		if v != "" {
+			slog.Warn("config: unknown download.audio_sync; using ask", "value", v)
+		}
 		return "ask"
 	}
 }

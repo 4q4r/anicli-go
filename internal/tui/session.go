@@ -1058,8 +1058,13 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		return s, nil
 	case sessionStateSyncAsk:
 		// PR165b: Esc from the sync ask answers «Нет» — the batch
-		// continues unsynchronized (never an abort).
-		return s.startRangeDownload(s.syncAskMode, s.syncAskStrict, syncNo())
+		// continues unsynchronized (never an abort). The stash clears
+		// exactly like the pick path (no leaked state), and the menu
+		// state drops before the batch restarts.
+		mode, strict := s.syncAskMode, s.syncAskStrict
+		s.syncAskMode, s.syncAskStrict = "", false
+		s.setState(sessionStateMenu)
+		return s.startRangeDownload(mode, strict, syncNo())
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
 	case sessionStateLoading:

@@ -9,6 +9,7 @@ package download
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,4 +116,30 @@ func buildSilentFixture(t *testing.T, dir string) string {
 		t.Fatalf("ffmpeg: %s: %v", out, err)
 	}
 	return mkv
+}
+
+// TestLiveVerifyAssembledPad17 (FIX-ROUND MAJOR-2 live re-proof): a
+// REAL 17-second padded mux passes verification with expectedLead 17 —
+// the pre-fix fixed 15 s window measured lead ≈15.04, deviation 2.0 >
+// 1.0, and deleted the VALID file. The silencedetect depth now scales
+// (17 + 2 = 19 s) and the real ffmpeg reports the true lead.
+func TestLiveVerifyAssembledPad17(t *testing.T) {
+	if _, err := exec.LookPath("mkvmerge"); err != nil {
+		t.Skip("live test: mkvmerge not on PATH")
+	}
+	dir := t.TempDir()
+	d := New(Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	padded17 := buildVerifyFixture(t, dir, "padded17s", 17)
+	if err := d.VerifyAssembled(ctx, padded17, 17*time.Second); err != nil {
+		t.Fatalf("pad 17s / expected 17s must pass: %v", err)
+	}
+	// The trim-geometry guard still fires against the same file when
+	// the expectation is 0 (the head IS 17 s of silence).
+	var silent *ErrSilentOutput
+	if err := d.VerifyAssembled(ctx, padded17, 0); !errors.As(err, &silent) || silent.Check != "lead" {
+		t.Fatalf("pad 17s / expected 0 must fail on lead, got %v", err)
+	}
 }

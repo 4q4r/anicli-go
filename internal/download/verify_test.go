@@ -131,3 +131,67 @@ func TestErrSilentOutputText(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyAssembledLeadWindowScales (FIX-ROUND MAJOR-2): the
+// silencedetect depth must reach PAST the expected pad — a
+// legitimate ±60 s pad (research range) measured through a fixed 15 s
+// window read as a mis-shaped head and deleted a VALID file. Depth =
+// max(15 s, expectedLead + 2 s).
+func TestVerifyAssembledLeadWindowScales(t *testing.T) {
+	ctx := context.Background()
+	var leadArgs []string
+	d := New(Options{})
+	d.runOut = func(ctx context.Context, bin string, args []string) ([]byte, string, error) {
+		return soundingPCM(t), "", nil
+	}
+	d.run = func(ctx context.Context, bin string, args []string) (string, error) {
+		leadArgs = args
+		return "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 17.4 | silence_duration: 17.4\n", nil
+	}
+	if err := d.VerifyAssembled(ctx, "out.mkv", 17*time.Second); err != nil {
+		t.Fatalf("pad 17s must pass: %v", err)
+	}
+	joined := strings.Join(leadArgs, " ")
+	if !strings.Contains(joined, "-t 19.000") {
+		t.Fatalf("lead depth = %q, want -t 19.000 (expected 17s + 2s)", joined)
+	}
+
+	// The default depth for the trim geometry stays 15 s.
+	leadArgs = nil
+	_ = d.VerifyAssembled(ctx, "out.mkv", 0)
+	if !strings.Contains(strings.Join(leadArgs, " "), "-t 15.000") {
+		t.Fatalf("default lead depth missing: %q", leadArgs)
+	}
+}
+
+// TestVerifyAssembledRMSWindowFollowsPad (FIX-ROUND, same class): the
+// RMS@45s sample must land PAST a legitimate pad — a 60 s pad is
+// silent AT 45 s by construction, and the invariant is «the file has
+// audible sound after the applied head», not «sound at a fixed
+// second». Sample = max(45 s, expectedLead + 5 s).
+func TestVerifyAssembledRMSWindowFollowsPad(t *testing.T) {
+	ctx := context.Background()
+	var rmsArgs []string
+	d := New(Options{})
+	d.runOut = func(ctx context.Context, bin string, args []string) ([]byte, string, error) {
+		rmsArgs = args
+		return soundingPCM(t), "", nil
+	}
+	d.run = func(ctx context.Context, bin string, args []string) (string, error) {
+		// The matching 60-s pad geometry: the lead check passes so the
+		// RMS leg is what this pin exercises.
+		return "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 60.4 | silence_duration: 60.4\n", nil
+	}
+	if err := d.VerifyAssembled(ctx, "out.mkv", 60*time.Second); err != nil {
+		t.Fatalf("pad 60s must pass: %v", err)
+	}
+	if !strings.Contains(strings.Join(rmsArgs, " "), "-ss 65.000") {
+		t.Fatalf("rms sample = %q, want -ss 65.000 (expected 60s + 5s)", rmsArgs)
+	}
+
+	rmsArgs = nil
+	_ = d.VerifyAssembled(ctx, "out.mkv", 0)
+	if !strings.Contains(strings.Join(rmsArgs, " "), "-ss 45.000") {
+		t.Fatalf("default rms sample missing: %q", rmsArgs)
+	}
+}

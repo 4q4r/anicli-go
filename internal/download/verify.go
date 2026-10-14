@@ -20,14 +20,24 @@ import (
 
 // The verification measurement windows (the owner's pins).
 const (
-	// LeadSilenceWindow is how deep the lead-geometry check looks.
+	// LeadSilenceWindow is how deep the lead-geometry check looks at
+	// minimum (the trim geometry's default).
 	LeadSilenceWindow = 15 * time.Second
+	// LeadPadSlack extends the lead depth past the expected pad
+	// (FIX-ROUND MAJOR-2: a fixed 15 s window measured a legitimate
+	// 17 s pad as a mis-shaped head and deleted a valid file).
+	LeadPadSlack = 2 * time.Second
 	// MaxLeadDeviation is the head-geometry tolerance.
 	MaxLeadDeviation = 1 * time.Second
 	// RMSWindow is the RMS sampling window at RMSAt.
 	RMSWindow = 5 * time.Second
-	// RMSAt is where the audible-sound check samples.
+	// RMSAt is where the audible-sound check samples — for the trim
+	// geometry and small pads (the owner's 45 s pin).
 	RMSAt = 45 * time.Second
+	// RMSFollowPad pushes the RMS sample past a legitimate pad (the
+	// same FIX-ROUND class: a 60 s pad is silent AT 45 s by
+	// construction).
+	RMSFollowPad = 5 * time.Second
 )
 
 // ErrSilentOutput reports an assembled file that failed delivery
@@ -47,10 +57,17 @@ func (e *ErrSilentOutput) Error() string {
 // expectedLead: a trim shift expects ≈0 head silence, a pad shift
 // expects ≈|offset|.
 func (d *Downloader) VerifyAssembled(ctx context.Context, path string, expectedLead time.Duration) error {
-	// 1. The audible-sound floor at 45 s (first-audio track).
+	// 1. The audible-sound floor (first-audio track). The sample
+	// point follows a legitimate pad — a 60 s pad is silent AT 45 s
+	// by construction, and the invariant is «the file has audible
+	// sound after the applied head», never «at a fixed second».
+	rmsAt := RMSAt
+	if at := expectedLead + RMSFollowPad; at > rmsAt {
+		rmsAt = at
+	}
 	rmsArgs := []string{"-hide_banner", "-i", path,
 		"-map", "0:a:0",
-		"-ss", strconv.FormatFloat(RMSAt.Seconds(), 'f', 3, 64),
+		"-ss", strconv.FormatFloat(rmsAt.Seconds(), 'f', 3, 64),
 		"-t", strconv.FormatFloat(RMSWindow.Seconds(), 'f', 3, 64),
 		"-f", "s16le", "-ar", "8000", "-ac", "1", "pipe:"}
 	pcm, stderr, err := d.runOut(ctx, d.ffmpeg, rmsArgs)
@@ -62,10 +79,16 @@ func (d *Downloader) VerifyAssembled(ctx context.Context, path string, expectedL
 			Details: fmt.Sprintf("rms %.0f < %.0f (s16)", rms, audsync.MinRMS)}
 	}
 
-	// 2. The head geometry against silencedetect's stderr.
+	// 2. The head geometry against silencedetect's stderr. The depth
+	// reaches PAST the expected pad — a fixed window measured a
+	// legitimate 17 s pad as a mis-shaped head (FIX-ROUND MAJOR-2).
+	leadDepth := LeadSilenceWindow
+	if depth := expectedLead + LeadPadSlack; depth > leadDepth {
+		leadDepth = depth
+	}
 	leadArgs := []string{"-hide_banner", "-i", path,
 		"-map", "0:a:0",
-		"-t", strconv.FormatFloat(LeadSilenceWindow.Seconds(), 'f', 3, 64),
+		"-t", strconv.FormatFloat(leadDepth.Seconds(), 'f', 3, 64),
 		"-af", "silencedetect=noise=-50dB:d=0.2",
 		"-f", "null", "-"}
 	leadStderr, err := d.run(ctx, d.ffmpeg, leadArgs)

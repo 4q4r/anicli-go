@@ -157,20 +157,18 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 	return nil
 }
 
-// syncExpectedLead resolves the verification's expected head: the
-// first donor with a non-zero offset decides (trim → 0, pad →
-// |offset|); an all-zero set expects ≈0.
+// syncExpectedLead resolves the verification's expected head from
+// donors[0] ONLY — that is the track VerifyAssembled measures
+// (0:a:0): zero when donors is empty or the first offset is
+// nonnegative (trim geometry), else the negated first offset (pad).
+// A later donor's pad never sets the expectation for a head it does
+// not own (CodeRabbit #4: donors[0] unshifted + donors[1] padded
+// −10 s has a ≈0 file lead).
 func syncExpectedLead(donors []SyncDonor) time.Duration {
-	for _, don := range donors {
-		if don.Offset == 0 {
-			continue
-		}
-		if don.Offset < 0 {
-			return secondsToDuration(-don.Offset)
-		}
+	if len(donors) == 0 || donors[0].Offset >= 0 {
 		return 0
 	}
-	return 0
+	return secondsToDuration(-donors[0].Offset)
 }
 
 // secondsToDuration converts float seconds to a time.Duration

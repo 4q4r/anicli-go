@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,7 +47,12 @@ func bundleEn(t *testing.T) {
 	t.Cleanup(func() { i18n.SetBundle(prev) })
 }
 
-func TestMkvmmergeSyncNotice(t *testing.T) {
+func TestMkvmergeSyncNotice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The fake mkvmerge is a POSIX shell script — Windows cannot
+		// resolve it as an executable (CodeRabbit #2).
+		t.Skip("fake mkvmerge is a POSIX shell script")
+	}
 	bundleEn(t)
 	ctx := context.Background()
 

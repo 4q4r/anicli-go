@@ -64,18 +64,6 @@ func meSyncFixture(t *testing.T, dir string) (refPath, donorPath string) {
 	return refPath, donorPath
 }
 
-// runFFCapture runs one ffmpeg leg capturing stdout (the pipe legs).
-func runFFCapture(t *testing.T, args []string) []byte {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ffmpeg", args...).Output() //nolint:gosec // test-only fixture command
-	if err != nil {
-		t.Fatalf("ffmpeg %v: %v", args, err)
-	}
-	return out
-}
-
 func TestLiveMeSyncRealPair(t *testing.T) {
 	for _, bin := range []string{"ffmpeg", "ffprobe", "mkvmerge", "mpv"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -115,19 +103,9 @@ func TestLiveMeSyncRealPair(t *testing.T) {
 		t.Fatalf("the offset drifted %.3fs between runs, want ≤ 0.125", drift)
 	}
 
-	// The FULL pipeline: decode → byte-exact shift → m4a → real
-	// mkvmerge assembly → the delivery verification (RunSyncJob runs
-	// Stages A-D; the analysis legs above used the same argv shapes).
-	wav := filepath.Join(dir, "donor.wav")
-	runFFCapture(t, audsync.DecodeWAVArgs(contracts.VideoSource{URL: donorPath}, wav))
-	shifted := wav + ".shifted"
-	if err := audsync.ShiftWAVFile(wav, shifted, audsync.FramesFor(found[0].Seconds, audsync.PipelineRate)); err != nil {
-		t.Fatalf("shift: %v", err)
-	}
-	m4a := filepath.Join(dir, "donor.m4a")
-	runFFCapture(t, audsync.EncodeM4AArgs(shifted, m4a))
-	_ = m4a
-
+	// The FULL pipeline: RunSyncJob runs Stages A-D (video solo →
+	// decode → byte-exact shift → m4a → real mkvmerge → verification)
+	// from donorPath.
 	dl := download.New(download.Options{MKVMerge: "mkvmerge"})
 	out := filepath.Join(dir, "EP_1_DUB_720p.mkv")
 	if err := dl.RunSyncJob(ctx, download.SyncJob{

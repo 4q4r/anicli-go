@@ -1032,8 +1032,6 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 	var dropped []string
 	var ext string
 	syncNotes := []SyncNote{}
-	// donorsFromSync marks that the sync analysis produced ≥1
-	// non-zero offset — the assembly ran (or failed fatally).
 	switch {
 	case mode == download.ModeVideoOnly:
 		// Research §2.2: mp4 only for the registered set, else mkv;
@@ -1288,9 +1286,15 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 		return "", notes, nil, false
 	}
 
-	// The reference chain: the video's own track first; without it,
-	// ≥2 donors promote the FIRST donor to reference (the remaining
-	// donors still carry analyzable pairs).
+	// The reference chain: the video's own track first. Without one,
+	// ≥2 donors promote the FIRST donor to the ANCHOR: it ships
+	// UNSHIFTED (its own timeline is the only reference that exists —
+	// the absolute video alignment stays unknown) and carries its own
+	// SyncNote; the remaining dubs are measured against it and
+	// shifted by the RELATIVE offsets, so the dubs align to each
+	// other. The anchor is never invisible and never silently
+	// dropped.
+	anchor := false
 	ref, rerr := c.analyzer.Reference(ctx, video)
 	if rerr != nil {
 		if len(donors) < 2 {
@@ -1306,16 +1310,22 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 			}
 			return "", notes, nil, false
 		}
-		donors = donors[1:]
+		anchor = true
+		notes = append(notes, SyncNote{Dub: donors[0].dub, Kind: SyncAnchor})
 	}
 
 	anyOffset := false
 	for i := range donors {
+		if anchor && i == 0 {
+			continue // the anchor ships unshifted — it IS the reference
+		}
 		d := &donors[i]
-		if d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
+		if !anchor && d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
 			// The same provider's timeline IS the video's timeline —
 			// in sync by construction, nothing to analyze (the plan's
 			// constraint: analysis only for cross-provider pairs).
+			// Anchor mode measures everything: the anchor's timeline
+			// is the reference now, not the video's.
 			continue
 		}
 		off, oerr := c.analyzer.Offset(ctx, ref, d.src)

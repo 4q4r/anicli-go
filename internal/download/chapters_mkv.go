@@ -125,11 +125,11 @@ func parseFFMetadataChapters(text string) ([]ffChapter, error) {
 			}
 			cur.timebaseNum, cur.timebaseDen = n, d
 		case "START":
-			ms, err := parseInt64(value)
-			if err != nil || ms < 0 {
+			ticks, err := parseInt64(value)
+			if err != nil || ticks < 0 {
 				return nil, fmt.Errorf("START %q", value)
 			}
-			cur.startTicks = ms
+			cur.startTicks = ticks
 		case "title":
 			cur.title = value
 		}

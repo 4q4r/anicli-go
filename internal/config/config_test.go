@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -772,5 +773,33 @@ func TestAudioSyncUnknownDegradesToAsk(t *testing.T) {
 	}
 	if got.Download.AudioSync != "ask" {
 		t.Fatalf("unknown audio_sync = %q, want the ask degradation", got.Download.AudioSync)
+	}
+}
+
+// TestAudioSyncUnknownWarnsRejectedValue (CodeRabbit #3): the
+// fallback to ask WARNS with the rejected value — a typo like "Yes"
+// must be visible, not silent.
+func TestAudioSyncUnknownWarnsRejectedValue(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	path := writeTOML(t, "[download]\naudio_sync = \"мусор\"\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(buf.String(), "мусор") || !strings.Contains(buf.String(), "audio_sync") {
+		t.Fatalf("the warn must name the rejected value:\n%s", buf.String())
+	}
+
+	// An empty value stays silent (the unset-field case).
+	buf.Reset()
+	path = writeTOML(t, "[download]\nmax_concurrency = 3\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if strings.Contains(buf.String(), "audio_sync") {
+		t.Fatalf("the empty fallback must stay silent:\n%s", buf.String())
 	}
 }

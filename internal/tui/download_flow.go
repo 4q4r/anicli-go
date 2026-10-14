@@ -29,11 +29,15 @@ type SyncNote struct {
 	Kind string
 }
 
-// Sync note kinds (the plan §Task 10 taxonomy).
+// Sync note kinds (the plan §Task 10 taxonomy + the FIX-ROUND anchor).
 const (
 	SyncApplied     = "applied"
 	SyncUncertain   = "uncertain"
 	SyncUnavailable = "unavailable"
+	// SyncAnchor marks the anchor donor of a reference-less batch: it
+	// ships UNSHIFTED (its timeline is the only reference) and is
+	// never silently dropped.
+	SyncAnchor = "anchor"
 )
 
 // availabilityMaxRuns caps the rendered run list: a pathological
@@ -482,6 +486,8 @@ func renderSyncSuffix(notes []SyncNote) string {
 			parts = append(parts, i18n.T("download.sync_note_uncertain", i18n.Vals{"dub": n.Dub}))
 		case SyncUnavailable:
 			parts = append(parts, i18n.T("download.sync_note_unavailable", i18n.Vals{"dub": n.Dub}))
+		case SyncAnchor:
+			parts = append(parts, i18n.T("download.sync_note_anchor", i18n.Vals{"dub": n.Dub}))
 		}
 	}
 	if len(parts) == 0 {
@@ -577,6 +583,12 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 		case r.Err != nil && r.Dub != "":
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_error", i18n.Vals{
 				"ep": r.Episode, "dub": r.Dub, "err": fmt.Sprint(r.Err)}))
+			if synced != "" {
+				// A failed row still renders what the analysis measured
+				// (CodeRabbit #6: failed rows must not hide applied
+				// offsets).
+				fmt.Fprintf(&b, " (%s)", synced)
+			}
 		case r.Err != nil:
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_no_dubs", i18n.Vals{"ep": r.Episode}))
 		case r.Path != "":

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
@@ -281,4 +282,30 @@ func loudRMSBytes(t *testing.T) []byte {
 		b[i*2], b[i*2+1] = 120, 0
 	}
 	return b
+}
+
+// TestSyncExpectedLeadFirstDonorOnly (CodeRabbit #4): the expected
+// lead derives ONLY from donors[0] — that is the track
+// VerifyAssembled measures (0:a:0). A later donor's pad must not set
+// the expectation: donors[0] unshifted + donors[1] padded −10 s has a
+// ≈0 file lead, and expecting 10 s deleted VALID episodes.
+func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
+	cases := []struct {
+		name   string
+		donors []SyncDonor
+		want   time.Duration
+	}{
+		{"empty", nil, 0},
+		{"first_zero_second_padded", []SyncDonor{{Offset: 0}, {Offset: -10}}, 0},
+		{"first_padded", []SyncDonor{{Offset: -10}}, 10 * time.Second},
+		{"first_trim", []SyncDonor{{Offset: 17.042}, {Offset: -10}}, 0},
+		{"all_zero", []SyncDonor{{Offset: 0}, {Offset: 0}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := syncExpectedLead(tc.donors); got != tc.want {
+				t.Fatalf("syncExpectedLead = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

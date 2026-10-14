@@ -485,3 +485,69 @@ func TestOfflineRangeProgressSyncNote(t *testing.T) {
 		t.Errorf("status must render the sync note %q:\n%s", progress.note, view)
 	}
 }
+
+// TestRealOfflineTitlesWatchedDirs: titles come from every watched
+// root; a folder listed under two roots renders once (first root
+// wins) with RelDir relative to the root that actually holds it.
+func TestRealOfflineTitlesWatchedDirs(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	for _, root := range []string{rootA, rootB} {
+		dir := filepath.Join(root, "Сериал")
+		for _, f := range []string{"EP_1_a.mkv", "EP_2_a.mkv"} {
+			if err := writeFixtureFile(filepath.Join(dir, f)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rf := download.RangesFile{Version: 1, Ranges: []download.RangeBinding{
+			{ID: "s1", Title: "Сериал — S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+		}}
+		if err := download.SaveRanges(dir, &rf); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svc := &realOffline{settings: config.Settings{Download: config.Download{
+		Dir:         rootA,
+		WatchedDirs: []string{rootB},
+	}}}
+	titles, err := svc.Titles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 2 {
+		t.Fatalf("titles = %d (%+v), want one per root", len(titles), titles)
+	}
+	if titles[0].RelDir != "Сериал" || titles[1].RelDir != "Сериал" {
+		t.Errorf("RelDirs = %q, %q; want Сериал under each own root", titles[0].RelDir, titles[1].RelDir)
+	}
+	if titles[0].Dir != filepath.Join(rootA, "Сериал") || titles[1].Dir != filepath.Join(rootB, "Сериал") {
+		t.Errorf("Dirs must point into their own roots: %q, %q", titles[0].Dir, titles[1].Dir)
+	}
+
+	// The same physical folder under both roots renders once.
+	shared := &realOffline{settings: config.Settings{Download: config.Download{
+		Dir:         rootA,
+		WatchedDirs: []string{rootA},
+	}}}
+	titles, err = shared.Titles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 1 {
+		t.Fatalf("dedupe: titles = %d, want 1", len(titles))
+	}
+
+	// A missing watched root is tolerated (the missing-dir tolerance).
+	missing := &realOffline{settings: config.Settings{Download: config.Download{
+		Dir:         rootA,
+		WatchedDirs: []string{filepath.Join(rootB, "ghost")},
+	}}}
+	titles, err = missing.Titles()
+	if err != nil {
+		t.Fatalf("missing root must not fail: %v", err)
+	}
+	if len(titles) != 1 {
+		t.Fatalf("titles = %d, want the rootA one", len(titles))
+	}
+}

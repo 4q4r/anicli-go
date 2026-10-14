@@ -120,6 +120,10 @@ type Skip struct {
 type Download struct {
 	// Dir is the download root; empty means DataDir()/downloads.
 	Dir string `toml:"dir"`
+	// WatchedDirs lists extra library roots scanned by «📂 Скачанное»
+	// alongside Dir; missing paths are skipped (the same tolerance as
+	// a missing Dir).
+	WatchedDirs []string `toml:"watched_dirs"`
 	// MaxConcurrency bounds simultaneous downloads.
 	MaxConcurrency int `toml:"max_concurrency"`
 	// AudioSync controls the PR165b dub auto-sync: "ask" — one prompt

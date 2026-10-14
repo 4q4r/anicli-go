@@ -681,8 +681,8 @@ func (s *realHistory) SetRateID(ctx context.Context, animeID, rateID int64) erro
 type realOffline struct{ settings config.Settings }
 
 // offlineRoots lists the watched library roots: the download dir
-// first ("" = DataDir()/downloads). Task [watched_dirs] extends this
-// to the extra [download] watched_dirs entries.
+// first ("" = DataDir()/downloads), then the extra [download]
+// watched_dirs entries.
 func (s *realOffline) offlineRoots() []string {
 	dir := s.settings.Download.Dir
 	if dir == "" {
@@ -692,7 +692,10 @@ func (s *realOffline) offlineRoots() []string {
 		}
 		dir = filepath.Join(base, "downloads")
 	}
-	return []string{dir}
+	roots := make([]string, 0, 1+len(s.settings.Download.WatchedDirs))
+	roots = append(roots, dir)
+	roots = append(roots, s.settings.Download.WatchedDirs...)
+	return roots
 }
 
 // Titles enumerates the offline library: one plain title per folder,

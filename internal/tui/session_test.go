@@ -623,9 +623,9 @@ type fakeDownload struct {
 	downloads []DownloadTask
 }
 
-func (f *fakeDownload) Download(_ context.Context, task DownloadTask) (string, []string, error) {
+func (f *fakeDownload) Download(_ context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
 	f.downloads = append(f.downloads, task)
-	return "/dl/" + task.AnimeTitle + "/EP_" + task.EpisodeNum + ".mp4", nil, nil
+	return "/dl/" + task.AnimeTitle + "/EP_" + task.EpisodeNum + ".mp4", nil, nil, nil
 }
 
 func (f *fakeDownload) Submit(task DownloadTask) { f.submitted = append(f.submitted, task) }
@@ -970,8 +970,8 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 // errDownload fails every foreground download.
 type errDownload struct{ fakeDownload }
 
-func (f *errDownload) Download(_ context.Context, _ DownloadTask) (string, []string, error) {
-	return "", nil, errors.New("disk full")
+func (f *errDownload) Download(_ context.Context, _ DownloadTask) (string, []string, []SyncNote, error) {
+	return "", nil, nil, errors.New("disk full")
 }
 
 // watchStreaming drives «▶ Watch» through the PR44 format selector

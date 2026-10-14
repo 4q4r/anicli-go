@@ -24,7 +24,7 @@ var errLookMissing = errFixed("not found")
 
 func (f *fakeLook) look(name string) (string, error) {
 	switch name {
-	case "mpv", "ffmpeg":
+	case "mpv", "ffmpeg", "mkvmerge":
 		if f.installed {
 			return "/usr/bin/" + name, nil
 		}
@@ -85,7 +85,7 @@ func bundle(t *testing.T, locale string) {
 func TestDetectMissingReportsInRequiredOrder(t *testing.T) {
 	look := &fakeLook{tools: map[string]bool{}}
 	got := Detect(look.look)
-	want := []string{"mpv", "ffmpeg"}
+	want := []string{"mpv", "ffmpeg", "mkvmerge"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Detect() = %v, want %v (required order)", got, want)
 	}
@@ -98,8 +98,8 @@ func TestDetectPartialMissing(t *testing.T) {
 		}
 		return "", errLookMissing
 	}
-	if got := Detect(l); strings.Join(got, ",") != "ffmpeg" {
-		t.Fatalf("Detect() = %v, want [ffmpeg]", got)
+	if got := Detect(l); strings.Join(got, ",") != "ffmpeg,mkvmerge" {
+		t.Fatalf("Detect() = %v, want [ffmpeg mkvmerge]", got)
 	}
 }
 
@@ -167,10 +167,10 @@ func TestEnsureStartupNonTTYNeverPrompts(t *testing.T) {
 	env := Env{Out: &out, Look: look.look, Run: run.run, In: strings.NewReader("y\ny\n"), InTTY: false}
 	notices := EnsureStartup(env)
 	got := out.String()
-	if !strings.Contains(got, "mpv и ffmpeg не установлены") {
+	if !strings.Contains(got, "mpv и ffmpeg и mkvmerge не установлены") {
 		t.Errorf("output missing the localized missing-message:\n%s", got)
 	}
-	if !strings.Contains(got, "sudo apt install mpv ffmpeg") {
+	if !strings.Contains(got, "sudo apt install mpv ffmpeg mkvtoolnix") {
 		t.Errorf("output missing the exact actionable command:\n%s", got)
 	}
 	if strings.Contains(got, "Установить?") {
@@ -220,7 +220,7 @@ func TestEnsureStartupAcceptedRunsThenRecheckStillMissing(t *testing.T) {
 	env := Env{Out: &out, Look: look.look, Run: run, In: strings.NewReader("y\n"), InTTY: true}
 	notices := EnsureStartup(env)
 	got := out.String()
-	want := "sudo apt install mpv ffmpeg"
+	want := "sudo apt install mpv ffmpeg mkvtoolnix"
 	if len(calls) != 1 || strings.Join(calls[0], " ") != want {
 		t.Fatalf("runner calls = %v, want exactly [%s] as a direct child", calls, want)
 	}
@@ -278,7 +278,11 @@ func TestWindowsPlanPrefersWinget(t *testing.T) {
 		got = append(got, argvOf(st))
 	}
 	joined := strings.Join(got, "|")
-	for _, want := range []string{"winget install -e --id shinchiro.mpv", "winget install -e --id Gyan.FFmpeg"} {
+	for _, want := range []string{
+		"winget install -e --id shinchiro.mpv",
+		"winget install -e --id Gyan.FFmpeg",
+		"winget install -e --id MKVToolNix.MKVToolNix",
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("winget plan commands %q missing %q", joined, want)
 		}
@@ -291,7 +295,7 @@ func TestWindowsPlanFallsBackToChocolatey(t *testing.T) {
 	if p.titleKey != "deps.offer_choco" {
 		t.Fatalf("titleKey = %q, want deps.offer_choco", p.titleKey)
 	}
-	if argvOf(p.steps[0]) != "choco install mpvio ffmpeg -y" {
+	if argvOf(p.steps[0]) != "choco install mpvio ffmpeg mkvtoolnix -y" {
 		t.Fatalf("choco command = %q", argvOf(p.steps[0]))
 	}
 }
@@ -316,7 +320,7 @@ func TestDarwinPlanBrewPresent(t *testing.T) {
 	if p.titleKey != "deps.offer_brew" || p.bootstrap {
 		t.Fatalf("plan = %+v, want the brew offer", p)
 	}
-	if argvOf(p.steps[0]) != "brew install mpv ffmpeg" {
+	if argvOf(p.steps[0]) != "brew install mpv ffmpeg mkvtoolnix" {
 		t.Fatalf("brew command = %q", argvOf(p.steps[0]))
 	}
 }
@@ -364,10 +368,10 @@ func TestLinuxPlanDnfEnablesRPMFusionFirst(t *testing.T) {
 	if !strings.Contains(argvOf(p.steps[0]), "rpmfusion-free-release") {
 		t.Errorf("dnf step 1 = %q, want the RPM Fusion free release enable", argvOf(p.steps[0]))
 	}
-	if argvOf(p.steps[1]) != "sudo dnf install --exclude=openh264* mpv ffmpeg" {
+	if argvOf(p.steps[1]) != "sudo dnf install --exclude=openh264* mpv ffmpeg mkvtoolnix" {
 		t.Errorf("dnf step 2 argv = %q, want the openh264-excluded install", argvOf(p.steps[1]))
 	}
-	if p.steps[1].display() != "sudo dnf install --exclude='openh264*' mpv ffmpeg" {
+	if p.steps[1].display() != "sudo dnf install --exclude='openh264*' mpv ffmpeg mkvtoolnix" {
 		t.Errorf("dnf step 2 display = %q, want the single-quoted paste-safe form", p.steps[1].display())
 	}
 }
@@ -419,7 +423,7 @@ func TestBootstrapThenInstallDarwin(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("runner calls = %v, want bootstrap then brew install", calls)
 	}
-	if !strings.Contains(strings.Join(calls[1], " "), "brew install mpv ffmpeg") {
+	if !strings.Contains(strings.Join(calls[1], " "), "brew install mpv ffmpeg mkvtoolnix") {
 		t.Errorf("second call = %v, want the brew install", calls[1])
 	}
 }
@@ -445,6 +449,32 @@ func TestEveryReferencedDepsKeyExists(t *testing.T) {
 	}
 }
 
+// TestManualKeysCarryMKVToolNix pins the PR165b T1 manual-instruction
+// update: every per-family manual line installs the whole media trio,
+// so a no-package-manager system still lands mkvmerge (mkvtoolnix;
+// Arch's CLI package is mkvtoolnix-cli).
+func TestManualKeysCarryMKVToolNix(t *testing.T) {
+	en, err := i18n.Load(anicli.Locales, "", "en")
+	if err != nil {
+		t.Fatalf("load en: %v", err)
+	}
+	ru, err := i18n.Load(anicli.Locales, "", "ru")
+	if err != nil {
+		t.Fatalf("load ru: %v", err)
+	}
+	for _, key := range []string{"deps.manual_debian", "deps.manual_fedora", "deps.manual_arch", "deps.manual_suse"} {
+		if enText, ruText := en.T(key), ru.T(key); !strings.Contains(enText, "mkvtoolnix") || !strings.Contains(ruText, "mkvtoolnix") {
+			t.Errorf("manual line %s = %q / %q, want mkvtoolnix in both locales", key, enText, ruText)
+		}
+	}
+	if !strings.Contains(en.T("deps.manual_arch"), "mkvtoolnix-cli") {
+		t.Errorf("arch manual line = %q, want the Arch CLI package name mkvtoolnix-cli", en.T("deps.manual_arch"))
+	}
+	if !strings.Contains(ru.T("deps.manual_arch"), "mkvtoolnix-cli") {
+		t.Errorf("arch manual line = %q, want the Arch CLI package name mkvtoolnix-cli", ru.T("deps.manual_arch"))
+	}
+}
+
 // TestEnsureStartupNonTTYBootstrapPrintsFollowUp (169-C): the non-TTY
 // bootstrap flow must print BOTH command sets — the manager bootstrap
 // AND the follow-up mpv/ffmpeg install. planFor() re-probing the same
@@ -462,7 +492,7 @@ func TestEnsureStartupNonTTYBootstrapPrintsFollowUp(t *testing.T) {
 	if !strings.Contains(got, "raw.githubusercontent.com/Homebrew/install") {
 		t.Errorf("output missing the brew bootstrap command:\n%s", got)
 	}
-	if !strings.Contains(got, "brew install mpv ffmpeg") {
+	if !strings.Contains(got, "brew install mpv ffmpeg mkvtoolnix") {
 		t.Errorf("non-TTY bootstrap flow missing the follow-up install commands:\n%s", got)
 	}
 	if len(run.calls) != 0 {
@@ -486,7 +516,7 @@ func TestEnsureStartupNonTTYBootstrapPrintsFollowUpWindows(t *testing.T) {
 	if !strings.Contains(got, "community.chocolatey.org/install.ps1") {
 		t.Errorf("output missing the choco bootstrap command:\n%s", got)
 	}
-	if !strings.Contains(got, "choco install mpvio ffmpeg -y") {
+	if !strings.Contains(got, "choco install mpvio ffmpeg mkvtoolnix -y") {
 		t.Errorf("non-TTY bootstrap flow missing the follow-up install commands:\n%s", got)
 	}
 }

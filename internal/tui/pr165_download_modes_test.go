@@ -31,8 +31,9 @@ func pr165PickerSession(t *testing.T) *sessionScreen {
 			episodes: testEpisodeSet(),
 			langs:    map[string]string{"animego": "ru", "anilib": "ja"},
 		},
-		Playback: &fakePlayback{},
-		Download: &fakeDownload{},
+		Playback:     &fakePlayback{},
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
 	}
 	group := []contracts.SearchResult{
 		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
@@ -331,8 +332,9 @@ func TestPR165PerEpisodeAudioDegradation(t *testing.T) {
 				"[animevib] Vib":    {Links: map[string]contracts.VideoSource{"720": {URL: "x-vib"}}},
 			},
 		},
-		Download: &fakeDownload{},
-		Log:      testLogger(),
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
+		Log:          testLogger(),
 	}
 	group := []contracts.SearchResult{
 		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
@@ -412,9 +414,9 @@ type droppingDownload struct {
 	dropped []string
 }
 
-func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, error) {
-	path, _, err := f.fakeDownload.Download(ctx, task)
-	return path, f.dropped, err
+func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
+	path, _, _, err := f.fakeDownload.Download(ctx, task)
+	return path, f.dropped, nil, err
 }
 
 // mergedEpisodeOne runs the session merge for one animego episode and

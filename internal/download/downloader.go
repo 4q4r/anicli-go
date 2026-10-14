@@ -8,6 +8,7 @@ package download
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,12 @@ func (e *ErrBinaryNotFound) Error() string {
 type Options struct {
 	// FFmpeg is the ffmpeg binary path (default "ffmpeg").
 	FFmpeg string
+	// MKVMerge is the mkvmerge binary path (default "mkvmerge") —
+	// the PR165b sync-assembly muxer.
+	MKVMerge string
+	// Logger is the diagnostics sink (mkvmerge's exit-1 warnings);
+	// nil degrades to a discard logger.
+	Logger *slog.Logger
 }
 
 // CommandInput is one download request.
@@ -176,8 +183,20 @@ type runner func(ctx context.Context, bin string, args []string) (stderr string,
 // Downloader merges streams into local files with an atomic finalize.
 type Downloader struct {
 	ffmpeg string
-	// run executes the command; injectable for tests.
+	// mkvmerge is the sync-assembly muxer (PR165b).
+	mkvmerge string
+	// log is the optional diagnostics sink (mkvmerge warnings).
+	log *slog.Logger
+	// run executes the ffmpeg command; injectable for tests.
 	run runner
+	// runOut executes ffmpeg and captures STDOUT (the verification
+	// RMS pipe); injectable for tests.
+	runOut func(ctx context.Context, bin string, args []string) (stdout []byte, stderr string, err error)
+	// runMKV executes mkvmerge and reports its exit-code contract;
+	// injectable for tests.
+	runMKV func(ctx context.Context, bin string, args []string) (code int, stderr string, err error)
+	// mkvVersion probes `mkvmerge --version`; injectable for tests.
+	mkvVersion func(ctx context.Context, bin string) (string, error)
 }
 
 // New builds the Downloader.
@@ -185,9 +204,34 @@ func New(opts Options) *Downloader {
 	if opts.FFmpeg == "" {
 		opts.FFmpeg = "ffmpeg"
 	}
-	d := &Downloader{ffmpeg: opts.FFmpeg}
+	if opts.MKVMerge == "" {
+		opts.MKVMerge = "mkvmerge"
+	}
+	d := &Downloader{ffmpeg: opts.FFmpeg, mkvmerge: opts.MKVMerge, log: opts.Logger}
 	d.run = d.runFFmpeg
+	d.runOut = d.realRunOut
+	d.runMKV = d.realRunMKV
+	d.mkvVersion = d.realMKVMergeVersion
 	return d
+}
+
+// realRunOut executes ffmpeg capturing stdout (the verification
+// pipe), LookPath fail-loud, context cancellation killing the child.
+func (d *Downloader) realRunOut(ctx context.Context, bin string, args []string) ([]byte, string, error) {
+	if _, err := exec.LookPath(bin); err != nil {
+		return nil, "", &ErrBinaryNotFound{Bin: bin}
+	}
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // bin/args are config-derived, not request input
+	var stderr errBuffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return out, stderr.String(), ctx.Err()
+		}
+		return out, stderr.String(), fmt.Errorf("%s: %s", bin, oneLine(stderr.String(), err))
+	}
+	return out, stderr.String(), nil
 }
 
 // Download runs the merge: ffmpeg writes OutputPath+".part" and the

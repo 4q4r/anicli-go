@@ -41,7 +41,10 @@ import (
 
 // required are the external programs checked at startup, in the fixed
 // message order (mpv first — the spec's example «mpv и ffmpeg»).
-var required = []string{"mpv", "ffmpeg"}
+// PR165b: mkvmerge (mkvtoolnix) closes the media trio — playback,
+// mux-decode, and the sync assembly (mkvmerge-remux builds every
+// synchronized file).
+var required = []string{"mpv", "ffmpeg", "mkvmerge"}
 
 // Looker resolves a program name on PATH; production passes
 // exec.LookPath, tests script the verdict.
@@ -215,12 +218,12 @@ func bootstrapFollowUp(goos string) (plan, bool) {
 	case "darwin":
 		return plan{
 			titleKey: "deps.offer_brew",
-			steps:    []step{{argv: []string{"brew", "install", "mpv", "ffmpeg"}}},
+			steps:    []step{{argv: []string{"brew", "install", "mpv", "ffmpeg", "mkvtoolnix"}}},
 		}, true
 	case "windows":
 		return plan{
 			titleKey: "deps.offer_choco",
-			steps:    []step{{argv: []string{"choco", "install", "mpvio", "ffmpeg", "-y"}}},
+			steps:    []step{{argv: []string{"choco", "install", "mpvio", "ffmpeg", "mkvtoolnix", "-y"}}},
 		}, true
 	}
 	return plan{}, false

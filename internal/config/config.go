@@ -16,6 +16,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -121,6 +122,11 @@ type Download struct {
 	Dir string `toml:"dir"`
 	// MaxConcurrency bounds simultaneous downloads.
 	MaxConcurrency int `toml:"max_concurrency"`
+	// AudioSync controls the PR165b dub auto-sync: "ask" — one prompt
+	// per download batch (the default), "yes" — always, "no" — never.
+	// An unknown value degrades to "ask" at load (a log line, the
+	// startup never aborts).
+	AudioSync string `toml:"audio_sync"`
 }
 
 // API configures the optional HTTP API face.
@@ -409,6 +415,7 @@ func Default() Settings {
 		Download: Download{
 			Dir:            "",
 			MaxConcurrency: 2,
+			AudioSync:      "ask",
 		},
 		API: API{
 			Enabled:         false,
@@ -468,10 +475,27 @@ func Load(path string) (*Settings, error) {
 
 	applyEnv(&s)
 
+	s.Download.AudioSync = normalizeAudioSync(s.Download.AudioSync)
+
 	if err := s.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid settings: %w", err)
 	}
 	return &s, nil
+}
+
+// normalizeAudioSync collapses any unknown audio_sync value to the
+// "ask" default: the knob never aborts startup, and the TUI gate
+// treats everything but an exact "yes"/"no" as ask anyway.
+func normalizeAudioSync(v string) string {
+	switch v {
+	case "yes", "no", "ask":
+		return v
+	default:
+		if v != "" {
+			slog.Warn("config: unknown download.audio_sync; using ask", "value", v)
+		}
+		return "ask"
+	}
 }
 
 // applyFile decodes the TOML file into the prefilled settings, then rejects

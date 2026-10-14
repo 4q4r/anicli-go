@@ -89,7 +89,7 @@ func TestDownloadOneHostileQualityKeyStaysInRoot(t *testing.T) {
 		t.Run(quality, func(t *testing.T) {
 			c, dl, root := hostileQualityCore(t, quality)
 
-			_, _, err := c.downloadOne(context.Background(), hostileQualityTask())
+			_, _, _, err := c.downloadOne(context.Background(), hostileQualityTask(), nil)
 			if err != nil {
 				t.Fatalf("downloadOne: %v", err)
 			}

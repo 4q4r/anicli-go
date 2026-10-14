@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -724,5 +725,81 @@ func TestDiscordSectionParses(t *testing.T) {
 	}
 	if !s.Discord.Enabled || s.Discord.ClientID != "123456789012345678" || s.Discord.ShowEpisode {
 		t.Fatalf("parsed [discord] = %+v", s.Discord)
+	}
+}
+
+// --- PR165b T9: download.audio_sync ----------------------------------
+
+// TestAudioSyncDefaultAsk pins the default: analysis is opt-in per
+// batch via the ask prompt.
+func TestAudioSyncDefaultAsk(t *testing.T) {
+	t.Parallel()
+	if got := Default().Download.AudioSync; got != "ask" {
+		t.Fatalf("default audio_sync = %q, want ask", got)
+	}
+	if got, err := Load(filepath.Join(t.TempDir(), "absent.toml")); err != nil || got.Download.AudioSync != "ask" {
+		t.Fatalf("absent file audio_sync = %q, %v; want ask", got.Download.AudioSync, err)
+	}
+}
+
+// TestAudioSyncFileValues pins the three valid values straight from
+// the settings file.
+func TestAudioSyncFileValues(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ in, want string }{
+		{"ask", "ask"}, {"yes", "yes"}, {"no", "no"},
+	} {
+		path := writeTOML(t, "[download]\naudio_sync = \""+tc.in+"\"\n")
+		got, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", tc.in, err)
+		}
+		if got.Download.AudioSync != tc.want {
+			t.Fatalf("audio_sync = %q, want %q", got.Download.AudioSync, tc.want)
+		}
+	}
+}
+
+// TestAudioSyncUnknownDegradesToAsk pins the plan's degradation: an
+// unknown value never aborts startup — it degrades to "ask" (the
+// loader logs the verdict through slog's default sink; the download
+// gate additionally treats anything but "yes"/"no" as ask).
+func TestAudioSyncUnknownDegradesToAsk(t *testing.T) {
+	t.Parallel()
+	path := writeTOML(t, "[download]\naudio_sync = \"мусор\"\n")
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("unknown audio_sync must not abort startup: %v", err)
+	}
+	if got.Download.AudioSync != "ask" {
+		t.Fatalf("unknown audio_sync = %q, want the ask degradation", got.Download.AudioSync)
+	}
+}
+
+// TestAudioSyncUnknownWarnsRejectedValue (CodeRabbit #3): the
+// fallback to ask WARNS with the rejected value — a typo like "Yes"
+// must be visible, not silent.
+func TestAudioSyncUnknownWarnsRejectedValue(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	path := writeTOML(t, "[download]\naudio_sync = \"мусор\"\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(buf.String(), "мусор") || !strings.Contains(buf.String(), "audio_sync") {
+		t.Fatalf("the warn must name the rejected value:\n%s", buf.String())
+	}
+
+	// An empty value stays silent (the unset-field case).
+	buf.Reset()
+	path = writeTOML(t, "[download]\nmax_concurrency = 3\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if strings.Contains(buf.String(), "audio_sync") {
+		t.Fatalf("the empty fallback must stay silent:\n%s", buf.String())
 	}
 }

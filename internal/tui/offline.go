@@ -179,15 +179,21 @@ func (s *offlineSession) buildEpisodeList() {
 
 // buildActionMenu renders the offline action set (python
 // _offline_session menu). The trailing Back row appended by NewMenu is
-// the menu's exit path (PR24 bottom pin).
+// the menu's exit path (PR24 bottom pin). Plain folders gain the ✂️
+// binding-editor row; a range title's binding already exists and the
+// plain/unsorted sibling session is the edit path.
 func (s *offlineSession) buildActionMenu() {
-	s.list = NewPinList(NewMenu(s.header(), "", []Choice{
+	choices := []Choice{
 		{ID: "watch", Label: i18n.T("menu.watch")},
 		{ID: "next", Label: i18n.T("common.next_ep")},
 		{ID: "prev", Label: i18n.T("common.prev_ep")},
 		{ID: "jump", Label: i18n.T("common.jump_ep")},
 		{ID: "variant", Label: i18n.T("offline.switch_variant")},
-	}...), defaultListHeight)
+	}
+	if s.title.Range == nil {
+		choices = append(choices, Choice{ID: "bind", Label: i18n.T("offline.ranges.open")})
+	}
+	s.list = NewPinList(NewMenu(s.header(), "", choices...), defaultListHeight)
 }
 
 // header renders the offline session header with the active variant.
@@ -303,6 +309,8 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	case "variant":
 		return s.pickVariant()
+	case "bind":
+		return s, push(NewBindEditor(s.deps, s.title))
 	default:
 		return s, nil
 	}

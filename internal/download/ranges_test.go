@@ -278,12 +278,12 @@ func TestScanMediaFiles(t *testing.T) {
 // (filepath.Match: "EP_1_*" needs the literal "EP_1_" prefix).
 func TestResolveFilesGlobOrder(t *testing.T) {
 	dir := rangesMediaDir(t, "EP_1_a.mkv", "EP_2_a.mkv", "EP_10_a.mkv")
-	got := resolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_1_*", "EP_2_*", "EP_10_*"}})
+	got := ResolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_1_*", "EP_2_*", "EP_10_*"}})
 	want := []string{"EP_1_a.mkv", "EP_2_a.mkv", "EP_10_a.mkv"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pattern order = %v, want %v", got, want)
 	}
-	got = resolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}})
+	got = ResolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}})
 	want = []string{"EP_10_a.mkv", "EP_1_a.mkv", "EP_2_a.mkv"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("byte order = %v, want %v (R7 caveat pin)", got, want)
@@ -294,7 +294,7 @@ func TestResolveFilesGlobOrder(t *testing.T) {
 // the same range is not re-matched (first-wins).
 func TestResolveFilesGlobDedup(t *testing.T) {
 	dir := rangesMediaDir(t, "EP_1.mkv", "EP_2.mkv")
-	got := resolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*", "EP_1_*"}})
+	got := ResolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*", "EP_1_*"}})
 	want := []string{"EP_1.mkv", "EP_2.mkv"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("dedup = %v, want %v", got, want)
@@ -305,7 +305,7 @@ func TestResolveFilesGlobDedup(t *testing.T) {
 // episode order; files missing on disk drop silently.
 func TestResolveFilesExactOrderAndMissing(t *testing.T) {
 	dir := rangesMediaDir(t, "b.mkv", "a.mkv")
-	got := resolveRangeFiles(dir, RangeMatch{Kind: "exact", Files: []string{"b.mkv", "ghost.mkv", "a.mkv"}})
+	got := ResolveRangeFiles(dir, RangeMatch{Kind: "exact", Files: []string{"b.mkv", "ghost.mkv", "a.mkv"}})
 	want := []string{"b.mkv", "a.mkv"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("exact order = %v, want %v", got, want)
@@ -318,12 +318,12 @@ func TestResolveFilesExactOrderAndMissing(t *testing.T) {
 // field the plan behavior (every matched file = one position) stays.
 func TestResolveFilesQualityFilter(t *testing.T) {
 	dir := rangesMediaDir(t, "EP_1_1080p.mkv", "EP_1_720p.mkv", "EP_2_1080p.mkv", "EP_2_720p.mkv")
-	filtered := resolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}, Quality: "1080p"})
+	filtered := ResolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}, Quality: "1080p"})
 	want := []string{"EP_1_1080p.mkv", "EP_2_1080p.mkv"}
 	if !reflect.DeepEqual(filtered, want) {
 		t.Fatalf("quality-filtered = %v, want %v (one position per episode)", filtered, want)
 	}
-	all := resolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}})
+	all := ResolveRangeFiles(dir, RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}})
 	if len(all) != 4 {
 		t.Fatalf("unfiltered = %v, want all 4 files (plan behavior)", all)
 	}

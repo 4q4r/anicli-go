@@ -321,7 +321,7 @@ func isRegularFile(dir, name string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// resolveRangeFiles resolves one range's Match onto the directory:
+// ResolveRangeFiles resolves one range's Match onto the directory:
 // glob — patterns against the base name, pattern order is episode
 // order, matches inside one pattern sort byte-wise, a file matched by
 // an earlier pattern is never re-matched (first-wins); exact — the
@@ -329,7 +329,7 @@ func isRegularFile(dir, name string) bool {
 // A non-empty Match.Quality keeps only the files whose base name
 // matches the quality glob (owner amendment A1: a multi-quality
 // folder must not produce phantom positions).
-func resolveRangeFiles(dir string, match RangeMatch) []string {
+func ResolveRangeFiles(dir string, match RangeMatch) []string {
 	var matched []string
 	claimed := map[string]struct{}{}
 	switch match.Kind {
@@ -422,7 +422,7 @@ func ExpandRanges(dir string, index Snapshot, rf *RangesFile) (views []RangeView
 
 	matched := map[string]struct{}{}
 	for _, binding := range rf.Ranges {
-		files := resolveRangeFiles(dir, binding.Match)
+		files := ResolveRangeFiles(dir, binding.Match)
 		if len(files) == 0 {
 			continue
 		}

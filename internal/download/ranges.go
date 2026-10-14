@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -275,4 +277,195 @@ func RangeOverlaps(rf *RangesFile) map[string][]string {
 		sort.Strings(out[file])
 	}
 	return out
+}
+
+// mediaExtensions are the file extensions ScanMediaFiles picks up
+// (lowercase compare; the set covers the downloader's containers and
+// the common hand-placed rips).
+var mediaExtensions = map[string]struct{}{
+	".mkv":  {},
+	".mp4":  {},
+	".avi":  {},
+	".m4v":  {},
+	".mov":  {},
+	".ts":   {},
+	".webm": {},
+}
+
+// ScanMediaFiles lists the directory's media files: regular files
+// only, base names, byte-sorted.
+func ScanMediaFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if _, ok := mediaExtensions[ext]; !ok {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isRegularFile stats the dir entry and reports a readable regular
+// file (missing files silently drop — exact lists pre-date the disk).
+func isRegularFile(dir, name string) bool {
+	info, err := os.Stat(filepath.Join(dir, name))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// resolveRangeFiles resolves one range's Match onto the directory:
+// glob — patterns against the base name, pattern order is episode
+// order, matches inside one pattern sort byte-wise, a file matched by
+// an earlier pattern is never re-matched (first-wins); exact — the
+// listed order is the episode order, missing files drop silently.
+// A non-empty Match.Quality keeps only the files whose base name
+// matches the quality glob (owner amendment A1: a multi-quality
+// folder must not produce phantom positions).
+func resolveRangeFiles(dir string, match RangeMatch) []string {
+	var matched []string
+	claimed := map[string]struct{}{}
+	switch match.Kind {
+	case "glob":
+		files := ScanMediaFiles(dir)
+		for _, pattern := range match.Patterns {
+			for _, file := range files {
+				if _, taken := claimed[file]; taken {
+					continue
+				}
+				ok, err := filepath.Match(pattern, file)
+				if err != nil || !ok {
+					continue
+				}
+				claimed[file] = struct{}{}
+				matched = append(matched, file)
+			}
+		}
+	case "exact":
+		for _, file := range match.Files {
+			if !isRegularFile(dir, file) {
+				continue
+			}
+			if _, taken := claimed[file]; taken {
+				continue
+			}
+			claimed[file] = struct{}{}
+			matched = append(matched, file)
+		}
+	default:
+		return nil
+	}
+	if match.Quality == "" {
+		return matched
+	}
+	kept := make([]string, 0, len(matched))
+	for _, file := range matched {
+		if qualityMatches(match.Quality, file) {
+			kept = append(kept, file)
+		}
+	}
+	return kept
+}
+
+// qualityMatches reports whether the quality glob selects one file:
+// the pattern matches the whole base name (so "*1080p*" works) or any
+// delimiter-separated token of it (so the plain "1080p" of the owner
+// example matches "EP_1_1080p.mkv").
+func qualityMatches(quality, file string) bool {
+	if ok, err := filepath.Match(quality, file); err == nil && ok {
+		return true
+	}
+	for _, token := range strings.FieldsFunc(file, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.' || r == ' '
+	}) {
+		if ok, err := filepath.Match(quality, token); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// RangeView is one range expanded against the folder: the binding and
+// its entries with EpisodeNum REWRITTEN to position labels "1".."N"
+// (the index's own episode labels never surface inside a range —
+// label-collision immunity).
+type RangeView struct {
+	Binding RangeBinding
+	Entries []Entry
+}
+
+// ExpandRanges expands the ranges file against the folder contents.
+//
+// Per position: an index entry whose RelativePath base name equals
+// the file donates its stream metadata (VideoKey/AudioKey/Quality/
+// Container/ChapterTypes, RelativePath kept); otherwise the position
+// degrades to the honest pseudo-entry (VideoKey "file", AudioKey "—",
+// Quality 0 — one position is one playable file). Files matched by no
+// range land in the limbo bucket under their base-name label. Zero-
+// file ranges are omitted from the views (they stay in the file — a
+// glob can come alive later).
+func ExpandRanges(dir string, index Snapshot, rf *RangesFile) (views []RangeView, unsorted []Entry) {
+	if rf == nil {
+		return nil, nil
+	}
+	byBase := make(map[string]Entry, len(index.Entries))
+	for _, e := range index.Entries {
+		byBase[filepath.Base(e.RelativePath)] = e
+	}
+
+	matched := map[string]struct{}{}
+	for _, binding := range rf.Ranges {
+		files := resolveRangeFiles(dir, binding.Match)
+		if len(files) == 0 {
+			continue
+		}
+		view := RangeView{Binding: binding, Entries: make([]Entry, 0, len(files))}
+		for pos, file := range files {
+			label := strconv.Itoa(pos + 1)
+			matched[file] = struct{}{}
+			view.Entries = append(view.Entries, entryForFile(dir, file, label, byBase))
+		}
+		views = append(views, view)
+	}
+	for _, file := range ScanMediaFiles(dir) {
+		if _, taken := matched[file]; taken {
+			continue
+		}
+		unsorted = append(unsorted, entryForFile(dir, file, file, byBase))
+	}
+	return views, unsorted
+}
+
+// entryForFile synthesizes the playable entry of one file: index
+// metadata when the folder's index knows the file, the pseudo-entry
+// otherwise.
+func entryForFile(dir, file, label string, byBase map[string]Entry) Entry {
+	if e, ok := byBase[file]; ok {
+		e.EpisodeNum = label
+		return e
+	}
+	return Entry{
+		EpisodeNum:   label,
+		AnimeID:      nil,
+		VideoKey:     "file",
+		AudioKey:     "—",
+		Quality:      0,
+		Container:    strings.TrimPrefix(filepath.Ext(file), "."),
+		RelativePath: file,
+	}
+}
+
+// SyntheticSourceURL composes the range's progress source key:
+// source_id "offline" + this URL give the anime_progress row its
+// unique identity (the relDir is slash-separated and relative to the
+// watched root, so a moved/remounted folder keeps its progress).
+func SyntheticSourceURL(relDir, rangeID string) string {
+	return "anicli-offline:" + relDir + "#" + rangeID
 }

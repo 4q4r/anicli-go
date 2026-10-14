@@ -127,7 +127,7 @@ func TestDownloadOneStripsTrackTagFromDubID(t *testing.T) {
 	}
 	c := &realCore{registry: reg}
 
-	_, _, err := c.downloadOne(context.Background(), DownloadTask{
+	_, _, _, err := c.downloadOne(context.Background(), DownloadTask{
 		ProviderID: "animevib",
 		DubID:      "[animevib] Amazing Dubbing",
 		Episode: contracts.Episode{
@@ -135,7 +135,7 @@ func TestDownloadOneStripsTrackTagFromDubID(t *testing.T) {
 			RawID:     recorderMergedRawID,
 			RawEmbeds: map[string][]string{},
 		},
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "quality") {
 		t.Fatalf("err = %v, want the empty-links quality verdict", err)
 	}
@@ -160,7 +160,7 @@ func TestDownloadOneDecomposesMergedRawID(t *testing.T) {
 	}
 	c := &realCore{registry: reg}
 
-	_, _, err := c.downloadOne(context.Background(), DownloadTask{
+	_, _, _, err := c.downloadOne(context.Background(), DownloadTask{
 		ProviderID: "animevib",
 		DubID:      "JAM",
 		Episode: contracts.Episode{
@@ -168,7 +168,7 @@ func TestDownloadOneDecomposesMergedRawID(t *testing.T) {
 			RawID:     recorderMergedRawID,
 			RawEmbeds: map[string][]string{},
 		},
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "quality") {
 		t.Fatalf("err = %v, want the empty-links quality verdict", err)
 	}

@@ -49,7 +49,7 @@ func TestDecodeArgsNoHeaders(t *testing.T) {
 // immune to a nonlinear HLS timeline).
 func TestDecodeWAVArgsForcedPipeline(t *testing.T) {
 	src := contracts.VideoSource{URL: "https://x/dub.m3u8"}
-	got := decodeWAVArgs(src, "/tmp/out.wav")
+	got := DecodeWAVArgs(src, "/tmp/out.wav")
 	want := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", "https://x/dub.m3u8", "-map", "0:a:0",
 		"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-f", "wav", "/tmp/out.wav"}
@@ -66,7 +66,7 @@ func TestDecodeWAVArgsForcedPipeline(t *testing.T) {
 }
 
 func TestEncodeM4AArgs(t *testing.T) {
-	got := encodeM4AArgs("/tmp/in.wav", "/tmp/out.m4a")
+	got := EncodeM4AArgs("/tmp/in.wav", "/tmp/out.m4a")
 	want := []string{"-y", "-hide_banner", "-loglevel", "error",
 		"-i", "/tmp/in.wav", "-c:a", "aac", "-b:a", "256k", "/tmp/out.m4a"}
 	if !reflect.DeepEqual(got, want) {

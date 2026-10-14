@@ -412,9 +412,9 @@ type droppingDownload struct {
 	dropped []string
 }
 
-func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, error) {
-	path, _, err := f.fakeDownload.Download(ctx, task)
-	return path, f.dropped, err
+func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
+	path, _, _, err := f.fakeDownload.Download(ctx, task)
+	return path, f.dropped, nil, err
 }
 
 // mergedEpisodeOne runs the session merge for one animego episode and

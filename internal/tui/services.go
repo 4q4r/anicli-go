@@ -252,6 +252,9 @@ type DownloadTask struct {
 	// DefaultAudio is the AudioSet key carrying the default
 	// disposition; "" = the first AudioSet key.
 	DefaultAudio string
+	// AudioSync is the PR165b decision to analyze and fix dub
+	// desync (config + the ask prompt, one decision per batch).
+	AudioSync bool
 }
 
 // DownloadResult reports one finished (or failed) download.
@@ -269,9 +272,11 @@ type DownloadService interface {
 	// returns the written file path (PR64 #3 — the per-episode report
 	// shows where the episode landed) plus the marked dubs that died
 	// between the resolve and the download (M2 — the report row names
-	// them loudly; empty when the whole marked set carried). A
+	// them loudly; empty when the whole marked set carried). sync
+	// carries the PR165b per-dub sync verdicts (applied/uncertain/
+	// unavailable — the report row renders them as one suffix). A
 	// non-nil error means the episode failed; the path is then empty.
-	Download(ctx context.Context, task DownloadTask) (path string, dropped []string, err error)
+	Download(ctx context.Context, task DownloadTask) (path string, dropped []string, sync []SyncNote, err error)
 	// Submit queues one background download.
 	Submit(task DownloadTask)
 	// ActiveBanner renders the background-task summary line ("" when

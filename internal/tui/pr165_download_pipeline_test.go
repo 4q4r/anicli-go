@@ -88,7 +88,7 @@ func TestDownloadOneMultiAudioMuxPinsTracks(t *testing.T) {
 	dl := &capturingDownloader{}
 	c, rec := pr165Core(t, dl, &stubProber{video: "h264", audio: "aac"})
 
-	_, _, err := c.downloadOne(context.Background(), pr165MuxTask())
+	_, _, _, err := c.downloadOne(context.Background(), pr165MuxTask(), nil)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestDownloadOneMultiAudioSingleAACTracksProbesToMP4(t *testing.T) {
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Second Dub"}
 	task.DefaultAudio = ""
-	_, _, err := c.downloadOne(context.Background(), task)
+	_, _, _, err := c.downloadOne(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestDownloadOneVideoOnlyProbesContainer(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "video_only"
 	task.AudioSet = nil
-	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, _, err := c.downloadOne(context.Background(), task, nil); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	in := dl.inputs[0]
@@ -174,7 +174,7 @@ func TestDownloadOneVideoOnlyProbesContainer(t *testing.T) {
 
 	dl2 := &capturingDownloader{}
 	c2, _ := pr165Core(t, dl2, &stubProber{video: "mpeg2video"})
-	if _, _, err := c2.downloadOne(context.Background(), task); err != nil {
+	if _, _, _, err := c2.downloadOne(context.Background(), task, nil); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	if !strings.HasSuffix(dl2.inputs[0].OutputPath, ".mkv") {
@@ -195,7 +195,7 @@ func TestDownloadOneAudioOnlyNativeContainer(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "audio_only"
 	task.AudioSet = nil
-	path, _, err := c.downloadOne(context.Background(), task)
+	path, _, _, err := c.downloadOne(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestDownloadOneMultiAudioPartialDropReportsDropped(t *testing.T) {
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Amazing Dubbing", "[animevib] Ghost Dub"}
 	task.DefaultAudio = ""
-	path, dropped, err := c.downloadOne(context.Background(), task)
+	path, dropped, _, err := c.downloadOne(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestDownloadOneNoDropReturnsCleanResult(t *testing.T) {
 	dl := &capturingDownloader{}
 	c, _ := pr165Core(t, dl, &stubProber{video: "h264", audio: "aac"})
 
-	path, dropped, err := c.downloadOne(context.Background(), pr165MuxTask())
+	path, dropped, _, err := c.downloadOne(context.Background(), pr165MuxTask(), nil)
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestDownloadOneMultiAudioAllDroppedDegradesToVideoOnlyLoudly(t *testing.T) 
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Ghost Dub", "[animevib] Second Ghost"}
 	task.DefaultAudio = ""
-	path, dropped, err := c.downloadOne(context.Background(), task)
+	path, dropped, _, err := c.downloadOne(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("an all-dropped set must degrade, not fail: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestDownloadOneMultiAudioPartialDropMuxesTheRest(t *testing.T) {
 	task := pr165MuxTask()
 	task.AudioSet = []string{"[animevib] Amazing Dubbing", "[animevib] Second Dub", "[animevib] Ghost Dub"}
 	task.DefaultAudio = "[animevib] Ghost Dub" // dropped → the invariant repairs
-	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, _, err := c.downloadOne(context.Background(), task, nil); err != nil {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	in := dl.inputs[0]
@@ -388,7 +388,7 @@ func TestDownloadOneProbeFailureDegradesToMKV(t *testing.T) {
 	task := pr165MuxTask()
 	task.Mode = "video_only"
 	task.AudioSet = nil
-	if _, _, err := c.downloadOne(context.Background(), task); err != nil {
+	if _, _, _, err := c.downloadOne(context.Background(), task, nil); err != nil {
 		t.Fatalf("a probe failure must not fail the download, got %v", err)
 	}
 	if !strings.HasSuffix(dl.inputs[0].OutputPath, ".mkv") {

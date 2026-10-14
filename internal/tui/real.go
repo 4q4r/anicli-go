@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/an0nx/anicli-go/internal/audsync"
 	"github.com/an0nx/anicli-go/internal/buffered"
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/contracts"
@@ -132,12 +134,14 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	mpvPlayer := player.New(player.Options{Bin: settings.Player.Path})
 	mpvPlayer.SetLog(func(line string) { logf(o.logger).Info("player: mpv", "output", line) })
 
+	syncDL := download.New(download.Options{FFmpeg: "ffmpeg", MKVMerge: "mkvmerge", Logger: logf(o.logger)})
+
 	real := &realCore{
 		registry: registry,
 		store:    store,
 		player:   mpvPlayer,
 		skips:    skip.NewManager(settings.Skip, shikiNet),
-		dl:       download.New(download.Options{FFmpeg: "ffmpeg"}),
+		dl:       syncDL,
 		shiki: shikimori.New(settings.Shikimori, shikiNet, nil,
 			shikimori.WithTokenPersister(o.shikiPersister)),
 		settings: settings,
@@ -147,6 +151,15 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	// split field keeps the test fakes narrow (PR165).
 	if d, ok := real.dl.(*download.Downloader); ok {
 		real.prober = d
+		real.assembler = d
+	}
+	// PR165b: the dub auto-sync analyzer and the mkvmerge presence
+	// probe (a refused install degrades to the unsynced download with
+	// the «синхронизация недоступна» row — the PR148 doctrine).
+	real.analyzer = audsync.New(audsync.Options{FFmpeg: "ffmpeg"})
+	real.mkvmergePresent = func() bool {
+		_, err := exec.LookPath("mkvmerge")
+		return err == nil
 	}
 
 	// PR43 C: the buffered watch pipeline. Playlists ride their own
@@ -271,6 +284,12 @@ type realCore struct {
 	mal            *mal.Client
 	settings       config.Settings
 	downloadBridge *realDownload
+	// PR165b sync seams: the analysis engine (nil = the feature is
+	// off), the mkvmerge assembler and the mkvmerge presence probe
+	// (a refused install degrades to the unsynced download).
+	analyzer        audioSyncAnalyzer
+	assembler       syncAssembler
+	mkvmergePresent func() bool
 	// log is the file diagnostics sink (PR74: the download path's
 	// skip verdict is logged, so «вшиваются ли скипы?» is answerable
 	// from the log); nil degrades to discard.
@@ -288,6 +307,19 @@ type mediaDownloader interface {
 // ffprobe.
 type codecProber interface {
 	ProbeCodec(ctx context.Context, kind string, src contracts.VideoSource) (string, error)
+}
+
+// audioSyncAnalyzer is the PR165b analysis seam (nil = the sync
+// feature is off); production: audsync.New.
+type audioSyncAnalyzer interface {
+	Reference(ctx context.Context, video contracts.VideoSource) (audsync.Reference, error)
+	Offset(ctx context.Context, ref audsync.Reference, dub contracts.VideoSource) (audsync.SyncOffset, error)
+}
+
+// syncAssembler is the PR165b assembly seam; production: the concrete
+// *download.Downloader.
+type syncAssembler interface {
+	RunSyncJob(ctx context.Context, job download.SyncJob, progress func(float64)) error
 }
 
 // streamingHTTPClient builds the media-byte transport of the buffered
@@ -803,8 +835,8 @@ type realDownload struct {
 	parts map[string]DownloadTask
 }
 
-func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string, []string, error) {
-	return s.core.downloadOne(ctx, task)
+func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
+	return s.core.downloadOne(ctx, task, nil)
 }
 
 func (s *realDownload) Submit(task DownloadTask) {
@@ -888,7 +920,7 @@ func (c *realCore) logger() *slog.Logger {
 }
 
 // runDownload adapts the manager Runner onto downloadOne.
-func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(float64)) error {
+func (c *realCore) runDownload(ctx context.Context, task download.Task, progress func(float64)) error {
 	bridge := c.downloadBridge
 	if bridge == nil {
 		return fmt.Errorf("tui: download: task bridge unavailable")
@@ -897,7 +929,22 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 	if !ok {
 		return fmt.Errorf("tui: download: task %q lost its parts", task.ID)
 	}
-	_, _, err := c.downloadOne(ctx, parts) // the background runner needs no path or drop list
+	// The background mode reports through the manager progress ticks
+	// (10/30/90/100 on the assembly path, 100 on the legacy one) and
+	// LOGS the sync verdicts — the report row is foreground-only
+	// (owner decision Q1).
+	_, _, notes, err := c.downloadOne(ctx, parts, progress)
+	for _, n := range notes {
+		switch n.Kind {
+		case SyncApplied:
+			c.logger().Info("download: sync applied",
+				"episode", parts.Episode.Num, "dub", n.Dub, "offset", fmt.Sprintf("%+.3fs", n.Seconds))
+		case SyncUncertain:
+			c.logger().Warn("download: sync uncertain", "episode", parts.Episode.Num, "dub", n.Dub)
+		case SyncUnavailable:
+			c.logger().Warn("download: sync unavailable", "episode", parts.Episode.Num, "dub", n.Dub)
+		}
+	}
 	return err
 }
 
@@ -907,7 +954,8 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 // returns to the caller (the PR64 #3 per-episode report) together
 // with the marked dubs that died BETWEEN the resolve and the download
 // (M2: the report row names them in the established «без отмеченных:
-// …» suffix — a download-time drop is never invisible).
+// …» suffix — a download-time drop is never invisible) and the
+// PR165b per-dub sync verdicts.
 //
 // PR165: the content mode dispatches the shape. video+аудио (the
 // default, "" included) keeps the legacy single-audio command when no
@@ -918,10 +966,18 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, _ func(f
 // аудио» bit-extracts the chosen dub's audio into its native
 // container (never a re-encode) and stays out of the offline index —
 // the index rows promise a playable video episode.
-func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, []string, error) {
+//
+// PR165b: when the task carries the sync decision (config + ask
+// prompt), the mode is video+аудио and at least one cross-provider
+// dub measures an offset, the episode goes through the mkvmerge
+// ASSEMBLY (always .mkv); any assembly/verification failure fails the
+// EPISODE (a silent file never ships). Everything else — sync off,
+// mkvmerge refused, analysis without offsets — degrades to today's
+// single-pass path with the honest sync notes.
+func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress func(float64)) (string, []string, []SyncNote, error) {
 	p, ok := c.registry.Get(task.ProviderID)
 	if !ok {
-		return "", nil, fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
+		return "", nil, nil, fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
 	}
 
 	// The merged-session decomposition (#157): each resolve leg gets
@@ -937,7 +993,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	// its own bare dub name, python stream_resolver.py:174 parity.
 	stream, err := p.ResolveStream(ctx, videoEpisode, stripProviderTag(task.DubID))
 	if err != nil {
-		return "", nil, fmt.Errorf("tui: download: resolve: %w", err)
+		return "", nil, nil, fmt.Errorf("tui: download: resolve: %w", err)
 	}
 
 	mode := download.Mode(task.Mode)
@@ -945,13 +1001,13 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	// «только аудио»: the CHOSEN dub's audio alone, codec-preserving.
 	if mode == download.ModeAudioOnly {
 		path, err := c.downloadAudioOnly(ctx, task, stream)
-		return path, nil, err
+		return path, nil, nil, err
 	}
 
 	quality := pickQuality(stream.Links, task.Quality)
 	video, ok := stream.Links[quality]
 	if !ok {
-		return "", nil, fmt.Errorf("tui: download: quality %q unavailable", quality)
+		return "", nil, nil, fmt.Errorf("tui: download: quality %q unavailable", quality)
 	}
 
 	// The python-parity bake: the episode's skips resolve to an
@@ -965,31 +1021,44 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 	}
 
 	outDir := filepath.Join(c.downloadRoot(), download.CleanTitleForFS(task.AnimeTitle))
-
-	input := download.CommandInput{
-		Video:        video,
-		ChaptersFile: chaptersFile,
-		Title:        i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num}),
-	}
+	title := i18n.T("real.download_media_title", i18n.Vals{"title": task.AnimeTitle, "ep": task.Episode.Num})
 
 	// dropped carries the marked dubs that died between the resolve
 	// and the download (M2): it rides the result so the report row
 	// names the loss.
 	var dropped []string
 	var ext string
+	syncNotes := []SyncNote{}
+	// donorsFromSync marks that the sync analysis produced ≥1
+	// non-zero offset — the assembly ran (or failed fatally).
 	switch {
 	case mode == download.ModeVideoOnly:
 		// Research §2.2: mp4 only for the registered set, else mkv;
 		// a failed probe degrades to the universal mkv.
 		ext = c.videoOnlyExtension(ctx, task.Episode.Num, video)
-		input.Mode = download.ModeVideoOnly
-	case len(task.AudioSet) > 0:
-		var tracks []download.AudioTrack
-		var terr error
-		tracks, dropped, terr = c.resolveAudioTracks(ctx, task)
-		if terr != nil {
-			return "", nil, terr
+		input := download.CommandInput{
+			Mode:         download.ModeVideoOnly,
+			Video:        video,
+			ChaptersFile: chaptersFile,
+			Title:        title,
 		}
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, input)
+		if err != nil {
+			return "", dropped, syncNotes, err
+		}
+		c.logIndexSkipped(path, task)
+		return path, dropped, syncNotes, nil
+
+	// 169-D: `quality` is a RAW provider-controlled map key (anilib
+	// main.lua links[tostring(q.quality)]) — sanitize it like every
+	// other filename fragment; the downloadSinglePass belt re-checks
+	// the composed path against the download root.
+	case len(task.AudioSet) > 0:
+		tracks, carriedKeys, terr := c.resolveAudioTracks(ctx, task)
+		if terr != nil {
+			return "", nil, nil, terr
+		}
+		dropped = carriedKeys.dropped
 		if len(dropped) > 0 {
 			// Mandate #7, download-time half: a dub dead at download
 			// time drops for THIS episode (the resolve phase already
@@ -1007,12 +1076,50 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 			c.logger().Warn("download: every marked dub dropped at download time; muxing video-only",
 				"episode", task.Episode.Num, "dubs", dropped)
 			ext = c.videoOnlyExtension(ctx, task.Episode.Num, video)
-			input.Mode = download.ModeVideoOnly
-			break
+			path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+				Mode:         download.ModeVideoOnly,
+				Video:        video,
+				ChaptersFile: chaptersFile,
+				Title:        title,
+			})
+			if err != nil {
+				return "", dropped, syncNotes, err
+			}
+			c.logIndexSkipped(path, task)
+			return path, dropped, syncNotes, nil
 		}
+
+		donors := syncDonorsFromTracks(tracks, carriedKeys.carried)
+		syncPath, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, progress)
+		if handled {
+			if serr != nil {
+				return "", dropped, notes, serr
+			}
+			// The marked-set files keep the offline index untouched
+			// (PR165 scope: index rows exist for the legacy episode
+			// shape) — the sync output is a video-bearing .mkv that
+			// lands in the same directory; the report carries it.
+			c.logIndexSkipped(syncPath, task)
+			return syncPath, dropped, notes, nil
+		}
+		// The degradation carries whatever verdicts accumulated (an
+		// analysis that produced no offsets renders no notes — «уже
+		// в синхроне» is not a note).
+		syncNotes = notes
 		ext = c.multiAudioExtension(ctx, task.Episode.Num, video, tracks)
-		input.Mode = download.ModeVideoAudio
-		input.Tracks = tracks
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+			Mode:         download.ModeVideoAudio,
+			Video:        video,
+			ChaptersFile: chaptersFile,
+			Title:        title,
+			Tracks:       tracks,
+		})
+		if err != nil {
+			return "", dropped, syncNotes, err
+		}
+		c.logIndexSkipped(path, task)
+		return path, dropped, syncNotes, nil
+
 	default:
 		// The legacy path stays byte-identical: the video's own audio
 		// (or the remembered separate-audio pair), the mp4 name.
@@ -1032,40 +1139,75 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 				}
 			}
 		}
-		input.Audio = audio
-		ext = "mp4"
-	}
 
-	// 169-D: `quality` is a RAW provider-controlled map key (anilib
-	// main.lua links[tostring(q.quality)]) — sanitize it like every
-	// other filename fragment, then the belt below re-checks the
-	// composed path against the download root.
+		if audio != nil {
+			donors := []syncDonor{{
+				key:  audioKey,
+				dub:  stripProviderTag(audioKey),
+				lang: download.LangToISO639_2(c.registry.ContentLanguage(providerOfTrackKey(audioKey))),
+				src:  *audio,
+				def:  true,
+			}}
+			if path, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, progress); handled {
+				if serr != nil {
+					return "", dropped, notes, serr
+				}
+				// The legacy shape indexes as today — a synchronized
+				// .mkv is a video-bearing episode (the offline-index
+				// contract is intact).
+				if err := c.indexLegacyEpisode(ctx, task, path, quality); err != nil {
+					return "", dropped, notes, err
+				}
+				return path, dropped, notes, nil
+			}
+		}
+
+		ext = "mp4"
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+			Video:        video,
+			Audio:        audio,
+			ChaptersFile: chaptersFile,
+			Title:        title,
+		})
+		if err != nil {
+			return "", dropped, syncNotes, err
+		}
+		if err := c.indexLegacyEpisode(ctx, task, path, quality); err != nil {
+			return "", dropped, syncNotes, err
+		}
+		return path, dropped, syncNotes, nil
+	}
+}
+
+// downloadSinglePass runs today's single-pass ffmpeg mux: the
+// sanitized name (169-D belt inside), the atomic finalize. Every
+// PR165b degradation lands here — the argv is byte-identical to the
+// pre-sync shape.
+func (c *realCore) downloadSinglePass(ctx context.Context, task DownloadTask, quality, ext, outDir string, input download.CommandInput) (string, error) {
 	name := fmt.Sprintf("EP_%s_%s_%sp.%s",
 		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), sanitizeFragment(quality), ext)
 	outPath := filepath.Join(outDir, name)
 	if err := ensurePathWithinRoot(c.downloadRoot(), outPath); err != nil {
-		return "", nil, err
+		return "", err
 	}
 	input.OutputPath = outPath
-
 	if err := c.dl.Download(ctx, input); err != nil {
-		return "", nil, err
+		return "", err
 	}
+	return outPath, nil
+}
 
-	if mode == download.ModeVideoOnly || len(task.AudioSet) > 0 {
-		// PR165 scope note: the marked-set and video-only files keep
-		// the offline index untouched — index rows exist for the
-		// legacy episode shape (single video+audio pair per key) and
-		// a multi-track row would promise offline playback the
-		// player does not model yet. The file lands in the same
-		// directory and the report carries its path. The all-dropped
-		// video-only degradation (M2) lands here too: the marked set
-		// still rides the task.
-		c.logger().Info("download: file written; offline index not updated (PR165 shape)",
-			"episode", task.Episode.Num, "path", outPath)
-		return outPath, dropped, nil
-	}
+// logIndexSkipped is the PR165 scope note for the files that keep
+// the offline index untouched.
+func (c *realCore) logIndexSkipped(path string, task DownloadTask) {
+	c.logger().Info("download: file written; offline index not updated (PR165 shape)",
+		"episode", task.Episode.Num, "path", path)
+}
 
+// indexLegacyEpisode upserts the offline-index entry of a legacy
+// episode (single video+audio pair per key). A PR165b synchronized
+// file is a video-bearing episode and keeps the contract intact.
+func (c *realCore) indexLegacyEpisode(ctx context.Context, task DownloadTask, outPath, quality string) error {
 	var animeID *int64
 	if task.ShikimoriID > 0 {
 		if rec, err := c.store.Progress.GetByShikimoriID(ctx, task.ShikimoriID); err == nil && rec != nil {
@@ -1073,21 +1215,152 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask) (string, 
 		}
 	}
 	audioKey := audioKeyOfTask(task)
-	key := audioKey
-	if key == "" {
-		key = task.DubID
+	if audioKey == "" {
+		audioKey = task.DubID
 	}
-	if err := download.UpsertEntry(outDir, download.EntryInput{
+	return download.UpsertEntry(filepath.Dir(outPath), download.EntryInput{
 		EpisodeNum: task.Episode.Num,
 		AnimeID:    animeID,
 		VideoKey:   task.DubID,
-		AudioKey:   key,
+		AudioKey:   audioKey,
 		Quality:    qualityIntOf(quality),
 		FilePath:   outPath,
-	}); err != nil {
-		return "", nil, err
+	})
+}
+
+// syncDonor is one analysis/assembly candidate dub (tui-local). The
+// offset is filled by the analysis; a zero means no shift (the donor
+// still assembles when the episode goes through the assembly).
+type syncDonor struct {
+	key, dub, lang string
+	src            contracts.VideoSource
+	def            bool
+	offset         float64
+}
+
+// syncCarried is resolveAudioTracks' richer result: the carried keys
+// ride next to their tracks (index-aligned) so the sync analysis can
+// tell cross-provider pairs apart.
+type syncCarried struct {
+	carried, dropped []string
+}
+
+// syncDonorsFromTracks zips the resolved mux tracks with their
+// carried keys.
+func syncDonorsFromTracks(tracks []download.AudioTrack, carried []string) []syncDonor {
+	donors := make([]syncDonor, 0, len(tracks))
+	for i, tr := range tracks {
+		key := ""
+		if i < len(carried) {
+			key = carried[i]
+		}
+		donors = append(donors, syncDonor{
+			key: key, dub: tr.Title, lang: tr.Lang, src: tr.Source, def: tr.Default,
+		})
 	}
-	return outPath, dropped, nil
+	return donors
+}
+
+// trySyncDownload runs the PR165b analysis and — when ≥1
+// cross-provider dub measures a non-zero offset and mkvmerge is
+// present — the mkvmerge assembly. handled=false degrades to the
+// caller's single-pass path (sync off, mkvmerge refused, no
+// reference, no offsets); handled=true with err != nil FAILS the
+// episode (the assembly/verification contract: a silent file never
+// ships).
+func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video contracts.VideoSource, donors []syncDonor, chaptersFile, outDir, quality, title string, progress func(float64)) (path string, notes []SyncNote, err error, handled bool) {
+	notes = []SyncNote{}
+	if !task.AudioSync || c.analyzer == nil || c.assembler == nil {
+		// The feature is OFF (the config/prompt decision or a nil
+		// production seam): no notes — the download is exactly
+		// today's, unremarked.
+		return "", notes, nil, false
+	}
+	if c.mkvmergePresent == nil || !c.mkvmergePresent() {
+		// mkvmerge was refused at startup (the PR148 doctrine): the
+		// download proceeds unsynchronized, honestly named.
+		for _, d := range donors {
+			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUnavailable})
+		}
+		return "", notes, nil, false
+	}
+
+	// The reference chain: the video's own track first; without it,
+	// ≥2 donors promote the FIRST donor to reference (the remaining
+	// donors still carry analyzable pairs).
+	ref, rerr := c.analyzer.Reference(ctx, video)
+	if rerr != nil {
+		if len(donors) < 2 {
+			for _, d := range donors {
+				notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
+			}
+			return "", notes, nil, false
+		}
+		ref, rerr = c.analyzer.Reference(ctx, donors[0].src)
+		if rerr != nil {
+			for _, d := range donors {
+				notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
+			}
+			return "", notes, nil, false
+		}
+		donors = donors[1:]
+	}
+
+	anyOffset := false
+	for i := range donors {
+		d := &donors[i]
+		if d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
+			// The same provider's timeline IS the video's timeline —
+			// in sync by construction, nothing to analyze (the plan's
+			// constraint: analysis only for cross-provider pairs).
+			continue
+		}
+		off, oerr := c.analyzer.Offset(ctx, ref, d.src)
+		if oerr != nil {
+			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
+			continue
+		}
+		if off.Seconds == 0 {
+			continue // already in sync — no note (the info verdict)
+		}
+		d.offset = off.Seconds
+		anyOffset = true
+		notes = append(notes, SyncNote{Dub: d.dub, Seconds: off.Seconds, Kind: SyncApplied})
+	}
+	if !anyOffset {
+		return "", notes, nil, false
+	}
+
+	// The assembly: sync outputs are ALWAYS .mkv (the mkvmerge
+	// architecture — the owner's confirmed ruling).
+	name := fmt.Sprintf("EP_%s_%s_%sp.mkv",
+		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), sanitizeFragment(quality))
+	outPath := filepath.Join(outDir, name)
+	if err := ensurePathWithinRoot(c.downloadRoot(), outPath); err != nil {
+		return "", notes, err, true
+	}
+	job := download.SyncJob{
+		Video:          video,
+		Donors:         syncJobDonors(donors),
+		ChaptersFFMeta: chaptersFile,
+		Output:         outPath,
+		Title:          title,
+	}
+	if err := c.assembler.RunSyncJob(ctx, job, progress); err != nil {
+		return "", notes, err, true
+	}
+	return outPath, notes, nil, true
+}
+
+// syncJobDonors renders the analysis donors onto the assembler job.
+func syncJobDonors(donors []syncDonor) []download.SyncDonor {
+	out := make([]download.SyncDonor, 0, len(donors))
+	for _, d := range donors {
+		out = append(out, download.SyncDonor{
+			Dub: d.dub, Source: d.src, Lang: d.lang, Title: d.dub, Default: d.def, Offset: d.offset,
+		})
+	}
+	return out
 }
 
 // videoOnlyExtension decides the container of a video-only mux
@@ -1114,14 +1387,16 @@ func (c *realCore) videoOnlyExtension(ctx context.Context, episode string, video
 // a set where NOTHING carried returns an empty track list with every
 // dropped name — the caller degrades to video-only and the report row
 // names the loss loudly (M2: a video-only file, never a SILENT one).
-func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([]download.AudioTrack, []string, error) {
+// The carried keys return index-aligned with the tracks (the sync
+// analysis reads the providers off them).
+func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([]download.AudioTrack, syncCarried, error) {
 	tracks := make([]download.AudioTrack, 0, len(task.AudioSet))
-	var dropped []string
+	var carried syncCarried
 	for _, key := range task.AudioSet {
 		prov := providerOfTrackKey(key)
 		ap, ok := c.registry.Get(prov)
 		if !ok {
-			dropped = append(dropped, key)
+			carried.dropped = append(carried.dropped, key)
 			continue
 		}
 		audioEpisode := task.Episode
@@ -1131,7 +1406,7 @@ func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([
 		// (#158 fix-round 2).
 		audioStream, err := ap.ResolveStream(ctx, audioEpisode, stripProviderTag(key))
 		if err != nil || len(audioStream.Links) == 0 {
-			dropped = append(dropped, key)
+			carried.dropped = append(carried.dropped, key)
 			continue
 		}
 		best := audioStream.Links[sortedQualityDesc(audioStream.Links)[0]]
@@ -1141,9 +1416,10 @@ func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([
 			Title:   stripProviderTag(key),
 			Default: key == task.DefaultAudio,
 		})
+		carried.carried = append(carried.carried, key)
 	}
 	if len(tracks) == 0 {
-		return nil, dropped, nil
+		return nil, carried, nil
 	}
 	// The default-disposition invariant repairs here: exactly one
 	// track is the default. "" means the FIRST marked track, and a
@@ -1159,7 +1435,7 @@ func (c *realCore) resolveAudioTracks(ctx context.Context, task DownloadTask) ([
 	if !hasDefault {
 		tracks[0].Default = true
 	}
-	return tracks, dropped, nil
+	return tracks, carried, nil
 }
 
 // multiAudioExtension decides the mux container per the research

@@ -19,6 +19,23 @@ import (
 	"github.com/an0nx/anicli-go/internal/i18n"
 )
 
+// SyncNote is one dub's PR165b sync verdict for the report row.
+type SyncNote struct {
+	// Dub is the bare dub name (the provider tag stripped).
+	Dub string
+	// Seconds is the applied offset (3-decimal rendering, signed).
+	Seconds float64
+	// Kind is "applied", "uncertain" or "unavailable".
+	Kind string
+}
+
+// Sync note kinds (the plan §Task 10 taxonomy).
+const (
+	SyncApplied     = "applied"
+	SyncUncertain   = "uncertain"
+	SyncUnavailable = "unavailable"
+)
+
 // availabilityMaxRuns caps the rendered run list: a pathological
 // many-gap merge (1100+ gappy episodes, dozens of junk labels) must
 // not render a multi-KB status line (review fix 5).
@@ -123,6 +140,10 @@ type downloadEpisodeReport struct {
 	// skipped entirely (never a silent video-only file), folded into
 	// the compact audio-set attribution line.
 	SkipAudioSet bool
+	// SyncNotes carries the PR165b per-dub sync verdicts of the
+	// episode (applied/uncertain/unavailable) — rendered as one row
+	// suffix.
+	SyncNotes []SyncNote
 }
 
 // resolveDownloadDub resolves ONE range episode's dub with the PR63
@@ -348,9 +369,10 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 		stamped := task
 		stampResolvedDub(&stamped, stub.Dub)
 		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, stub.Dub+"…"))
-		path, dlDropped, err := deps.Download.Download(ctx, stamped)
+		path, dlDropped, dlSync, err := deps.Download.Download(ctx, stamped)
 		if err != nil {
 			report[i].Err = err
+			report[i].SyncNotes = dlSync
 			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_error", i18n.Vals{"err": err.Error()})))
 			if firstErr == nil {
 				firstErr = err
@@ -361,6 +383,7 @@ func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask
 		// M2: the dubs that died between the resolve and the download
 		// land on the same row, in the same established suffix.
 		report[i].DroppedAudio = mergeDroppedAudio(report[i].DroppedAudio, dlDropped)
+		report[i].SyncNotes = dlSync
 		ok++
 		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_done")))
 	}
@@ -439,6 +462,32 @@ func renderSkippedAudioSet(report []downloadEpisodeReport) string {
 	runs := truncateRuns(episodeRuns(skipped))
 	return i18n.T("download.skipped_audio_set", i18n.Vals{
 		"eps": strings.Join(runs, ", ")})
+}
+
+// renderSyncSuffix renders the PR165b sync verdicts as one row
+// suffix: «синхронизация: DUB +17.042с, DUB2: нет уверенности».
+// Applied notes render the signed 3-decimal offset; uncertain and
+// unavailable render their typed forms. "" when there are no notes.
+func renderSyncSuffix(notes []SyncNote) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(notes))
+	for _, n := range notes {
+		switch n.Kind {
+		case SyncApplied:
+			parts = append(parts, i18n.T("download.sync_note_applied", i18n.Vals{
+				"dub": n.Dub, "offset": fmt.Sprintf("%+.3f", n.Seconds)}))
+		case SyncUncertain:
+			parts = append(parts, i18n.T("download.sync_note_uncertain", i18n.Vals{"dub": n.Dub}))
+		case SyncUnavailable:
+			parts = append(parts, i18n.T("download.sync_note_unavailable", i18n.Vals{"dub": n.Dub}))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return i18n.T("download.row_sync", i18n.Vals{"notes": strings.Join(parts, ", ")})
 }
 
 // renderDroppedSuffix renders the loud per-episode degradation note:
@@ -522,6 +571,7 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 			continue // the compact skip lines already carry them
 		}
 		dropped := renderDroppedSuffix(r.DroppedAudio)
+		synced := renderSyncSuffix(r.SyncNotes)
 		b.WriteString("\n")
 		switch {
 		case r.Err != nil && r.Dub != "":
@@ -535,11 +585,17 @@ func renderDownloadSettle(msg downloadSettledMsg) string {
 			if dropped != "" {
 				fmt.Fprintf(&b, " (%s)", dropped)
 			}
+			if synced != "" {
+				fmt.Fprintf(&b, " (%s)", synced)
+			}
 		default:
 			fmt.Fprintf(&b, "%s", i18n.T("download.row_done", i18n.Vals{
 				"ep": r.Episode, "dub": r.Dub}))
 			if dropped != "" {
 				fmt.Fprintf(&b, " (%s)", dropped)
+			}
+			if synced != "" {
+				fmt.Fprintf(&b, " (%s)", synced)
 			}
 		}
 	}

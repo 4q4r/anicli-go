@@ -44,7 +44,7 @@ func TestLiveMeasuredShiftedRemeasured(t *testing.T) {
 
 	// 2. The pipeline legs on real files: decode → byte shift → m4a.
 	wavPath := filepath.Join(dir, "donor.wav")
-	if _, _, err := a.exec(ctx, a.ffmpeg, decodeWAVArgs(srcURL(donorPath), wavPath)); err != nil {
+	if _, _, err := a.exec(ctx, a.ffmpeg, DecodeWAVArgs(srcURL(donorPath), wavPath)); err != nil {
 		t.Fatalf("pipeline decode: %v", err)
 	}
 	if _, err := os.Stat(wavPath); err != nil {
@@ -57,7 +57,7 @@ func TestLiveMeasuredShiftedRemeasured(t *testing.T) {
 	}
 	t.Logf("shifted = %d frames (%.3fs @48 kHz)", frames, off1.Seconds)
 	m4aPath := filepath.Join(dir, "donor.m4a")
-	if _, _, err := a.exec(ctx, a.ffmpeg, encodeM4AArgs(shiftedPath, m4aPath)); err != nil {
+	if _, _, err := a.exec(ctx, a.ffmpeg, EncodeM4AArgs(shiftedPath, m4aPath)); err != nil {
 		t.Fatalf("m4a encode: %v", err)
 	}
 

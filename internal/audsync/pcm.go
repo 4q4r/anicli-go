@@ -62,9 +62,9 @@ func decodeArgs(src contracts.VideoSource) []string {
 	return args
 }
 
-// decodeWAVArgs renders the PIPELINE decode (owner-forced 48 kHz
+// DecodeWAVArgs renders the PIPELINE decode (owner-forced 48 kHz
 // stereo WAV; the whole donor — never a window).
-func decodeWAVArgs(src contracts.VideoSource, outWAV string) []string {
+func DecodeWAVArgs(src contracts.VideoSource, outWAV string) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	args = append(args, headerBlob(src.Headers)...)
 	args = append(args, "-i", src.URL, "-map", "0:a:0",
@@ -72,8 +72,8 @@ func decodeWAVArgs(src contracts.VideoSource, outWAV string) []string {
 	return args
 }
 
-// encodeM4AArgs renders the shifted-WAV → m4a codec pass.
-func encodeM4AArgs(inWAV, outM4A string) []string {
+// EncodeM4AArgs renders the shifted-WAV → m4a codec pass.
+func EncodeM4AArgs(inWAV, outM4A string) []string {
 	return []string{"-y", "-hide_banner", "-loglevel", "error",
 		"-i", inWAV, "-c:a", "aac", "-b:a", "256k", outM4A}
 }

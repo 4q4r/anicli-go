@@ -56,7 +56,7 @@ func TestLiveDiscontinuousHLSDecode(t *testing.T) {
 	// Claim 1: the PIPELINE decode of the discontinuous HLS is
 	// THROUGH — the WAV spans both segments with no holes.
 	wavPath := filepath.Join(dir, "full.wav")
-	if _, _, err := a.exec(ctx, a.ffmpeg, decodeWAVArgs(srcURL(playlist), wavPath)); err != nil {
+	if _, _, err := a.exec(ctx, a.ffmpeg, DecodeWAVArgs(srcURL(playlist), wavPath)); err != nil {
 		t.Fatalf("pipeline decode: %v", err)
 	}
 	wf, err := os.Open(wavPath) //nolint:gosec // G304: the test reads its own temp wav

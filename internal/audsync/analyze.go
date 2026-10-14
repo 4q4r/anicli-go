@@ -36,7 +36,11 @@ type Reference struct {
 // is ErrNoReference; an episode shorter than MinEpisodeDur yields an
 // EMPTY reference (no schedule), which every Offset rejects with
 // ErrNoConfidence — the caller just skips the analysis. All-silent
-// windows are ErrNoReference.
+// windows are ErrNoReference. The whole-source decode runs on its own
+// DecodeBudget (a hung or giant source must not hold the caller
+// forever), derived from the parent context — a child deadline can
+// only be earlier, never longer; a budget kill surfaces as a typed
+// ErrNoReference wrap.
 func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (Reference, error) {
 	dur, err := a.probeDuration(ctx, video)
 	if err != nil {
@@ -51,7 +55,9 @@ func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (
 		fps = f // an unreadable fps is DefaultFPS, never an error
 	}
 
-	samples, err := a.decodeAll(ctx, video)
+	decodeCtx, cancel := context.WithTimeout(ctx, a.decodeBudget)
+	defer cancel()
+	samples, err := a.decodeAll(decodeCtx, video)
 	if err != nil {
 		return Reference{}, fmt.Errorf("%w (video decode: %w)", ErrNoReference, err)
 	}
@@ -73,8 +79,11 @@ func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (
 	return Reference{Schedule: schedule, Windows: windows, FPS: fps}, nil
 }
 
-// Offset renders one donor's verdict against a Reference within the
-// analysis budget (the timeout kills ffmpeg mid-window). The search
+// Offset renders one donor's verdict against a Reference under two
+// budgets, both derived from the parent context: the whole-source
+// decode is the slow leg and runs on its own DecodeBudget, while the
+// probes and the correlation keep the per-pair analysis Budget (the
+// timeout kills ffmpeg mid-window). The search
 // windows ride the REFERENCE's schedule — research §4 ties
 // searchStart to refStart (t−60); re-deriving them from the donor's
 // own duration would skew every window whose index pairs across
@@ -85,10 +94,12 @@ func (a *Analyzer) Offset(ctx context.Context, ref Reference, dub contracts.Vide
 	if len(ref.Windows) == 0 || len(ref.Schedule) != len(ref.Windows) {
 		return SyncOffset{}, ErrNoConfidence
 	}
-	ctx, cancel := context.WithTimeout(ctx, a.budget)
-	defer cancel()
+	decodeCtx, cancelDecode := context.WithTimeout(ctx, a.decodeBudget)
+	defer cancelDecode()
+	analysisCtx, cancelAnalysis := context.WithTimeout(ctx, a.budget)
+	defer cancelAnalysis()
 
-	dur, err := a.probeDuration(ctx, dub)
+	dur, err := a.probeDuration(analysisCtx, dub)
 	if err != nil {
 		return SyncOffset{}, fmt.Errorf("%w (donor duration: %w)", ErrNoConfidence, err)
 	}
@@ -97,7 +108,7 @@ func (a *Analyzer) Offset(ctx context.Context, ref Reference, dub contracts.Vide
 	}
 
 	searchWins := make([][]float64, len(ref.Schedule))
-	dubSamples, err := a.decodeAll(ctx, dub)
+	dubSamples, err := a.decodeAll(decodeCtx, dub)
 	if err != nil {
 		return SyncOffset{}, fmt.Errorf("%w (donor decode: %w)", ErrNoConfidence, err)
 	}

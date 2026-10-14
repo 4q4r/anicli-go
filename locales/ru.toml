@@ -372,4 +372,5 @@
 "deps.manual_arch" = "Arch/Manjaro:  sudo pacman -S mpv ffmpeg mkvtoolnix-cli"
 "deps.manual_suse" = "openSUSE:  sudo zypper install mpv ffmpeg mkvtoolnix"
 "deps.caveat_fresh_path" = "Установка выполнена, но {names} всё ещё не найдены в PATH — перезапустите терминал (или войдите в сессию заново) и запустите anicli снова"
+"deps.mkvmerge_version_unparsable" = "mkvmerge установлен, но версию прочитать не удалось — синхронизация дубляжей недоступна (загрузки продолжатся без синхронизации)"
 "deps.continue_note" = "anicli продолжит работу: поиск и обзор работают, воспроизведение и загрузка предупредят при использовании"

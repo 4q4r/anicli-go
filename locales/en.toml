@@ -370,4 +370,5 @@
 "deps.manual_arch" = "Arch/Manjaro:  sudo pacman -S mpv ffmpeg mkvtoolnix-cli"
 "deps.manual_suse" = "openSUSE:  sudo zypper install mpv ffmpeg mkvtoolnix"
 "deps.caveat_fresh_path" = "The install ran, but {names} still cannot be found on PATH — restart your terminal (or re-login) and start anicli again"
+"deps.mkvmerge_version_unparsable" = "mkvmerge is installed but its version cannot be read — dub sync is unavailable (downloads continue unsynchronized)"
 "deps.continue_note" = "anicli will continue: search and browsing work, playback and download warn when used"

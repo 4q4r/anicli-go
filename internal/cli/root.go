@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/an0nx/anicli-go/internal/api"
 	"github.com/an0nx/anicli-go/internal/config"
+	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/i18n"
 	"github.com/an0nx/anicli-go/internal/netclient"
 	"github.com/an0nx/anicli-go/internal/providers"
@@ -184,6 +186,13 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	// install NEVER aborts startup: the warning rides the TUI notices
 	// below and playback/download fail loud again at use.
 	notices = append(notices, sysdeps.EnsureStartup(sysdeps.Env{Out: out})...)
+	// PR165b: the once-per-launch mkvmerge version probe (owner
+	// order) — an installed mkvmerge with an unparsable version
+	// surfaces the sync-degrade notice up front; the mux re-probes
+	// cheaply at every assembly.
+	if notice := mkvmergeSyncNotice(ctx); notice != "" {
+		notices = append(notices, notice)
+	}
 
 	real, err := tui.NewRealDeps(*settings, store,
 		tui.WithShikiPersister(shikiTokenPersister(settingsPath)),
@@ -210,6 +219,22 @@ func runTUI(ctx context.Context, out io.Writer, settingsPath string) error {
 	defer stop()
 
 	return tui.Run(signalCtx, real.Deps, tuiLog.Logger)
+}
+
+// mkvmergeSyncNotice is the PR165b once-per-launch version probe: an
+// installed mkvmerge with an UNPARSABLE version means the sync cannot
+// pick its default-track flag — the download degrades to
+// unsynchronized, and this notice says so up front (the mux probe
+// fails typed at assembly time). An absent mkvmerge is already named
+// by the sysdeps startup warning — no second notice.
+func mkvmergeSyncNotice(ctx context.Context) string {
+	if _, err := exec.LookPath("mkvmerge"); err != nil {
+		return ""
+	}
+	if _, err := download.ProbeMKVMerge(ctx, "mkvmerge"); err != nil {
+		return i18n.T("deps.mkvmerge_version_unparsable")
+	}
+	return ""
 }
 
 // newTUILogger builds a file-based logger for the TUI session (stderr

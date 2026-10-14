@@ -51,13 +51,17 @@ func planFor(goos string, look Looker) plan {
 // Package IDs verified upstream:
 //   - winget: shinchiro.mpv (the shinchiro build mpv.io lists first;
 //     winget adds it to PATH), Gyan.FFmpeg (the Gyan.dev builds
-//     ffmpeg.org links);
-//   - Chocolatey: mpvio (the package mpv.io's installation page links)
-//     and ffmpeg;
-//   - Homebrew formulas: mpv, ffmpeg.
+//     ffmpeg.org links), MKVToolNix.MKVToolNix (the upstream
+//     mkvtoolnix.download Windows installer's winget id);
+//   - Chocolatey: mpvio (the package mpv.io's installation page links),
+//     ffmpeg and mkvtoolnix;
+//   - Homebrew formulas: mpv, ffmpeg, mkvtoolnix;
+//   - distro packages: mkvtoolnix (apt/dnf/zypper), mkvtoolnix-cli
+//     (Arch's CLI-only package; -gui is a separate package there).
 const (
 	wingetMPVID = "shinchiro.mpv"
 	wingetFFID  = "Gyan.FFmpeg"
+	wingetMKVID = "MKVToolNix.MKVToolNix"
 
 	// chocoBootstrap is Chocolatey's official install one-liner.
 	chocoBootstrap = `Set-ExecutionPolicy Bypass -Scope Process -Force; ` +
@@ -85,13 +89,14 @@ func pickWindowsPlan(look Looker) plan {
 			steps: []step{
 				{argv: []string{"winget", "install", "-e", "--id", wingetMPVID}},
 				{argv: []string{"winget", "install", "-e", "--id", wingetFFID}},
+				{argv: []string{"winget", "install", "-e", "--id", wingetMKVID}},
 			},
 		}
 	}
 	if _, err := look("choco"); err == nil {
 		return plan{
 			titleKey: "deps.offer_choco",
-			steps:    []step{{argv: []string{"choco", "install", "mpvio", "ffmpeg", "-y"}}},
+			steps:    []step{{argv: []string{"choco", "install", "mpvio", "ffmpeg", "mkvtoolnix", "-y"}}},
 		}
 	}
 	return plan{
@@ -110,7 +115,7 @@ func pickDarwinPlan(look Looker) plan {
 	if _, err := look("brew"); err == nil {
 		return plan{
 			titleKey: "deps.offer_brew",
-			steps:    []step{{argv: []string{"brew", "install", "mpv", "ffmpeg"}}},
+			steps:    []step{{argv: []string{"brew", "install", "mpv", "ffmpeg", "mkvtoolnix"}}},
 		}
 	}
 	return plan{
@@ -130,7 +135,7 @@ func pickLinuxPlan(look Looker) plan {
 		pm    string
 		steps []step
 	}{
-		{"apt", []step{{argv: []string{"sudo", "apt", "install", "mpv", "ffmpeg"}}}},
+		{"apt", []step{{argv: []string{"sudo", "apt", "install", "mpv", "ffmpeg", "mkvtoolnix"}}}},
 		{"dnf", []step{
 			{
 				argv: []string{"sh", "-c", "sudo dnf install " + rpmFusionFreeRelease},
@@ -142,12 +147,12 @@ func pickLinuxPlan(look Looker) plan {
 			// runner execs without a shell, and the display form quotes
 			// it for a zsh paste.
 			{
-				argv: []string{"sudo", "dnf", "install", "--exclude=openh264*", "mpv", "ffmpeg"},
-				disp: "sudo dnf install --exclude='openh264*' mpv ffmpeg",
+				argv: []string{"sudo", "dnf", "install", "--exclude=openh264*", "mpv", "ffmpeg", "mkvtoolnix"},
+				disp: "sudo dnf install --exclude='openh264*' mpv ffmpeg mkvtoolnix",
 			},
 		}},
-		{"pacman", []step{{argv: []string{"sudo", "pacman", "-S", "mpv", "ffmpeg"}}}},
-		{"zypper", []step{{argv: []string{"sudo", "zypper", "install", "mpv", "ffmpeg"}}}},
+		{"pacman", []step{{argv: []string{"sudo", "pacman", "-S", "mpv", "ffmpeg", "mkvtoolnix-cli"}}}},
+		{"zypper", []step{{argv: []string{"sudo", "zypper", "install", "mpv", "ffmpeg", "mkvtoolnix"}}}},
 	}
 	for _, entry := range ladder {
 		if _, err := look(entry.pm); err == nil {

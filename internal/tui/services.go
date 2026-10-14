@@ -136,6 +136,12 @@ type OfflineTitle struct {
 	Name string
 	// Snapshot is the validated offline index view.
 	Snapshot download.Snapshot
+	// RelDir is Dir's slash-separated path under its watched library
+	// root ("" when unknown — fakes). Feeds SyntheticSourceURL.
+	RelDir string
+	// Range is non-nil for a virtual range title (a folder split by
+	// .anicli_ranges.json renders one title per range).
+	Range *download.RangeBinding
 }
 
 // OfflineService exposes the downloaded library.

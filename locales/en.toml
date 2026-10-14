@@ -117,6 +117,8 @@
 "offline.player_unavailable" = "Player unavailable"
 "offline.variants_title" = "Local variants:"
 "offline.no_variants" = "No variants"
+"offline.unsorted_name" = "{dir} · unsorted"
+"offline.file_variant" = "file"
 
 # ---- playback / skip notes ------------------------------------------------------------
 "real.skips_note" = "skips: {ranges}"

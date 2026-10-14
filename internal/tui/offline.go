@@ -366,14 +366,20 @@ func (s *offlineSession) watch() (Screen, tea.Cmd) {
 	}
 }
 
-// pickVariant offers the local variants of the current episode.
+// pickVariant offers the local variants of the current episode. The
+// pseudo-entry of a hand-placed file renders its honest «файл» label
+// instead of the raw "V: file | A: — | 0p".
 func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 	entries := s.variants()
 	choices := make([]Choice, 0, len(entries))
 	for i, e := range entries {
+		label := "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + strconv.Itoa(e.Quality) + "p"
+		if e.VideoKey == "file" {
+			label = i18n.T("offline.file_variant")
+		}
 		choices = append(choices, Choice{
 			ID:    strconv.Itoa(i),
-			Label: "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + strconv.Itoa(e.Quality) + "p",
+			Label: label,
 			Value: e,
 		})
 	}

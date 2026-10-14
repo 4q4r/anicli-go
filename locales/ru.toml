@@ -118,6 +118,8 @@
 "offline.player_unavailable" = "Плеер недоступен"
 "offline.variants_title" = "Локальные варианты:"
 "offline.no_variants" = "Нет вариантов"
+"offline.unsorted_name" = "{dir} · несортированное"
+"offline.file_variant" = "файл"
 
 # ---- воспроизведение / скипы ----
 "real.skips_note" = "скипы: {ranges}"

@@ -680,38 +680,125 @@ func (s *realHistory) SetRateID(ctx context.Context, animeID, rateID int64) erro
 
 type realOffline struct{ settings config.Settings }
 
-func (s *realOffline) Titles() ([]OfflineTitle, error) {
+// offlineRoots lists the watched library roots: the download dir
+// first ("" = DataDir()/downloads). Task [watched_dirs] extends this
+// to the extra [download] watched_dirs entries.
+func (s *realOffline) offlineRoots() []string {
 	dir := s.settings.Download.Dir
 	if dir == "" {
 		base, err := config.DataDir()
 		if err != nil {
-			return nil, err
+			return nil
 		}
 		dir = filepath.Join(base, "downloads")
 	}
-	entries, err := os.ReadDir(dir)
+	return []string{dir}
+}
+
+// Titles enumerates the offline library: one plain title per folder,
+// or — when the folder carries a .anicli_ranges.json — one virtual
+// title per range plus the trailing unsorted limbo title. Folders
+// without a ranges file behave byte-identically to the pre-ranges
+// library (the backward-compat anchor).
+func (s *realOffline) Titles() ([]OfflineTitle, error) {
+	var out []OfflineTitle
+	seen := map[string]bool{}
+	for _, root := range s.offlineRoots() {
+		if err := s.scanRoot(root, seen, &out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// scanRoot appends one root's titles, deduping by cleaned directory
+// path across roots (first root wins).
+func (s *realOffline) scanRoot(root string, seen map[string]bool, out *[]OfflineTitle) error {
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil // a missing watched dir is tolerated like the download dir always was
 		}
-		return nil, fmt.Errorf("tui: read download dir: %w", err)
+		return fmt.Errorf("tui: read download dir: %w", err)
 	}
-	var out []OfflineTitle
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		snapshot, err := download.LoadSnapshot(path)
-		if err != nil {
-			continue // malformed index reads as empty (python parity)
-		}
-		if snapshot.TotalDownloaded() == 0 {
+		path := filepath.Join(root, e.Name())
+		if seen[filepath.Clean(path)] {
 			continue
 		}
-		out = append(out, OfflineTitle{Dir: path, Name: e.Name(), Snapshot: snapshot})
+		seen[filepath.Clean(path)] = true
+		s.appendFolderTitles(root, path, e.Name(), out)
 	}
-	return out, nil
+	return nil
+}
+
+// appendFolderTitles renders one folder's title(s): the plain title
+// when no usable ranges file exists, the virtual range titles
+// otherwise (plus the unsorted limbo title when files fall outside
+// every range).
+func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineTitle) {
+	snapshot, err := download.LoadSnapshot(dir)
+	if err != nil {
+		return // malformed index reads as empty (python parity)
+	}
+	rf, err := download.LoadRanges(dir)
+	if err != nil && !errors.Is(err, download.ErrRangesUnsupportedVersion) {
+		// A quarantine rename failure surfaces here; without a usable
+		// document the folder degrades to the plain title below.
+		rf = nil
+	}
+	if rf == nil || len(rf.Ranges) == 0 {
+		// Plain folder — exactly today's rendering.
+		if snapshot.TotalDownloaded() == 0 {
+			return
+		}
+		*out = append(*out, OfflineTitle{
+			Dir: dir, Name: base, Snapshot: snapshot,
+			RelDir: filepath.ToSlash(relDirOrDefault(root, dir)),
+		})
+		return
+	}
+
+	views, unsorted := download.ExpandRanges(dir, snapshot, rf)
+	if len(views) == 0 && len(unsorted) == 0 {
+		return // no index and zero media: skip the folder entirely
+	}
+	rel := filepath.ToSlash(relDirOrDefault(root, dir))
+	for _, view := range views {
+		binding := view.Binding
+		name := binding.Title
+		if name == "" {
+			name = base + " · " + binding.ID
+		}
+		*out = append(*out, OfflineTitle{
+			Dir:      dir,
+			Name:     name,
+			Snapshot: download.Snapshot{TitleDir: dir, Entries: view.Entries},
+			RelDir:   rel,
+			Range:    &binding,
+		})
+	}
+	if len(unsorted) > 0 {
+		*out = append(*out, OfflineTitle{
+			Dir:      dir,
+			Name:     i18n.T("offline.unsorted_name", i18n.Vals{"dir": base}),
+			Snapshot: download.Snapshot{TitleDir: dir, Entries: unsorted},
+			RelDir:   rel,
+		})
+	}
+}
+
+// relDirOrDefault relativizes the folder under its watched root;
+// a failure falls back to the base name (the synthetic key stays
+// stable enough for the common single-root layout).
+func relDirOrDefault(root, dir string) string {
+	if rel, err := filepath.Rel(root, dir); err == nil {
+		return rel
+	}
+	return filepath.Base(dir)
 }
 
 // --- DatabaseService ---

@@ -119,6 +119,7 @@
 "offline.no_variants" = "No variants"
 "offline.unsorted_name" = "{dir} · unsorted"
 "offline.file_variant" = "file"
+"offline.progress_failed" = "Progress not saved: {err}"
 
 # ---- playback / skip notes ------------------------------------------------------------
 "real.skips_note" = "skips: {ranges}"

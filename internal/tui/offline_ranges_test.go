@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -268,5 +269,219 @@ func TestLocalEpisodeCountsAggregatesByDir(t *testing.T) {
 	}
 	if counts["2"] != 1 {
 		t.Errorf("counts[2] = %d, want 1", counts["2"])
+	}
+}
+
+// rangesProgressDeps builds a range-title session over a real temp
+// library: two indexed ranges (s1 bound to shikimori 39535, s2 to
+// 55888 with offset) plus the real Offline service, history fake and
+// playback fake.
+type rangesProgressEnv struct {
+	deps   *Deps
+	hist   *fakeHistory
+	shiki  *fakeShiki
+	pb     *fakePlayback
+	dir    string
+	relDir string
+}
+
+func rangesProgressSetup(t *testing.T, offset int) *rangesProgressEnv {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "Реинкарнация")
+	rangesOfflineFixture(t, dir, map[string]string{
+		"EP_1_Kodik_1080p.mkv": "1",
+		"EP_2_Kodik_1080p.mkv": "2",
+		"EP_3_Kodik_1080p.mkv": "3",
+		"EP_4_Kodik_1080p.mkv": "4",
+		"EP_5_Kodik_1080p.mkv": "5",
+	})
+	rf := download.RangesFile{Version: 1, Ranges: []download.RangeBinding{
+		{ID: "s1", Title: "Реинкарнация — S1", ShikimoriID: 39535, ShikimoriTitle: "Mushoku Tensei", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_[12]*"}}},
+		{ID: "s2", Title: "Реинкарнация — S2 ч.2", ShikimoriID: 55888, Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_[345]*"}}, EpisodeOffset: offset},
+	}}
+	if err := download.SaveRanges(dir, &rf); err != nil {
+		t.Fatal(err)
+	}
+	env := &rangesProgressEnv{
+		hist:   &fakeHistory{},
+		shiki:  &fakeShiki{enabled: true, ids: map[string]int64{"Реинкарнация": 39535}},
+		pb:     &fakePlayback{},
+		dir:    dir,
+		relDir: "Реинкарнация",
+	}
+	env.deps = &Deps{
+		Offline:  realOfflineFor(root),
+		History:  env.hist,
+		Shiki:    env.shiki,
+		Playback: env.pb,
+	}
+	return env
+}
+
+// rangeSession picks the s2 virtual title and drives the session onto
+// the episode picker.
+func rangeSession(t *testing.T, env *rangesProgressEnv) *offlineSession {
+	t.Helper()
+	titles, err := env.deps.Offline.Titles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range titles {
+		if title.Range != nil && title.Range.ID == "s2" {
+			return NewOfflineSession(env.deps, title)
+		}
+	}
+	t.Fatalf("s2 virtual title missing among %+v", titles)
+	return nil
+}
+
+// settleRangeProgress drives the full watch chain: pick episode "1",
+// watch → offlinePlayMsg → playLocal → offlinePlayedMsg{nil} → the
+// save cmd, settling every intermediate command like the runtime
+// would.
+func settleRangeProgress(t *testing.T, s *offlineSession) offlineProgressMsg {
+	t.Helper()
+	s.current = "1"
+	_, watchCmd := s.watch()
+	playMsg := watchCmd()
+	next, playCmd := s.Update(playMsg)
+	if playCmd == nil {
+		t.Fatal("playLocal must schedule the playback")
+	}
+	played := playCmd()
+	playedMsg, ok := played.(offlinePlayedMsg)
+	if !ok {
+		t.Fatalf("expected offlinePlayedMsg, got %#v", played)
+	}
+	_, saveCmd := next.Update(playedMsg)
+	if saveCmd == nil {
+		t.Fatal("a range session must schedule saveRangeProgress after playback")
+	}
+	settled := saveCmd()
+	progress, ok := settled.(offlineProgressMsg)
+	if !ok {
+		t.Fatalf("expected offlineProgressMsg, got %#v", settled)
+	}
+	return progress
+}
+
+// TestOfflineRangeProgressSaveAndSync is the mandated integration
+// test: playing from the s2 virtual title lands the history row on
+// the s2 synthetic source key with s2's shikimori binding.
+func TestOfflineRangeProgressSaveAndSync(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	s := rangeSession(t, env)
+	progress := settleRangeProgress(t, s)
+
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v, want nil", progress.saveErr)
+	}
+	if len(env.hist.records) != 1 {
+		t.Fatalf("history records = %d, want 1", len(env.hist.records))
+	}
+	rec := env.hist.records[0]
+	if rec.SourceID != "offline" {
+		t.Errorf("SourceID = %q, want offline", rec.SourceID)
+	}
+	wantURL := download.SyntheticSourceURL(env.relDir, "s2")
+	if rec.SourceURL != wantURL {
+		t.Errorf("SourceURL = %q, want %q", rec.SourceURL, wantURL)
+	}
+	if rec.CurrentEpisode != "1" {
+		t.Errorf("CurrentEpisode = %q, want the position label 1", rec.CurrentEpisode)
+	}
+	if rec.ShikimoriID == nil || *rec.ShikimoriID != 55888 {
+		t.Errorf("ShikimoriID = %v, want 55888 (range s2 binding)", rec.ShikimoriID)
+	}
+	if rec.Title != "Реинкарнация — S2 ч.2" {
+		t.Errorf("Title = %q, want the range title", rec.Title)
+	}
+}
+
+// TestOfflineRangeProgressOffsetPush pins the offset units (Review
+// Focus #2): position "3" + offset 12 pushes episode 15, while the
+// stored row keeps the position label.
+func TestOfflineRangeProgressOffsetPush(t *testing.T) {
+	env := rangesProgressSetup(t, 12)
+	s := rangeSession(t, env)
+	s.current = "3"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	_, saveCmd := next.Update(playCmd())
+	if saveCmd == nil {
+		t.Fatal("save cmd missing")
+	}
+	settled := saveCmd()
+	progress := settled.(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	if len(env.shiki.epPushes) != 1 {
+		t.Fatalf("shiki pushes = %d, want 1", len(env.shiki.epPushes))
+	}
+	if got := env.shiki.epPushes[0].episodes; got != 15 {
+		t.Errorf("pushed episode = %d, want 15 (position 3 + offset 12)", got)
+	}
+	if env.hist.records[0].CurrentEpisode != "3" {
+		t.Errorf("stored label = %q, want the position 3 (units never mix)", env.hist.records[0].CurrentEpisode)
+	}
+}
+
+// TestOfflineSessionPlainFolderNoProgress: a plain folder title
+// (Range nil) keeps today's write-nothing behavior.
+func TestOfflineSessionPlainFolderNoProgress(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	plain := OfflineTitle{Dir: env.dir, Name: "Реинкарнация"}
+	s := NewOfflineSession(env.deps, plain)
+	if cmd := s.saveRangeProgress(); cmd != nil {
+		t.Fatal("plain session must not schedule a save")
+	}
+	if len(env.hist.records) != 0 {
+		t.Fatalf("records = %d, want none", len(env.hist.records))
+	}
+}
+
+// TestOfflineRangeProgressSaveError: a failed save surfaces the
+// typed status and never syncs.
+func TestOfflineRangeProgressSaveError(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	env.hist.saveErr = errors.New("db locked")
+	s := rangeSession(t, env)
+	progress := settleRangeProgress(t, s)
+	if progress.saveErr == nil {
+		t.Fatal("saveErr = nil, want the failure")
+	}
+	if progress.note != "" {
+		t.Errorf("note = %q, want empty (no sync after a failed save)", progress.note)
+	}
+	if len(env.shiki.epPushes) != 0 {
+		t.Errorf("shiki pushes = %d, want none", len(env.shiki.epPushes))
+	}
+	next, _ := s.Update(progress)
+	view := next.View().Content
+	// The default test locale is en; the ru table renders «Прогресс
+	// не сохранён: …» (pinned by the i18n parity keys).
+	if !strings.Contains(view, "Progress not saved") && !strings.Contains(view, "Прогресс не сохранён") {
+		t.Errorf("status must surface the failed save:\n%s", view)
+	}
+}
+
+// TestOfflineRangeProgressSyncNote: a non-empty sync verdict renders
+// appended to the play_done status.
+func TestOfflineRangeProgressSyncNote(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	s := rangeSession(t, env)
+	progress := settleRangeProgress(t, s)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	if progress.note == "" {
+		t.Fatal("note = empty, want the sync verdict line")
+	}
+	next, _ := s.Update(progress)
+	view := next.View().Content
+	if !strings.Contains(view, progress.note) {
+		t.Errorf("status must render the sync note %q:\n%s", progress.note, view)
 	}
 }

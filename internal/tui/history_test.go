@@ -18,6 +18,11 @@ type fakeHistory struct {
 	items []storage.AnimeProgress
 	saved []int64
 	binds []int64
+	// records captures every SavePlayback row (ranges progress):
+	// the offline range path asserts the synthetic source key on it.
+	records []storage.AnimeProgress
+	// saveErr fails every SavePlayback (offline.progress_failed path).
+	saveErr error
 	// bindCalls records every BindSource call (PR62 #2): the binding
 	// must persist at the checklist pick.
 	bindCalls []bindCall
@@ -30,6 +35,10 @@ func (f *fakeHistory) List(_ context.Context) ([]storage.AnimeProgress, error) {
 }
 
 func (f *fakeHistory) SavePlayback(_ context.Context, rec storage.AnimeProgress, _, _, _ string) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.records = append(f.records, rec)
 	f.saved = append(f.saved, rec.ID)
 	return nil
 }

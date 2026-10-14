@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/download"
-
 	"github.com/an0nx/anicli-go/internal/i18n"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // Offline flow screen ids.
@@ -25,6 +25,14 @@ type offlinePlayMsg struct {
 
 // offlinePlayedMsg settles one offline playback (C3).
 type offlinePlayedMsg struct{ err error }
+
+// offlineProgressMsg settles one offline progress round: the local
+// save verdict plus the (optional) Shikimori sync verdict line.
+type offlineProgressMsg struct {
+	saveErr error
+	// note is the sync verdict ("" when unbound or nothing to say).
+	note string
+}
 
 // NewOfflineTitles builds the «📂 Скачанное» title list (python
 // offline_menu port) with episode and variant counts; an empty
@@ -203,9 +211,20 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case offlinePlayedMsg:
 		if m.err != nil {
 			s.setStatus(i18n.T("common.play_failed", i18n.Vals{"err": m.err.Error()}))
-		} else {
-			s.setStatus(i18n.T("common.play_done"))
+			return s, nil
 		}
+		s.setStatus(i18n.T("common.play_done"))
+		return s, s.saveRangeProgress()
+	case offlineProgressMsg:
+		if m.saveErr != nil {
+			s.setStatus(i18n.T("offline.progress_failed", i18n.Vals{"err": m.saveErr.Error()}))
+			return s, nil
+		}
+		status := i18n.T("common.play_done")
+		if m.note != "" {
+			status += " · " + m.note
+		}
+		s.setStatus(status)
 		return s, nil
 	case tea.KeyPressMsg:
 		return s.handleKey(m)
@@ -345,6 +364,68 @@ func (s *offlineSession) shiftEpisode(delta int, eps []string) {
 			return
 		}
 	}
+}
+
+// saveRangeProgress schedules the per-range progress round after a
+// successful offline playback: one bounded save onto the range's
+// synthetic anime_progress key, then — for a bound range — the
+// episode push (`position + episode_offset`) through the same dual
+// dispatch the online session uses. Plain folders (Range nil) keep
+// today's write-nothing behavior; unsorted limbo titles likewise.
+func (s *offlineSession) saveRangeProgress() tea.Cmd {
+	if s.deps == nil || s.deps.History == nil {
+		return nil
+	}
+	if s.title.Range == nil || s.current == "" {
+		return nil
+	}
+	deps := s.deps
+	shikiID := s.title.Range.ShikimoriID
+	offset := s.title.Range.EpisodeOffset
+	position := s.current
+	title := s.title.Name
+	relDir := s.title.RelDir
+	rangeID := s.title.Range.ID
+	shikiTitle := s.title.Range.ShikimoriTitle
+	videoKey, audioKey := s.videoKey, s.audioKey
+	return safeCmd(offlineSessionID, func() tea.Msg {
+		rec := storage.AnimeProgress{
+			Title:          title,
+			SourceID:       "offline",
+			SourceURL:      download.SyntheticSourceURL(relDir, rangeID),
+			CurrentEpisode: position,
+			UpdatedAt:      nowUTC(),
+		}
+		if shikiID != 0 {
+			id := shikiID
+			rec.ShikimoriID = &id
+			if shikiTitle != "" {
+				st := shikiTitle
+				rec.ShikimoriTitle = &st
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
+		defer cancel()
+		err := deps.History.SavePlayback(ctx, rec, position, videoKey, audioKey)
+		if err != nil {
+			return offlineProgressMsg{saveErr: err}
+		}
+		note := ""
+		if shikiID != 0 {
+			// Entry units: the Shikimori counter is the position plus
+			// the range offset; the stored row keeps the position
+			// label — the units never mix (Review Focus #2).
+			episode := parseWatchEpisode(position) + offset
+			syncCtx, syncCancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
+			defer syncCancel()
+			if deps.ProgressSync != nil {
+				note = renderSyncReport(deps, deps.ProgressSync(syncCtx, shikiID, episode), episode)
+			} else {
+				note = syncWatchProgress(syncCtx, deps, shikiID, episode).note
+			}
+		}
+		return offlineProgressMsg{note: note}
+	})
 }
 
 // watch resolves the best local variant and plays it offline-marked;

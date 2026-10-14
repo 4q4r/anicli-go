@@ -120,6 +120,7 @@
 "offline.no_variants" = "Нет вариантов"
 "offline.unsorted_name" = "{dir} · несортированное"
 "offline.file_variant" = "файл"
+"offline.progress_failed" = "Прогресс не сохранён: {err}"
 
 # ---- воспроизведение / скипы ----
 "real.skips_note" = "скипы: {ranges}"

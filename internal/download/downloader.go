@@ -189,6 +189,9 @@ type Downloader struct {
 	log *slog.Logger
 	// run executes the ffmpeg command; injectable for tests.
 	run runner
+	// runOut executes ffmpeg and captures STDOUT (the verification
+	// RMS pipe); injectable for tests.
+	runOut func(ctx context.Context, bin string, args []string) (stdout []byte, stderr string, err error)
 	// runMKV executes mkvmerge and reports its exit-code contract;
 	// injectable for tests.
 	runMKV func(ctx context.Context, bin string, args []string) (code int, stderr string, err error)
@@ -206,9 +209,29 @@ func New(opts Options) *Downloader {
 	}
 	d := &Downloader{ffmpeg: opts.FFmpeg, mkvmerge: opts.MKVMerge, log: opts.Logger}
 	d.run = d.runFFmpeg
+	d.runOut = d.realRunOut
 	d.runMKV = d.realRunMKV
 	d.mkvVersion = d.realMKVMergeVersion
 	return d
+}
+
+// realRunOut executes ffmpeg capturing stdout (the verification
+// pipe), LookPath fail-loud, context cancellation killing the child.
+func (d *Downloader) realRunOut(ctx context.Context, bin string, args []string) ([]byte, string, error) {
+	if _, err := exec.LookPath(bin); err != nil {
+		return nil, "", &ErrBinaryNotFound{Bin: bin}
+	}
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // bin/args are config-derived, not request input
+	var stderr errBuffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return out, stderr.String(), ctx.Err()
+		}
+		return out, stderr.String(), fmt.Errorf("%s: %s", bin, oneLine(stderr.String(), err))
+	}
+	return out, stderr.String(), nil
 }
 
 // Download runs the merge: ffmpeg writes OutputPath+".part" and the

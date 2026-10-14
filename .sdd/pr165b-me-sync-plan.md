@@ -2,198 +2,192 @@
 <!-- MD010 (hard tabs) отключён локально: Go-скичи в fenced-блоках обязаны
      использовать табы (gofmt); пробелы сломали бы вставку кода исполнителем. -->
 
-# PR165b — план реализации «кросс-корреляция M&E» (автосинхронизация дубляжей), ред. 2
+# PR165b — план реализации «кросс-корреляция M&E», ред. 3 (mkvmerge-сборка)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** автоматическая правка рассинхрона дубляжа относительно видео через FFT-кросс-корреляцию аудио (decode → correlate → offset → apply), где СПОСОБ ПРИМЕНЕНИЯ сдвига выбирается эмпирически (Stage 0 проб-матрица), а каждый применённый сдвиг самопроверяется (звук с первой секунды) с лестницей ретраев.
+**Goal:** автоматическая правка рассинхрона дубляжа через FFT-кросс-корреляцию аудио, где сдвиг применяется БАЙТ-ТОЧНО к PCM (WAV), а финальный файл собирается `mkvmerge` — по архитектуре, предписанной владельцем после его root-cause расследования «первой половины без звука».
 
-**Architecture:** чистый пакет `internal/audsync` (ffmpeg-pipe PCM 8 кГц моно s16le → gonum FFT кросс-корреляция в 3 окнах → консенсус ≥2/3 ±80 мс → медиана → snap на сетку кадров → `SyncOffset`) — БЕЗ ИЗМЕНЕНИЙ от ред. 1. Применение — ПЕРЕРАБОТАНО: никакого заранее выбранного рецепта; Stage 0 эмпирически доказывает для каждой ячейки (тип источника × знак сдвига), какой метод (copy / фильтр-варианты) даёт звук с начала файла; продукт применяет метод-первенец ячейки, самопроверяет вывод через silencedetect и при провале повторяет с запасным методом; двойной провал — типизированная ошибка, файл НЕ отдаётся.
+**Architecture:** детекция — пакет `internal/audsync` (ffmpeg-pipe PCM 8 кГц моно → gonum FFT кросс-корреляция 3 окон → консенсус ≥2/3 ±80 мс → медиана → snap на кадр → `SyncOffset`), БЕЗ ИЗМЕНЕНИЙ от ред. 2. Применение — НОВАЯ двухстадийная схема: (A) видео скачивается отдельно (`-map 0:v -c copy`), (B) каждый донор декодируется в WAV 48 кГц стерео → байтовый сдвиг PCM-полезной нагрузки на офсет → изолированный M4A (aac 256k), (C) сборка `mkvmerge --no-audio video + audio.m4a…` с языком/именем/диспозицией, (D) верификация RMS@45 c + геометрия головы. Одиночный ffmpeg-проход mux — только для загрузок БЕЗ синхронизации (его дефекты: fMP4-discontinuity + interleave flush — неприсущие mkvmerge-сборке).
 
-**Tech Stack:** Go 1.27, `gonum.org/v1/gonum/dsp/fourier` (v0.17.0, чистый Go, CGO off), ffmpeg/ffprobe n9+ (системная зависимость проекта), существующие пакеты download/tui/config/i18n.
+**Tech Stack:** Go 1.27, `gonum.org/v1/gonum/dsp/fourier` v0.17.0 (чистый Go), ffmpeg/ffprobe (декод/кодирование аудио), **mkvmerge (mkvtoolnix) — новый startup-депенденси** (sysdeps, та же доктрина, что mpv/ffmpeg), существующие пакеты download/tui/config/i18n/sysdeps.
 
-**Spec:** `.sdd/pr165b-me-sync-research.md` (детекция и измерения; ЗДЕСЬ не воспроизводится). **Ред. 2 — по ОТКАЗУ владельца:** его фильтр-рецепт v2 (asetpts → trim/adelay → asetpts, aac 256k) в ручном ремюке дал «первую половину аниме без звука» — рецепт более НЕ является дефолтом, а способ применения выводится только из пробы (Stage 0) и охраняется самопроверкой.
+**Spec:** детекция — `.sdd/pr165b-me-sync-research.md` (не воспроизводится здесь). Применение — **root-cause владельца (ред. 3, переносим дословно, чтобы исполнитель не искал контекст):**
+
+1. **fMP4-discontinuity:** веб-доноры (HLS) несут `#EXT-X-DISCONTINUITY` на границе Part A/Part B (10:26 — eyecatch под рекламу); половины имеют РАЗНЫЕ базовые PTS, а фрагментированный mp4 (moof/traf) не имеет линейных stts/stco — наивные trim/delay/copy неверно понимают, где реально начинается аудио.
+2. **Interleave flush matroskaenc:** при `-c:v copy` (быстрые 1080p HEVC-пакеты) + запаздывающем AAC `av_interleaved_write_frame()` превысил `max_interleave_delta` (10 c) и вытолкнул монолитный блок 18611 видео-кадров (307 MB ≈ 13 мин) в MKV с НУЛЁМ аудио-пакетов → mpv: `audio/1: 0 packets` → тишина до 10-й минуты (лог владельца: `[mkv] Too many packets in the demuxer packet queues: video/0: 18611 packets, 307213408 bytes, audio/1: 0 packets`).
+3. **Валидированное решение владельца:** донор → декод в PCM WAV (**форс `-ar 48000 -ac 2 -c:a pcm_s16le`**) → байтовый сдвиг payload по семантике `wave`-модуля (Go/Python; НЕ жёсткие 44 байта: ffmpeg вкладывает LIST/INFO — заголовок 78 байт; резать по маркеру чанка `data` или через wave-модуль) → изолированный M4A (`-c:a aac -b:a 256k`) → сборка `mkvmerge -o out.mkv --no-audio video.mkv --language 0:rus --track-name 0:"<dub>" --default-track-flag 0:yes audio.m4a` → верификация RMS@45 c + контрольный `mpv --no-resume-playback` с 00:00 (кэш watch-later не должен маскировать фикс).
+4. **Офсеты владельца были ВЕРНЫ** (кратны кадру: +17.042 = вырезанные рекламные заставки Yummy/Wakanim на BD; −0.875 = тёмный преролл BD) — коррелятор меряет то же, что мерила его ручная таблица.
 
 ## Global Constraints
 
-- **ИНВАРИАНТ (жёсткое правило ред. 2): выданный файл ОБЯЗАН иметь слышимый звук со своей первой секунды.** Точная форма: измеренная ведущая тишина вывода обязана совпадать с ожидаемой геометрией сдвига (обрезка → ≈0; добивка → ≈|offset|) с допуском 1 c. Выход с молчащей головой — провал реализации, никогда не результат поставки (см. Task 7).
+- **ИНВАРИАНТ (жёсткое правило): собранный файл ОБЯЗАН иметь слышимый звук в середине первой трети И корректную голову.** Проверка продукта (Task 8): RMS аудио на 45 c ≥ MinRMS (ловит именно кейс владельца «половина без звука») И ведущая тишина совпадает с ожидаемой геометрией сдвига (обрезка → ≈0, добивка → ≈|offset|) с допуском 1 c. Провал → файл удаляется, типизированная ошибка; молчащий/полумолчащий файл никогда не поставляется.
 - Окружение для КАЖДОЙ go-команды: `export TMPDIR=/home/whoami/.cache/go-tmp GOTMPDIR=/home/whoami/.cache/go-tmp && mkdir -p $TMPDIR`.
-- Quality gate на каждый таск: `gofmt -l` (пусто) → `go vet ./...` → `golangci-lint run` → `go test -race -count=1 ./...` — 0 ошибок, 0 предупреждений.
-- Кросс-платформа: `make build-matrix` (CGO_ENABLED=0); gonum чистый Go — безопасно.
-- Анализ **никогда не валит загрузку**: ошибка анализа → mux как сегодня (без сдвига) + лог. Применение сдвига — НАОБОРОТ, охраняется: провал самопроверки после ретрая = провал загрузки (молчащий файл не отдаётся).
-- Бюджет анализа: ≤15 c на пару (видео, дубляж), константа `DefaultBudget`.
-- Корреляция только для пар «видео-провайдер ≠ провайдер дубляжа»; встроенное аудио видео — не анализировать.
-- Sign-семантика (подтверждается Stage 0 эмпирически, п. «геометрия знака»): `offset > 0` — у донора «лишнее начало» → обрезать ведущую часть (ожидаемая ведущая тишина ≈ 0); `offset < 0` — донор опережает/не хватает донорского звука в начале → добить `|offset|` тишины (ожидаемая ведущая тишина ≈ |offset|). Форматирование секунд — 3 знака (`17.042`).
-- Способ применения выбирается ТОЛЬКО по таблице, доказанной Stage 0 (`syncRecipeFor`); ячейка без доказанного метода → сдвиг для таких треков НЕ применяется (строка отчёта + лог), mux как сегодня. Метод, проваливший пробу, исключается из таблицы.
-- Оффлайн-индекс: контракт не меняется (audio-only и marked-set файлы мимо индекса — как в PR165; legacy-путь индексируется как сегодня).
-- Новая зависимость gonum разрешена владельцем (research §3.1); после добавления — `make notices` и сверка `THIRD-PARTY-NOTICES.md` (gonum: BSD-3-Clause).
-- i18n ключи в `locales/en.toml` (истина) и `locales/ru.toml` (дефолт).
-- План самодостаточен: константы/argv/рецепты скопированы, исследование заново не воспроизводится.
+- Quality gate на каждый таск: `gofmt -l` (пусто) → `go vet ./...` → `golangci-lint run` → `go test -race -count=1 ./...` — 0 ошибок, 0 предупреждений; `make build-matrix` (CGO off).
+- Анализ **никогда не валит загрузку**: ошибка анализа → mux как сегодня (без сдвига) + лог. Сборка/верификация — НАОБОРОТ: провал = провал эпизода (typed error).
+- **mkvmerge — startup-депенденси** (sysdeps, `required` = mpv, ffmpeg, mkvmerge): отказ от установки НЕ брюшит старт; при отсутствующем mkvmerge синхронизация деградирует в обычную несинхронизированную загрузку с notice.
+- Бюджет анализа ≤15 c на пару; анализ только для пар «провайдер видео ≠ провайдер донора»; встроенное аудио не анализируется.
+- Sign-семантика сдвига (подтверждена владельцем и геометрией фикcач): `offset > 0` — обрезать `round(offset×48000)` кадров с начала WAV-payload; `offset < 0` — добить `round(|offset|×48000)` нулевых кадров. Кадр = 4 байта (2 канала × s16le). Формат секунд — 3 знака (`17.042`).
+- **Пайплайн декода донора — 48 кГц стерео s16le (форс владельца); декод АНАЛИЗА — 8 кГц моно (research §3.4). Это два разных argv в audsync — не смешивать.**
+- Одиночный ffmpeg-mux НЕ используется для синхронизированных эпизодов (root-cause 2 инtrinsic его single-pass форме); для всех несинхронизированных загрузок он остаётся ровно сегодняшним.
+- Оффлайн-индекс: контракт не меняется (audio-only и marked-set мимо индекса; legacy индексируется как сегодня; sync не меняет форму EntryInput).
+- Новая зависимость gonum разрешена (research §3.1); `make notices` + THIRD-PARTY-NOTICES.md (BSD-3-Clause). mkvmerge — внешняя программа, не go-зависимость.
+- i18n ключи в `locales/en.toml` и `locales/ru.toml`.
 
 ---
 
-## 1. Архитектура решения (обзор, ред. 2)
+## 1. Архитектура (ред. 3)
 
 ```text
 TUI «Скачать серии» (startRangeDownload)
-  ├─ config download.audio_sync: ask → промпт «Синхронизировать дубляжи?» (1 раз на батч,
-  │   только video_audio и merged-сессия >1 провайдера); yes/no → без промпта
+  ├─ config download.audio_sync: ask → промпт (1 раз на батч, video_audio + merged-сессия)
   └─ DownloadTask{... AudioSync bool}
         │
         ▼
-realCore.downloadOne (единственный хук; общий для foreground и background)
-  ├─ resolve video/audio (как сегодня)
-  ├─ eligible = треки (или отдельное аудио legacy) с провайдером ≠ video-провайдера
-  ├─ ref := analyzer.Reference(video)            // 3×60 c, 1 раз на эпизод
-  │     └─ ErrNoReference → fallback: первый eligible-дубляж как референс (если их ≥2)
-  ├─ для каждого eligible: off := analyzer.Offset(ref, dub)    // ≤15 c, детекция БЕЗ ИЗМЕНЕНИЙ
-  ├─ recipe := syncRecipeFor(isHLS(url), off > 0)              // таблица из Stage 0 (Task 1)
-  │     └─ none (метод не доказан) → флаги не ставятся, SyncNote{unreliable}
-  ├─ tracks[i].Sync = {Offset, Recipe}; input → c.dl.Download  // mux попытка №1
-  ├─ САМОПРОВЕРКА (Task 7): VerifyAudioStart(вывод, первый sync-трек)
-  │     ├─ ok (|ведущая тишина − ожидаемая| ≤ 1 c) → готово
-  │     ├─ fail → mux попытка №2 с ЗАПАСНЫМ методом ячейки (SyncFallback)
-  │     │        → самопроверка снова → ok → готово
-  │     └─ fail → os.Remove(вывод) + типизированная ErrSilentLead (диагностика обеих попыток)
-  └─ отчёт: «синхронизация: DUB +17.042с» / «нет уверенности» / «не применена: нет метода»
+realCore.downloadOne — развилка по «нужна ли сборка»:
+  │
+  ├─ НЕТ сборки (sync off / анализ не дал офсета ни одному донору / mkvmerge отсутствует):
+  │    сегодняший одиночный ffmpeg-проход БЕЗ ИЗМЕНЕНИЙ + SyncNote{uncertain|unavailable}
+  │
+  └─ ДА сборка (≥1 донор с офсетом, mkvmerge на месте):
+       Stage A  видео отдельно:  ffmpeg [-headers] -i videoURL -map 0:v:0 -c:v copy video.tmp.mkv
+       Stage B  на КАЖДОГО донора (унифицированно; shift=0 если у трека нет уверенности):
+         B1 декод:  ffmpeg [-headers] -i donorURL -map 0:a:0 -ar 48000 -ac 2 -c:a pcm_s16le -f wav donor.wav
+         B2 сдвиг:  ShiftWAVFile(donor.wav, donor.shifted.wav, frames)   // байтовый, RIFF-safe
+         B3 кодек:  ffmpeg -i donor.shifted.wav -c:a aac -b:a 256k donor.m4a
+       Stage C  сборка:  mkvmerge -o out.part.mkv --no-audio video.tmp.mkv
+                          [--chapters chapters.simple]
+                          [--language 0:rus --track-name 0:"Dub" (--default-track-flag 0:yes|no)] dub.m4a …
+                          --title "…"
+       Stage D  верификация: VerifyAssembled(out) — lead-геометрия + RMS@45 c; провал → удалить + ErrSilentOutput
+       финал:   rename out.part.mkv → out.mkv; удалить все промежуточные temp-файлы
 ```
 
-### 1.1 Метод-таблица применения (заполняется Stage 0, Task 1)
+### 1.1 Матрица деградации (per-episode)
 
-Stage 0 прогоняет для каждой ячейки **(тип источника × знак сдвига)** все методы-кандидаты и фиксирует, какой даёт звук с начала файла:
-
-| Метод | argv-форма (offset = X, мс = M) |
+| Ситуация | Поведение |
 |---|---|
-| `copy` | `X>0`: `-ss X` перед `-i` донора; `X<0`: `-itsoffset {\|X\|}` перед `-i`; всегда `-c:a copy` |
-| `v2_async` / `v2_plain` (рецепт владельца ± aresample) | `[N:a:0]asetpts=PTS-STARTPTS,{atrim=start=X / adelay=M:all=1},asetpts=PTS-STARTPTS{,aresample=async=1:first_pts=0}[a]` + `-c:a aac -b:a 256k` |
-| `plain_async` / `plain_plain` (БЕЗ asetpts-цепочки — подозреваемый ломатель) | `[N:a:0]{atrim=start=X / adelay=M:all=1}{,aresample=async=1:first_pts=0}[a]` + `-c:a aac -b:a 256k` |
+| `audio_sync=no` / промпт «Нет» / режимы video_only, audio_only | сегодняшний путь, анализ не запускается |
+| Анализ: ни у одного донора нет офсета (no reference / no confidence) | сегодняшний путь (несинхронизированный mux) + строки «нет уверенности» |
+| mkvmerge отсутствует (отказ на старте / пропал из PATH) | сегодняшний путь (несинхронизированный mux) + строка «синхронизация недоступна» + warn-лог |
+| ≥1 донор с офсетом, сборка провалилась (exec/verify) | ЭПИЗОД ПРОВАЛЕН typed-ошибкой, temp-файлы удалены, молчащий файл не поставляется |
+| Успех | `out.mkv` (sync-путь ВСЕГДА mkv) + строка «синхронизация: DUB +17.042с» |
 
-Шаблон результата (заполняется фактическими результатами Task 1 и переносится в `syncRecipeFor`):
+Унификация Stage B: в собираемом эпизоде ВСЕ доноры проходят decode→shift→m4a (у трека без уверенности сдвиг = 0) — один mkvmerge-проход собирает все дорожки. Эпизод идёт по сборочному пути, если ХОТЯ БЫ один донор получил офсет.
 
-| Ячейка | Первенец (доказан) | Запасной (доказан) | Исключены (причина) |
-|---|---|---|---|
-| (mp4, X>0) | *(из Stage 0)* | *(из Stage 0)* | *(…)* |
-| (mp4, X<0) | *(из Stage 0)* | *(из Stage 0)* | *(…)* |
-| (hls, X>0) | *(из Stage 0)* | *(из Stage 0)* | *(…)* |
-| (hls, X<0) | *(из Stage 0)* | *(из Stage 0)* | *(…)* |
+### 1.2 Судьба старого ffmpeg-mux пути
 
-Правила заполнения: метод **доказан** для ячейки, если в выводе (i) нет ведущей тишины длиннее 1 c сверх ожидаемой геометрии (обрезка → ≤1 c; добивка → \|ведущая−\|X\|\| ≤ 1 c), (ii) позиция тона совпала с расчётной ±0.3 c, (iii) `ffprobe start_time` аудио sane (\|x\| ≤ 0.05). Первенец — доказанный метод с наименьшей ценой (copy дешевле перекодирования). Нет доказанных методов у ячейки → ячейка = `none` (сдвиг не применяется; инвариант важнее синхронизации).
+**Остаётся без изменений** для: video_only, audio_only, legacy embedded/однопровайдерных пар, marked-set без полученных офсетов, всех деградаций из §1.1. **Никогда не используется** для синхронизированных эпизодов — root-cause 2 (interleave flush) intrinsic форме «один проход: `-c:v copy` + отстающее аудио». Синхронизационные argv-изменения из ред. 2 (`-ss`/`itsoffset` в buildMuxArgs, фильтр-цепочки, `syncRecipeFor`) **не реализуются вовсе** (они существовали только в плане). Никакого дублирующего fallback: одна сборочная схема.
 
-Продуктовая лестница (Task 7-8) при этом ВСЕГДА активна как страховка: первенец → самопроверка → запасной → самопроверка → типизированная ошибка. Так «гибрид» из ред. 1 становится не отдельным методом, а свойством лестницы.
+### 1.3 fMP4-discontinuity и декод источника (исследование/проверка — директива владельца)
 
-### 1.2 Геометрия знака (Stage 0 подтверждает эмпирически)
+Ответ архитектуры (проверяется тестами Task 6 и Task 12):
 
-Фикстура Stage 0 строит донора с ИЗВЕСТНОЙ геометрией: тон на [5..35] c при 40 c длины; эталон — тот же сигнал без сдвига. Донор «+K» = контент появляется на K c позже (лишнее начало K c). Проверяется: метод «обрезать K» на доноре «+K» даёт тон на [5−K..] и тишину-голову ровно 5−K; метод «добить K» на доноре «−K» даёт тишину-голову 5+K. Параллельно фиксируется, что коррелятор (Task 2, синтетический юнит-пин) обязан назвать эту же геометрию «+K» — расхождение направления = стоп применению до выяснения (Task 4, замкнутый тест «измерил → применил → перемерил ≈ 0»).
+- **Сырой PCM-декод НЕведом PTS**: `-f wav`/`s16le` отдаёт сэмплы по порядку декодирования; ffmpeg-HLS-демуксер скармливает пакеты через границу `#EXT-X-DISCONTINUITY` подряд, без пропусков сэмплов. Сдвиг по байтам PCM оперирует временем декодирования — **иммунен** к нелинейному таймлайну (в отличие от trim/delay ред. 2, работавших по PTS).
+- **Сборка иммунна**: mkvmerge читает НАШИ промежуточные локальные файлы (mkv с непрерывным видео + m4a с честной линейной временной шкалой) — дисконтинуити в них не переносится.
+- **Остаточная экспозиция — анализ**: входной `-ss t` (окна корреляции) ищет по нелинейному таймлайну; окно за границей 10:26 может декодировать не тот спан. Защита — консенсус (≥2 из 3 годных окон; «плохое» окно не проходит RMS/prominence-гейт и не голосует) + проба длительности приблизительно верна. Проверка: синтетический discontinuous-HLS фиксач (Task 6) и живой донор (Task 12).
+- **speed-оценка сборки** (директива): mkvmerge ремюксирует 24-мин 1080p HEVC + 1-2 m4a без перекодирования видео — обычно 10-20× realtime (диск-упор); аудио-пайплайн добавляет декод+кодек ~5-10 c на донор. Итого +1-2 мин на эпизод против single-pass. Критерий владельца «realtime, если успевает» — выполняется с запасом; замер живым прогоном фиксируется в Task 12 (информационно, не гейт). TRUE-realtime mixing при просмотре — вне скоупа (директива 4: плеер не трогаем).
 
-Константы алгоритма детекции (все из research, в `internal/audsync/audsync.go`, без изменений от ред. 1):
+### 1.4 Константы детекции (research, `internal/audsync/audsync.go`; без изменений от ред. 2)
 
-| Константа | Значение | Смысл (research §) |
+| Константа | Значение | Смысл |
 |---|---|---|
-| `SampleRate` | 8000 | моно s16le PCM (§3.4) |
-| `ReferenceDur` | 60.0 c | референс-окно (§4) |
-| `SearchDur` | 180.0 c | поисковое окно (±60 c запаса) |
-| `WindowCount` | 3 | окна на пару (§4) |
+| `SampleRate` | 8000 | декод АНАЛИЗА (моно s16le) |
+| `PipelineRate` | 48000 | декод/сдвиг ПАЙПЛАЙНА (стерео s16le, форс владельца) |
+| `ReferenceDur` / `SearchDur` | 60 / 180 c | окна (§4 research) |
+| `WindowCount` | 3 | окна на пару |
 | `MinProminence` | 20.0 | пик/mean&#124;corr&#124; (§2.3) |
-| `ConsensusTolerance` | 0.080 c | согласие окон (§4) |
-| `SnapTolerance` | 0.020 c | допуск привязки к кадру (§5.4) |
-| `DefaultFPS` | 24.0 | при нечитаемом r_frame_rate (§5.4) |
+| `ConsensusTolerance` | 0.080 c | согласие окон |
+| `SnapTolerance` | 0.020 c | привязка к кадру |
+| `DefaultFPS` | 24.0 | при нечитаемом r_frame_rate |
 | `MinEpisodeDur` | 300.0 c | короче — анализ не запускать |
-| `MinRMS` | 100.0 (s16, ≈ −50 dBFS) | тишина/пустое окно → не голосует (§2.4; калибровочное) |
-| `ConfidenceCap` | 10.0 | cap confidence (§4; калибровочное) |
-| `DefaultBudget` | 15 s | бюджет пары (§4) |
+| `MinRMS` | 100.0 (s16) | тишина-гейт окон И верификация RMS@45 c |
+| `ConfidenceCap` | 10.0 | cap confidence |
+| `DefaultBudget` | 15 s | бюджет пары анализа |
 
-Расписание окон при длительности донора D (§4): старты референса `t₁ = 90`, `t₂ = D/2`, `t₃ = 2D/3`; референс декодируется `[t, t+60]` (у видео), поиск — `[max(0, t−60), 180]` (у донора). Rebasing: `offset_samples = D_lag − len(ref)`, `offset_sec = offset_samples / 8000`, диапазон ±60 c.
-
----
-
-### Task 1: STAGE 0 — эмпирическая проб-матрица применения (ffmpeg, без кода)
-
-**Files:**
-
-- Create (временные фиксачи в `$TMPDIR/audsync-probe/`, команды ниже — дословно)
-- Create: `.sdd/pr165b-me-sync-verify.md` (сырой вывод проб + ЗАПОЛНЕННАЯ таблица §1.1)
-
-Это **первый шаг всего плана**: до написания какого-либо кода применения. Продукт-код (Task 6) пишется только против результатов этой задачи.
-
-**Фиксачи** (тон 1 кГц на [5..35] c из 40 c; эталон = тот же донор БЕЗ сдвига базы):
-
-```bash
-export TMPDIR=/home/whoami/.cache/go-tmp; P=$TMPDIR/audsync-probe; mkdir -p $P; cd $P
-FF='ffmpeg -hide_banner -loglevel error -y'
-# донор: 5s тишина + 30s тон + 5s тишина, stereo aac
-$FF -f lavfi -i "sine=frequency=1000:duration=30" -f lavfi -i "anullsrc=r=44100:cl=stereo" \
-  -filter_complex "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[t];[1:a]atrim=0:5[s1];[1:a]atrim=0:5[s2];[s1][t][s2]concat=n=3:v=0:a=1[a]" \
-  -map "[a]" -c:a aac -b:a 192k donor.m4a
-# видео-подложка 40 c + эталонная «встроенная дорожка» (тот же тайминг тона, что у невычисленного донора)
-$FF -f lavfi -i "testsrc=duration=40:size=320x240:rate=24" -c:v libx264 -pix_fmt yuv420p vid.mp4
-# три вкуса источника донора:
-$FF -i donor.m4a -c copy mp4_zero.mp4                                   # прогрессивный, база PTS 0
-$FF -i donor.m4a -c copy -output_ts_offset 3600 mp4_shifted.mp4         # прогрессивный, база +3600
-$FF -i donor.m4a -c copy -output_ts_offset 3600 -f hls -hls_time 4 -hls_list_size 0 hls_shifted.m3u8  # HLS с сессионной базой (кейс владельца)
-```
-
-**Матрица:** вкусы {mp4_zero, hls_shifted} × знаки {+3 (обрезка), −3 (добивка)} × методы {copy, v2_async, v2_owner (v2 без aresample — точный эскиз владельца), plain_async, plain_plain} = 20 mux-прогонов (каждый — секунды). Вкус `mp4_shifted` — опциональный добор, только если основные ячейки покажут аномалии.
-
-Шаблон прогона (обрезка +3, copy): `-i vid.mp4 -ss 3 -i <донор> -map 0:v:0 -map 1:a:0 -c copy out.mkv`; (добивка −3, copy): `-i vid.mp4 -itsoffset 3 -i <донор> … -c copy`; фильтр-методы: `-i vid.mp4 -i <донор> -map 0:v:0 -filter_complex "<цепочка метода из §1.1, X=3 / M=3000>" -map "[a1]" -c:v copy -c:a aac -b:a 256k out.mkv`.
-
-**Ассерты каждого прогона** (все три — в протокол):
-
-```bash
-ffprobe -v error -select_streams a:0 -show_entries stream=start_time -of csv=p=0 out.mkv   # |x| ≤ 0.05
-ffmpeg -hide_banner -i out.mkv -map 0:a:0 -t 15 -af silencedetect=noise=-50dB:d=0.2 -f null - 2>&1 | grep silence_
-# обрезка +3: первая тишина-голова обязана кончиться на ≈2.0 (5−3) ±0.3, т.е. звук ≤ 2.3 c
-# добивка −3:  тишина-голова ≈ 8.0 (5+3) ±0.3, и НЕ минуты (кейс-маркер поломки владельца)
-```
-
-Оценка «доказан»: все три ассерта в допуске И тон звучит ровно 30 c (хвост сохранён).
-
-- [ ] **Step 1:** выполнить 20 прогонов; сырой вывод + вердикты — в `.sdd/pr165b-me-sync-verify.md`; заполнить таблицу §1.1 (первенец/запасной/исключены с причиной для каждой ячейки).
-- [ ] **Step 2:** **геометрия знака** (два прогона из п. 1.2): «обрезать K» на доноре-лидере и «добить K» на доноре-отстающем дают расчётные позиции тона. Если НЕТ — стоп: соглашение о знаке пересматривается до Task 6.
-- [ ] **Step 3:** коммит `docs(probe): stage-0 sync application matrix — proven method table (PR165b T1)` (файл .sdd добавляется `git add -f`).
+Расписание окон: старты референса `t = 90, D/2, 2D/3`; референс `[t, t+60]` (видео), поиск `[max(0,t−60), 180]` (донор); `offset_samples = D_lag − len(ref)`; `offset_sec = offset_samples / 8000`; диапазон ±60 c.
 
 ---
 
-### Task 2: пакет `internal/audsync` — типы, константы, чистая корреляция (gonum)
+### Task 1: sysdeps — mkvmerge третьим startup-депенденси
 
 **Files:**
 
-- Create: `internal/audsync/audsync.go`
-- Create: `internal/audsync/correlate.go`
+- Modify: `internal/sysdeps/sysdeps.go` (`required`), `internal/sysdeps/plan.go` (все планы), `internal/sysdeps/bootstrapFollowUp`
+- Modify: `locales/en.toml`, `locales/ru.toml` (`deps.manual_*`)
+- Test: `internal/sysdeps/sysdeps_test.go`, `internal/sysdeps/prompt_test.go`
+
+**Interfaces / поведение (доктрина PR148 сохраняется целиком):**
+
+```go
+// sysdeps.go
+// required — внешний порядок = порядок сообщения. mkvmerge (mkvtoolnix)
+// замыкает медиа-тройку: воспроизведение, mux-декод, сборка.
+var required = []string{"mpv", "ffmpeg", "mkvmerge"}
+```
+
+Обновление КАЖДОЙ команды установки (одна команда ставит всю тройку — форма доктрины «bundled install»):
+
+| Платформа | Было | Стало |
+|---|---|---|
+| pacman | `sudo pacman -S mpv ffmpeg` | `sudo pacman -S mpv ffmpeg mkvtoolnix-cli` (extra repo — система владельца) |
+| apt | `sudo apt install mpv ffmpeg` | `sudo apt install mpv ffmpeg mkvtoolnix` |
+| dnf | `sudo dnf install --exclude=openh264* mpv ffmpeg` | `… mpv ffmpeg mkvtoolnix` |
+| zypper | `sudo zypper install mpv ffmpeg` | `… mpv ffmpeg mkvtoolnix` |
+| brew | `brew install mpv ffmpeg` | `brew install mpv ffmpeg mkvtoolnix` |
+| winget | шаги `shinchiro.mpv`, `Gyan.FFmpeg` | + шаг `{argv: ["winget","install","-e","--id","MKVToolNix.MKVToolNix"]}` |
+| choco | `choco install mpvio ffmpeg -y` | `choco install mpvio ffmpeg mkvtoolnix -y` |
+| bootstrapFollowUp (brew/choco) | статические follow-up команды | + mkvtoolnix в те же команды |
+
+i18n: `deps.manual_debian` → `… sudo apt install mpv ffmpeg mkvtoolnix`; `deps.manual_arch` → `… sudo pacman -S mpv ffmpeg mkvtoolnix-cli`; `deps.manual_fedora`/`deps.manual_suse` — аналогично + mkvtoolnix. Ключи `deps.missing_*`, `deps.offer_*` — generic, не меняются.
+
+Фича-гейтинг: приложение, где пользователь ОТКАЗАЛСЯ от установки mkvmerge, продолжает работу (доктрина «never aborts»); синхронизация в `downloadOne` деградирует по §1.1 + стартовый notice уже называет mkvmerge (existing `MissingMessage`). Отдельного конфига пути mkvmerge НЕТ — LookPath при каждом запуске сборки (паритет с ffmpeg в `runFFmpeg`).
+
+- [ ] **Step 1: failing tests.** Обновить ЗАКОНСЕРВЕННЫЕ argv-пины (sysdeps_test.go:173, 223, 281, 294, 319, 422, 465, 489): `sudo apt install mpv ffmpeg mkvtoolnix`, `brew install mpv ffmpeg mkvtoolnix`, winget-тройка, choco+mkvtoolnix; тест порядка `required` (mpv, ffmpeg, mkvmerge в сообщении); bootstrapFollowUp несёт mkvtoolnix; manual-ключи содержат mkvtoolnix/mkvtoolnix-cli.
+- [ ] **Step 2:** FAIL. **Step 3:** правки `required`, планов, follow-up, локалей. **Step 4:** PASS (`go test -race ./internal/sysdeps/`).
+- [ ] **Step 5: gate + commit** `feat(sysdeps): mkvmerge (mkvtoolnix) as third startup dependency (PR165b T1)`.
+
+---
+
+### Task 2: `internal/audsync` — типы, константы, чистая корреляция (gonum)
+
+**Files:**
+
+- Create: `internal/audsync/audsync.go`, `internal/audsync/correlate.go`
 - Test: `internal/audsync/correlate_test.go`
-- Modify: `go.mod` / `go.sum` (gonum), `THIRD-PARTY-NOTICES.md`
+- Modify: `go.mod`/`go.sum`, `THIRD-PARTY-NOTICES.md`
 
 **Interfaces (produces):**
 
 ```go
 package audsync
 
-// SyncOffset — вердикт анализа одной пары (видео, дубляж). Нулевое
-// значение = «нет уверенности» → mux без сдвига (research §6.3).
+// SyncOffset — вердикт анализа одной пары (видео, донор). Нулевое значение =
+// «нет уверенности» → без сдвига (research §6.3).
 type SyncOffset struct {
-    Seconds      float64 // сдвиг донора, c; >0 = обрезать начало донора, <0 = добить тишину
-    Confidence   float64 // min(prominence)/MinProminence, cap ConfidenceCap; ≥1 у принятых
-    WindowsAgree int     // согласных окон из годных (2 или 3)
+	Seconds      float64 // >0 = обрезать начало донора; <0 = добить тишину
+	Confidence   float64 // min(prominence)/MinProminence, cap ConfidenceCap; ≥1 у принятых
+	WindowsAgree int     // согласных окон из годных (2 или 3)
 }
 
 var (
-    ErrNoConfidence = errors.New("audsync: no confident offset") // анализ не дал вердикта (НЕ ошибка загрузки)
-    ErrNoReference  = errors.New("audsync: reference track is silent or absent")
+	ErrNoConfidence = errors.New("audsync: no confident offset")
+	ErrNoReference  = errors.New("audsync: reference track is silent or absent")
 )
 
-const ( /* таблица констант из раздела «Архитектура» — переносим дословно */ )
+const ( /* таблица §1.4 дословно, включая PipelineRate */ )
 ```
 
 ```go
-// correlate.go — research §3.3, рецепт проверен:
-// c = IFFT( FFT(x) · conj(FFT(y)) ), N = next_pow2(len(x)+len(y)−1), оба добиты нулями;
-// k = argmax(seq); D = (N−k) mod N — задержка srch относительно ref (srch[i] = ref[i−D]).
+// correlate.go — research §3.3:
+// c = IFFT( FFT(x) · conj(FFT(y)) ), N = next_pow2(len(x)+len(y)−1); k = argmax(seq);
+// D = (N−k) mod N — задержка srch относительно ref (srch[i] = ref[i−D]).
 func nextPow2(n int) int
 func CrossCorrelate(ref, srch []float64) (delay int, prominence float64, err error)
 ```
 
-- [ ] **Step 1: зависимость.** `export TMPDIR=... ; go get gonum.org/v1/gonum@v0.17.0 && go mod tidy`. `make notices` → добавить gonum (BSD-3-Clause) в `THIRD-PARTY-NOTICES.md`.
-
-- [ ] **Step 2: failing test корреляции (синтетика, без ffmpeg).**
+- [ ] **Step 1:** `go get gonum.org/v1/gonum@v0.17.0 && go mod tidy`; `make notices` → gonum в THIRD-PARTY-NOTICES.md.
+- [ ] **Step 2: failing tests.**
 
 ```go
 func TestCrossCorrelateFindsExactDelay(t *testing.T) {
@@ -213,7 +207,7 @@ func TestCrossCorrelateFindsExactDelay(t *testing.T) {
 			d, prom, err := CrossCorrelate(x, srch)
 			if err != nil { t.Fatalf("err: %v", err) }
 			if d != tc.delay { t.Fatalf("delay = %d, want %d", d, tc.delay) }
-			if prom < MinProminence { t.Fatalf("prominence = %v, want ≥ %v", prom, MinProminence) }
+			if prom < MinProminence { t.Fatalf("prominence = %v", prom) }
 		})
 	}
 }
@@ -223,9 +217,9 @@ func TestCrossCorrelateUncorrelatedLowProminence(t *testing.T) {
 	a := make([]float64, 48000); b := make([]float64, 144000)
 	for i := range a { a[i] = rng.NormFloat64() }
 	for i := range b { b[i] = rng.NormFloat64() }
-	_, prom, err := CrossCorrelate(a, b)
-	if err != nil { t.Fatalf("err: %v", err) }
-	if prom >= MinProminence { t.Fatalf("prominence = %v, want < %v (несвязанные ≈ 8)", prom, MinProminence) }
+	if _, prom, err := CrossCorrelate(a, b); err != nil || prom >= MinProminence {
+		t.Fatalf("prom = %v err = %v, want prom < 20", prom, err)
+	}
 }
 
 func TestNextPow2(t *testing.T) {
@@ -237,8 +231,7 @@ func TestNextPow2(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3:** `go test -race -count=1 ./internal/audsync/ -run TestCrossCorrelate -v` → FAIL (CrossCorrelate undefined).
-- [ ] **Step 4: минимальная реализация** — `audsync.go` (package doc: «аудио-автосинк дубляжей, research .sdd/pr165b-me-sync-research.md»; типы, ошибки, константы) и `correlate.go`:
+- [ ] **Step 3:** запуск → FAIL (undefined). **Step 4: реализация** — `audsync.go` (doc: «аудио-автосинк дубляжей; детекция — research .sdd/pr165b-me-sync-research.md; применение — mkvmerge-архитектура владельца, ред. 3») + `correlate.go`:
 
 ```go
 import "gonum.org/v1/gonum/dsp/fourier"
@@ -272,55 +265,48 @@ func CrossCorrelate(ref, srch []float64) (int, float64, error) {
 }
 ```
 
-- [ ] **Step 5:** тесты из Step 2 — PASS.
-- [ ] **Step 6: gate + commit** `feat(audsync): FFT cross-correlation core on gonum (PR165b T2)`.
+- [ ] **Step 5:** PASS. **Step 6: gate + commit** `feat(audsync): FFT cross-correlation core on gonum (PR165b T2)`.
 
 ---
 
-### Task 3: `internal/audsync` — окна, вердикт (консенсус/медиана/confidence), snap
+### Task 3: `internal/audsync` — окна, вердикт (консенсус/медиана), snap
 
 **Files:**
 
-- Create: `internal/audsync/windows.go`
-- Create: `internal/audsync/analyze.go` (только чистая часть: `analyzePair` + `snapToFrame`)
+- Create: `internal/audsync/windows.go`, `internal/audsync/analyze.go` (чистая часть)
 - Test: `internal/audsync/analyze_test.go`
 
 **Interfaces:**
 
-- Consumes: `CrossCorrelate`, константы (Task 2), `SyncOffset`.
-- Produces:
-
 ```go
 // windows.go
 type Window struct { RefStart, SearchStart float64 } // секунды
-// WindowSchedule: t = 90, D/2, 2D/3; nil если D < MinEpisodeDur (анализ неприменим).
+// WindowSchedule: t = 90, D/2, 2D/3; nil если D < MinEpisodeDur.
 func WindowSchedule(dur float64) []Window
 
-// analyze.go — ЧИСТАЯ функция (без exec): на вход уже декодированные окна.
-// refWins[i] — референс [t, t+60]; searchWins[i] — поиск [max(0,t−60), ≤180]; fps — сетка кадров.
-// Правило вердикта (research §4): окно годно, если RMS(ref) ≥ MinRMS && RMS(srch) ≥ MinRMS &&
-// prominence ≥ MinProminence; offset_i = (delay_i − len(ref_i))/SampleRate;
+// analyze.go — чистая функция (без exec): окна уже декодированы.
+// Окно годно: RMS(ref) ≥ MinRMS && RMS(srch) ≥ MinRMS && prominence ≥ MinProminence;
+// offset_i = (delay_i − len(ref_i))/SampleRate;
 // ≥2 годных согласны в ±ConsensusTolerance → медиана → snapToFrame → SyncOffset; иначе ErrNoConfidence.
 func analyzePair(refWins, searchWins [][]float64, fps float64) (SyncOffset, error)
 func snapToFrame(off, fps float64) float64 // round(off*fps)/fps при |остатке| ≤ SnapTolerance, иначе off
 func rms(x []float64) float64
+func RMSOfPCM(pcm []byte) float64 // s16le → float64/32768 → rms; экспорт для верификации сборки (Task 8)
 ```
 
-- [ ] **Step 1: failing tests (синтетика — главный контракт знака).**
+- [ ] **Step 1: failing tests.**
 
 ```go
 func TestAnalyzePairFindsShiftedDubExactly(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 	for _, k := range []float64{17.042, -0.958, 6.25, 0.5} {
-		// видео-таймлайн 24 мин: вобл-сигнал с t=90; дубль-таймлайн = видео, сдвинутое на k;
-		// окна нарезаются по WindowSchedule(1440) — refWins из «видео», searchWins из «дубляжа».
-		refWins, searchWins := cutWindows(wobbleVideo(24*60, rng), shiftedCopy(k), 1440.0)
+		// видео-таймлайн 24 мин: вобл-сигнал (сумма синусов + шум, генератор из Task 2)
+		// с t=90; дубль-таймлайн = видео, сдвинутое на k; окна по WindowSchedule(1440).
+		refWins, searchWins := cutWindows(wobbleVideo(24*60, rng), shiftedCopy(k, rng), 1440.0)
 		off, err := analyzePair(refWins, searchWins, 24)
 		if err != nil { t.Fatalf("k=%v: %v", k, err) }
 		if math.Abs(off.Seconds-k) > 0.05 { t.Fatalf("k=%v: got %v", k, off.Seconds) }
-		if off.WindowsAgree < 2 { t.Fatalf("k=%v: agree=%d", k, off.WindowsAgree) }
-		if off.Confidence < 1 { t.Fatalf("k=%v: confidence=%v", k, off.Confidence) }
-		// snap: 17.042 ≈ 409/24 — остаётся; 6.25 = 150/24 — остаётся
+		if off.WindowsAgree < 2 || off.Confidence < 1 { t.Fatalf("k=%v: %+v", k, off) }
 	}
 }
 
@@ -333,171 +319,392 @@ func TestAnalyzePairNoConfidenceOnSilence(t *testing.T) {
 }
 
 func TestAnalyzePairConsensusIgnoresDialogueOnlyWindow(t *testing.T) {
-	// Окна 1 и 3: чистый сдвиг k=+2.0. Окно 2 — «диалог-only»: несвязанный шум
-	// (rng-генератор с другим seed) → prominence < MinProminence → окно не голосует.
-	// Вердикт: +2.0, WindowsAgree=2; err == nil.
+	// Окна 1,3 — сдвиг k=+2.0; окно 2 — несвязанный шум (другой seed) → не голосует.
+	// Вердикт +2.0, WindowsAgree=2.
 }
 
 func TestAnalyzePairMedianOfThree(t *testing.T) {
-	// Три годных окна (все prominence ≥ MinProminence) со сдвигами 2.000 / 2.004 / 2.080:
-	// 2.080 отходит от 2.004 на 76 мс ≤ ConsensusTolerance → все три согласны →
-	// медиана = 2.004 (сортировка, средний элемент). Assert off.Seconds == 2.004 ± 1e-9.
+	// Годные окна 2.000/2.004/2.080 (разброс ≤ 0.08) → медиана 2.004 ± 1e-9.
 }
 
 func TestSnapToFrame(t *testing.T) {
 	cases := []struct{ name string; in, fps, want float64 }{
-		{"snaps_within_tolerance", 17.050, 24, 17.041666}, // остаток 8.3 мс ≤ 20 мс
-		{"already_on_grid", 6.250, 24, 6.250},             // 150/24 точно
-		{"keeps_off_grid", 17.100, 24, 17.100},            // остаток 58 мс > 20 мс
-		{"default_fps", 2.000, 0, 2.000},                  // fps=0 → DefaultFPS=24, 48/24 на сетке
+		{"snaps_within_tolerance", 17.050, 24, 17.041666},
+		{"already_on_grid", 6.250, 24, 6.250},
+		{"keeps_off_grid", 17.100, 24, 17.100},
+		{"default_fps", 2.000, 0, 2.000}, // fps=0 → DefaultFPS
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fps := tc.fps
 			if fps == 0 { fps = DefaultFPS }
 			if got := snapToFrame(tc.in, fps); math.Abs(got-tc.want) > 1e-6 {
-				t.Fatalf("snapToFrame(%v, %v) = %v, want %v", tc.in, fps, got, tc.want)
+				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
 	}
 }
 
 func TestWindowSchedule(t *testing.T) {
-	// D=1440: {90, 720, 960}; D=299 → nil; D=301 → 3 окна, все start+60 ≤ D−1 (t₃ = 2D/3).
+	// D=1440: {90, 720, 960}; D=299 → nil; D=301 → 3 окна, start+60 ≤ D−1.
+}
+
+func TestRMSOfPCM(t *testing.T) {
+	// 4 байта = 2 кадра s16le стерео: {1000,-1000,1000,-1000} → RMS=1000±1e-6; пусто → 0.
 }
 ```
 
-- [ ] **Step 2:** `go test -race ./internal/audsync/ -run 'TestAnalyzePair|TestSnap|TestWindowSchedule' -v` → FAIL (undefined).
-- [ ] **Step 3: реализация** `windows.go` + `analyze.go` (только чистые функции; orchestration с exec — Task 4). RMS-гейт ДО корреляции; медиана для 2 окон — среднее; `confidence = min(prom agrees)/MinProminence`, cap `ConfidenceCap`.
-- [ ] **Step 4:** тесты PASS. **Step 5: gate + commit** `feat(audsync): window schedule, consensus verdict, frame snap (PR165b T3)`.
+- [ ] **Step 2:** FAIL. **Step 3: реализация** (RMS-гейт до корреляции; медиана 2 окон — среднее; confidence = min(prom agrees)/MinProminence, cap). **Step 4:** PASS.
+- [ ] **Step 5: gate + commit** `feat(audsync): windows, consensus verdict, frame snap, RMS helper (PR165b T3)`.
 
 ---
 
-### Task 4: `internal/audsync` — exec-слой: ffmpeg-pipe PCM, ffprobe-пробы, `Reference`/`Offset` + замкнутый тест знака
+### Task 4: `internal/audsync` — exec-слой, `Reference`/`Offset`, argv пайплайна
 
 **Files:**
 
-- Create: `internal/audsync/exec.go`
-- Create: `internal/audsync/pcm.go`
-- Create: `internal/audsync/probe.go`
+- Create: `internal/audsync/exec.go`, `internal/audsync/pcm.go`, `internal/audsync/probe.go`
 - Modify: `internal/audsync/analyze.go` (orchestration)
-- Test: `internal/audsync/pcm_test.go`, `internal/audsync/probe_test.go`, `internal/audsync/offset_test.go`, `internal/audsync/live_loop_test.go` (тег `live`)
+- Test: `internal/audsync/pcm_test.go`, `internal/audsync/probe_test.go`, `internal/audsync/offset_test.go`
 
 **Interfaces:**
 
 ```go
-// exec.go — инъекционный шов (аналог download.runner): stdout буферизуется целиком
-// (180 c × 8000 × 2 байта ≈ 2.9 MB — копейки).
+// exec.go — шов (аналог download.runner); stdout буферизуется целиком.
 type execFunc func(ctx context.Context, bin string, args []string) (stdout []byte, stderr string, err error)
-func realExec(ctx context.Context, bin string, args []string) ([]byte, string, error) // exec.CommandContext + cmd.Output()
+func realExec(ctx context.Context, bin string, args []string) ([]byte, string, error)
 
 // audsync.go
 type Options struct {
 	FFmpeg  string        // дефолт "ffmpeg"
-	FFprobe string        // дефолт: sibling от FFmpeg (как download.probeBin, 169-K), иначе "ffprobe"
-	Budget  time.Duration // дефолт DefaultBudget (15 c) — НА ПАРУ (Offset)
+	FFprobe string        // sibling от FFmpeg (169-K), иначе "ffprobe"
+	Budget  time.Duration // DefaultBudget; НА ПАРУ анализа (Offset)
 	Exec    execFunc      // nil = realExec
 }
 func New(opts Options) *Analyzer
 
 // analyze.go
-// Reference — окна встроенной аудиодорожки видео (декод ОДИН раз на эпизод, research §6.2),
-// плюс fps видео для snap. Все окна тише MinRMS → ErrNoReference.
+// Reference — 3 окна встроенной дорожки видео (1 раз на эпизод) + fps.
 type Reference struct { Windows [][]float64; FPS float64 }
 func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource) (Reference, error)
 
-// Offset — вердикт для одного донора против готового Reference: проба длительности донора
-// (format=duration) → расписание окон → декод 3×поисковых окон у донора → analyzePair.
-// Бюджет: context.WithTimeout(Budget) на весь вызов (убивает ffmpeg по истечении).
-// Сигнатура (SyncOffset, error); ошибки: ErrNoConfidence/ErrNoReference/обёртки с причиной.
+// Offset — вердикт донора против Reference (≤ Budget; таймаут убивает ffmpeg).
 func (a *Analyzer) Offset(ctx context.Context, ref Reference, dub contracts.VideoSource) (SyncOffset, error)
 ```
 
-argv декода (research §3.4, дословно; заголовки — единым `-headers`-блобом как `headerArgs` в download; ресемплинг в моно 8 кГц делает сам ffmpeg флагами `-ac 1 -ar 8000` — отдельного Go-ресемплера НЕТ и не нужен):
+**Два ДЕКОДА — не путать:**
 
-```text
-ffmpeg -hide_banner -loglevel error -nostdin [-headers "<CRLF-joined>"] -ss {start} -t {dur} -i {URL} -vn -ac 1 -ar 8000 -f s16le pipe:
+```go
+// pcm.go — argv АНАЛИЗА (research §3.4, 8 кГц моно):
+// ffmpeg -hide_banner -loglevel error -nostdin [-headers "<CRLF>"] -ss {start} -t {dur} -i {URL} -vn -ac 1 -ar 8000 -f s16le pipe:
+func decodeArgs(src contracts.VideoSource, start, dur float64) []string
+
+// pcm.go — argv ПАЙПЛАЙНА (форс владельца, 48 кГц стерео WAV, БЕЗ -ss: донор декодируется ЦЕЛИКОМ):
+// ffmpeg -hide_banner -loglevel error -nostdin [-headers "<CRLF>"] -i {URL} -map 0:a:0 -ar 48000 -ac 2 -c:a pcm_s16le -f wav {out.wav}
+func decodeWAVArgs(src contracts.VideoSource, outWAV string) []string
+
+// pcm.go — argv кодека m4a:
+// ffmpeg -y -hide_banner -loglevel error -i {in.wav} -c:a aac -b:a 256k {out.m4a}
+func encodeM4AArgs(inWAV, outM4A string) []string
+
+// probe.go — duration: ffprobe -v error -show_entries format=duration -of json {URL}
+//            fps:      ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of json {URL}
+// fps нечитаем → DefaultFPS (НЕ ошибка); duration донора нечитаема → обёртка ErrNoConfidence;
+// duration видео нечитаема → обёртка ErrNoReference.
 ```
 
-argv пробы длительности: `ffprobe -v error -show_entries format=duration -of json {URL}` (+headers).
-argv пробы fps: `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of json {URL}` (+headers); парс `24000/1001` → 23.976…; нечитаемо → `DefaultFPS` (НЕ ошибка); нечитаемая duration донора = провал пары (обёртка ErrNoConfidence), duration видео = обёртка ErrNoReference.
-
-- [ ] **Step 1: failing test argv + парсинга (fake exec, без процессов).**
+- [ ] **Step 1: failing tests (fake exec).**
 
 ```go
 func TestDecodeArgs(t *testing.T) {
 	src := contracts.VideoSource{URL: "https://x/v.m3u8", Headers: map[string]string{"Referer": "https://r/"}}
-	got := decodeArgs(src, 90, 180)
 	want := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-headers", "Referer: https://r/\r\n", "-ss", "90.000", "-t", "180.000",
 		"-i", "https://x/v.m3u8", "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:"}
-	if !reflect.DeepEqual(got, want) { t.Fatalf("got %q", got) }
+	if got := decodeArgs(src, 90, 180); !reflect.DeepEqual(got, want) { t.Fatalf("got %q", got) }
 }
 
-func TestDecodePCMConvertsS16LE(t *testing.T) {
-	// fake exec отдаёт 8 сэмплов little-endian s16 → []float64; отрицательные и ±32768.
+func TestDecodeWAVArgsForcedPipeline(t *testing.T) {
+	// пин форса владельца: "-map","0:a:0","-ar","48000","-ac","2","-c:a","pcm_s16le","-f","wav",out
+	// и ОТСУТСТВИЕ -ss/-t.
 }
+
+func TestEncodeM4AArgs(t *testing.T) { // пин "-c:a","aac","-b:a","256k" }
+
+func TestDecodePCMConvertsS16LE(t *testing.T) { // little-endian, отрицательные, ±32768 }
 
 func TestParseDurationAndFPS(t *testing.T) {
-	// duration: {"format":{"duration":"1440.5"}} → 1440.5; мусор/пусто → error (пара не анализируется).
-	// fps: "24000/1001" → 23.976…; "24/1" → 24; мусор/ошибка пробы → DefaultFPS (НЕ ошибка анализа).
+	// duration "1440.5" → ok; мусор → error. fps "24000/1001" → 23.976…; мусор → DefaultFPS.
 }
 
 func TestOffsetBudgetKillsDecode(t *testing.T) {
-	// fake exec спит до ctx.Done() (не time.Sleep!) с Options.Budget=200ms → Offset
-	// возвращает обёртку ErrNoConfidence за ≤ 1s.
+	// fake exec спит до ctx.Done(); Budget=200ms → обёртка ErrNoConfidence за ≤1s.
 }
 
-func TestReferenceErrOnSilence(t *testing.T) {
-	// fake exec отдаёт нули → ErrNoReference.
-}
+func TestReferenceErrOnSilence(t *testing.T) { // нули → ErrNoReference }
 ```
 
-- [ ] **Step 2:** FAIL. **Step 3: реализация** `exec.go`, `pcm.go` (байты → `binary.LittleEndian` → int16 → float64/32768), `probe.go`, orchestration в `analyze.go` (порядок: `Offset` = timeout → probeDuration → WindowSchedule → цикл окон; `Reference` = fps-проба + 3 декода `[t, t+60]` от dur видео).
-- [ ] **Step 4:** PASS.
-- [ ] **Step 5: замкнутый тест знака (тег `live`, ffmpeg обязателен; закрывает требование «пик ≈ 0 после применения»).**
-
-```go
-//go:build live
-
-// TestLiveMeasuredAppliedRemeasuredZero: фикcачи Task 1 (donor.m4a + vid.mp4 со
-// встроенной дорожкой того же тайминга). Донор «+3» собирается ffmpeg'ом (concat
-// 3 c тишины + donor). Далее: Analyzer.Offset(videoSrc, dubSrc) → ожидался ≈ +3;
-// применение ПЕРВЕНЦЕМ ячейки (mp4, +) из таблицы Task 1 — argv из .sdd/pr165b-me-sync-verify.md;
-// затем ПОвторный Offset(видео, ПРИМЕНЁННЫЙ вывод) → |seconds| ≤ 0.125 (ITU).
-// Форма доказательства: лог found1/applied/found2 в тестовый вывод.
-func TestLiveMeasuredAppliedRemeasuredZero(t *testing.T) { /* ... */ }
-```
-
-- [ ] **Step 6:** `go test -race -count=1 ./internal/audsync/` PASS; live-прогон вручную: `go test -tags live -run TestLiveMeasuredAppliedRemeasuredZero -count=1 -v ./internal/audsync/`.
-- [ ] **Step 7: gate + commit** `feat(audsync): exec layer, Reference/Offset, closed-loop sign proof (PR165b T4)`.
+- [ ] **Step 2:** FAIL. **Step 3: реализация** (`pcm.go`: байты→`binary.LittleEndian`→int16→float64/32768; orchestration: `Offset` = timeout → duration → schedule → 3 поиска; `Reference` = fps + 3 декода `[t, t+60]`). **Step 4:** PASS.
+- [ ] **Step 5: gate + commit** `feat(audsync): exec layer, Reference/Offset, pipeline argv (PR165b T4)`.
 
 ---
 
-### Task 5: конфиг `download.audio_sync` + i18n
+### Task 5: `internal/audsync` — WAV RIFF-парсер и байтовый сдвиг
 
 **Files:**
 
-- Modify: `internal/config/config.go` (структура `Download` ~строка 118; дефолты ~строка 411)
-- Modify: `settings.example.toml` (блок `[download]`, ~строка 152)
-- Modify: `locales/en.toml`, `locales/ru.toml`
-- Test: `internal/config/config_test.go`
+- Create: `internal/audsync/wav.go`, `internal/audsync/shift.go`
+- Test: `internal/audsync/wav_test.go`, `internal/audsync/shift_test.go`, `internal/audsync/live_wav_test.go` (тег `live`)
 
 **Interfaces:**
 
 ```go
+// wav.go — семантика wave-модуля (Go-порт): RIFF-контейнер, чанки.
+// ffmpeg кладёт перед data LIST/INFO-чанк (заголовок 78 байт) — жёсткие 44 байта ЗАПРЕЩЕНЫ.
+type wavLayout struct {
+	DataOff    int64 // абсолютное смещение payload чанка data
+	DataSize   int64 // размер payload (из заголовка чанка)
+	Frames     int64 // DataSize / blockAlign
+	BlockAlign int16 // байт на кадр (каналы × 2)
+}
+
+// readWAVLayout читает RIFF-чанки по кругу (id, size LE, payload c pad-байтом при
+// нечётном размере), валидирует RIFF/WAVE, fmt: PCM s16le, берёт ПЕРВЫЙ чанк data.
+// Ошибки: не-RIFF, не-WAVE, не-PCM, нет fmt/data, битые размеры.
+func readWAVLayout(f *os.File) (wavLayout, error)
+
+// shift.go — файл-в-файл сдвиг БЕЗ загрузки в RAM (кадр-выровненные порции).
+// frames > 0: обрезать frames кадров с начала payload (TrimPrefix-семантика);
+// frames < 0: добить |frames| нулевых кадров. dst получает КОРЕКТНЫЕ заголовки
+// (data size и RIFF size пересчитаны, pad-байт учтён), fmt-чанк копируется.
+func ShiftWAVFile(src, dst string, frames int64) error
+
+// удобство: FramesFor(seconds, rate) = int64(math.Round(seconds * rate))
+func FramesFor(seconds float64, rate int) int64
+```
+
+- [ ] **Step 1: failing hermetic tests (рукописные RIFF-фикстуры).**
+
+```go
+func wavFixture(t *testing.T, withListChunk bool) string {
+	// Руками собрать RIFF: RIFF/WAVE + fmt (PCM, 2ch, 48000, s16le, blockAlign=4)
+	// + [опционально LIST/INFO 26 байт — кейс владельца «78-байтный заголовок»]
+	// + data (N кадров) [+ pad-байт кейса нечётного INFO].
+}
+
+func TestReadWAVLayoutClassic44(t *testing.T) { /* DataOff=44, Frames=N */ }
+func TestReadWAVLayoutWithListChunk(t *testing.T) { /* DataOff=78: LIST/INFO перед data НЕ ломает парсер */ }
+func TestReadWAVLayoutRejects(t *testing.T) { /* не-RIFF; fmt=float; нет data; битый size → типизированные ошибки */ }
+
+func TestShiftWAVFileTrim(t *testing.T) {
+	// frames=+10: DataSize' = DataSize−40; payload начинается с кадра №10;
+	// RIFF size пересчитан; первый байт dst.data == байт кадра 10 источника.
+}
+func TestShiftWAVFilePad(t *testing.T) {
+	// frames=−10: DataSize' = DataSize+40; первые 40 байт payload — нули; дальше 1:1.
+}
+func TestShiftWAVFileZeroAndNegativeGuards(t *testing.T) { /* frames=0 → контент 1:1; |frames| > Frames при триме → типизированная ошибка (не молча пустой файл) */ }
+func TestFramesFor(t *testing.T) { /* (17.042, 48000) = 818016; (−0.875, 48000) = −42000 */ }
+```
+
+- [ ] **Step 2:** FAIL. **Step 3: реализация.** **Step 4:** PASS hermetic.
+- [ ] **Step 5: live-тест (тег `live`):** `ffmpeg -f lavfi -i sine -ar 48000 -ac 2 -c:a pcm_s16le -f wav` фиксач → readWAVLayout (реальный ffmpeg-заголовок с LIST/INFO: DataOff=78) → ShiftWAVFile ±1 c → повторный readWAVLayout валиден, размеры точны.
+- [ ] **Step 6: gate + commit** `feat(audsync): RIFF-safe WAV parser and byte-exact PCM shift (PR165b T5)`.
+
+---
+
+### Task 6: замкнутый тест знака + fMP4-декод-проверка (live + синтетика)
+
+**Files:**
+
+- Test: `internal/audsync/live_loop_test.go` (тег `live`), `internal/audsync/discontinuity_test.go` (hermetic, синтетический HLS)
+
+**Пин знака (закрывает «пик ≈ 0 после применения»):** фикcачи Task 12 (donor + video со встроенной дорожкой). Донор «+3 c» = concat(3 c тишины, donor). Полный цикл: `Offset(видео, донор+3)` ≈ +3 → `decodeWAVArgs` → `ShiftWAVFile(+round(3*48000))` → `encodeM4AArgs` → `Offset(видео, m4a-файл)` → |seconds| ≤ 0.125 (ITU). Форма доказательства: found1/shifted/found2 в тест-лог.
+
+**fMP4-декод (директива «research/verify»):** синтетический discontinuous HLS собирается ffmpeg'ом: два mpegts-сегмента РАЗНОЙ геометрии + плейлист с `#EXT-X-DISCONTINUITY` между ними. Ассерты hermetic-теста (ffmpeg обязателен → тест живёт с тегом `live` рядом с hermetic-парсерами, но сам HLS-фиксач синтетический):
+
+1. полный WAV-декод пайплайна (`decodeWAVArgs` без -ss) даёт длительность ≈ сумме сегментов ±1 c (декод сквозной, без дыр);
+2. окно анализа `-ss 90 -t 60` декодирует ожидаемый спан (корреляция с известным контентом сегмента A);
+3. окно, пересекающее границу дисконтинуити, деградирует честно: либо коррелирует, либо не голосует (RMS/prominence-гейт) — вердикт консенсуса от оставшихся окон не ломается.
+
+- [ ] **Step 1:** фикcачи + тесты по спецификации выше. **Step 2:** прогон `go test -tags live -run 'TestLiveMeasuredShiftedRemeasured|TestLiveDiscontinuousHLSDecode' -count=1 -v ./internal/audsync/` — PASS; результаты в `.sdd/pr165b-me-sync-verify.md`.
+- [ ] **Step 3:** hermetic-парсер плейлиста/фикcач (без ffmpeg) — PASS в основном suite.
+- [ ] **Step 4: gate + commit** `test(audsync): closed-loop sign proof, discontinuous-HLS decode verification (PR165b T6)`.
+
+---
+
+### Task 7: `internal/download` — mkvmerge-сборщик, video-solo, конвертер глав
+
+**Files:**
+
+- Create: `internal/download/assemble.go`, `internal/download/chapters_mkv.go`
+- Modify: `internal/download/downloader.go` (Options.MKVMerge, runner-переиспользование)
+- Test: `internal/download/assemble_test.go`, `internal/download/chapters_mkv_test.go`, `internal/download/live_assemble_test.go` (тег `live`)
+
+**Interfaces:**
+
+```go
+// downloader.go
+type Options struct {
+	FFmpeg  string // дефолт "ffmpeg"
+	MKVMerge string // дефолт "mkvmerge"
+}
+
+// assemble.go
+type AssembleAudio struct {
+	Path    string // локальный .m4a донора (продукт Stage B)
+	Lang    string // ISO 639-2 (LangToISO639_2 переиспользуется); "" → флаг опускается
+	Title   string // имя дубляжа
+	Default bool
+}
+
+type AssembleInput struct {
+	VideoPath    string          // промежуточный video-only .mkv (Stage A)
+	AudioFiles   []AssembleAudio // ≥1
+	ChaptersFile string          // mkvmerge simple format ("") — флаг опускается
+	OutputPath   string
+	Title        string // --title (дефолт "Эпизод" — как в ffmpeg-билдерах)
+}
+
+// buildMkvMergeArgs — ДОСЛОВНАЯ форма владельца, обобщённая на N дорожек.
+// Per-input опции строго ПЕРЕД своим входом; argv передаётся exec'ом напрямую
+// (никакого шелл-цитирования: "0:<name>" — ОДИН argv-элемент).
+func buildMkvMergeArgs(in AssembleInput) []string
+// ["-o", out, "--no-audio", video,
+//  "--language", "0:rus", "--track-name", "0:AniLibria.TV", "--default-track-flag", "0:yes", a1.m4a,
+//  "--track-name", "0:DUB2", "--default-track-flag", "0:no", a2.m4a,
+//  "--chapters", chapters.simple, "--title", title]
+
+// RunAssemble исполняет mkvmerge. КОНТРАКТ КОДОВ ВЫХОДА mkvmerge:
+// 0 = ok; 1 = ПРЕДУПРЕЖДЕНИЯ = успех (stderr в warn-лог); 2 = ошибка.
+func (d *Downloader) RunAssemble(ctx context.Context, in AssembleInput) error
+```
+
+```go
+// assemble.go — Stage A: промежуточный video-only mkv (без глав, без title — их ставит mkvmerge).
+// ffmpeg -y -hide_banner -loglevel error [-headers blob] -i {videoURL} -map 0:v:0 -c:v copy {video.tmp.mkv}
+func buildVideoSoloArgs(video contracts.VideoSource, outPath string) []string
+
+// chapters_mkv.go — конвертер FFMETADATA → mkvmerge simple chapters.
+// [CHAPTER] TIMEBASE=1/1000 START=35000 END=92000 title=intro
+//   → "CHAPTER1=00:00:35.000\nCHAPTER1NAME=intro\n" (границы END игнорируются:
+//     mkvmerge chapters — точки, не интервалы).
+// Пустой/отсутствующий файл → "", флаг опускается. Временный файл рядом с выводом.
+func ConvertChaptersToMkv(ffmetaPath, outDir string) (string, error)
+```
+
+Инвариант default-диспозиции переносится из `resolveAudioTracks`: ровно одна дорожка default; отсутствующая → первая (ремонт в вызывающем коде, Task 10 — здесь билдер честно рендерит как сказано).
+
+- [ ] **Step 1: failing argv-пины.**
+
+```go
+func TestBuildMkvMergeArgsOwnerShape(t *testing.T) {
+	in := AssembleInput{
+		VideoPath: "v.tmp.mkv",
+		AudioFiles: []AssembleAudio{{Path: "dub.m4a", Lang: "rus", Title: "AniLibria.TV", Default: true}},
+		OutputPath: "out.part.mkv", Title: "Тайтл — эп 1",
+	}
+	want := []string{"-o", "out.part.mkv", "--no-audio", "v.tmp.mkv",
+		"--language", "0:rus", "--track-name", "0:AniLibria.TV", "--default-track-flag", "0:yes", "dub.m4a",
+		"--title", "Тайтл — эп 1"}
+	if got := buildMkvMergeArgs(in); !reflect.DeepEqual(got, want) { t.Fatalf("got %q", got) }
+}
+
+func TestBuildMkvMergeArgsMultiTrack(t *testing.T) {
+	// 2 дорожки: первая default=yes, вторая no; lang "" → флаг --language опущен для неё.
+}
+func TestBuildMkvMergeArgsChapters(t *testing.T) { /* "--chapters","c.simple" перед --title */ }
+func TestBuildVideoSoloArgs(t *testing.T) { /* headers-блоб + "-map","0:v:0","-c:v","copy", out; без глав/title */ }
+func TestRunAssembleExitCodes(t *testing.T) {
+	// runner-шов: exit 0 → nil; exit 1 (stderr "warnings") → nil + warn;
+	// exit 2 → типизированная ошибка с одной строкой stderr.
+}
+func TestConvertChaptersToMkv(t *testing.T) {
+	// FFMETADATA-фикстура (2 главы, TIMEBASE 1/1000) → simple-формат, мс → HH:MM:SS.nnn;
+	// пустой файл → ""; битая секция → типизированная ошибка.
+}
+```
+
+- [ ] **Step 2:** FAIL. **Step 3: реализация.** **Step 4:** PASS.
+- [ ] **Step 5: live (тег `live`):** собранные Task 12 фикcачи → полный RunAssemble → файл открывается ffprobe (v+2a-дорожки, language/default теги на месте); замер времени сборки 24-мин фикcачи → в `.sdd/pr165b-me-sync-verify.md` (speed-оценка §1.3).
+- [ ] **Step 6: gate + commit** `feat(download): mkvmerge assembler, video-solo stage, FFMETADATA→mkv chapters (PR165b T7)`.
+
+---
+
+### Task 8: `internal/download` — VerifyAssembled (инвариант поставки)
+
+**Files:**
+
+- Create: `internal/download/verify.go`
+- Test: `internal/download/verify_test.go` (hermetic), `internal/download/live_verify_test.go` (тег `live`)
+
+**Interfaces:**
+
+```go
+// verify.go
+const (
+	LeadSilenceWindow = 15 * time.Second // глубина lead-проверки
+	MaxLeadDeviation  = 1 * time.Second  // допуск геометрии головы
+	RMSWindow         = 5 * time.Second  // окно RMS@45 c (пин владельца)
+	RMSAt             = 45 * time.Second
+)
+
+// VerifyAssembled — ЕДИНАЯ проверка собранного файла (инвариант ред. 3):
+//  1. RMS@45 c аудиодорожки 0:0 ≥ MinRMS — ловит «половина без звука» (root-cause 2).
+//     argv: ffmpeg -hide_banner -i {path} -map 0:a:0 -ss 45 -t 5 -f s16le -ar 8000 -ac 1 pipe:
+//     → audsync.RMSOfPCM.
+//  2. Ведущая тишина совпадает с ожидаемой геометрией: |measured − expectedLead| ≤ MaxLeadDeviation.
+//     argv: ffmpeg -hide_banner -i {path} -map 0:a:0 -t 15 -af silencedetect=noise=-50dB:d=0.2 -f null -
+//     (stderr; парс: первый silence_start ≤ 0.05 → lead = его silence_end; тишины с нуля нет → 0).
+//     expectedLead: обрезка (offset>0) → 0; добивка → |offset|.
+// Любой провал → *ErrSilentOutput (файл удаляет вызывающий — Task 10).
+func (d *Downloader) VerifyAssembled(ctx context.Context, path string, expectedLead time.Duration) error
+
+type ErrSilentOutput struct {
+	Path     string
+	Check    string // "rms@45s" | "lead"
+	Details  string // измеренное vs ожидаемое + одна строка stderr
+}
+func (e *ErrSilentOutput) Error() string
+```
+
+- [ ] **Step 1: failing hermetic тесты.**
+
+```go
+func TestParseLeadSilence(t *testing.T) {
+	// "silence_start: 0.0 … silence_end: 8.123" → 8.123s; "silence_start: 4.2…" → 0; пусто/мусор → 0.
+}
+func TestVerifyAssembledTolerance(t *testing.T) {
+	// fake runner: rms-вызов отдаёт звучащие байты, lead 0.4s, expected 0 → nil;
+	// lead 8s expected 0 → ErrSilentOutput{Check:"lead"}; rms тишина → {Check:"rms@45s"};
+	// expected 17s (добивка), lead 17.5s → nil.
+}
+```
+
+- [ ] **Step 2:** FAIL. **Step 3: реализация.** **Step 4:** PASS.
+- [ ] **Step 5: live:** фикcачи «3s тишина+тон» (FAIL по lead), «тон с 0» (nil), «добивка 2s» (nil при expected 2s) — `go test -tags live -run TestLiveVerifyAssembled -v ./internal/download/`.
+- [ ] **Step 6: gate + commit** `feat(download): assembled-file verification — RMS@45s + lead geometry (PR165b T8)`.
+
+---
+
+### Task 9: конфиг `download.audio_sync` + i18n
+
+**Files:**
+
+- Modify: `internal/config/config.go` (~118 структура, ~411 дефолты), `settings.example.toml` (~152), `locales/en.toml`, `locales/ru.toml`
+- Test: `internal/config/config_test.go`
+
+```go
 type Download struct {
 	MaxConcurrency int `toml:"max_concurrency"`
-	// AudioSync управляет автосинхронизацией дубляжей («кросс-корреляция
-	// M&E»): "ask" — промпт один раз на батч (дефолт), "yes" — всегда
-	// анализировать, "no" — никогда. Неизвестное значение деградирует в
-	// "ask" при загрузке (плюс строка в лог) — конфиг-опечатка не брюшит
-	// старт TUI.
+	// AudioSync управляет автосинхронизацией дубляжей: "ask" — промпт на
+	// батч (дефолт), "yes" — всегда, "no" — никогда. Неизвестное значение
+	// деградирует в "ask" при загрузке (строка в лог, старт не брюшится).
 	AudioSync string `toml:"audio_sync"`
 }
 ```
 
-i18n-ключи (новые, в ОБА файла; третий — состояние «метод не доказан», ред. 2):
+i18n-ключи (в ОБА файла):
 
 ```toml
 "download.sync_ask_title" = "Синхронизировать дубляжи по видео? (анализ ~15 с на пару)"
@@ -506,193 +713,24 @@ i18n-ключи (новые, в ОБА файла; третий — состоя
 "download.row_sync" = "синхронизация: {notes}"
 "download.sync_note_applied" = "{dub} {offset}с"
 "download.sync_note_uncertain" = "{dub}: нет уверенности"
-"download.sync_note_unreliable" = "{dub}: не применена (нет проверенного метода)"
+"download.sync_note_unavailable" = "{dub}: синхронизация недоступна (mkvmerge не установлен)"
 "download.sync_verdict" = "анализ синхронизации…"
 ```
 
-- [ ] **Step 1: failing test** (`config_test.go`): парс `audio_sync = "yes"` → "yes"; `audio_sync = "мусор"` → нормализация в "ask"; отсутствие ключа → дефолт "ask".
-- [ ] **Step 2:** FAIL. **Step 3:** поле + дефолт + `normalizeAudioSync` в load-пути; ключи в оба toml; `settings.example.toml`:
+`settings.example.toml` `[download]`: закомментированный `# audio_sync = "ask"` с комментарием (ask/yes/no; sync-файлы всегда .mkv через mkvmerge).
 
-```toml
-[download]
-# ...
-# Автосинхронизация дубляжей (кросс-корреляция M&E): ask — спросить
-# перед батчем (по умолчанию), yes — всегда, no — никогда.
-# audio_sync = "ask"
-```
-
-- [ ] **Step 4:** PASS. **Step 5: gate + commit** `feat(config): download.audio_sync ask|yes|no (PR165b T5)`.
+- [ ] **Step 1: failing test** (`audio_sync="yes"` → "yes"; `"мусор"` → "ask"; отсутствие → "ask"). **Step 2:** FAIL. **Step 3:** поле+дефолт+`normalizeAudioSync`; ключи; toml. **Step 4:** PASS.
+- [ ] **Step 5: gate + commit** `feat(config): download.audio_sync ask|yes|no (PR165b T9)`.
 
 ---
 
-### Task 6: применение сдвига — таблица методов Stage 0, оба билдера, isHLS
+### Task 10: tui — двухстадийный `downloadOne`, лестница деградации, отчёт
 
 **Files:**
 
-- Modify: `internal/download/mux.go` (AudioTrack, билдеры, таблица рецептов)
-- Modify: `internal/download/downloader.go` (CommandInput)
-- Test: `internal/download/mux_test.go` (argv-golden)
-
-**Interfaces:**
-
-```go
-// mux.go
-type SyncMethod string
-
-const (
-	SyncCopy   SyncMethod = "copy"   // -ss/-itsoffset + -c:a copy
-	SyncFilter SyncMethod = "filter" // -filter_complex + aac 256k
-)
-
-// syncRecipe — применитель для одной ячейки (тип источника × знак).
-type syncRecipe struct {
-	Method SyncMethod
-	Chain  string // для filter: "v2_async" | "v2_owner" | "plain_async" | "plain_plain" (§1.1)
-}
-
-// syncRecipeFor — ТАБЛИЦА, перенесённая из результатов Stage 0 (Task 1,
-// .sdd/pr165b-me-sync-verify.md): первенец ячейки; fallback=false → запасной метод.
-// Ячейка «none» (нет доказанных методов) → ok=false → сдвиг для трека НЕ применяется.
-func syncRecipeFor(isHLS bool, positive bool, fallback bool) (r syncRecipe, ok bool)
-
-func isHLS(rawURL string) bool // срезать query/fragment, ToLower, HasSuffix ".m3u8"
-// syncPerInputArgs: offset>0 → ["-ss", "17.042"]; offset<0 → ["-itsoffset", "0.958"]; |x|<0.001 → nil.
-func syncPerInputArgs(off float64) []string
-// filterSyncChain — цепочка по варианту chain (§1.1), inputIdx — индекс -i; ms = round(|off|*1000).
-//   v2_*:    "[N:a:0]asetpts=PTS-STARTPTS,{trim|delay},asetpts=PTS-STARTPTS{,aresample=async=1:first_pts=0}[aN]"
-//   plain_*: "[N:a:0]{trim|delay}{,aresample=async=1:first_pts=0}[aN]"
-func filterSyncChain(inputIdx int, off float64, chain string) string
-```
-
-```go
-// downloader.go
-type AudioTrack struct {
-	// ...существующие поля...
-	// Sync — вердикт анализа (nil = без сдвига; |Seconds|<0.001 флагов не порождает).
-	Sync *audsync.SyncOffset
-	// SyncFallback — ретрай-лестница: вместо первенца ячейки применить
-	// запасной метод (syncRecipeFor(..., fallback=true)). Ставит только ladder (Task 8).
-	SyncFallback bool
-}
-
-type CommandInput struct {
-	// ...существующие поля...
-	// AudioSync / AudioSyncFallback — то же для ОТДЕЛЬНОГО аудио legacy-пути.
-	AudioSync        *audsync.SyncOffset
-	AudioSyncFallback bool
-}
-```
-
-Изменения билдеров (на `buildMuxArgs`; video-only/audio-only не трогаются):
-
-```go
-// 1) ВХОДЫ: per-input sync строго перед СВОИМ -i (после headerArgs), ТОЛЬКО для copy-метода:
-for i, tr := range tracks {
-	args = append(args, headerArgs(tr.Source.Headers)...)
-	if r, ok := trackRecipe(tr); ok && r.Method == SyncCopy {
-		args = append(args, syncPerInputArgs(tr.Sync.Seconds)...)
-	}
-	args = append(args, "-i", tr.Source.URL)
-}
-// 2) ФИЛЬТР-ТРЕКИ: одна цепочка -filter_complex (все chains через ";"), мапы [aN]
-//    вместо N:a:0, per-stream кодек: "-c:a:N","aac","-b:a:N","256k".
-//    trackRecipe(tr) = syncRecipeFor(isHLS(tr.Source.URL), tr.Sync.Seconds > 0, tr.SyncFallback);
-//    ok=false → трек идёт БЕЗ флагов сдвига (ячейка none).
-// 3) Порядок -map сохраняется — disposition/metadata циклы без изменений.
-```
-
-Legacy-ветка `BuildCommand` (default): `in.Audio != nil && in.AudioSync != nil` — те же два режима через `syncRecipeFor(isHLS(...), sign, fallback)`; фильтр: `-filter_complex "[1:a:0]{chain}[a1]" -map 0:v -map [a1] -c:v copy -c:a aac -b:a 256k`.
-
-- [ ] **Step 1: failing argv-golden тесты.**
-
-```go
-func TestMuxCopyPathPositiveOffset(t *testing.T) { /* ... "-ss","17.042" перед -i прямого донора ... */ }
-func TestMuxCopyPathNegativeOffset(t *testing.T) { /* "-itsoffset","0.958" перед -i */ }
-func TestMuxFilterV2Positive(t *testing.T) {
-	// HLS-донор: "-filter_complex","[1:a:0]asetpts=PTS-STARTPTS,atrim=start=17.042,asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a1]",
-	// "-map","[a1]","-c:a:0","aac","-b:a:0","256k", НИКАКИХ -ss/-itsoffset.
-	// (Variant v2_async — только если Stage 0 сделал его первенцем/запасным ячейки; иначе соответствующий вариант.)
-}
-func TestMuxFilterPlainNegative(t *testing.T) { /* adelay=958:all=1 по варианту ячейки */ }
-func TestMuxMixedCopyAndFilter(t *testing.T) { /* трек 0 copy+(-ss), трек 1 фильтр [a2]; один -filter_complex */ }
-func TestMuxNoneCellDropsSync(t *testing.T) { /* ячейка none → argv идентичен беcсдвиговому, лог-условие */ }
-func TestMuxFallbackSwitchesMethod(t *testing.T) { /* SyncFallback=true → запасной метод ячейки */ }
-func TestMuxZeroOffsetNoFlags(t *testing.T) { /* Sync{Seconds: 0.0004} → argv идентичен сегодняшнему */ }
-func TestLegacySeparateAudioSync(t *testing.T) { /* AudioSync: copy и фильтр-режимы */ }
-func TestIsHLSTable(t *testing.T) {
-	// "http://x/a.m3u8"→true; ".../index.m3u8?tok=1#frag"→true; ".../A.M3U8"→true;
-	// "http://x/a.mp4"→false; "http://x/m3u8.foo"→false.
-}
-```
-
-ВАЖНО для исполнителя: конкретные варианты фильтр-цепочек в golden-тестах берутся ИЗ заполненной таблицы Task 1 (какая ячейка каким методом первенствует) — тесты кодируют РЕЗУЛЬТАТ пробы, а не предположение.
-
-- [ ] **Step 2:** FAIL. **Step 3:** реализация по эскизу + таблица из Task 1. **Step 4:** PASS (весь `go test -race ./internal/download/`).
-- [ ] **Step 5: gate + commit** `feat(download): stage-0 proven sync recipes — copy/filter builders, isHLS (PR165b T6)`.
-
----
-
-### Task 7: самопроверка вывода — `VerifyAudioStart` + типизированная ошибка
-
-**Files:**
-
-- Modify: `internal/download/downloader.go` (метод верификатора)
-- Test: `internal/download/verify_test.go` (hermetic, парсер), `internal/download/live_verify_test.go` (тег `live`, реальный ffmpeg)
-
-**Interfaces:**
-
-```go
-// downloader.go
-const (
-	// LeadSilenceWindow — глубина самопроверки (первые N секунд вывода).
-	LeadSilenceWindow = 15 * time.Second
-	// MaxLeadDeviation — допуск «ведущая тишина vs ожидаемая геометрия» (инвариант ред. 2).
-	MaxLeadDeviation = 1 * time.Second
-)
-
-// VerifyAudioStart измеряет ведущую тишину аудио-дорожки trackIdx файла path и
-// сверяет с ожидаемой геометрией expectedLead: |measured − expected| ≤ MaxLeadDeviation.
-// expectedLead: обрезка (offset>0) → 0; добивка (offset<0) → |offset|.
-// argv: ffmpeg -hide_banner -i {path} -map 0:a:{trackIdx} -t 15 -af silencedetect=noise=-50dB:d=0.2 -f null -
-// (вывод в stderr — читается существующим швом d.run). Парс: первый silence_start ≤ 0.05 →
-// ведущая тишина = его silence_end; тишины в начале нет → 0.
-func (d *Downloader) VerifyAudioStart(ctx context.Context, path string, trackIdx int, expectedLead time.Duration) error
-
-// ErrSilentLead — двойной провал самоправерки: молчащий файл НЕ отдаётся
-// (вывод удалён вызывающим lado лестницы). Диагностика обеих попыток — в Attempt.
-type ErrSilentLead struct {
-	Path     string
-	Attempts []string // "copy: lead=8m12s (expected 0s)" и т.п.
-}
-func (e *ErrSilentLead) Error() string
-```
-
-- [ ] **Step 1: failing hermetic тесты (парсер + допуск).**
-
-```go
-func TestParseLeadSilence(t *testing.T) {
-	// stderr c "silence_start: 0.0 … silence_end: 8.123" → 8.123s;
-	// "silence_start: 4.2 …" (тишина НЕ с нуля) → 0; пустой stderr → 0; мусор → 0.
-}
-func TestVerifyAudioStartTolerance(t *testing.T) {
-	// expected 0s, measured 8.123s → ошибка; measured 0.4s → nil;
-	// expected 17s (добивка), measured 17.5s → nil; measured 3s → ошибка.
-}
-```
-
-- [ ] **Step 2:** FAIL. **Step 3:** реализация парсера + метода (ffmpeg-зависимый прогон — в live-тесте).
-- [ ] **Step 4: live-тест (тег `live`):** собрать фиксачу «3s тишина + тон» (mkv) → VerifyAudioStart(expected 0) → FAIL; фиксача «тон с 0 c» → nil; фиксача «добивка 2s» (тишина 2s + тон) → expected 2s → nil, expected 0 → FAIL.
-- [ ] **Step 5: gate + commit** `feat(download): audio-lead self-verification, ErrSilentLead (PR165b T7)`.
-
----
-
-### Task 8: интеграция в `downloadOne` — анализ, лестница ретраев, отчёт
-
-**Files:**
-
-- Modify: `internal/tui/real.go` (realCore: analyzer + verifier поля; `downloadOne`; `realDownload.Download`)
+- Modify: `internal/tui/real.go` (realCore: analyzer, verifier-швы; `downloadOne`; `runDownload` — wire progress)
 - Modify: `internal/tui/services.go` (DownloadService.Download сигнатура; DownloadTask.AudioSync)
-- Modify: `internal/tui/download_flow.go` (runForegroundDownload: sync-заметки; рендер суффикса)
+- Modify: `internal/tui/download_flow.go` (SyncNote; renderDownloadSettle суффикс)
 - Test: `internal/tui/pr165b_me_sync_test.go`
 
 **Interfaces:**
@@ -701,103 +739,74 @@ func TestVerifyAudioStartTolerance(t *testing.T) {
 // services.go
 type DownloadTask struct {
 	// ...существующие поля...
-	// AudioSync — решение «анализировать ли пары» для этой задачи
-	// (конфиг + промпт, проставляется на батче в startRangeDownload).
+	// AudioSync — решение «анализировать ли» (конфиг + промпт, Task 11).
 	AudioSync bool
 }
 
 type DownloadService interface {
-	// Download возвращает также sync-заметки пар этой серии
-	// (пусто = анализ не запускался/ничего не нашёл).
 	Download(ctx context.Context, task DownloadTask) (path string, dropped []string, sync []SyncNote, err error)
-	// ...
+	Submit(task DownloadTask)
+	ActiveBanner() string
 }
 
-// download_flow.go — заметка одной пары для строки отчёта.
+// download_flow.go
 type SyncNote struct {
-	Dub      string  // имя дубляжа (без provider-тега)
-	Seconds  float64
-	Kind     string  // "applied" | "uncertain" | "unreliable" (ключи i18n sync_note_*)
+	Dub     string
+	Seconds float64
+	Kind    string // "applied" | "uncertain" | "unavailable"
 }
 
-// real.go — швы (по образцу dl/prober); nil = фича выключена.
+// real.go — швы (nil = фича выключена; продакшн: audsync.New + real.dl):
 type audioSyncAnalyzer interface {
 	Reference(ctx context.Context, video contracts.VideoSource) (audsync.Reference, error)
 	Offset(ctx context.Context, ref audsync.Reference, dub contracts.VideoSource) (audsync.SyncOffset, error)
 }
-type leadVerifier interface {
-	VerifyAudioStart(ctx context.Context, path string, trackIdx int, expectedLead time.Duration) error
+type assembleVerifier interface {
+	VerifyAssembled(ctx context.Context, path string, expectedLead time.Duration) error
 }
-// продакшн: real.analyzer = audsync.New(audsync.Options{FFmpeg: "ffmpeg"}); real.verifier = real.dl
 ```
 
-Порядок в `downloadOne` (после resolve video/tracks, до индексации):
+Порядок в `downloadOne`:
 
-1. Gate: `task.AudioSync && c.analyzer != nil`, иначе — как сегодня.
-2. Сбор eligible-пар: (a) marked-set: треки с `providerOfTrackKey(key) != task.ProviderID`; (b) legacy: `input.Audio != nil` и провайдер отдельного аудио ≠ `task.ProviderID`.
-3. Референс-цепочка (research §6.2): `Reference(video)`; `ErrNoReference` и eligible ≥ 2 → первый eligible-дубляж как референс; иначе skip с warn-логом.
-4. Для каждого eligible: `Offset(...)`:
-   - err → `SyncNote{Kind:"uncertain"}` + warn-лог;
-   - уверенный ноль (|Seconds| < 0.001) → без заметки, info-лог «already in sync»;
-   - иначе → рецепт ячейки `syncRecipeFor(...)`; `ok=false` → флаги НЕ ставятся, `SyncNote{Kind:"unreliable"}` + warn-лог; `ok=true` → `track.Sync = &off`, `SyncNote{Kind:"applied"}`, info-лог (offset, confidence, метод). Индекс первого sync-трека и его expectedLead (0 при >0, |off| при <0) запоминаются для верификации.
-5. **Лестница (инвариант):** `c.dl.Download(ctx, input)` → если был хоть один sync-вход с методом → `c.verifier.VerifyAudioStart(ctx, outPath, trackIdx, expectedLead)`:
-   - nil → готово;
-   - err и у ячейки есть запасной метод → `input` c `SyncFallback=true` (все sync-входы) → ВТОРОЙ `c.dl.Download` → повторная `VerifyAudioStart`:
-     - nil → готово (лог «recovered via fallback method»);
-     - err → `os.Remove(outPath)` + вернуть `&download.ErrSilentLead{Path, Attempts:[первая, вторая]}` — молчащий файл НЕ отдаётся;
-   - err и запасного метода нет → `os.Remove(outPath)` + `ErrSilentLead{Attempts:[первая]}`.
-6. Вернуть `sync []SyncNote`; индексация — без изменений (формат EntryInput прежний).
+1. Gate `task.AudioSync && c.analyzer != nil`; resolve video + треки как сегодня.
+2. Референс-цепочка: `Reference(video)`; `ErrNoReference` и доноров ≥ 2 → первый донор-референс; иначе skip.
+3. Офсеты: `Offset(ref, donor)` на каждого cross-provider донора; err → SyncNote{uncertain}; ноль → без заметки (info «already in sync»).
+4. Развилка §1.1: ни одного офсета ИЛИ mkvmerge не найден (`exec.LookPath(c.dl.mkvmerge)` — шов `mkvmergeLooker` для тестов) → сегодняшний ffmpeg-путь + SyncNote{uncertain|unavailable}; иначе — сборочный путь:
+   - Stage A: `buildVideoSoloArgs` → `c.dl.run` → `video.tmp.mkv`;
+   - Stage B: на каждого донора: `decodeWAVArgs` → `ShiftWAVFile(wav, wav.sh, FramesFor(off.Seconds, PipelineRate))` → `encodeM4AArgs`; у no-confidence доноров frames=0;
+   - главы: `ConvertChaptersToMkv(chaptersFile, outDir)` (ffmeta temp уже резолвится сегодняшним кодом);
+   - Stage C: `RunAssemble(AssembleInput{…, OutputPath: TempPathFor(outPath)})`; default-ремонт как в `resolveAudioTracks`;
+   - Stage D: `VerifyAssembled(out.part.mkv, expectedLead)` — expectedLead от ПЕРВОГО трека с офсетом (0 при обрезке, |off| при добивке); провал → `os.Remove(out.part.mkv)` + `*download.ErrSilentOutput`;
+   - финал: `os.Rename` (существующий контракт TempPathFor/атомарности); удалить все `.tmp`-промежуточные (defer, best-effort — форму chapters-cleanup downloader.go:964);
+   - имя/индекс: расширение `mkv`; правило индекса прежнее (legacy → UpsertEntry, marked-set → skip).
+5. Manager progress: `runDownload` перестаёт игнорировать progress-колбэк — 10 (видео готово) / 30 (аудио готово) / 90 (сборка готова) / 100. Foreground-строки не меняются.
+6. Вернуть `sync []SyncNote`; рендер суффикса строки — `renderSyncSuffix` (как ред. 2: «(синхронизация: DUB +17.042с, DUB2: нет уверенности)»); background — только логи (решение владельца Q1).
 
-Отчёт (foreground): `runForegroundDownload` принимает 4-е возвращаемое; `downloadEpisodeReport.Sync []SyncNote`; в `renderDownloadSettle` после dropped-суффикса:
-
-```go
-if sfx := renderSyncSuffix(r.Sync); sfx != "" {
-	fmt.Fprintf(&b, " (%s)", sfx) // «синхронизация: DUB +17.042с, DUB2: нет уверенности»
-}
-// renderSyncSuffix: i18n.T("download.row_sync", {notes: strings.Join(notes, ", ")})
-// applied:   fmt.Sprintf("%+.3f", sec) в "download.sync_note_applied"
-// uncertain: "download.sync_note_uncertain"; unreliable: "download.sync_note_unreliable"
-```
-
-Background: заметки в лог (runDownload игнорирует возврат; downloadOne уже логирует всё); строки очереди — без суффикса (OWNER QUESTIONS #1).
-
-- [ ] **Step 1: failing tests.**
-  - fake analyzer (заданный SyncOffset / ошибка) + fake mediaDownloader (argv-капчер, может «писать» файлы) + fake leadVerifier.
-  - Пин «молчащий вывод → ретрай»: fake verifier на 1-й вызов возвращает ошибку, на 2-й nil; assert: второй Download получил SyncFallback=true, файл отfaked как хороший, путь возвращён.
-  - Пин «двойной провал»: verifier всегда ошибку → assert: второй вызов был, файл УДАЛЁН (fake dl пишет файл — тест проверяет отсутствие), ошибка `*download.ErrSilentLead` с 2 Attempts, downloadOne вернул её как err.
-  - Пин «нет запасного → сразу ErrSilentLead с 1 Attempts».
-  - Пин «верификация только при применённом сдвиге»: без sync verifier НЕ вызывается.
-  - Пин «ячейка none»: трек без флагов, SyncNote unreliable, verifier не вызван.
-  - Строка отчёта: «синхронизация: DUB +17.042с»; «нет уверенности»; «не применена (нет проверенного метода)».
-  - offline-index: legacy-путь с sync создаёт запись индекса как сегодня.
-- [ ] **Step 2:** FAIL. **Step 3:** реализация п.1–6 + правка фейка `droppingDownload` (pr165_download_modes_test.go:415) под новую сигнатуру. **Step 4:** PASS весь `go test -race ./internal/tui/`.
-- [ ] **Step 5: gate + commit** `feat(tui): sync ladder in downloadOne — verify, fallback retry, ErrSilentLead (PR165b T8)`.
+- [ ] **Step 1: failing tests (fakes: analyzer, mediaDownloader/runner-капчер, verifier, mkvmergeLooker).**
+  - Пин «оффсет есть → сборочный путь»: последовательность argv — video solo, WAV-декод донора (без -ss), m4a-кодек, mkvmerge с `--no-audio`; расширение .mkv.
+  - Пин «ни одного офсета → сегодняшний ffmpeg-путь» (argv идентичен текущему mux) + SyncNote{uncertain}.
+  - Пин «mkvmerge отсутствует → ffmpeg-путь» + SyncNote{unavailable}.
+  - Пин «verify fail → файл удалён + ErrSilentOutput наверх»; «verify ok → rename, temps удалены».
+  - Пин «донор без уверенности в собираемом эпизоде → frames=0, всё равно m4a».
+  - Пин индекса: legacy-синхронизированный файл индексируется как сегодня; marked-set — нет.
+  - Строка отчёта: applied/uncertain/unavailable рендер.
+- [ ] **Step 2:** FAIL. **Step 3:** реализация + фейк `droppingDownload` (pr165_download_modes_test.go:415) под новую сигнатуру. **Step 4:** PASS `go test -race ./internal/tui/`.
+- [ ] **Step 5: gate + commit** `feat(tui): two-stage sync download — video solo, PCM shift, mkvmerge assembly (PR165b T10)`.
 
 ---
 
-### Task 9: TUI-промпт `ask` + проводка на батч
+### Task 11: TUI-промпт `ask` + проводка на батч
 
 **Files:**
 
-- Modify: `internal/tui/session.go` (startRangeDownload, sync-меню), `internal/tui/app.go` (Deps.DownloadSync)
-- Modify: `internal/tui/real.go` (сборка Deps: снапшот настройки)
+- Modify: `internal/tui/session.go`, `internal/tui/app.go` (Deps.DownloadSync), `internal/tui/real.go` (wiring)
 - Test: `internal/tui/pr165b_sync_ask_test.go`
 
-**Interfaces / поведение:**
+**Interfaces / поведение (без изменений от ред. 2):**
 
 ```go
-// app.go — снапшот настройки для сессий (zero value "" ведёт себя как "ask").
-type Deps struct { /* ... */ DownloadSync string }
-
-// session.go — новые поля:
-syncAskMode   string // stash mode/strict на время промпта
-syncAskStrict bool
-// syncChoice *bool — НОВЫЙ параметр startRangeDownload: nil = решение не принято
-// (можно спросить), &true/&false = решено (промпт и повторное чтение конфига не нужны).
-
-// Все существующие вызовы (session.go:2856 и :2986) переходят на nil:
-//   s.startRangeDownload(mode, strict, nil)
-
+// app.go: type Deps struct { /* ... */ DownloadSync string } // "" ведёт себя как "ask"
+// session.go: поля syncAskMode string, syncAskStrict bool; параметр syncChoice *bool:
 func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice *bool) (Screen, tea.Cmd) {
 	content := s.downloadContentMode
 	if content == "" { content = "video_audio" }
@@ -808,37 +817,33 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 			f := false; syncChoice = &f
 		case cfg == "yes":
 			f := true; syncChoice = &f
-		default: // "ask" (и "" как ask): stash вызова и промпт
+		default: // ask: stash + да/нет-меню (форма dub-меню #164)
 			s.syncAskMode, s.syncAskStrict = mode, strict
-			s.openSyncAskMenu() // PinList: sync_choice_yes / sync_choice_no, форма dub-меню #164
+			s.openSyncAskMenu()
 			return s, nil
 		}
 	}
 	ask := *syncChoice
-	// ...построение tasks c AudioSync: ask (иначе false) и dispatch
-	// foreground/background — без изменений относительно сегодняшнего кода.
+	// tasks: AudioSync: ask; dispatch foreground/background — как сегодня.
 }
-
-// handleSyncAskKey: «Да» → choice=true; «Нет» и Esc/Back → choice=false (батч
-// продолжается БЕЗ синхронизации — это НЕ отмена загрузки); затем
-// return s.startRangeDownload(s.syncAskMode, s.syncAskStrict, &choice).
+// handleSyncAskKey: «Да» → true; «Нет»/Esc → false (батч продолжается БЕЗ sync — не отмена);
+// затем startRangeDownload(stash, stash, &choice). Существующие вызовы (session.go:2856, :2986) → nil.
 ```
 
-Гейт одноразовый по построению: промпт открывается только при `syncChoice == nil`, а обработчик всегда отвечает явным значением — re-entry loop невозможен. Режимы `video_only`/`audio_only` и одиночная сессия (`len(s.parts) < 2`) гейт не проходят вовсе.
-
-- [ ] **Step 1: failing tests:** (a) config ask + merged-сессия → задачи с AudioSync true после «Да», false после «Нет»; (b) config yes/no → меню не открывается; (c) одиночная сессия → гейт не срабатывает; (d) video_only-батч → AudioSync false; (e) strict-путь через dub-меню корректно возобновляется (strict восстановлен из stash).
-- [ ] **Step 2:** FAIL. **Step 3:** реализация. **Step 4:** PASS. **Step 5: gate + commit** `feat(tui): audio_sync ask prompt on download batches (PR165b T9)`.
+- [ ] **Step 1: failing tests:** (a) ask+merged → «Да» AudioSync true / «Нет» false; (b) yes/no → меню нет; (c) одиночная сессия → гейт мимо; (d) video_only → false; (e) strict-restore через dub-меню.
+- [ ] **Step 2:** FAIL. **Step 3:** реализация. **Step 4:** PASS.
+- [ ] **Step 5: gate + commit** `feat(tui): audio_sync ask prompt on download batches (PR165b T11)`.
 
 ---
 
-### Task 10: финальный gate и живые пробы
+### Task 12: финальный gate и живые доказательства
 
-- [ ] **Step 1: полный gate:** `gofmt -l .` (пусто) → `go vet ./...` → `golangci-lint run` → `go test -race -count=1 ./...` → `make build-matrix`. 0 ошибок/предупреждений.
-- [ ] **Step 2: live-пробы (тег `live`, по конвенции live_*_test.go):**
-  - `TestLiveMeSyncRealPair` (`internal/tui/live_pr165b_test.go`): реальная пара (эпизод видео + дубляж с ручным сдвигом владельца из его таблицы, напр. 17.042) → assert: found ≈ 17.042 (±0.125, ITU), WindowsAgree ≥ 2, confidence ≥ 1; **и отдельно**: если found РАЗОШЁЛСЯ с ручным значением — тест НЕ падает, но пишет обе величины в лог (см. OWNER QUESTIONS #2 и риски).
-  - `TestLiveMeSyncMuxEndToEnd`: полный mux с sync через сборку `downloadOne`-подобную → `VerifyAudioStart` PASS + `ffprobe`: длительность аудио ≈ видео − offset (обрезка).
-  - Прогон владельцем: `go test -tags live -run 'TestLiveMeSync' -count=1 -v ./internal/tui/`.
-- [ ] **Step 3:** результаты live-прогонов — в `.sdd/pr165b-me-sync-verify.md`; коммит `test(tui): live me-sync proofs (PR165b T10)`.
+- [ ] **Step 1: полный gate:** `gofmt -l .` → `go vet ./...` → `golangci-lint run` → `go test -race -count=1 ./...` → `make build-matrix`. 0/0.
+- [ ] **Step 2: live (тег `live`, `internal/tui/live_pr165b_test.go`):**
+  - `TestLiveMeSyncRealPair`: реальная пара (видео+дубляж с ручным сдвигом владельца +17.042): found ≈ 17.042 ± 0.125, WindowsAgree ≥ 2, confidence ≥ 1; полный пайплайн (solo → wav → shift → m4a → mkvmerge) → VerifyAssembled PASS; **контроль владельца**: `mpv --no-resume-playback out.mkv` с 00:00 — звук с первой секунды и на 45-й (ручной шаг, результат — в `.sdd/pr165b-me-sync-verify.md`).
+  - `TestLiveMeSyncAssemblySpeed`: замер Stage A+B+C на 24-мин фикcаче → скорость vs realtime в verify.md (§1.3, информационно).
+  - Прогон: `go test -tags live -run 'TestLiveMeSync' -count=1 -v ./internal/tui/ ./internal/audsync/ ./internal/download/`.
+- [ ] **Step 3:** результаты в verify.md; коммит `test: live me-sync proofs — real pair, assembly speed, owner playback check (PR165b T12)`.
 
 ---
 
@@ -846,45 +851,46 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 
 | Слой | Что | Где | Метод |
 |---|---|---|---|
-| stage 0 | 20-прогонная матрица методов × источников × знаков: звук-с-начала, позиция тона ±0.3, start_time; геометрия знака | `.sdd/pr165b-me-sync-verify.md` | ffmpeg-прогоны по командам Task 1 |
-| unit, математика | точный лаг 12345/98765; несвязанные → prominence < 20; nextPow2 | correlate_test.go | синтетика |
-| unit, вердикт | знак (+17.042/−0.958/6.25/0.5 в ±0.05); тишина → ErrNoConfidence; диалог-only не голосует; медиана; snap; расписание | analyze_test.go | синтетика |
-| unit, exec | argv декода; s16le→float64; duration/fps-парс; бюджет; ErrNoReference | pcm/probe/offset_test.go | fake execFunc |
-| live, замкнутый цикл | измерил → применил первенцем ячейки → перемерил ≈ 0 (пик ~0 после применения) | live_loop_test.go | ffmpeg + Analyzer |
-| unit, конфиг | parse/нормализация/дефолт audio_sync | config_test.go | toml |
-| unit, применение | argv-golden: copy ±; фильтр по доказанным вариантам; mixed; none-ячейка; fallback-переключение; \|off\|<0.001 → без флагов; legacy; isHLS | mux_test.go | golden argv |
-| unit, самопроверка | парсер lead; допуск \|measured−expected\| ≤ 1 c | verify_test.go | hermetic |
-| live, самопроверка | реальные mkv: тишина-голова FAIL / тон с 0 nil / добивка expected-зависимо | live_verify_test.go | ffmpeg-фиксачи |
-| unit, лестница | silent → ретрай fallback; двойной провал → удаление файла + ErrSilentLead(2); нет запасного → 1 Attempt; без sync — verify не зовётся; none-ячейка | pr165b_me_sync_test.go | fakes |
-| unit, TUI ask | матрица config×сессия×режим; strict-restore | pr165b_sync_ask_test.go | screen-тесты |
-| live | реальная пара: found vs ручная таблица владельца (расхождение НЕ падение, но в лог); e2e mux + verify + ffprobe | live_pr165b_test.go | `-tags live` |
+| unit, sysdeps | required-тройка и порядок; argv планов с mkvtoolnix(-cli); follow-up; manual-ключи | sysdeps_test.go | обновлённые пины |
+| unit, математика | точный лаг; несвязанные → prom < 20; nextPow2 | correlate_test.go | синтетика |
+| unit, вердикт | знак (+17.042/−0.958/6.25/0.5 ±0.05); тишина → ErrNoConfidence; консенсус/медиана; snap; расписание; RMSOfPCM | analyze_test.go | синтетика |
+| unit, exec | argv анализа (8k моно); argv пайплайна (48k стерео WAV, форс, без -ss); m4a-кодек; duration/fps; бюджет; ErrNoReference | pcm/probe/offset_test.go | fake execFunc |
+| unit, WAV/сдвиг | RIFF-парсер: 44-байтный, 78-байтный LIST/INFO (кейс владельца), pad-байт, отказы; ShiftWAVFile ±кадры точные размеры/контент; FramesFor | wav/shift_test.go | рукописные RIFF |
+| live, замкнутый знак | измерил +3 → сдвинул → m4a → перемерил ≈ 0 | live_loop_test.go | ffmpeg |
+| live/hermetic, fMP4 | discontinuous HLS: сквозной декод без дыр; окна за границей деградируют честно | discontinuity_test.go, live | синтетический HLS |
+| unit, сборка | argv пины владельца (одна/две дорожки, главы, title); video-solo; exit-коды 0/1/2; конвертер глав | assemble/chapters_mkv_test.go | golden argv |
+| unit, верификация | lead-парсер; допуск геометрии; RMS-гейт; ErrSilentOutput | verify_test.go | hermetic |
+| live, верификация | реальные mkv: тишина-голова FAIL; тон с 0 nil; добивка expected-зависимо | live_verify_test.go | ffmpeg-фиксачи |
+| unit, downloadOne | развилка §1.1 (все ветки); последовательность стадий; verify-fail → удаление+ошибка; индекс; SyncNote-рендер | pr165b_me_sync_test.go | fakes |
+| unit, TUI ask | матрица config×сессия×режим; strict-restore | pr165b_sync_ask_test.go | screen |
+| live | реальная пара +17.042: полный пайплайн + VerifyAssembled + mpv-контроль владельца; speed-замер | live_pr165b_test.go | `-tags live` |
 
-## 3. Оценки (ред. 2)
+## 3. Оценки (ред. 3)
 
-| Область | Новые/изменённые LOC (с тестами) | Файлы |
+| Область | LOC (код+тесты) | Файлы |
 |---|---|---|
-| Stage 0 проба | ~0 кода (протокол ~200 строк md) | `.sdd/pr165b-me-sync-verify.md` |
-| internal/audsync | ~520 кода + ~480 тестов | audsync.go, correlate.go, windows.go, analyze.go, exec.go, pcm.go, probe.go + 5 test-файлов (новые) |
-| internal/download | ~230 кода + ~340 тестов | mux.go, downloader.go, mux_test.go, verify_test.go, live_verify_test.go |
-| internal/tui | ~270 кода + ~340 тестов | real.go, services.go, download_flow.go, session.go, app.go, pr165b_*_test.go, droppingDownload-фейк |
-| config + i18n + toml | ~30 кода + ~60 тестов + ~16 строк toml | config.go, config_test.go, settings.example.toml, locales/{ru,en}.toml |
-| deps/notices | ~10 строк | go.mod, go.sum, THIRD-PARTY-NOTICES.md |
-| **итого** | **~2250 LOC** | 12 изменённых + ~14 новых |
+| sysdeps | ~40 + ~120 | sysdeps.go, plan.go, 2 test-файла, локали deps.manual_* |
+| audsync детекция | ~560 + ~500 | audsync.go, correlate.go, windows.go, analyze.go, exec.go, pcm.go, probe.go + тесты |
+| audsync WAV/сдвиг | ~160 + ~240 | wav.go, shift.go + тесты |
+| download сборка+верификация | ~280 + ~440 | assemble.go, chapters_mkv.go, verify.go + тесты |
+| tui двухстадийный+ask | ~320 + ~420 | real.go, services.go, download_flow.go, session.go, app.go + тесты |
+| config + i18n + toml | ~30 + ~60 + ~20 строк | config.go, settings.example.toml, locales |
+| deps/notices | ~10 | go.mod, go.sum, THIRD-PARTY-NOTICES.md |
+| **итого** | **~2740** | 14 изменённых + ~17 новых |
 
-## 4. Риски и честные следствия отказа владельца
+## 4. Риски
 
-1. **Ручная таблица сдвигов владельца может не совпасть с измерениями коррелятора.** Его значения получены eyeballing'ем на конкретных релизах и применялись СЛОМАННЫМ методом — нельзя исключать, что часть «сдвигов» была скомпенсирована обратным знаком или вообще неверно измерена. Следствие: v1 считает источник истины пару «коррелятор на фактических источниках в момент скачивания»; ручная таблица — только земля для live-сверки (Task 10: расхождение пишется в лог, не падение). Согласование — OWNER QUESTIONS #2.
-2. **Направление применения могло быть частью поломки владельца** (обрезал не тот конец). Защита: геометрия знака подтверждается дважды — фиксачами Stage 0 (Task 1, Step 2) и замкнутым «измерил → применил → перемерил ≈ 0» (Task 4, Step 5). До обоих — код применения не пишется.
-3. **Ни один метод может не доказаться для какой-то ячейки** — тогда эта ячейка честно не синхронизируется (`none`), инвариант не нарушается, пользователь видит «не применена».
-4. **Пороги детекции не откалиброваны на живых релизах** (MinRMS=100, MinProminence=20, ±80 мс) — стартовые; константы экспортированы; live-проба сверяет.
-5. **Мульти-трековая верификация**: самопроверка покрывает ПЕРВЫЙ sync-трек вывода; катастрофа на втором-третьем треке не ловится в v1 (документировано; лог per-track остаётся).
-6. **Дрейф (разные fps релизов) вне скоупа v1** — константа применяется честно; будущее — регрессия по якорям.
-7. **Сигнатурный ripple DownloadService.Download** (+1 возвращаемое): один прод-имплементор + один тестовый фейк (`droppingDownload`).
-8. **AAC-прайминг ±21–23 мс** гуляет старт трека: snap глушит; допуск верификации 1 c покрывает с запасом.
-9. **Лестница удваивает цену провального mux** (2 прохода + 2 silencedetect): редкий путь (нормальный — 1 mux + 1 проверка ≤ 15 c декода).
-10. **golangci-lint на exec-вызовы**: паттерн `//nolint:gosec // bin/args are config-derived` (downloader.go:221) повторить с той же мотивацией.
+1. **Доступность mkvmerge**: новый внешний депенденси. Митигировано доктриной sysdeps (детект/промпт/non-TTY/never-abort) + деградацией §1.1; риск — пользователь в отказе получает несинхронизированные файлы без явного красного флага: строка отчёта «синхронизация недоступна» + стартовый notice.
+2. **Разброс версий mkvmerge**: флаг `--default-track-flag` — современное имя (mkvtoolnix ≥ 54, 2021; в distro-репо давно). Решение (без probe-версии, YAGNI): пол `mkvtoolnix ≥ 54` документируется; незнакомый флаг = exit 2 = typed failure с stderr. (**Veto-able design call** — если нужна поддержка старых дистров, добавить `--version`-пробу в sysdeps.)
+3. **Диск/RAM пайплайна**: промежуточный WAV донора ≈ 550 MB на 24 мин (48 кГц стерео s16le) + m4a ~120 MB; ShiftWAVFile файл-в-файл (RAM-flat). Пики ~0.7 GB на донора, очистка best-effort deferred. При жалобах на диск — будущая оптимизация: потоковый shift через pipe (ffmpeg→shift→m4a без wav на диске).
+4. **fMP4-дисконтинуити в анализе**: входной `-ss` по нелинейному таймлайну может дать окно не с того места → консенсус ≥2/3 поглощает; закрыто тестами Task 6 и живым донором Task 12. В применении дефект не воспроизводим (PCM-декод + mkvmerge оба иммунны — §1.3).
+5. **Скорость сборки**: оценка 10-20× realtime (ремюкс без перекодирования); критерий владельца «realtime, если успевает» выполняется; замер Task 12 фиксирует факт. Худший случай (медленный HDD) — «1× realtime» на эпизод, приемлемо по директиве.
+6. **Пороги детекции не откалиброваны на живых релизах** (MinRMS, MinProminence, ±80 мс — стартовые): константы экспортированы; live-проба сверяет с ручным значением владельца.
+7. **Сигнатурный ripple DownloadService.Download** (+sync): один прод-имплементор + фейк `droppingDownload`.
+8. **Мульти-донорная верификация**: VerifyAssembled проверяет дорожку 0:a:0 (первый sync-трек); катастрофа на второй дорожке не ловится в v1 (лог per-track остаётся).
+9. **Контейнер синхронизированных файлов всегда .mkv** (в т.ч. одиночный дубляж, который раньше давал .mp4) — следствие mkvmerge-архитектуры владельца; отражено в example.toml и строках отчёта. (**Veto-able design call.**)
+10. **AAC-прайминг ±21–23 мс**: snap глушит; допуск верификации 1 c покрывает с запасом.
 
 ## 5. OWNER QUESTIONS
 
-1. **Background-режим без видимых sync-строк:** очередь печатает «фон» до анализа; применённые сдвиги в v1 — только в diagnostics-лог (и сам файл). Достаточно, или нужен post-settle канал менеджера (событие с заметкой) — отдельная маленькая задача?
-2. **Расхождение с ручной таблицей:** если live-проба покажет, что коррелятор меряет НЕ то, что ваша ручная таблица (после того как применение починено и проверено) — таблица перемеряется коррелятором и источник истины переходит к нему. Подтверждаете такой порядок?
+Открытых вопросов **не осталось**: Q1 (background → diagnostics-only) принят; Q2 аннулирован пивотом (коррелятор — единственный источник истины; ручной таблицы для будущих загрузок нет). Два дизайн-решения помечены в рисках как **veto-able** (пол #2: без `--version`-пробы mkvmerge; пол #9: sync-файлы всегда .mkv) — возражение в любой момент меняет одну строчку.

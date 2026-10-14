@@ -31,8 +31,9 @@ func pr165PickerSession(t *testing.T) *sessionScreen {
 			episodes: testEpisodeSet(),
 			langs:    map[string]string{"animego": "ru", "anilib": "ja"},
 		},
-		Playback: &fakePlayback{},
-		Download: &fakeDownload{},
+		Playback:     &fakePlayback{},
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
 	}
 	group := []contracts.SearchResult{
 		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
@@ -331,8 +332,9 @@ func TestPR165PerEpisodeAudioDegradation(t *testing.T) {
 				"[animevib] Vib":    {Links: map[string]contracts.VideoSource{"720": {URL: "x-vib"}}},
 			},
 		},
-		Download: &fakeDownload{},
-		Log:      testLogger(),
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
+		Log:          testLogger(),
 	}
 	group := []contracts.SearchResult{
 		{Title: "Тайтл", URL: "u1", SourceID: "animego"},

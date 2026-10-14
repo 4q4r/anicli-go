@@ -205,8 +205,11 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		Health:   &realHealth{registry: registry, timeout: settings.Network.ConnectTimeout},
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
 		Download: &realDownload{manager: manager, core: real},
-		Buffered: real.buffered,
-		Metadata: realMetadata{manager: metaManager},
+		// PR165b: the download batch's sync gate reads the
+		// [download] audio_sync snapshot.
+		DownloadSync: settings.Download.AudioSync,
+		Buffered:     real.buffered,
+		Metadata:     realMetadata{manager: metaManager},
 		// The per-provider fan-out ceiling (network.search_timeout,
 		// default 30s — PR24).
 		SearchTimeout: settings.Network.SearchTimeout,

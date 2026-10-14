@@ -361,6 +361,10 @@ type Deps struct {
 	// makes the screen surface its honest unavailability note.
 	Seasonal SeasonalService
 	Download DownloadService
+	// DownloadSync is the PR165b [download] audio_sync snapshot
+	// ("ask" | "yes" | "no"; "" behaves as "ask") — the download
+	// batch's sync gate reads it.
+	DownloadSync string
 	// Buffered powers «Формат: [буферный]» (PR43 C); nil makes the
 	// buffered toggle unavailable with an honest status note.
 	Buffered BufferedService

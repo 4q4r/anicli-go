@@ -41,8 +41,9 @@ func pr164AskSession(t *testing.T) (*sessionScreen, *fakeDownload) {
 				"[anilib] AniLib":   {Links: map[string]contracts.VideoSource{"1080": {URL: "v-lib"}}},
 			},
 		},
-		Download: &fakeDownload{},
-		Log:      testLogger(),
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
+		Log:          testLogger(),
 	}
 	group := []contracts.SearchResult{
 		{Title: "Тайтл", URL: "u1", SourceID: "animego"},
@@ -236,8 +237,9 @@ func pr164LazySession(t *testing.T) (*sessionScreen, *fakeDownload) {
 				},
 			},
 		},
-		Download: &fakeDownload{},
-		Log:      testLogger(),
+		Download:     &fakeDownload{},
+		DownloadSync: "no", // the #164/#165 dub semantics under test — sync stays out
+		Log:          testLogger(),
 	}
 	group := []contracts.SearchResult{{Title: "Тайтл", URL: "u", SourceID: "animego"}}
 	s := NewSessionScreen(deps, group[0], group)

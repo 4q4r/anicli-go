@@ -68,6 +68,11 @@ const (
 	// BEFORE anything downloads — the pick drives the whole batch,
 	// Back aborts with nothing downloaded.
 	sessionStateDownloadDub sessionState = "download_dub"
+	// sessionStateSyncAsk is the PR165b audio_sync two-choice prompt
+	// («Да — анализировать и править» / «Нет — как есть»): one
+	// decision per batch, in the #164 dub-menu form. Esc answers
+	// «Нет» — the batch continues unsynchronized, never aborted.
+	sessionStateSyncAsk sessionState = "sync_ask"
 )
 
 // sessionScreenID is the session screen identity.
@@ -363,6 +368,13 @@ type sessionScreen struct {
 	// ask-first dub menu opened; the menu's pick resumes the batch in
 	// that mode. "" whenever the menu is not open.
 	downloadAskMode string
+	// syncAskMode/syncAskStrict stash the batch parameters across the
+	// PR165b sync-ask menu (the dub-menu pick may have re-entered the
+	// start with the strict mode — both ride the stash).
+	syncAskMode   string
+	syncAskStrict bool
+	// syncAskList is the PR165b two-choice sync menu (the #164 form).
+	syncAskList *PinList
 	// markedAudio is the PR165 ordered download audio set: the dub
 	// keys SPACE-marked in the merged stream picker, in marking order.
 	// Every batch episode muxes the whole set; "" (nil) keeps today's
@@ -1002,6 +1014,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleDownloadModeKey(key)
 	case sessionStateDownloadDub:
 		return s.handleDownloadDubKey(key)
+	case sessionStateSyncAsk:
+		return s.handleSyncAskKey(key)
 	case sessionStatePlaying:
 		return s, nil
 	default:
@@ -1042,6 +1056,10 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.downloadAskMode = ""
 		s.setState(sessionStateMenu)
 		return s, nil
+	case sessionStateSyncAsk:
+		// PR165b: Esc from the sync ask answers «Нет» — the batch
+		// continues unsynchronized (never an abort).
+		return s.startRangeDownload(s.syncAskMode, s.syncAskStrict, syncNo())
 	case sessionStateMenu, sessionStatePlaying:
 		return s, pop()
 	case sessionStateLoading:
@@ -2853,7 +2871,7 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 		}
 		return s, nil
 	}
-	return s.startRangeDownload(mode, false)
+	return s.startRangeDownload(mode, false, nil)
 }
 
 // startRangeDownload dispatches the picked range batch in the given
@@ -2861,7 +2879,14 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 // picked dub ALONE per episode — episodes not carrying it are skipped
 // with the compact attribution, never substituted. A remembered dub
 // keeps the PR63 smart rotation (python resolve_dubs_smart parity).
-func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, tea.Cmd) {
+//
+// PR165b: syncChoice carries the audio_sync decision (nil = decide
+// here): config "no" or a non-qualifying batch (not видео+аудио, a
+// single-provider merge — no cross-provider pairs to fix) answers no
+// silently; config "yes" answers yes; "ask" opens the two-choice
+// menu (stashing mode+strict) and the answer re-enters with the
+// choice set.
+func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice *bool) (Screen, tea.Cmd) {
 	deps := s.deps
 	preferred := s.videoDub
 	episodes := make([]contracts.Episode, 0, len(s.downloadEpisodes))
@@ -2871,6 +2896,31 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 	content := s.downloadContentMode
 	if content == "" {
 		content = "video_audio"
+	}
+	ask := false
+	if syncChoice == nil {
+		cfg := deps.DownloadSync // "ask" | "yes" | "no"; "" = the sync
+		// gate is ABSENT (tests, embedded faces) — the batch runs
+		// exactly as pre-sync. Production never passes "": the config
+		// layer normalizes every unknown to "ask" before the snapshot.
+		switch {
+		case content != "video_audio" || len(s.parts) < 2 || cfg == "no" || cfg == "":
+			syncChoice = syncNo()
+		case cfg == "yes":
+			syncChoice = syncYes()
+		case cfg == "ask":
+			ask = true
+		default:
+			syncChoice = syncNo()
+		}
+	}
+	if ask {
+		// Stash the batch parameters and open the two-choice menu in
+		// the #164 dub-menu form; the answer re-enters with the
+		// choice set.
+		s.syncAskMode, s.syncAskStrict = mode, strict
+		s.openSyncAskMenu()
+		return s, nil
 	}
 	// The PR165 marked audio set rides every video+аудио task: every
 	// episode muxes the whole set (per-episode resolution inside the
@@ -2894,6 +2944,7 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 			Mode:         content,
 			AudioSet:     audioSet,
 			DefaultAudio: s.defaultAudio,
+			AudioSync:    *syncChoice,
 		})
 	}
 	switch mode {
@@ -2919,6 +2970,43 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool) (Screen, te
 	default:
 		return s, nil
 	}
+}
+
+// syncYes/syncNo render the sync-ask answers as pointers.
+func syncYes() *bool { v := true; return &v }
+func syncNo() *bool  { v := false; return &v }
+
+// openSyncAskMenu opens the PR165b two-choice sync prompt in the #164
+// dub-menu form.
+func (s *sessionScreen) openSyncAskMenu() {
+	s.syncAskList = NewPinList(NewMenu(i18n.T("download.sync_ask_title"), "", []Choice{
+		{ID: "yes", Label: i18n.T("download.sync_choice_yes"), Value: "yes"},
+		{ID: "no", Label: i18n.T("download.sync_choice_no"), Value: "no"},
+	}...), defaultListHeight)
+	s.setState(sessionStateSyncAsk)
+}
+
+// handleSyncAskKey drives the PR165b sync prompt: «Да» → the batch
+// restarts with AudioSync on; «Нет» (or any non-yes pick) → sync off;
+// the batch CONTINUES either way (never an abort). Esc is handled by
+// handleCancel with the same «Нет» semantics.
+func (s *sessionScreen) handleSyncAskKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.syncAskList.HandleKey(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.syncAskList.Menu(), s.syncAskList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	answer, _ := resolved.(string)
+	choice := syncNo()
+	if answer == "yes" {
+		choice = syncYes()
+	}
+	mode, strict := s.syncAskMode, s.syncAskStrict
+	s.syncAskMode, s.syncAskStrict = "", false
+	s.setState(sessionStateMenu)
+	return s.startRangeDownload(mode, strict, choice)
 }
 
 // openDownloadDubMenu opens the #164 ask-first dub menu: every dub
@@ -2983,7 +3071,7 @@ func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.C
 	// path. A stranded menu turned Enter-after-settle into the
 	// previously-unreachable silent-nothing default (PR41 B2).
 	s.setState(sessionStateMenu)
-	return s.startRangeDownload(mode, true)
+	return s.startRangeDownload(mode, true, nil)
 }
 
 // buildModeList renders the foreground/background picker once per
@@ -3323,6 +3411,10 @@ func (s *sessionScreen) View() tea.View {
 		// #164: the ask-first dub menu shares the redub list field and
 		// the dub-menu rendering.
 		body = themedList(s.redubList)
+	case sessionStateSyncAsk:
+		// PR165b: the sync ask shares the menu rendering with the
+		// #164 form.
+		body = themedList(s.syncAskList)
 	case sessionStateQuality:
 		body = themedList(s.qualityList) + "\n" + theme.StatusLine.Render(i18n.T("session.pick_stream_hint"))
 	case sessionStateFormat:

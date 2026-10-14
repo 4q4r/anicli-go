@@ -8,6 +8,7 @@ package download
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,12 @@ func (e *ErrBinaryNotFound) Error() string {
 type Options struct {
 	// FFmpeg is the ffmpeg binary path (default "ffmpeg").
 	FFmpeg string
+	// MKVMerge is the mkvmerge binary path (default "mkvmerge") —
+	// the PR165b sync-assembly muxer.
+	MKVMerge string
+	// Logger is the diagnostics sink (mkvmerge's exit-1 warnings);
+	// nil degrades to a discard logger.
+	Logger *slog.Logger
 }
 
 // CommandInput is one download request.
@@ -176,8 +183,17 @@ type runner func(ctx context.Context, bin string, args []string) (stderr string,
 // Downloader merges streams into local files with an atomic finalize.
 type Downloader struct {
 	ffmpeg string
-	// run executes the command; injectable for tests.
+	// mkvmerge is the sync-assembly muxer (PR165b).
+	mkvmerge string
+	// log is the optional diagnostics sink (mkvmerge warnings).
+	log *slog.Logger
+	// run executes the ffmpeg command; injectable for tests.
 	run runner
+	// runMKV executes mkvmerge and reports its exit-code contract;
+	// injectable for tests.
+	runMKV func(ctx context.Context, bin string, args []string) (code int, stderr string, err error)
+	// mkvVersion probes `mkvmerge --version`; injectable for tests.
+	mkvVersion func(ctx context.Context, bin string) (string, error)
 }
 
 // New builds the Downloader.
@@ -185,8 +201,13 @@ func New(opts Options) *Downloader {
 	if opts.FFmpeg == "" {
 		opts.FFmpeg = "ffmpeg"
 	}
-	d := &Downloader{ffmpeg: opts.FFmpeg}
+	if opts.MKVMerge == "" {
+		opts.MKVMerge = "mkvmerge"
+	}
+	d := &Downloader{ffmpeg: opts.FFmpeg, mkvmerge: opts.MKVMerge, log: opts.Logger}
 	d.run = d.runFFmpeg
+	d.runMKV = d.realRunMKV
+	d.mkvVersion = d.realMKVMergeVersion
 	return d
 }
 

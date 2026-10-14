@@ -42,6 +42,7 @@ and an interface in English or Russian.
 - [Lua Provider SDK](#-lua-provider-sdk)
 - [Torrent Engine](#-torrent-engine)
 - [Player & Skips](#-player--skips)
+- [Multi-Range Local Viewing](#-multi-range-local-viewing)
 - [Discord Rich Presence](#-discord-rich-presence)
 - [Localization](#-localization)
 - [Startup Dependencies](#-startup-dependencies)
@@ -388,6 +389,77 @@ and an offline index (`.anicli_offline_index.json`) the TUI's downloads screen r
 
 ---
 
+## ✂️ Multi-Range Local Viewing
+
+One local folder can hold several Shikimori entries (two seasons, OVAs) — a per-folder
+sidecar `.anicli_ranges.json` splits the folder's files into **ranges**, and each range
+renders as its own title in «📂 Скачанное» with its own progress row and its own
+Shikimori sync.
+
+```json
+{
+  "version": 1,
+  "updated_at": "2026-10-14T10:00:00Z",
+  "ranges": [
+    {
+      "id": "s1",
+      "title": "Тайтл — S1",
+      "shikimori_id": 39535,
+      "shikimori_title": "Mushoku Tensei",
+      "match": { "kind": "glob", "patterns": ["EP_1_*", "EP_2_*"], "quality": "1080p" },
+      "episode_offset": 0
+    },
+    {
+      "id": "s2p2",
+      "title": "Тайтл — S2 ч.2",
+      "shikimori_id": 55888,
+      "match": { "kind": "exact", "files": ["EP_13_a_1080p.mkv", "EP_14_a_1080p.mkv"] },
+      "episode_offset": 12
+    }
+  ]
+}
+```
+
+**Hybrid matching.** `kind: "glob"` patterns match the file base name
+(`filepath.Match` semantics); new files join automatically, and **pattern order is the
+episode order** — one pattern per episode (`["EP_1_*", "EP_2_*", "EP_10_*"]`) beats the
+byte-wise sort that would otherwise put `EP_10` before `EP_2`. `kind: "exact"` is a
+verbatim filename list — the owner's order IS the episode order. The optional
+`match.quality` glob (e.g. `"1080p"`, matched against the full base name or any
+`_-.`-separated token of it) keeps a multi-quality folder (one episode in 1080p + 720p)
+from producing phantom episode positions — only quality-matching files join the range.
+
+**Positions and offsets.** Inside a range the episode label is the 1-based position
+("1", "2", …) — the offline index's own episode labels never surface, so S1E1 and S2E1
+in one folder never collide. Progress lives in the regular history row keyed by a
+synthetic source (`anicli-offline:<folder>#<range>`); the Shikimori push sends
+`position + episode_offset` (files named 1–12 under a Shikimori entry counting 13–24 →
+offset 12), while the stored label stays the position. A range without `shikimori_id`
+plays but never syncs.
+
+**Binding flow.** Open a plain folder's session and pick «✂️ Разбить по записям
+Shikimori»: the editor stages a deterministic name-prefix suggestion (a disposable
+starting point), each range opens the detail editor (✏️ title, 🎯 Shikimori search,
+#️⃣ offset, ⇄ glob/exact mode, 📐 patterns, 📋 file order), and 💾 writes the file
+atomically. Files matched by no range render as a trailing «<folder> · несортированное»
+title. Duplicate Shikimori bindings in one folder are rejected; provable overlaps ask
+for confirmation.
+
+**Extra library roots.** `[download] watched_dirs` lists additional roots the downloads
+screen scans alongside `[download] dir` — the ranges file lives inside the folder, so a
+moved or remounted folder keeps its progress as long as it stays under some watched
+root.
+
+**Known limits.** One position = one playable file (multi-variant positions only come
+through the offline index's `relative_path` match — R3). A pre-existing index
+label-collision on merged-season re-downloads (`UpsertEntry` replaces by
+episode+stream key) is unchanged by this feature — the ranges file never writes the
+index (R6). Glob byte-sort (`EP_10` before `EP_2`) is the owner's to escape via
+per-episode patterns or exact mode (R7). Folders without a ranges file behave exactly
+as before this feature existed.
+
+---
+
 ## 🎮 Discord Rich Presence
 
 Optional: while mpv plays, anicli publishes a "Watching" activity — the title plus,
@@ -562,6 +634,7 @@ intro_skipper_enabled = true
 
 [download]
 # dir = ""                # empty -> <data>/downloads
+# watched_dirs = []       # extra library roots scanned by «📂 Скачанное»
 max_concurrency = 2
 
 [api]

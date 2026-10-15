@@ -115,6 +115,12 @@ type HistoryService interface {
 	List(ctx context.Context) ([]storage.AnimeProgress, error)
 	// SavePlayback records the watched episode and dub preferences.
 	SavePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
+	// SavePlaybackSourceOnly records progress WITHOUT the shikimori-id
+	// fallback: only the (source_id, source_url) row is looked up and
+	// upserted. The offline range path uses it — an unrelated online
+	// row sharing the range's shikimori id must never be moved or
+	// retired by an offline save (review M4).
+	SavePlaybackSourceOnly(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
 	// BindSource rebinds a record onto a new (source_id, url) pair
 	// (python search_and_bind record patch). boundTitle is the
 	// provider-side title the record is bound to; needs_correction
@@ -123,6 +129,12 @@ type HistoryService interface {
 	// GetByShikimoriID loads the record bound to a shikimori anime,
 	// nil when none is bound.
 	GetByShikimoriID(ctx context.Context, shikimoriID int64) (*storage.AnimeProgress, error)
+	// GetBySource loads the record sitting on a (source_id, source_url)
+	// pair, nil when none exists. The offline range path reads its
+	// prior from the range's OWN row here — a shikimori-id lookup
+	// would return the newest row of ANY source sharing the entry and
+	// mix foreign progress into the no-rollback guard (review round 2).
+	GetBySource(ctx context.Context, sourceID, sourceURL string) (*storage.AnimeProgress, error)
 	// SetRateID persists the shikimori rate (list entry) id of a
 	// record (SyncEpisodeProgress pattern: PATCH vs Create dispatch).
 	SetRateID(ctx context.Context, animeID, rateID int64) error
@@ -136,6 +148,17 @@ type OfflineTitle struct {
 	Name string
 	// Snapshot is the validated offline index view.
 	Snapshot download.Snapshot
+	// RelDir is Dir's slash-separated path under its watched library
+	// root ("" when unknown — fakes). Feeds SyntheticSourceURL.
+	RelDir string
+	// Root is the watched library root Dir lives under ("" when
+	// unknown — fakes). Feeds the SyntheticSourceURL root hash, so
+	// same-named folders under different roots never share a progress
+	// row (review M2).
+	Root string
+	// Range is non-nil for a virtual range title (a folder split by
+	// .anicli_ranges.json renders one title per range).
+	Range *download.RangeBinding
 }
 
 // OfflineService exposes the downloaded library.

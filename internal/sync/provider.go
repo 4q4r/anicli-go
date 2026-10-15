@@ -145,6 +145,17 @@ func NewDispatcher(history History, logger *slog.Logger, providers ...Provider) 
 //   - ErrNotOnMAL downgrades to NoteNotOnMAL (typed skip, not failure);
 //     everything else surfaces as the verdict's Err.
 func (d *Dispatcher) SyncEpisodeProgress(ctx context.Context, shikimoriID int64, episode int) Report {
+	return d.SyncEpisodeProgressPrior(ctx, shikimoriID, episode, 0, false)
+}
+
+// SyncEpisodeProgressPrior is SyncEpisodeProgress with the caller's
+// precomputed local counter (review M5): when hasPrior is set, prior —
+// already in entry units — replaces the row read for the no-rollback
+// guard. The offline range path saves range-position labels into the
+// row BEFORE the push; re-reading the row there would compare the
+// just-overwritten label against an offset entry counter. The row is
+// still read for the rate id, status and anime id.
+func (d *Dispatcher) SyncEpisodeProgressPrior(ctx context.Context, shikimoriID int64, episode, prior int, hasPrior bool) Report {
 	var active []Provider
 	for _, p := range d.providers {
 		if p != nil && p.Participates() {
@@ -177,10 +188,16 @@ func (d *Dispatcher) SyncEpisodeProgress(ctx context.Context, shikimoriID int64,
 				}
 				req.Status = st
 			}
-			if prior := parseEpisodeCounter(rec.CurrentEpisode); prior > episode {
+			// The guard compares entry units: the caller's precomputed
+			// prior when provided, the stored counter otherwise.
+			guardPrior := parseEpisodeCounter(rec.CurrentEpisode)
+			if hasPrior {
+				guardPrior = prior
+			}
+			if guardPrior > episode {
 				d.log.Info("sync: episode behind local progress; push skipped",
-					"episode", episode, "prior", prior)
-				return Report{Participated: true, NoRollback: true, Prior: prior}
+					"episode", episode, "prior", guardPrior)
+				return Report{Participated: true, NoRollback: true, Prior: guardPrior}
 			}
 		}
 	}

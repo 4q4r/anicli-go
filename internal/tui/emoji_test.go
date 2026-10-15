@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/storage"
 )
 
@@ -191,5 +192,95 @@ func TestEmojiMeansOneActionAcrossScreens(t *testing.T) {
 	}
 	if pairs["🔗"] != "rebind" {
 		t.Fatalf("🔗 = %q, want rebind", pairs["🔗"])
+	}
+}
+
+// menuBody trims the trailing Back row off a menu's items.
+func menuBody(items []Choice) []Choice {
+	if len(items) > 0 && items[len(items)-1].ID == BackID {
+		return items[:len(items)-1]
+	}
+	return items
+}
+
+// TestRangesEditorEmojiContract is the A3 audit: the ✂️ editor stack
+// obeys the emoji discipline against the WHOLE existing surface, and
+// the owner's chosen glyphs (✂️ = split/bind editor, 🎯 = bind
+// Shikimori) map to exactly one action each. Collisions found by the
+// audit were renamed, not the contract: the offset row uses #️⃣ (🔢
+// stays «Перейти к серии») and the search skip uses ⏩ (⏭ stays
+// «След.»).
+func TestRangesEditorEmojiContract(t *testing.T) {
+	pairs := map[string]string{}
+
+	// The existing action surfaces, so the new glyphs cannot collide.
+	fresh := newSessionForTests(t)
+	emojiActionPairs(t, "session/fresh", fresh.list.Menu().Items, pairs)
+	resumed := resumedSessionForEmojiTests(t)
+	emojiActionPairs(t, "session/resumed", resumed.list.Menu().Items, pairs)
+	deps := &Deps{
+		Episode:  &fakeEpisode{episodes: testEpisodeSet()},
+		Offline:  &fakeOffline{titles: offlineFixture()},
+		Playback: &fakePlayback{},
+	}
+	titles, _ := deps.Offline.Titles()
+	offline := NewOfflineSession(deps, titles[0])
+	emojiActionPairs(t, "offline", offline.list.Menu().Items, pairs)
+	emojiActionPairs(t, "root", NewRootScreen(deps).list.Menu().Items, pairs)
+	emojiActionPairs(t, "db", NewDBMenu(deps).list.Menu().Items, pairs)
+	emojiActionPairs(t, "shiki-setup", NewShikimoriSetup(deps).list.Menu().Items, pairs)
+
+	// The editor stack over a fixture folder.
+	dir := rangesBindFixture(t)
+	e := NewBindEditor(deps, OfflineTitle{Dir: dir, Name: "Сериал", RelDir: "Сериал"})
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	assertNoDuplicateEmoji(t, "ranges-bind", bindRows(e))
+	emojiActionPairs(t, "ranges-bind", bindRows(e), pairs)
+
+	detail := newRangeDetail(e, 0)
+	assertNoDuplicateEmoji(t, "ranges-detail", menuBody(detail.list.Menu().Items))
+	emojiActionPairs(t, "ranges-detail", menuBody(detail.list.Menu().Items), pairs)
+
+	// The delete confirm rides the same ✅/✖ ids as the overlap
+	// confirm (one emoji = one action id, both confirms).
+	resolvePick(t, detail, detail.list, "delete")
+	if detail.confirm != nil {
+		assertNoDuplicateEmoji(t, "ranges-delete-confirm", menuBody(detail.confirm.Menu().Items))
+		emojiActionPairs(t, "ranges-delete-confirm", menuBody(detail.confirm.Menu().Items), pairs)
+	}
+
+	picker := newFileOrderPicker(e, detail, 0)
+	assertNoDuplicateEmoji(t, "ranges-files", menuBody(picker.list.Menu().Items))
+	emojiActionPairs(t, "ranges-files", menuBody(picker.list.Menu().Items), pairs)
+
+	// The overlap confirm uses the same ✅/✖ pair.
+	e2 := NewBindEditor(deps, OfflineTitle{Dir: dir, Name: "Сериал", RelDir: "Сериал"})
+	e2.staged = []download.RangeBinding{
+		{ID: "g", Title: "G", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+		{ID: "x", Title: "X", Match: download.RangeMatch{Kind: "exact", Files: []string{"EP_1_a.mkv"}}},
+	}
+	e2.buildList()
+	e2.save()
+	if e2.confirm != nil {
+		assertNoDuplicateEmoji(t, "ranges-overlap-confirm", menuBody(e2.confirm.Menu().Items))
+		emojiActionPairs(t, "ranges-overlap-confirm", menuBody(e2.confirm.Menu().Items), pairs)
+	}
+
+	// The owner's pins: the new glyphs mean exactly one action, and
+	// the taken glyphs stayed with their owners.
+	if pairs["✂️"] != "bind" {
+		t.Fatalf("✂️ = %q, want bind only", pairs["✂️"])
+	}
+	if pairs["🎯"] != "bind" {
+		t.Fatalf("🎯 = %q, want bind", pairs["🎯"])
+	}
+	if pairs["🔢"] != "jump" {
+		t.Fatalf("🔢 = %q, want jump (the offset row must not reuse it)", pairs["🔢"])
+	}
+	if pairs["⏭"] != "next" {
+		t.Fatalf("⏭ = %q, want next (the search skip must not reuse it)", pairs["⏭"])
 	}
 }

@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/an0nx/anicli-go/internal/download"
-
 	"github.com/an0nx/anicli-go/internal/i18n"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // Offline flow screen ids.
@@ -17,14 +17,33 @@ const (
 	offlineSessionID = "offline-session"
 )
 
-// offlinePlayMsg carries one resolved local playback.
+// offlinePlayMsg carries one resolved local playback: the episode
+// label and variant keys ride along so the settle records the PLAYED
+// state, not whatever the session switched to meanwhile (review m7).
 type offlinePlayMsg struct {
-	path  string
-	title string
+	path     string
+	title    string
+	episode  string
+	videoKey string
+	audioKey string
 }
 
-// offlinePlayedMsg settles one offline playback (C3).
-type offlinePlayedMsg struct{ err error }
+// offlinePlayedMsg settles one offline playback (C3), carrying the
+// played episode label and variant keys into the progress save.
+type offlinePlayedMsg struct {
+	err      error
+	episode  string
+	videoKey string
+	audioKey string
+}
+
+// offlineProgressMsg settles one offline progress round: the local
+// save verdict plus the (optional) Shikimori sync verdict line.
+type offlineProgressMsg struct {
+	saveErr error
+	// note is the sync verdict ("" when unbound or nothing to say).
+	note string
+}
 
 // NewOfflineTitles builds the «📂 Скачанное» title list (python
 // offline_menu port) with episode and variant counts; an empty
@@ -171,15 +190,20 @@ func (s *offlineSession) buildEpisodeList() {
 
 // buildActionMenu renders the offline action set (python
 // _offline_session menu). The trailing Back row appended by NewMenu is
-// the menu's exit path (PR24 bottom pin).
+// the menu's exit path (PR24 bottom pin). Every offline session keeps
+// the ✂️ binding-editor row (review M3): a fully-bound folder renders
+// ONLY range titles, so each range title is an edit path — without the
+// row the owner could never edit/rebind/delete ranges again.
 func (s *offlineSession) buildActionMenu() {
-	s.list = NewPinList(NewMenu(s.header(), "", []Choice{
+	choices := []Choice{
 		{ID: "watch", Label: i18n.T("menu.watch")},
 		{ID: "next", Label: i18n.T("common.next_ep")},
 		{ID: "prev", Label: i18n.T("common.prev_ep")},
 		{ID: "jump", Label: i18n.T("common.jump_ep")},
 		{ID: "variant", Label: i18n.T("offline.switch_variant")},
-	}...), defaultListHeight)
+		{ID: "bind", Label: i18n.T("offline.ranges.open")},
+	}
+	s.list = NewPinList(NewMenu(s.header(), "", choices...), defaultListHeight)
 }
 
 // header renders the offline session header with the active variant.
@@ -203,9 +227,22 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case offlinePlayedMsg:
 		if m.err != nil {
 			s.setStatus(i18n.T("common.play_failed", i18n.Vals{"err": m.err.Error()}))
-		} else {
-			s.setStatus(i18n.T("common.play_done"))
+			return s, nil
 		}
+		s.setStatus(i18n.T("common.play_done"))
+		// The played state rides the message: two overlapping plays
+		// each settle their own episode (review m7).
+		return s, s.saveRangeProgressFor(m.episode, m.videoKey, m.audioKey)
+	case offlineProgressMsg:
+		if m.saveErr != nil {
+			s.setStatus(i18n.T("offline.progress_failed", i18n.Vals{"err": m.saveErr.Error()}))
+			return s, nil
+		}
+		status := i18n.T("common.play_done")
+		if m.note != "" {
+			status += " · " + m.note
+		}
+		s.setStatus(status)
 		return s, nil
 	case tea.KeyPressMsg:
 		return s.handleKey(m)
@@ -284,6 +321,8 @@ func (s *offlineSession) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s, nil
 	case "variant":
 		return s.pickVariant()
+	case "bind":
+		return s, push(NewBindEditor(s.deps, s.title))
 	default:
 		return s, nil
 	}
@@ -317,7 +356,8 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 }
 
 // playLocal runs the resolved local file through the playback
-// service (C3): [OFFLINE] title, no skip lookups ever.
+// service (C3): [OFFLINE] title, no skip lookups ever. The played
+// episode and variant keys ride the messages into the settle.
 func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	if s.deps == nil || s.deps.Playback == nil {
 		s.setStatus(i18n.T("offline.player_unavailable"))
@@ -325,12 +365,13 @@ func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	}
 	deps := s.deps
 	return s, safeCmd(offlineSessionID, func() tea.Msg {
-		return offlinePlayedMsg{err: deps.Playback.Play(context.Background(), PlayRequest{
+		err := deps.Playback.Play(context.Background(), PlayRequest{
 			URL:        m.path,
 			Title:      m.title,
 			AnimeTitle: s.title.Name,
-			EpisodeNum: s.current,
-		})}
+			EpisodeNum: m.episode,
+		})
+		return offlinePlayedMsg{err: err, episode: m.episode, videoKey: m.videoKey, audioKey: m.audioKey}
 	})
 }
 
@@ -347,6 +388,96 @@ func (s *offlineSession) shiftEpisode(delta int, eps []string) {
 	}
 }
 
+// saveRangeProgress schedules the per-range progress round after a
+// successful offline playback: one bounded source-only save onto the
+// range's synthetic anime_progress key, then — for a bound range — the
+// episode push (`position + episode_offset`) with the PRE-SAVE local
+// counter as the no-rollback prior. Plain folders (Range nil) keep
+// today's write-nothing behavior; unsorted limbo titles likewise.
+func (s *offlineSession) saveRangeProgress() tea.Cmd {
+	return s.saveRangeProgressFor(s.current, s.videoKey, s.audioKey)
+}
+
+// saveRangeProgressFor is saveRangeProgress with the explicitly played
+// episode label and variant keys (review m7): the settle writes the
+// played state even after the session moved on.
+func (s *offlineSession) saveRangeProgressFor(episode, videoKey, audioKey string) tea.Cmd {
+	if s.deps == nil || s.deps.History == nil {
+		return nil
+	}
+	if s.title.Range == nil || episode == "" {
+		return nil
+	}
+	deps := s.deps
+	shikiID := s.title.Range.ShikimoriID
+	offset := s.title.Range.EpisodeOffset
+	position := episode
+	title := s.title.Name
+	relDir := s.title.RelDir
+	root := s.title.Root
+	rangeID := s.title.Range.ID
+	shikiTitle := s.title.Range.ShikimoriTitle
+	return safeCmd(offlineSessionID, func() tea.Msg {
+		rec := storage.AnimeProgress{
+			Title:          title,
+			SourceID:       "offline",
+			SourceURL:      download.SyntheticSourceURL(root, relDir, rangeID),
+			CurrentEpisode: position,
+			UpdatedAt:      nowUTC(),
+		}
+		if shikiID != 0 {
+			id := shikiID
+			rec.ShikimoriID = &id
+			if shikiTitle != "" {
+				st := shikiTitle
+				rec.ShikimoriTitle = &st
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
+		defer cancel()
+		// The no-rollback prior must be read BEFORE the save
+		// overwrites the row with the new position label (review M5):
+		// converted to entry units it guards the push below. The prior
+		// comes from the range's OWN row (the synthetic source key) —
+		// a shikimori-id lookup returns the newest row of ANY source
+		// sharing the entry, so a newer online row (or a foreign
+		// folder's range) mixed its global episode into this range's
+		// unit space and blocked legitimate pushes (review round 2).
+		// hasPrior stays true for every bound range: prior 0 (no own
+		// row — first watch) must own the guard instead of falling
+		// back to the newest-by-shikimori-id row read, whose units are
+		// whatever that foreign row stores.
+		priorEntry := 0
+		hasPrior := shikiID != 0
+		if hasPrior {
+			if own, err := deps.History.GetBySource(ctx, "offline", download.SyntheticSourceURL(root, relDir, rangeID)); err == nil && own != nil {
+				priorEntry = parseWatchEpisode(own.CurrentEpisode) + offset
+			}
+		}
+		// Source-only upsert (review M4): the shikimori-id fallback
+		// would move/retire an unrelated ONLINE row sharing the id.
+		err := deps.History.SavePlaybackSourceOnly(ctx, rec, position, videoKey, audioKey)
+		if err != nil {
+			return offlineProgressMsg{saveErr: err}
+		}
+		note := ""
+		if shikiID != 0 {
+			// Entry units: the Shikimori counter is the position plus
+			// the range offset; the stored row keeps the position
+			// label — the units never mix (Review Focus #2).
+			episodeNum := parseWatchEpisode(position) + offset
+			syncCtx, syncCancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
+			defer syncCancel()
+			if deps.ProgressSyncPrior != nil {
+				note = renderSyncReport(deps, deps.ProgressSyncPrior(syncCtx, shikiID, episodeNum, priorEntry, hasPrior), episodeNum)
+			} else {
+				note = syncWatchProgressPrior(syncCtx, deps, shikiID, episodeNum, priorEntry, hasPrior).note
+			}
+		}
+		return offlineProgressMsg{note: note}
+	})
+}
+
 // watch resolves the best local variant and plays it offline-marked;
 // NO skip resolution ever runs (spec).
 func (s *offlineSession) watch() (Screen, tea.Cmd) {
@@ -361,19 +492,33 @@ func (s *offlineSession) watch() (Screen, tea.Cmd) {
 	s.videoKey, s.audioKey, s.quality = variant.VideoKey, variant.AudioKey, variant.Quality
 	path := s.title.Dir + "/" + variant.RelativePath
 	title := offlineTitle(s.videoKey, s.audioKey, s.title.Name, s.current)
+	played := s.current
+	videoKey, audioKey := s.videoKey, s.audioKey
 	return s, func() tea.Msg {
-		return offlinePlayMsg{path: path, title: title}
+		return offlinePlayMsg{
+			path:     path,
+			title:    title,
+			episode:  played,
+			videoKey: videoKey,
+			audioKey: audioKey,
+		}
 	}
 }
 
-// pickVariant offers the local variants of the current episode.
+// pickVariant offers the local variants of the current episode. The
+// pseudo-entry of a hand-placed file renders its honest «файл» label
+// instead of the raw "V: file | A: — | 0p".
 func (s *offlineSession) pickVariant() (Screen, tea.Cmd) {
 	entries := s.variants()
 	choices := make([]Choice, 0, len(entries))
 	for i, e := range entries {
+		label := "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + strconv.Itoa(e.Quality) + "p"
+		if e.VideoKey == "file" {
+			label = i18n.T("offline.file_variant")
+		}
 		choices = append(choices, Choice{
 			ID:    strconv.Itoa(i),
-			Label: "V: " + e.VideoKey + " | A: " + e.AudioKey + " | " + strconv.Itoa(e.Quality) + "p",
+			Label: label,
 			Value: e,
 		})
 	}

@@ -186,7 +186,7 @@ func TestOfflinePlayLocalCarriesPresenceParts(t *testing.T) {
 		title:   OfflineTitle{Name: "Наруто"},
 		current: "2",
 	}
-	_, cmd := s.playLocal(offlinePlayMsg{path: "/tmp/n.mkv", title: "[OFFLINE] Наруто - 2"})
+	_, cmd := s.playLocal(offlinePlayMsg{path: "/tmp/n.mkv", title: "[OFFLINE] Наруто - 2", episode: "2"})
 	if cmd != nil {
 		_ = cmd()
 	}

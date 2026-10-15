@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -801,5 +802,37 @@ func TestAudioSyncUnknownWarnsRejectedValue(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "audio_sync") {
 		t.Fatalf("the empty fallback must stay silent:\n%s", buf.String())
+	}
+}
+
+// TestLoadWatchedDirs: [download] watched_dirs loads as the extra
+// library roots; the absent key keeps the field nil.
+func TestLoadWatchedDirs(t *testing.T) {
+	t.Parallel()
+
+	path := writeTOML(t, `
+[download]
+dir = "/main/library"
+watched_dirs = ["/a", "/b"]
+`)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Download.Dir != "/main/library" {
+		t.Errorf("Dir = %q, want /main/library", got.Download.Dir)
+	}
+	want := []string{"/a", "/b"}
+	if !reflect.DeepEqual(got.Download.WatchedDirs, want) {
+		t.Errorf("WatchedDirs = %v, want %v", got.Download.WatchedDirs, want)
+	}
+
+	absent := writeTOML(t, "")
+	got, err = Load(absent)
+	if err != nil {
+		t.Fatalf("Load(absent): %v", err)
+	}
+	if got.Download.WatchedDirs != nil {
+		t.Errorf("WatchedDirs = %v, want nil", got.Download.WatchedDirs)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2324,6 +2325,15 @@ func syncWatchProgressCmd(deps *Deps, shikimoriID int64, episode int) tea.Cmd {
 // counter only ever moves forward, and every verdict — synced, typed
 // skip or failure — is logged.
 func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episode int) shikiSyncedMsg {
+	return syncWatchProgressPrior(ctx, deps, shikimoriID, episode, 0, false)
+}
+
+// syncWatchProgressPrior is syncWatchProgress with the caller's
+// precomputed local counter (review M5): when hasPrior is set, prior —
+// already in entry units — replaces the just-overwritten row read for
+// the no-rollback guard. The row is still read for the rate id and
+// status.
+func syncWatchProgressPrior(ctx context.Context, deps *Deps, shikimoriID int64, episode, prior int, hasPrior bool) shikiSyncedMsg {
 	log := deps.logger()
 	if deps.Shiki == nil || !deps.Shiki.Enabled() {
 		log.Info("tui: shiki: tracker disabled; progress push skipped", "episode", episode)
@@ -2336,10 +2346,10 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 	}
 
 	var (
-		rateID  int64
-		animeID int64
-		prior   int
-		status  = "watching"
+		rateID   int64
+		animeID  int64
+		status   = "watching"
+		rowPrior int
 	)
 	if deps.History != nil {
 		rec, err := deps.History.GetByShikimoriID(ctx, shikimoriID)
@@ -2348,7 +2358,7 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 		}
 		if rec != nil {
 			animeID = rec.ID
-			prior = parseWatchEpisode(rec.CurrentEpisode)
+			rowPrior = parseWatchEpisode(rec.CurrentEpisode)
 			if rec.ShikimoriRateID != nil {
 				rateID = *rec.ShikimoriRateID
 			}
@@ -2360,11 +2370,18 @@ func syncWatchProgress(ctx context.Context, deps *Deps, shikimoriID int64, episo
 			}
 		}
 	}
-	if prior > episode {
+	// The guard compares entry units: the caller's precomputed prior
+	// when provided, the stored counter otherwise (the row the offline
+	// range path just rewrote holds a range-position label).
+	guardPrior := rowPrior
+	if hasPrior {
+		guardPrior = prior
+	}
+	if guardPrior > episode {
 		log.Info("tui: shiki: episode behind local progress; push skipped",
-			"episode", episode, "prior", prior)
+			"episode", episode, "prior", guardPrior)
 		return shikiSyncedMsg{note: i18n.T("shiki.note_no_rollback", i18n.Vals{
-			"ep": strconv.Itoa(episode), "prior": strconv.Itoa(prior)})}
+			"ep": strconv.Itoa(episode), "prior": strconv.Itoa(guardPrior)})}
 	}
 
 	newRate, err := deps.Shiki.UpdateEpisodes(ctx, shikimoriID, rateID, episode, status)
@@ -3222,20 +3239,25 @@ func (s *sessionScreen) attachLocalCounts() {
 	s.localCounts = LocalEpisodeCounts(titles, BestDisplayTitle(s.group))
 }
 
-// LocalEpisodeCounts matches an offline title by its cleaned
-// directory name and maps episode → variant count.
+// LocalEpisodeCounts matches offline titles by their directory (R4:
+// a ranged folder emits several titles under one Dir — the online
+// session's «★» marks must see the whole folder) and sums the
+// episode → variant counts over every title sharing it.
 func LocalEpisodeCounts(titles []OfflineTitle, displayTitle string) map[string]int {
 	cleaned := download.CleanTitleForFS(displayTitle)
+	counts := make(map[string]int)
 	for _, t := range titles {
-		if download.CleanTitleForFS(t.Name) == cleaned {
-			counts := make(map[string]int)
-			for _, e := range t.Snapshot.Entries {
-				counts[e.EpisodeNum]++
-			}
-			return counts
+		if download.CleanTitleForFS(filepath.Base(t.Dir)) != cleaned {
+			continue
+		}
+		for _, e := range t.Snapshot.Entries {
+			counts[e.EpisodeNum]++
 		}
 	}
-	return nil
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 // currentEpisode returns the current episode number.

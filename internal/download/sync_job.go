@@ -41,7 +41,11 @@ type SyncDonor struct {
 	Default bool
 	// Offset is the measured LAG in seconds (>0 trim, <0 pad) — the
 	// pipeline adds the AAC priming before moving frames (the v2
-	// convention; the closed loop may refine it further).
+	// convention; the closed loop may refine it further). Once the
+	// shift is applied, the same field carries the APPLIED shift —
+	// the lag plus the AAC priming compensation, exactly what
+	// ShiftWAVFile consumed — and the Stage D lead verification
+	// (syncExpectedLead) reads it directly.
 	Offset float64
 	// Measured marks donors the analyzer actually measured. Only
 	// measured donors run the closed loop and carry the priming
@@ -135,6 +139,13 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 			// correction, leaving `shifted` as the final product. A
 			// loop failure degrades to the measured shift (the v1
 			// product) — the analysis never fails a download.
+			//
+			// The fallback re-shifts FROM THE RAW wav below: ClosedLoop
+			// performs its initial shift before the re-measure, so
+			// `shifted` may already hold a shifted copy — the fresh
+			// ShiftWAVFile(wav → shifted) overwrites it wholesale (a
+			// duplicate of that initial shift, never a chained second
+			// shift of already-shifted PCM).
 			applied = don.Offset + audsync.AACPrimingSec
 			if v, err := job.SyncLoop.ClosedLoop(ctx, *job.SyncRef, wav, shifted, don.Offset); err == nil {
 				applied = v
@@ -209,20 +220,21 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 
 // syncExpectedLead resolves the verification's expected head from
 // donors[0] ONLY — that is the track VerifyAssembled measures
-// (0:a:0). The v2 applied shift is lag + AAC priming (the m4a encode
-// puts the priming back); a nonpositive applied shift is trim
-// geometry (≈0 lead), a negative one pads (≈|applied|). Unmeasured
-// donors ship untouched — no lead. A later donor's pad never sets
-// the expectation for a head it does not own (CodeRabbit #4).
+// (0:a:0). Offset here is the APPLIED shift (the lag plus the AAC
+// priming compensation — exactly what ShiftWAVFile consumed), so the
+// lead derives from it directly: a nonpositive applied shift is trim
+// geometry (≈0 lead), a negative one pads (≈|Offset|). No second
+// priming addition happens here. Unmeasured donors ship untouched —
+// no lead. A later donor's pad never sets the expectation for a head
+// it does not own (CodeRabbit #4).
 func syncExpectedLead(donors []SyncDonor) time.Duration {
 	if len(donors) == 0 || !donors[0].Measured {
 		return 0
 	}
-	applied := donors[0].Offset + audsync.AACPrimingSec
-	if applied >= 0 {
+	if donors[0].Offset >= 0 {
 		return 0
 	}
-	return secondsToDuration(-applied)
+	return secondsToDuration(-donors[0].Offset)
 }
 
 // secondsToDuration converts float seconds to a time.Duration

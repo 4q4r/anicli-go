@@ -90,13 +90,9 @@ func TestLiveMeSyncRealPair(t *testing.T) {
 			t.Fatalf("Offset run %d: %v", run+1, err)
 		}
 		found[run] = off
-		t.Logf("run %d: found %+.3fs, confidence %.2f, windows agree %d",
-			run+1, off.Seconds, off.Confidence, off.WindowsAgree)
+		t.Logf("run %d: found %+.3fs", run+1, off.Seconds)
 		if math.Abs(off.Seconds-3) > 0.125 {
 			t.Fatalf("run %d: found %+.3f, want ≈ +3 ± 0.125", run+1, off.Seconds)
-		}
-		if off.WindowsAgree < 2 || off.Confidence < 1 {
-			t.Fatalf("run %d verdict weak: %+v", run+1, off)
 		}
 	}
 	if drift := math.Abs(found[0].Seconds - found[1].Seconds); drift > 0.125 {

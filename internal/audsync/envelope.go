@@ -9,8 +9,11 @@ package audsync
 // uniform high-pass, and a fixed 72000-bin canvas (1440 s at 50 Hz).
 //
 // The filter runs as a direct-form II transposed recurrence — the
-// scipy lfilter structure — applied sample-by-sample while streaming
-// the PCM, so the whole-source decode never materializes in memory.
+// scipy lfilter structure — applied sample-by-sample over the decoded
+// PCM. The decode itself DOES materialize in memory: realExec buffers
+// the whole ffmpeg stdout (≈46 MB per 24 min of source at 8 kHz
+// stereo s16le), bounded in time by DecodeBudget — the streaming
+// claim covers the filter math, not the PCM buffer.
 
 import "math"
 

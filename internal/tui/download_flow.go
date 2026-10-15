@@ -34,10 +34,6 @@ const (
 	SyncApplied     = "applied"
 	SyncUncertain   = "uncertain"
 	SyncUnavailable = "unavailable"
-	// SyncAnchor marks the anchor donor of a reference-less batch: it
-	// ships UNSHIFTED (its timeline is the only reference) and is
-	// never silently dropped.
-	SyncAnchor = "anchor"
 )
 
 // availabilityMaxRuns caps the rendered run list: a pathological
@@ -486,8 +482,6 @@ func renderSyncSuffix(notes []SyncNote) string {
 			parts = append(parts, i18n.T("download.sync_note_uncertain", i18n.Vals{"dub": n.Dub}))
 		case SyncUnavailable:
 			parts = append(parts, i18n.T("download.sync_note_unavailable", i18n.Vals{"dub": n.Dub}))
-		case SyncAnchor:
-			parts = append(parts, i18n.T("download.sync_note_anchor", i18n.Vals{"dub": n.Dub}))
 		}
 	}
 	if len(parts) == 0 {

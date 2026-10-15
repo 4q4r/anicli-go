@@ -334,6 +334,11 @@ func loudRMSBytes(t *testing.T) []byte {
 // VerifyAssembled measures (0:a:0). A later donor's pad must not set
 // the expectation: donors[0] unshifted + donors[1] padded −10 s has a
 // ≈0 file lead, and expecting 10 s deleted VALID episodes.
+//
+// Donors here carry the APPLIED shift (the v2 contract: lag + AAC
+// priming — exactly what ShiftWAVFile consumed), so the pad/pin
+// values are read directly: pad −10 s ⇒ ≈10 s lead, no second
+// priming subtraction.
 func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -343,8 +348,8 @@ func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
 		{"empty", nil, 0},
 		// Unmeasured donors ship untouched — no lead, ever.
 		{"first_unmeasured_padded", []SyncDonor{{Offset: -10}, {Offset: -10, Measured: true}}, 0},
-		// Measured donors: applied = lag + AAC priming.
-		{"first_padded", []SyncDonor{{Offset: -10, Measured: true}}, secondsToDuration(10 - audsync.AACPrimingSec)},
+		// Measured donors: Offset IS the applied shift (lag + priming).
+		{"first_padded", []SyncDonor{{Offset: -10, Measured: true}}, secondsToDuration(10)},
 		{"first_trim", []SyncDonor{{Offset: 17.042, Measured: true}, {Offset: -10, Measured: true}}, 0},
 		{"measured_zero", []SyncDonor{{Offset: 0, Measured: true}}, 0},
 	}

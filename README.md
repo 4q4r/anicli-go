@@ -387,6 +387,29 @@ The skip manager (`internal/skip`) resolves intro/ending chapters through the co
 Downloads (`internal/download`) run as a bounded background queue with ffmpeg muxing
 and an offline index (`.anicli_offline_index.json`) the TUI's downloads screen reads.
 
+### 🎯 Download-Time Dub Sync
+
+Cross-provider downloads can align the dub to the video automatically
+(`audio_sync = ask|yes|no` in `[download]`, mkvmerge required — `internal/sysdeps`).
+The algorithm is the owner's reference implementation, ported verbatim:
+
+- **Reference hierarchy** — one reference per episode, picked from the video's OWN
+  streams: ASS **subtitles** first (dialogue intervals → a 50 Hz speech gate), then a
+  **japanese-tagged** audio track, then any other embedded original track (preferring a
+  language the donors don't speak, first non-silent wins). Nothing usable → the download
+  proceeds unsynchronized with a log line — the analysis never fails a download.
+- **Vocal envelope** — the reference and every donor decode to 8 kHz stereo; a
+  mid/side separation (center channel ≈ voice) rides a 300–2800 Hz Butterworth bandpass
+  into a 50 Hz block-RMS envelope, high-passed and fixed at 72000 bins (1440 s).
+- **Lag search** — one full-length FFT cross-correlation per donor over the envelope;
+  the band-limited peak is the lag (±3…+20 s against subtitles, ±60 s against audio).
+- **Closed loop** — the pipeline WAV is shifted by `lag + 1024/48000` (the AAC encoder
+  delay the m4a encode puts back), re-decoded, and re-measured in a ±1 s band; a residual
+  beyond ±15 ms triggers exactly one correction pass, re-shifting from the original WAV.
+  The product then measures ≈ 0 against the reference — the owner's «подгонка в идеал».
+- **Assembly** — video solo → shifted donors as isolated m4a → one mkvmerge pass →
+  RMS@45 s + lead-geometry verification; a silent file never ships.
+
 ---
 
 ## ✂️ Multi-Range Local Viewing

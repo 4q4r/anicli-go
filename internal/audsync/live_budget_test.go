@@ -40,8 +40,7 @@ func TestLiveDecodeUnderBudgetRealShortFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Offset: %v", err)
 	}
-	t.Logf("found = %.3fs (want ≈ +3), confidence %.2f, agree %d",
-		off.Seconds, off.Confidence, off.WindowsAgree)
+	t.Logf("found = %.3fs (want ≈ +3)", off.Seconds)
 	if math.Abs(off.Seconds-3) > 0.125 {
 		t.Fatalf("found = %.3f, want ≈ +3 ± 0.125", off.Seconds)
 	}

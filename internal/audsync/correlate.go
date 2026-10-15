@@ -1,11 +1,11 @@
 package audsync
 
-// The pure cross-correlation core (research §3.3):
-// c = IFFT( FFT(x) · conj(FFT(y)) ), N = next_pow2(len(x)+len(y)−1);
-// k = argmax(seq); D = (N−k) mod N — the delay of srch relative to
-// ref (srch[i] = ref[i−D]). Prominence is the peak against the mean
-// absolute correlation — uncorrelated signals stay far below
-// MinProminence.
+// The v2 lag search (the script's measure_lag): the FULL-length
+// linear cross-correlation of two envelopes via zero-padded FFT, the
+// lag axis scaled to seconds, and the argmax restricted to the
+// reference kind's band. Sign convention (pinned by the synthetic
+// tests): lag > 0 — the donor's audio events are LATER than the
+// reference's events → trim the donor's head; lag < 0 — pad.
 
 import (
 	"errors"
@@ -24,35 +24,66 @@ func nextPow2(n int) int {
 	return p
 }
 
-// CrossCorrelate locates srch inside ref's timeline: it returns the
-// delay D in samples (srch[i] = ref[i−D]) and the peak prominence —
-// seq[k] over the mean absolute correlation. Empty inputs are an
-// error; there is no other failure mode (the caller gates
-// prominence/RMS itself).
-func CrossCorrelate(ref, srch []float64) (delay int, prominence float64, err error) {
-	if len(ref) == 0 || len(srch) == 0 {
-		return 0, 0, errors.New("audsync: empty signal")
+// correlateFull computes the linear full cross-correlation of a and b:
+// result[j] = Σ a[m]·b[m−ℓ] with the lag ℓ = j − (len(b)−1) — the
+// numpy/scipy "full" convention. a and b may differ in length; both
+// are zero-padded to the next power of two.
+func correlateFull(a, b []float64) ([]float64, error) {
+	if len(a) == 0 || len(b) == 0 {
+		return nil, errors.New("audsync: empty signal")
 	}
-	n := nextPow2(len(ref) + len(srch) - 1)
-	px := make([]float64, n)
-	copy(px, ref)
-	py := make([]float64, n)
-	copy(py, srch)
+	na, nb := len(a), len(b)
+	n := nextPow2(na + nb - 1)
+	pa := make([]float64, n)
+	pb := make([]float64, n)
+	copy(pa, a)
+	copy(pb, b)
 	fft := fourier.NewFFT(n)
-	x := fft.Coefficients(nil, px)
-	y := fft.Coefficients(nil, py)
-	for i := range x {
-		x[i] *= cmplx.Conj(y[i])
+	fa := fft.Coefficients(nil, pa)
+	fb := fft.Coefficients(nil, pb)
+	for i := range fa {
+		fa[i] *= cmplx.Conj(fb[i])
 	}
-	seq := fft.Sequence(nil, x)
-	k := 0
-	sum := 0.0
-	for i, v := range seq {
-		av := math.Abs(v)
-		sum += av
-		if v > seq[k] {
-			k = i
+	seq := fft.Sequence(nil, fa)
+	// The circular result maps onto the linear full correlation with
+	// lag ℓ = j−(nb−1) read at circular index ℓ (≥0) or n+ℓ (<0):
+	// corr[j] = seq[(j−(nb−1)) mod n].
+	corr := make([]float64, na+nb-1)
+	for j := range corr {
+		idx := (j - (nb - 1)) % n
+		if idx < 0 {
+			idx += n
+		}
+		corr[j] = seq[idx]
+	}
+	return corr, nil
+}
+
+// measureLag returns the band-limited peak lag of aud against ref in
+// SECONDS: the script's measure_lag(aud_env, sub_norm, min_lag,
+// max_lag), verbatim — the full correlation, the lag axis ÷ EnvRate,
+// argmax over the band (first max on ties, numpy's argmax
+// convention). lag > 0 — aud's events are later than ref's (trim the
+// donor head); lag < 0 — pad.
+func measureLag(aud, ref []float64, minLag, maxLag float64) (float64, error) {
+	corr, err := correlateFull(aud, ref)
+	if err != nil {
+		return 0, err
+	}
+	bestBin := -1
+	bestVal := math.Inf(-1)
+	for j, v := range corr {
+		lag := float64(j-(len(ref)-1)) / EnvRate
+		if lag < minLag || lag > maxLag {
+			continue
+		}
+		if v > bestVal {
+			bestVal = v
+			bestBin = j
 		}
 	}
-	return (n - k) % n, seq[k] / (sum / float64(n)), nil
+	if bestBin < 0 {
+		return 0, errors.New("audsync: empty lag band")
+	}
+	return float64(bestBin-(len(ref)-1)) / EnvRate, nil
 }

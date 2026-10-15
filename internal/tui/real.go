@@ -316,11 +316,14 @@ type codecProber interface {
 	ProbeCodec(ctx context.Context, kind string, src contracts.VideoSource) (string, error)
 }
 
-// audioSyncAnalyzer is the PR165b analysis seam (nil = the sync
-// feature is off); production: audsync.New.
+// audioSyncAnalyzer is the PR173 v2 analysis seam (nil = the sync
+// feature is off); production: audsync.New. donorLangs feed the
+// reference hierarchy's language preference; ClosedLoop is the
+// pipeline's per-donor shift/correct pass.
 type audioSyncAnalyzer interface {
-	Reference(ctx context.Context, video contracts.VideoSource) (audsync.Reference, error)
+	Reference(ctx context.Context, video contracts.VideoSource, donorLangs ...string) (audsync.Reference, error)
 	Offset(ctx context.Context, ref audsync.Reference, dub contracts.VideoSource) (audsync.SyncOffset, error)
+	ClosedLoop(ctx context.Context, ref audsync.Reference, rawWAV, shiftedWAV string, measuredLag float64) (float64, error)
 }
 
 // syncAssembler is the PR165b assembly seam; production: the concrete
@@ -1388,13 +1391,19 @@ func (c *realCore) indexLegacyEpisode(ctx context.Context, task DownloadTask, ou
 }
 
 // syncDonor is one analysis/assembly candidate dub (tui-local). The
-// offset is filled by the analysis; a zero means no shift (the donor
-// still assembles when the episode goes through the assembly).
+// offset is filled by the analysis (the measured LAG — the pipeline
+// adds the AAC priming); a zero means no shift (the donor still
+// assembles when the episode goes through the assembly). measured
+// marks donors the analyzer actually measured — only they run the
+// pipeline's closed loop and the priming compensation; an
+// unmeasured donor ships byte-identical (same-provider timelines are
+// in sync by construction).
 type syncDonor struct {
 	key, dub, lang string
 	src            contracts.VideoSource
 	def            bool
 	offset         float64
+	measured       bool
 }
 
 // syncCarried is resolveAudioTracks' richer result: the carried keys
@@ -1444,46 +1453,32 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 		return "", notes, nil, false
 	}
 
-	// The reference chain: the video's own track first. Without one,
-	// ≥2 donors promote the FIRST donor to the ANCHOR: it ships
-	// UNSHIFTED (its own timeline is the only reference that exists —
-	// the absolute video alignment stays unknown) and carries its own
-	// SyncNote; the remaining dubs are measured against it and
-	// shifted by the RELATIVE offsets, so the dubs align to each
-	// other. The anchor is never invisible and never silently
-	// dropped.
-	anchor := false
-	ref, rerr := c.analyzer.Reference(ctx, video)
+	// The reference chain (PR173 v2 hierarchy): the video's OWN
+	// streams — subtitles first, then a japanese-tagged track, then
+	// any other embedded original. Without one, the download proceeds
+	// unsynchronized (the analysis NEVER fails a download; the v1
+	// anchor fallback is superseded — the hierarchy's «любая другая
+	// исходная дорожка» leg covers every usable case).
+	donorLangs := make([]string, 0, len(donors))
+	for _, d := range donors {
+		donorLangs = append(donorLangs, d.lang)
+	}
+	ref, rerr := c.analyzer.Reference(ctx, video, donorLangs...)
 	if rerr != nil {
-		if len(donors) < 2 {
-			for _, d := range donors {
-				notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
-			}
-			return "", notes, nil, false
+		c.logger().Warn("download: sync analysis skipped (no usable reference)", "error", rerr)
+		for _, d := range donors {
+			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
 		}
-		ref, rerr = c.analyzer.Reference(ctx, donors[0].src)
-		if rerr != nil {
-			for _, d := range donors {
-				notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
-			}
-			return "", notes, nil, false
-		}
-		anchor = true
-		notes = append(notes, SyncNote{Dub: donors[0].dub, Kind: SyncAnchor})
+		return "", notes, nil, false
 	}
 
 	anyOffset := false
 	for i := range donors {
-		if anchor && i == 0 {
-			continue // the anchor ships unshifted — it IS the reference
-		}
 		d := &donors[i]
-		if !anchor && d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
+		if d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
 			// The same provider's timeline IS the video's timeline —
-			// in sync by construction, nothing to analyze (the plan's
-			// constraint: analysis only for cross-provider pairs).
-			// Anchor mode measures everything: the anchor's timeline
-			// is the reference now, not the video's.
+			// in sync by construction, nothing to analyze; the donor
+			// ships unmeasured (byte-identical audio).
 			continue
 		}
 		off, oerr := c.analyzer.Offset(ctx, ref, d.src)
@@ -1491,6 +1486,7 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
 			continue
 		}
+		d.measured = true
 		if off.Seconds == 0 {
 			continue // already in sync — no note (the info verdict)
 		}
@@ -1516,6 +1512,8 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 		ChaptersFFMeta: chaptersFile,
 		Output:         outPath,
 		Title:          title,
+		SyncRef:        &ref,
+		SyncLoop:       c.analyzer,
 	}
 	if err := c.assembler.RunSyncJob(ctx, job, progress); err != nil {
 		return "", notes, err, true
@@ -1524,11 +1522,14 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 }
 
 // syncJobDonors renders the analysis donors onto the assembler job.
+// Offset carries the measured LAG (the pipeline adds the AAC priming
+// and runs the closed loop for measured donors).
 func syncJobDonors(donors []syncDonor) []download.SyncDonor {
 	out := make([]download.SyncDonor, 0, len(donors))
 	for _, d := range donors {
 		out = append(out, download.SyncDonor{
-			Dub: d.dub, Source: d.src, Lang: d.lang, Title: d.dub, Default: d.def, Offset: d.offset,
+			Dub: d.dub, Source: d.src, Lang: d.lang, Title: d.dub, Default: d.def,
+			Offset: d.offset, Measured: d.measured,
 		})
 	}
 	return out

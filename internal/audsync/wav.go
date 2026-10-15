@@ -113,6 +113,22 @@ func readWAVLayout(f *os.File) (wavLayout, error) {
 	return wavLayout{}, errors.New("audsync: wav: no data chunk")
 }
 
+// WAVFrames opens a WAV file and returns its PCM frame count — the
+// pipeline's payload-geometry checks (Stage B's shift verification)
+// read it without touching the raw layout internals.
+func WAVFrames(path string) (int64, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: path is the caller-provided temp WAV, the function's contract
+	if err != nil {
+		return 0, fmt.Errorf("audsync: wav: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	layout, err := readWAVLayout(f)
+	if err != nil {
+		return 0, fmt.Errorf("audsync: wav: %w", err)
+	}
+	return layout.Frames, nil
+}
+
 var (
 	errNotRIFF    = errors.New("not a RIFF container")
 	errNotWAVE    = errors.New("not a WAVE form")

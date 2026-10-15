@@ -27,7 +27,10 @@ type fakeHistory struct {
 	// must persist at the checklist pick.
 	bindCalls []bindCall
 	byShiki   map[int64]*storage.AnimeProgress
-	rateIDs   map[int64]int64 // animeID -> last SetRateID
+	// bySource fixtures the (source_id, source_url) row (the offline
+	// range prior seam).
+	bySource map[string]*storage.AnimeProgress
+	rateIDs  map[int64]int64 // animeID -> last SetRateID
 }
 
 func (f *fakeHistory) List(_ context.Context) ([]storage.AnimeProgress, error) {
@@ -63,6 +66,19 @@ func (f *fakeHistory) BindSource(_ context.Context, id int64, sourceID, sourceUR
 
 func (f *fakeHistory) GetByShikimoriID(_ context.Context, shikimoriID int64) (*storage.AnimeProgress, error) {
 	if rec, ok := f.byShiki[shikimoriID]; ok {
+		return rec, nil
+	}
+	return nil, nil
+}
+
+// bySourceKey joins the source pair into the fake's row key.
+func bySourceKey(sourceID, sourceURL string) string { return sourceID + "\x00" + sourceURL }
+
+// GetBySource mirrors the real contract: the row on the exact
+// (source_id, source_url) pair, nil when absent (GetBySource fixture
+// for the offline range prior).
+func (f *fakeHistory) GetBySource(_ context.Context, sourceID, sourceURL string) (*storage.AnimeProgress, error) {
+	if rec, ok := f.bySource[bySourceKey(sourceID, sourceURL)]; ok {
 		return rec, nil
 	}
 	return nil, nil

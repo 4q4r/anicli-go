@@ -688,6 +688,20 @@ func (s *realHistory) GetByShikimoriID(ctx context.Context, shikimoriID int64) (
 	return rec, nil
 }
 
+// GetBySource loads the row sitting on a (source_id, source_url) pair;
+// a miss maps to (nil, nil) — the same "no row" contract as
+// GetByShikimoriID.
+func (s *realHistory) GetBySource(ctx context.Context, sourceID, sourceURL string) (*storage.AnimeProgress, error) {
+	rec, err := s.store.Progress.GetBySource(ctx, sourceID, sourceURL)
+	if err != nil {
+		if errors.Is(err, contracts.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return rec, nil
+}
+
 // SetRateID persists the shikimori rate id of a history row.
 func (s *realHistory) SetRateID(ctx context.Context, animeID, rateID int64) error {
 	return s.store.Progress.SetRateID(ctx, animeID, rateID)

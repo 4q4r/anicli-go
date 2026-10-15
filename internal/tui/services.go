@@ -129,6 +129,12 @@ type HistoryService interface {
 	// GetByShikimoriID loads the record bound to a shikimori anime,
 	// nil when none is bound.
 	GetByShikimoriID(ctx context.Context, shikimoriID int64) (*storage.AnimeProgress, error)
+	// GetBySource loads the record sitting on a (source_id, source_url)
+	// pair, nil when none exists. The offline range path reads its
+	// prior from the range's OWN row here — a shikimori-id lookup
+	// would return the newest row of ANY source sharing the entry and
+	// mix foreign progress into the no-rollback guard (review round 2).
+	GetBySource(ctx context.Context, sourceID, sourceURL string) (*storage.AnimeProgress, error)
 	// SetRateID persists the shikimori rate (list entry) id of a
 	// record (SyncEpisodeProgress pattern: PATCH vs Create dispatch).
 	SetRateID(ctx context.Context, animeID, rateID int64) error

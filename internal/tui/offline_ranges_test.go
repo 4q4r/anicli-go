@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -805,6 +806,117 @@ func TestOfflineRangeProgressGuardPrecomputedPrior(t *testing.T) {
 	}
 }
 
+// TestOfflineRangePriorIgnoresNewerOnlineRow (F2): the prior must come
+// from the range's OWN row (source lookup), never from the newest row
+// sharing the shikimori id. A NEWER online row of the same entry
+// (global episode 17) must not block the FIRST offline push: no own
+// row exists yet, so prior = 0 and the push of entry 13 goes through.
+func TestOfflineRangePriorIgnoresNewerOnlineRow(t *testing.T) {
+	env := rangesProgressSetup(t, 12)
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	onlineID := int64(55888)
+	online := storage.AnimeProgress{
+		Title:          "Онлайн-строка",
+		SourceID:       "shikimori",
+		SourceURL:      "https://shikimori.io/animes/55888",
+		CurrentEpisode: "17",
+		ShikimoriID:    &onlineID,
+		UpdatedAt:      nowUTC().Add(2 * time.Minute), // strictly newer
+	}
+	if err := store.Progress.Upsert(ctx, &online); err != nil {
+		t.Fatal(err)
+	}
+	env.deps.History = &realHistory{store: store}
+
+	s := rangeSession(t, env)
+	s.current = "1"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	_, saveCmd := next.Update(playCmd())
+	if saveCmd == nil {
+		t.Fatal("save cmd missing")
+	}
+	progress := saveCmd().(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	// The online row's global episode (17 + offset 12 = prior 29) must
+	// NOT block the first offline push of entry 13.
+	if len(env.shiki.epPushes) != 1 {
+		t.Fatalf("shiki pushes = %d (%+v), want 1 — the newer online row must not block the first range push",
+			len(env.shiki.epPushes), env.shiki.epPushes)
+	}
+	push := env.shiki.epPushes[0]
+	if push.shikimoriID != 55888 || push.episodes != 13 {
+		t.Errorf("push = %+v, want shikimoriID 55888 episodes 13", push)
+	}
+}
+
+// TestOfflineRangePriorOwnRowBeatsNewerOnlineRow (F2): when the range's
+// OWN row exists, it is the prior — even when a foreign online row of
+// the same shikimori id is newer. Own row at position 10 (entry 22)
+// must produce the 22-verdict, not the online row's 17+12=29.
+func TestOfflineRangePriorOwnRowBeatsNewerOnlineRow(t *testing.T) {
+	env := rangesProgressSetup(t, 12)
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	shikiID := int64(55888)
+	wantURL := download.SyntheticSourceURL(env.root, env.relDir, "s2")
+	own := storage.AnimeProgress{
+		Title:          "Реинкарнация — S2 ч.2",
+		SourceID:       "offline",
+		SourceURL:      wantURL,
+		CurrentEpisode: "10",
+		ShikimoriID:    &shikiID,
+		UpdatedAt:      nowUTC(),
+	}
+	if err := store.Progress.Upsert(ctx, &own); err != nil {
+		t.Fatal(err)
+	}
+	onlineID := int64(55888)
+	online := storage.AnimeProgress{
+		Title:          "Онлайн-строка",
+		SourceID:       "shikimori",
+		SourceURL:      "https://shikimori.io/animes/55888",
+		CurrentEpisode: "17",
+		ShikimoriID:    &onlineID,
+		UpdatedAt:      nowUTC().Add(2 * time.Minute), // strictly newer
+	}
+	if err := store.Progress.Upsert(ctx, &online); err != nil {
+		t.Fatal(err)
+	}
+	env.deps.History = &realHistory{store: store}
+
+	s := rangeSession(t, env)
+	s.current = "1"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	_, saveCmd := next.Update(playCmd())
+	if saveCmd == nil {
+		t.Fatal("save cmd missing")
+	}
+	progress := saveCmd().(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	if len(env.shiki.epPushes) != 0 {
+		t.Errorf("shiki pushes = %d (%+v), want 0 — the own row's prior 22 must block episode 13",
+			len(env.shiki.epPushes), env.shiki.epPushes)
+	}
+	if !strings.Contains(progress.note, "22") {
+		t.Errorf("note = %q, want the no-rollback verdict carrying the OWN row's prior 22", progress.note)
+	}
+}
+
 // TestOfflineRangeProgressPassesPriorToDispatcher (M5, dispatcher
 // leg): the precomputed prior rides into the ProgressSyncPrior seam —
 // same units, same guard — instead of the dispatcher re-reading the
@@ -830,8 +942,10 @@ func TestOfflineRangeProgressPassesPriorToDispatcher(t *testing.T) {
 	}
 	// A prior row exists (position 3 from the last watch): the
 	// dispatcher receives the ENTRY-unit prior 15 (3 + offset 12).
-	env.hist.byShiki = map[int64]*storage.AnimeProgress{
-		55888: {ID: 9, CurrentEpisode: "3"},
+	// The prior lives on the range's OWN row (review round 2) — the
+	// synthetic source key, not the shikimori-id fixture.
+	env.hist.bySource = map[string]*storage.AnimeProgress{
+		bySourceKey("offline", download.SyntheticSourceURL(env.root, env.relDir, "s2")): {ID: 9, CurrentEpisode: "3"},
 	}
 	s := rangeSession(t, env)
 	s.current = "3"

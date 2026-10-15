@@ -437,7 +437,9 @@ the first 8 hex digits of sha256 over the watched root's absolute path — same-
 folders under different roots never share a row); the Shikimori push sends
 `position + episode_offset` (files named 1–12 under a Shikimori entry counting 13–24 →
 offset 12), while the stored label stays the position. The no-rollback guard compares
-entry units: a rewatch of an early position never rolls the remote counter back. A
+entry units and reads its prior from the range's own history row: a newer online row
+of the same Shikimori entry never blocks the range push, and the first watch pushes
+freely. A rewatch of an early position never rolls the remote counter back. A
 range without `shikimori_id` plays but never syncs.
 
 **Binding flow.** Open any offline folder session (plain or range title) and pick

@@ -437,13 +437,21 @@ func (s *offlineSession) saveRangeProgressFor(episode, videoKey, audioKey string
 		defer cancel()
 		// The no-rollback prior must be read BEFORE the save
 		// overwrites the row with the new position label (review M5):
-		// converted to entry units it guards the push below.
+		// converted to entry units it guards the push below. The prior
+		// comes from the range's OWN row (the synthetic source key) —
+		// a shikimori-id lookup returns the newest row of ANY source
+		// sharing the entry, so a newer online row (or a foreign
+		// folder's range) mixed its global episode into this range's
+		// unit space and blocked legitimate pushes (review round 2).
+		// hasPrior stays true for every bound range: prior 0 (no own
+		// row — first watch) must own the guard instead of falling
+		// back to the newest-by-shikimori-id row read, whose units are
+		// whatever that foreign row stores.
 		priorEntry := 0
-		hasPrior := false
-		if shikiID != 0 {
-			if existing, err := deps.History.GetByShikimoriID(ctx, shikiID); err == nil && existing != nil {
-				priorEntry = parseWatchEpisode(existing.CurrentEpisode) + offset
-				hasPrior = true
+		hasPrior := shikiID != 0
+		if hasPrior {
+			if own, err := deps.History.GetBySource(ctx, "offline", download.SyntheticSourceURL(root, relDir, rangeID)); err == nil && own != nil {
+				priorEntry = parseWatchEpisode(own.CurrentEpisode) + offset
 			}
 		}
 		// Source-only upsert (review M4): the shikimori-id fallback

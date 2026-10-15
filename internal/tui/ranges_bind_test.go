@@ -770,3 +770,101 @@ func TestDeleteRangeConfirmRemovesStaged(t *testing.T) {
 		t.Fatalf("staged = %+v, want r2 removed", e.staged)
 	}
 }
+
+// TestRangeDetailPromptUpdateReturnsOwnerScreen: the prompt substate's
+// Update result must NOT become the screen the stack keeps — App.Update
+// REPLACES the stack top with the returned Screen (app.go default
+// branch), so returning the raw TextPrompt corrupts the stack (the
+// detail's list/confirm state falls off) and any later async message
+// lands on a prompt that ignores it. The owner screen stays.
+func TestRangeDetailPromptUpdateReturnsOwnerScreen(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	resolvePick(t, detail, detail.list, "rename")
+	if detail.prompt == nil {
+		t.Fatal("rename must open a prompt")
+	}
+	detail.prompt.typeText("Сезон 1")
+	next, _ := detail.Update(enter()) //nolint:errcheck // applies through the owner
+	if next != Screen(detail) {
+		t.Fatalf("Update returned %T, want the SAME rangeDetail — the prompt must not replace its owner on the stack", next)
+	}
+	if e.staged[0].Title != "Сезон 1" {
+		t.Errorf("title = %q, want Сезон 1 (the submit must still land)", e.staged[0].Title)
+	}
+}
+
+// TestShikiSearchPromptUpdateReturnsOwnerScreen (F1, submit leg): the
+// query submit keeps the shikiSearch on the stack and the lookup cmd
+// still flows out of the owner's Update.
+func TestShikiSearchPromptUpdateReturnsOwnerScreen(t *testing.T) {
+	dir := rangesBindFixture(t)
+	deps := &Deps{Shiki: &fakeShiki{enabled: true, ids: map[string]int64{"Тайтл": 42}}, Offline: &fakeOffline{}}
+	e := newBindEditorFor(t, deps, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	search, ok := pushedScreen(t, resolvePick(t, detail, detail.list, "bind")).(*shikiSearch)
+	if !ok {
+		t.Fatal("bind must push the shiki search")
+	}
+	search.prompt.typeText("Тайтл")
+	next, cmd := search.Update(enter())
+	if next != Screen(search) {
+		t.Fatalf("Update returned %T, want the SAME shikiSearch — the prompt must not replace its owner on the stack", next)
+	}
+	if cmd == nil {
+		t.Fatal("the wired lookup must still be scheduled")
+	}
+	if msg, ok := cmd().(shikiSearchMsg); !ok || msg.err != nil {
+		t.Fatalf("cmd msg = %#v, want an error-free shikiSearchMsg", msg)
+	}
+}
+
+// TestShikiSearchResultsArriveThroughAppStack (F1, the real
+// replacement semantics): App.Update REPLACES the stack top with the
+// returned Screen, so the pre-results key path returning the raw
+// TextPrompt made every later shikiSearchMsg land on the prompt —
+// which ignores it — and the candidates NEVER rendered. Driven through
+// the App Update path (unit tests calling methods directly missed it).
+func TestShikiSearchResultsArriveThroughAppStack(t *testing.T) {
+	dir := rangesBindFixture(t)
+	shiki := &fakeShiki{enabled: true, ids: map[string]int64{"Тайтл": 42}}
+	deps := &Deps{Shiki: shiki, Offline: &fakeOffline{}}
+	e := newBindEditorFor(t, deps, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := newRangeDetail(e, 0)
+	search := newShikiSearch(e, detail, 0)
+	app := NewApp(e, deps, nil, detail, search) // stack: [editor, detail, search]
+
+	search.prompt.typeText("Тайтл")
+	model, cmd := app.Update(enter())
+	if cmd == nil {
+		t.Fatal("the query submit must schedule the lookup")
+	}
+	app = model.(App)
+	if top := app.stack[len(app.stack)-1]; top != Screen(search) {
+		t.Fatalf("stack top = %T, want the SAME shikiSearch after the submit", top)
+	}
+	model, _ = app.Update(cmd()) // the lookup settles → shikiSearchMsg
+	app = model.(App)
+	if top := app.stack[len(app.stack)-1]; top != Screen(search) {
+		t.Fatalf("stack top = %T, want the shikiSearch still owning the stack when the results arrive", top)
+	}
+	if search.results == nil {
+		t.Fatal("the results menu was never built — shikiSearchMsg landed off its owner")
+	}
+	if got := search.View().Content; !strings.Contains(got, "Тайтл") {
+		t.Errorf("the settled candidates must render:\n%s", got)
+	}
+}

@@ -417,7 +417,12 @@ func (d *rangeDetail) View() tea.View {
 // delete confirm, then the rows.
 func (d *rangeDetail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if d.prompt != nil {
-		return d.prompt.Update(msg)
+		// The prompt's Update result must NOT become the return: App
+		// replaces the stack top with it, which would retire this
+		// detail (and orphan every later async message on a bare
+		// prompt — CodeRabbit round-1). The owner screen stays.
+		_, cmd := d.prompt.Update(msg)
+		return d, cmd
 	}
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -796,5 +801,10 @@ func (s *shikiSearch) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return s, nil
 		}
 	}
-	return s.prompt.Update(msg)
+	// The prompt's Update result stays internal (App replaces the
+	// stack top with the returned Screen — returning the bare prompt
+	// would strand the coming shikiSearchMsg on a screen that ignores
+	// it). The owner screen stays.
+	_, cmd := s.prompt.Update(msg)
+	return s, cmd
 }

@@ -3188,10 +3188,12 @@ func (s *sessionScreen) buildActionMenu() {
 	s.list = NewPinList(NewMenu(s.renderHeader(), "", choices...), defaultListHeight)
 }
 
-// seriesOnlyTitleRe matches an episode title that merely restates
-// the jump list's own «Серия N» prefix (PR112: RU providers echo the
+// episodeEchoTitleRe matches an episode title that merely restates
+// the jump list's own episode label (PR112: RU providers echo the
 // player-API episode title, so the row read «Серия 3 — Серия 3»).
-var seriesOnlyTitleRe = regexp.MustCompile(`^Серия\s+\d+$`)
+// The echo comes in both observed player forms — the cyrillic
+// «Серия N» and the latin «Episode N» — either must render once.
+var episodeEchoTitleRe = regexp.MustCompile(`^(?:Серия|Episode)\s+\d+$`)
 
 // episodeChoices builds the full jump-list choices (one per episode in
 // watch order).
@@ -3200,10 +3202,11 @@ func (s *sessionScreen) episodeChoices() []Choice {
 	for _, num := range s.order {
 		ep := s.episodes[num]
 		label := i18n.T("session.episode_label", i18n.Vals{"num": num})
-		// PR112: a title that only restates «Серия N» is dropped —
-		// the jump list renders it once. A real distinct title keeps
-		// the «Серия N — Title» form.
-		if title := strings.TrimSpace(ep.Title); title != "" && !seriesOnlyTitleRe.MatchString(title) {
+		// PR112: a title that only restates the episode label (the
+		// «Серия N» / «Episode N» player echo) is dropped — the jump
+		// list renders it once. A real distinct title keeps the
+		// «Серия N — Title» form.
+		if title := strings.TrimSpace(ep.Title); title != "" && !episodeEchoTitleRe.MatchString(title) {
 			label += " — " + ep.Title
 		}
 		choices = append(choices, Choice{ID: num, Label: label, Value: num})

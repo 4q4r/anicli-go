@@ -17,9 +17,10 @@ import (
 )
 
 // pr112Session loads a session whose episodes carry every label
-// shape: a «Episode N» echo (RU providers), a real distinct title, an
-// empty title, and a whitespace-padded echo (normalized match,
-// multi-digit).
+// shape: a «Серия N» echo, a latin «Episode N» echo (RU providers
+// fill contracts.Episode.Title with the player-API episode title in
+// either form), a real distinct title, an empty title, and a
+// whitespace-padded echo (normalized match, multi-digit).
 func pr112Session(t *testing.T) *sessionScreen {
 	t.Helper()
 	deps := &Deps{Episode: &fakeEpisode{episodes: map[string][]contracts.Episode{
@@ -27,6 +28,7 @@ func pr112Session(t *testing.T) *sessionScreen {
 			{Num: "3", Title: "Серия 3", RawID: "a3", RawEmbeds: map[string][]string{"Дубль 1": {"u3"}}},
 			{Num: "5", Title: "Опенинг", RawID: "a5", RawEmbeds: map[string][]string{"Дубль 1": {"u5"}}},
 			{Num: "7", Title: "", RawID: "a7", RawEmbeds: map[string][]string{"Дубль 1": {"u7"}}},
+			{Num: "9", Title: "Episode 9", RawID: "a9", RawEmbeds: map[string][]string{"Дубль 1": {"u9"}}},
 			{Num: "12", Title: "  Серия   12  ", RawID: "a12", RawEmbeds: map[string][]string{"Дубль 1": {"u12"}}},
 		},
 	}}}
@@ -58,6 +60,9 @@ func TestPR112JumpLabelSeriesTitleDedupe(t *testing.T) {
 	}
 	if got := pr112Label(t, s, "7"); got != "Episode 7" {
 		t.Fatalf("an empty title must render the bare row, got %q", got)
+	}
+	if got := pr112Label(t, s, "9"); got != "Episode 9" {
+		t.Fatalf("a latin echoed «Episode N» title must render once, got %q", got)
 	}
 	if got := pr112Label(t, s, "12"); got != "Episode 12" {
 		t.Fatalf("a whitespace-padded echo must normalize to a single label, got %q", got)

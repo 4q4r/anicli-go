@@ -254,7 +254,7 @@ func TestLivePR61UnauthSkip(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("unauthenticated must be a typed skip, not an error: %v", msg.err)
 	}
-	if !strings.Contains(msg.note, "нет авторизации") && !strings.Contains(msg.note, "отключён") {
+	if !strings.Contains(msg.note, "not authorized") && !strings.Contains(msg.note, "disabled") {
 		t.Fatalf("note = %q, want the typed unauth/disabled skip", msg.note)
 	}
 }

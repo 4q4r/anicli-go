@@ -74,42 +74,17 @@ func TestLiveDiscontinuousHLSDecode(t *testing.T) {
 		t.Fatalf("decoded %.2fs, want 323 ± 1.5 (a hole would shorten it)", secs)
 	}
 
-	// Claim 2: the analysis window at t=90 lands in segment A's
-	// content — it correlates with the reference's own window at 90.
-	// Both windows start at their stream's t=90, and the HLS stream
-	// carries A's 3-second silence head, so the HLS window holds the
-	// reference content 3 s EARLIER: the RAW delay reads +3 s (the
-	// offset formula's −60 head-start term does not apply to two
-	// equal windows — the prominence is the claim's substance).
-	hlsWin := mustDecodeWindow(t, a, ctx, playlist, 90, 60)
-	refWin := ref.Windows[0] // the reference's t=90 window
-	delay, prom, err := CrossCorrelate(refWin, hlsWin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lagSec := float64(delay) / SampleRate
-	t.Logf("window@90: prominence %.1f, raw delay %.3fs (A's head delay)", prom, lagSec)
-	if prom < MinProminence {
-		t.Fatalf("window@90 prominence %.1f < %.0f — the span is not the expected content", prom, MinProminence)
-	}
-	if math.Abs(lagSec-3) > 0.125 {
-		t.Fatalf("window@90 raw delay %.3fs, want ≈ +3 (A's head delay)", lagSec)
-	}
-
-	// Claim 3: the FULL verdict over the discontinuous donor — the
-	// boundary-crossing middle window (search 100..280 crosses the
-	// t=160 discontinuity) either votes correctly or abstains; the
-	// consensus stands and lands +3.
+	// Claim 2+3 (v2): the FULL verdict over the discontinuous donor —
+	// the whole-length envelope correlation is PTS-blind; the
+	// verdict lands +3 (the decode is through, the content carries
+	// it).
 	off, err := a.Offset(ctx, ref, srcURL(playlist))
 	if err != nil {
 		t.Fatalf("Offset over discontinuous donor: %v", err)
 	}
-	t.Logf("verdict = %.3fs, agree %d, confidence %.2f", off.Seconds, off.WindowsAgree, off.Confidence)
+	t.Logf("verdict = %.3fs", off.Seconds)
 	if math.Abs(off.Seconds-3) > 0.125 {
 		t.Fatalf("verdict %.3f, want ≈ +3 ± 0.125", off.Seconds)
-	}
-	if off.WindowsAgree < 2 {
-		t.Fatalf("WindowsAgree = %d, want ≥2 (the decode is PTS-blind)", off.WindowsAgree)
 	}
 }
 
@@ -147,7 +122,7 @@ func TestLiveDiscontinuousHLSContentBreakDegradesHonestly(t *testing.T) {
 	off, err := a.Offset(ctx, ref, srcURL(playlist))
 	switch {
 	case err == nil:
-		t.Logf("verdict = %.3fs, agree %d (the A-span windows carried it)", off.Seconds, off.WindowsAgree)
+		t.Logf("verdict = %.3fs (the A-span carried it)", off.Seconds)
 		if math.Abs(off.Seconds-3) > 0.125 {
 			t.Fatalf("verdict %.3f is a made-up offset, want ≈+3 or no-confidence", off.Seconds)
 		}
@@ -156,19 +131,4 @@ func TestLiveDiscontinuousHLSContentBreakDegradesHonestly(t *testing.T) {
 	default:
 		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-// mustDecodeWindow decodes one analysis window: the WHOLE source
-// (decode order is the timeline), sliced locally at [start, start+dur).
-func mustDecodeWindow(t *testing.T, a *Analyzer, ctx context.Context, url string, start, dur float64) []float64 {
-	t.Helper()
-	data, _, err := a.exec(ctx, a.ffmpeg, decodeArgs(srcURL(url)))
-	if err != nil {
-		t.Fatalf("decode window: %v", err)
-	}
-	win := sliceWindow(decodePCM(data), start, dur)
-	if win == nil {
-		t.Fatalf("window [%v, %v) past the decoded samples", start, dur)
-	}
-	return win
 }

@@ -39,8 +39,27 @@ type SyncDonor struct {
 	Lang, Title string
 	// Default marks the default disposition.
 	Default bool
-	// Offset is the measured offset in seconds (>0 trim, <0 pad).
+	// Offset is the measured LAG in seconds (>0 trim, <0 pad) — the
+	// pipeline adds the AAC priming before moving frames (the v2
+	// convention; the closed loop may refine it further). Once the
+	// shift is applied, the same field carries the APPLIED shift —
+	// the lag plus the AAC priming compensation, exactly what
+	// ShiftWAVFile consumed — and the Stage D lead verification
+	// (syncExpectedLead) reads it directly.
 	Offset float64
+	// Measured marks donors the analyzer actually measured. Only
+	// measured donors run the closed loop and carry the priming
+	// compensation; an unmeasured donor ships byte-identical (a
+	// same-provider timeline is in sync by construction).
+	Measured bool
+}
+
+// DonorSynchronizer is the v2 closed-loop seam (the audsync.Analyzer
+// in production): it refines one donor's measured lag against the
+// decoded pipeline WAV, leaving shiftedWAV as the final product, and
+// returns the applied shift (final lag + AAC priming).
+type DonorSynchronizer interface {
+	ClosedLoop(ctx context.Context, ref audsync.Reference, rawWAV, shiftedWAV string, measuredLag float64) (float64, error)
 }
 
 // SyncJob is one episode's assembly plan.
@@ -56,6 +75,12 @@ type SyncJob struct {
 	Output string
 	// Title feeds the container title.
 	Title string
+	// SyncRef/SyncLoop enable the v2 closed-loop refinement in
+	// Stage B (the episode's reference envelope + the analyzer
+	// seam). nil either — the measured offsets apply verbatim (the
+	// plain shift).
+	SyncRef  *audsync.Reference
+	SyncLoop DonorSynchronizer
 }
 
 // tempSibling derives a hidden intermediate next to the output.
@@ -92,10 +117,12 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 	}
 	tick(10)
 
-	// Stage B: decode → byte-shift → m4a per donor (ALL donors, a
-	// zero-offset one included — one mkvmerge pass carries every
-	// track).
+	// Stage B: decode → byte-shift (the v2 closed loop for measured
+	// donors) → m4a per donor (ALL donors, a zero-offset one
+	// included — one mkvmerge pass carries every track).
 	var audio []AssembleAudio
+	finalDonors := make([]SyncDonor, len(job.Donors))
+	copy(finalDonors, job.Donors)
 	for i, don := range job.Donors {
 		wav := tempSibling(job.Output, fmt.Sprintf(".donor%d.tmp.wav", i))
 		shifted := wav + ".shifted"
@@ -105,10 +132,43 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 		if _, _, err := d.runOut(ctx, d.ffmpeg, audsync.DecodeWAVArgs(don.Source, wav)); err != nil {
 			return fmt.Errorf("download: sync stage B (%s): decode: %w", don.Dub, err)
 		}
-		frames := audsync.FramesFor(don.Offset, audsync.PipelineRate)
-		if err := audsync.ShiftWAVFile(wav, shifted, frames); err != nil {
-			return fmt.Errorf("download: sync stage B (%s): shift: %w", don.Dub, err)
+		applied := 0.0
+		switch {
+		case don.Measured && job.SyncRef != nil && job.SyncLoop != nil:
+			// The v2 closed loop: measure → shift → re-measure → one
+			// correction, leaving `shifted` as the final product. A
+			// loop failure degrades to the measured shift (the v1
+			// product) — the analysis never fails a download.
+			//
+			// The fallback re-shifts FROM THE RAW wav below: ClosedLoop
+			// performs its initial shift before the re-measure, so
+			// `shifted` may already hold a shifted copy — the fresh
+			// ShiftWAVFile(wav → shifted) overwrites it wholesale (a
+			// duplicate of that initial shift, never a chained second
+			// shift of already-shifted PCM).
+			applied = don.Offset + audsync.AACPrimingSec
+			if v, err := job.SyncLoop.ClosedLoop(ctx, *job.SyncRef, wav, shifted, don.Offset); err == nil {
+				applied = v
+			} else {
+				d.logger().Warn("download: sync closed loop failed; applying the measured shift",
+					"donor", don.Dub, "error", err)
+				if err := audsync.ShiftWAVFile(wav, shifted, audsync.FramesFor(applied, audsync.PipelineRate)); err != nil {
+					return fmt.Errorf("download: sync stage B (%s): shift: %w", don.Dub, err)
+				}
+			}
+		case don.Measured:
+			applied = don.Offset + audsync.AACPrimingSec
+			if err := audsync.ShiftWAVFile(wav, shifted, audsync.FramesFor(applied, audsync.PipelineRate)); err != nil {
+				return fmt.Errorf("download: sync stage B (%s): shift: %w", don.Dub, err)
+			}
+		default:
+			// Unmeasured: the donor ships byte-identical (a plain
+			// copy through the same temp path).
+			if err := audsync.ShiftWAVFile(wav, shifted, 0); err != nil {
+				return fmt.Errorf("download: sync stage B (%s): copy: %w", don.Dub, err)
+			}
 		}
+		finalDonors[i].Offset = applied
 		if _, _, err := d.runOut(ctx, d.ffmpeg, audsync.EncodeM4AArgs(shifted, m4a)); err != nil {
 			return fmt.Errorf("download: sync stage B (%s): encode: %w", don.Dub, err)
 		}
@@ -142,8 +202,9 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 	tick(90)
 
 	// Stage D: the delivery invariant — the lead geometry follows the
-	// FIRST shifted donor (trim → ≈0, pad → ≈|offset|).
-	expectedLead := syncExpectedLead(job.Donors)
+	// FIRST donor (trim → ≈0, pad → ≈|applied|), from the FINAL
+	// offsets (the closed loop may have corrected donors[0]).
+	expectedLead := syncExpectedLead(finalDonors)
 	if err := d.VerifyAssembled(ctx, outPart, expectedLead); err != nil {
 		_ = os.Remove(outPart)
 		return fmt.Errorf("download: sync stage D: %w", err)
@@ -159,13 +220,18 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 
 // syncExpectedLead resolves the verification's expected head from
 // donors[0] ONLY — that is the track VerifyAssembled measures
-// (0:a:0): zero when donors is empty or the first offset is
-// nonnegative (trim geometry), else the negated first offset (pad).
-// A later donor's pad never sets the expectation for a head it does
-// not own (CodeRabbit #4: donors[0] unshifted + donors[1] padded
-// −10 s has a ≈0 file lead).
+// (0:a:0). Offset here is the APPLIED shift (the lag plus the AAC
+// priming compensation — exactly what ShiftWAVFile consumed), so the
+// lead derives from it directly: a nonnegative applied shift is trim
+// geometry (≈0 lead), a negative one pads (≈|Offset|). No second
+// priming addition happens here. Unmeasured donors ship untouched —
+// no lead. A later donor's pad never sets the expectation for a head
+// it does not own (CodeRabbit #4).
 func syncExpectedLead(donors []SyncDonor) time.Duration {
-	if len(donors) == 0 || donors[0].Offset >= 0 {
+	if len(donors) == 0 || !donors[0].Measured {
+		return 0
+	}
+	if donors[0].Offset >= 0 {
 		return 0
 	}
 	return secondsToDuration(-donors[0].Offset)

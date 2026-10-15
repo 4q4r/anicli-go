@@ -1,17 +1,19 @@
 package audsync
 
-// The two DECODE argv shapes — never mix them:
-//   - decodeArgs: the ANALYSIS decode (research §3.4): a timed window
-//     at 8 kHz mono s16le straight to the pipe;
-//   - decodeWAVArgs: the PIPELINE decode (the owner's forced shape):
-//     the WHOLE donor, first audio track, 48 kHz stereo s16le WAV on
-//     disk — no -ss/-t, because the byte shift operates on decode
-//     order and must stay immune to a nonlinear HLS timeline.
+// The PIPELINE argv shapes — the owner's forced decode/encode pair,
+// unchanged from PR165b:
+//   - DecodeWAVArgs: the whole donor's first audio track, 48 kHz
+//     stereo s16le WAV on disk — no -ss/-t, because the byte shift
+//     operates on decode order and must stay immune to a nonlinear
+//     HLS timeline;
+//   - EncodeM4AArgs: the shifted-WAV → isolated m4a codec pass.
 //
-// encodeM4AArgs is the shifted-WAV → isolated m4a codec pass.
+// The ANALYSIS argv shapes live with the v2 algorithm: envDecodeArgs
+// and assExtractArgs (reference.go).
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 	"strings"
 
@@ -48,20 +50,6 @@ func stripCRLF(s string) string {
 
 var crlfReplacer = strings.NewReplacer("\r", "", "\n", "")
 
-// decodeArgs renders the ANALYSIS decode: the WHOLE source's audio to
-// the pipe, 8 kHz mono s16le. There is deliberately NO -ss: input
-// seeking is unreliable on HLS demuxers (the T6 live proof — a
-// discontinuous playlist re-decoded the head for every -ss), while a
-// whole decode follows the true decode-order timeline (plan §1.3);
-// the windows are then sliced from the samples locally. A full
-// episode at 8 kHz mono is ~23 MB for 24 minutes.
-func decodeArgs(src contracts.VideoSource) []string {
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
-	args = append(args, headerBlob(src.Headers)...)
-	args = append(args, "-i", src.URL, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:")
-	return args
-}
-
 // DecodeWAVArgs renders the PIPELINE decode (owner-forced 48 kHz
 // stereo WAV; the whole donor — never a window).
 func DecodeWAVArgs(src contracts.VideoSource, outWAV string) []string {
@@ -76,22 +64,6 @@ func DecodeWAVArgs(src contracts.VideoSource, outWAV string) []string {
 func EncodeM4AArgs(inWAV, outM4A string) []string {
 	return []string{"-y", "-hide_banner", "-loglevel", "error",
 		"-i", inWAV, "-c:a", "aac", "-b:a", "256k", outM4A}
-}
-
-// decodePCM converts s16le bytes to float samples. The values keep the
-// s16 integer scale: the RMS gates compare against MinRMS in s16
-// units, and the correlation/prominence math is scale-invariant. An
-// odd trailing byte is ignored; nil is an empty slice.
-func decodePCM(pcm []byte) []float64 {
-	n := len(pcm) / 2
-	if n == 0 {
-		return nil
-	}
-	out := make([]float64, n)
-	for i := range out {
-		out[i] = float64(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) //nolint:gosec // G115: PCM s16le IS the two's-complement reinterpretation of the uint16 word
-	}
-	return out
 }
 
 // s16Bytes is the inverse of decodePCM (tests and the closed-loop live
@@ -114,4 +86,21 @@ func clampS16(v float64) float64 {
 	default:
 		return v
 	}
+}
+
+// RMSOfPCM is the s16le PCM root-mean-square in s16 units — the
+// assembled-file verification floor (the download package's
+// VerifyAssembled reads it). An empty or odd-length buffer is 0 (never
+// a panic); odd trailing bytes are ignored.
+func RMSOfPCM(pcm []byte) float64 {
+	n := len(pcm) / 2
+	if n == 0 {
+		return 0
+	}
+	sum := 0.0
+	for i := range n {
+		v := float64(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) //nolint:gosec // G115: PCM s16le IS the two's-complement reinterpretation of the uint16 word
+		sum += v * v
+	}
+	return math.Sqrt(sum / float64(n))
 }

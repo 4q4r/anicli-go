@@ -19,33 +19,29 @@ import (
 	"github.com/an0nx/anicli-go/internal/providers"
 )
 
-// fakeSyncAnalyzer scripts Reference and per-ANALYSIS-CALL offsets
-// (the pipeline legs share one resolved URL, so the scripting is
-// queue-based by call order).
+// fakeSyncAnalyzer scripts the v2 analysis seam: the reference
+// hierarchy leg and per-ANALYSIS-CALL offsets (queue-based by call
+// order). donorLangs of the last Reference call are recorded.
 type fakeSyncAnalyzer struct {
 	refErr       error
 	refErrFor    map[string]error // per-URL reference failure
-	refErrsQueue []error          // per-CALL reference failures (the video leg fails first in the anchor scenarios)
 	offsetsQueue []audsync.SyncOffset
 	errsQueue    []error
-	references   []string // the reference sources requested, in order
-	analyzed     []string // the donor sources analyzed, in order
+	references   []string   // the reference sources requested, in order
+	donorLangs   [][]string // the donor langs per Reference call
+	analyzed     []string   // the donor sources analyzed, in order
 }
 
-func (f *fakeSyncAnalyzer) Reference(_ context.Context, video contracts.VideoSource) (audsync.Reference, error) {
+func (f *fakeSyncAnalyzer) Reference(_ context.Context, video contracts.VideoSource, donorLangs ...string) (audsync.Reference, error) {
 	f.references = append(f.references, video.URL)
-	if len(f.refErrsQueue) > 0 {
-		err := f.refErrsQueue[0]
-		f.refErrsQueue = f.refErrsQueue[1:]
-		return audsync.Reference{}, err
-	}
+	f.donorLangs = append(f.donorLangs, donorLangs)
 	if err, ok := f.refErrFor[video.URL]; ok {
 		return audsync.Reference{}, err
 	}
 	if f.refErr != nil {
 		return audsync.Reference{}, f.refErr
 	}
-	return audsync.Reference{FPS: 24}, nil
+	return audsync.Reference{Kind: audsync.RefSubs, Envelope: make([]float64, audsync.EnvBins), MinLag: audsync.SubLagMin, MaxLag: audsync.SubLagMax}, nil
 }
 
 func (f *fakeSyncAnalyzer) Offset(_ context.Context, _ audsync.Reference, dub contracts.VideoSource) (audsync.SyncOffset, error) {
@@ -61,6 +57,10 @@ func (f *fakeSyncAnalyzer) Offset(_ context.Context, _ audsync.Reference, dub co
 		return off, nil
 	}
 	return audsync.SyncOffset{}, nil // measured clean zero
+}
+
+func (f *fakeSyncAnalyzer) ClosedLoop(_ context.Context, _ audsync.Reference, rawWAV, shiftedWAV string, measuredLag float64) (float64, error) {
+	return measuredLag + audsync.AACPrimingSec, nil
 }
 
 // fakeSyncAssembler captures the assembly jobs and emits the
@@ -129,7 +129,7 @@ func TestSyncAssemblyRunsOnOffset(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{offsetsQueue: []audsync.SyncOffset{
-		{Seconds: 17.042, Confidence: 5, WindowsAgree: 3},
+		{Seconds: 17.042},
 		{Seconds: 0}, // DUB2 measured clean zero → frames=0, no note
 	}}
 	assembler := &fakeSyncAssembler{}
@@ -237,7 +237,7 @@ func TestSyncUnavailableWhenMkvmergeAbsent(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{offsetsQueue: []audsync.SyncOffset{
-		{Seconds: 17.042, Confidence: 5, WindowsAgree: 3},
+		{Seconds: 17.042},
 	}}
 	assembler := &fakeSyncAssembler{}
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, false)
@@ -268,7 +268,7 @@ func TestSyncFatalOnAssemblyError(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{offsetsQueue: []audsync.SyncOffset{
-		{Seconds: 17.042, Confidence: 5, WindowsAgree: 3},
+		{Seconds: 17.042},
 	}}
 	assembler := &fakeSyncAssembler{err: errors.New("mkvmerge exploded")}
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
@@ -314,7 +314,7 @@ func TestSyncLegacyPathIndexes(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{offsetsQueue: []audsync.SyncOffset{
-		{Seconds: -0.875, Confidence: 5, WindowsAgree: 3},
+		{Seconds: -0.875},
 	}}
 	assembler := &fakeSyncAssembler{}
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
@@ -395,7 +395,7 @@ func TestSyncProgressTicksReachTheManager(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{offsetsQueue: []audsync.SyncOffset{
-		{Seconds: 17.042, Confidence: 5, WindowsAgree: 3},
+		{Seconds: 17.042},
 	}}
 	assembler := &fakeSyncAssembler{}
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
@@ -412,69 +412,18 @@ func TestSyncProgressTicksReachTheManager(t *testing.T) {
 	}
 }
 
-// --- PR165b FIX-ROUND MAJOR-1: the anchor fallback --------------------
+// --- PR173 v2: the reference hierarchy's degradation ------------------
 
-// TestSyncAnchorShipsUnshiftedAndShiftsTheRest: no embedded reference
-// (ErrNoReference) with ≥2 donors — the FIRST donor is the ANCHOR: it
-// ships UNSHIFTED (its own timeline is the only reference that
-// exists), carries its own SyncNote (never invisible), and the
-// remaining dubs are measured against it and shifted by the RELATIVE
-// offsets.
-func TestSyncAnchorShipsUnshiftedAndShiftsTheRest(t *testing.T) {
+// TestSyncNoReferenceDegradesUnsynchronized: the hierarchy finds
+// nothing usable (ErrNoReference) — the download proceeds
+// UNSYNCHRONIZED with an uncertain note per dub, whatever the donor
+// count (the v1 anchor fallback is superseded: the hierarchy's
+// «любая другая исходная дорожка» leg covers every usable case, and
+// without ANY reference there is nothing to align to).
+func TestSyncNoReferenceDegradesUnsynchronized(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
-	analyzer := &fakeSyncAnalyzer{
-		// Call 1 = the video leg fails (no embedded track); call 2 =
-		// the anchor donor succeeds.
-		refErrsQueue: []error{audsync.ErrNoReference},
-		offsetsQueue: []audsync.SyncOffset{{Seconds: 2.0, Confidence: 5, WindowsAgree: 3}},
-	}
-	assembler := &fakeSyncAssembler{}
-	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
-
-	path, _, notes, err := c.downloadOne(context.Background(), pr165bSyncTask(), nil)
-	if err != nil {
-		t.Fatalf("downloadOne: %v", err)
-	}
-	if len(dl.inputs) != 0 {
-		t.Fatalf("the anchor assembly must not single-pass mux, got %v", dl.inputs)
-	}
-	if len(assembler.jobs) != 1 {
-		t.Fatalf("one assembly job expected, got %d", len(assembler.jobs))
-	}
-	job := assembler.jobs[0]
-	// The anchor ships: BOTH donors land in the .mkv, the anchor with
-	// shift 0 (its own timeline), the rest shifted by the measured
-	// relative offsets.
-	if len(job.Donors) != 2 {
-		t.Fatalf("donors = %d, want 2 (the anchor is never dropped)", len(job.Donors))
-	}
-	if job.Donors[0].Offset != 0 {
-		t.Fatalf("anchor offset = %v, want 0 (unshifted)", job.Donors[0].Offset)
-	}
-	if job.Donors[1].Offset != 2.0 {
-		t.Fatalf("relative offset = %v, want 2.0", job.Donors[1].Offset)
-	}
-	if !strings.HasSuffix(path, ".mkv") {
-		t.Fatalf("anchor assembly output = %q, want .mkv", path)
-	}
-	// The anchor note + the applied note.
-	if len(notes) != 2 || notes[0].Kind != SyncAnchor || notes[0].Dub != "DUB1" ||
-		notes[1].Kind != SyncApplied || notes[1].Seconds != 2.0 {
-		t.Fatalf("notes = %+v, want anchor(DUB1)+applied(DUB2)", notes)
-	}
-}
-
-// TestSyncAnchorAllZeroFallsBackWithNote: every relative offset
-// measures clean zero — the dubs are aligned to each other already;
-// today's mux runs and the anchor note still tells the truth.
-func TestSyncAnchorAllZeroFallsBackWithNote(t *testing.T) {
-	t.Parallel()
-	dl := &capturingDownloader{}
-	analyzer := &fakeSyncAnalyzer{
-		refErrsQueue: []error{audsync.ErrNoReference},
-		offsetsQueue: []audsync.SyncOffset{{Seconds: 0}},
-	}
+	analyzer := &fakeSyncAnalyzer{refErr: audsync.ErrNoReference}
 	assembler := &fakeSyncAssembler{}
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
 
@@ -483,20 +432,35 @@ func TestSyncAnchorAllZeroFallsBackWithNote(t *testing.T) {
 		t.Fatalf("downloadOne: %v", err)
 	}
 	if len(assembler.jobs) != 0 {
-		t.Fatalf("no assembly on all-zero relatives, got %v", assembler.jobs)
+		t.Fatalf("no assembly without a reference, got %v", assembler.jobs)
 	}
 	if len(dl.inputs) != 1 {
 		t.Fatalf("the single-pass mux must run, got %d", len(dl.inputs))
 	}
-	if len(notes) != 1 || notes[0].Kind != SyncAnchor || notes[0].Dub != "DUB1" {
-		t.Fatalf("notes = %+v, want the anchor note", notes)
+	if len(notes) != 2 {
+		t.Fatalf("notes = %+v, want one uncertain per dub", notes)
+	}
+	for _, n := range notes {
+		if n.Kind != SyncUncertain {
+			t.Fatalf("note %+v, want uncertain", n)
+		}
+	}
+	// The hierarchy asked ONCE, with the donors' langs passed through
+	// (the fixture's tracks carry no language metadata — the empty
+	// strings are the honest pass-through; the preference logic is
+	// audsync's reference_test's business).
+	if len(analyzer.references) != 1 {
+		t.Fatalf("references = %v, want exactly one hierarchy call", analyzer.references)
+	}
+	if langs := analyzer.donorLangs[0]; len(langs) != 2 {
+		t.Fatalf("donorLangs = %v, want one entry per donor", langs)
 	}
 }
 
-// TestSyncAnchorSingleDonorNoRef: one donor and no embedded
+// TestSyncSingleDonorNoRef: one donor and no embedded
 // reference — nothing to correlate against; today's path + the
 // uncertain note.
-func TestSyncAnchorSingleDonorNoRef(t *testing.T) {
+func TestSyncSingleDonorNoRef(t *testing.T) {
 	t.Parallel()
 	dl := &capturingDownloader{}
 	analyzer := &fakeSyncAnalyzer{refErr: audsync.ErrNoReference}

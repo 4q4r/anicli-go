@@ -203,7 +203,6 @@
 "download.sync_note_applied" = "{dub} {offset}s"
 "download.sync_note_uncertain" = "{dub}: no confidence"
 "download.sync_note_unavailable" = "{dub}: sync unavailable (mkvmerge not installed)"
-"download.sync_note_anchor" = "{dub}: anchor — shift not measured (no reference)"
 "download.content_title" = "Download mode:"
 "download.content_video_audio" = "🎬 Video+Audio (default)"
 "download.content_video_only" = "🎞 Video only"

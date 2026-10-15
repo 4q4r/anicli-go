@@ -55,7 +55,7 @@ func TestLivePR111SettleCounter(t *testing.T) {
 	v := sp.View().Content
 	t.Logf("=== FRAME final settled (%d/%d, %d results) ===\n%s",
 		total, total, len(sp.results), pr110Indent(v))
-	if strings.Contains(v, "провайдеров,") {
+	if strings.Contains(v, "providers,") {
 		t.Fatalf("the settled frame must drop the loading line:\n%s", v)
 	}
 	if want := "Found: " + strconv.Itoa(len(sp.results)); !strings.Contains(v, want) {
@@ -68,8 +68,8 @@ func TestLivePR111SettleCounter(t *testing.T) {
 // global across branches), every provider command runs to completion,
 // and the first two settles plus the halfway settle re-render the
 // mid-flight live-counter frame into the test log. Each logged frame
-// must show the exact counter «settled/total провайдеров» — the
-// feature under proof.
+// must show the exact counter «settled/total providers» (the en
+// source-of-truth strings the tests render) — the feature under proof.
 func runLivePR111(t *testing.T, sp *searchProgress, cmd tea.Cmd, total int) {
 	t.Helper()
 	queue := []tea.Cmd{cmd}
@@ -96,7 +96,7 @@ func runLivePR111(t *testing.T, sp *searchProgress, cmd tea.Cmd, total int) {
 			if show && len(sp.pending) > 0 && !logged[settled] {
 				logged[settled] = true
 				frame := sp.View().Content
-				want := strconv.Itoa(total-len(sp.pending)) + "/" + strconv.Itoa(total) + " провайдеров"
+				want := strconv.Itoa(total-len(sp.pending)) + "/" + strconv.Itoa(total) + " providers"
 				if !strings.Contains(frame, want) {
 					t.Fatalf("mid-flight frame must carry the live counter %q:\n%s", want, frame)
 				}

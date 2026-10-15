@@ -240,7 +240,8 @@ func TestLivePR62AnilibDropsOnlyInFileLog(t *testing.T) {
 	t.Logf("%d drop line(s) in the file sink", drops)
 
 	// The search screen renders the settled results: the footer is the
-	// clean counter — the drop lines never render into the TUI.
+	// clean «Found: …» summary (the PR110 minimal surface) — the drop
+	// lines never render into the TUI.
 	fs := newFakeSearch()
 	fs.providers = []ProviderMeta{{ID: "anilib", Name: "AniLibria"}}
 	sp := NewSearchProgress(&Deps{Search: fs}, query)
@@ -249,7 +250,7 @@ func TestLivePR62AnilibDropsOnlyInFileLog(t *testing.T) {
 	view := sp.View().Content
 	footer := ""
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Ответившие:") {
+		if strings.Contains(line, "Found: ") {
 			footer = strings.TrimSpace(line)
 		}
 	}

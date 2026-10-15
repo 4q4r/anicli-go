@@ -77,7 +77,7 @@ func TestLiveMeSyncRealPair(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	ref, err := analyzer.Reference(ctx, contracts.VideoSource{URL: refPath})
+	ref, err := analyzer.Reference(ctx, contracts.VideoSource{URL: refPath}, "rus")
 	if err != nil {
 		t.Fatalf("Reference: %v", err)
 	}
@@ -90,29 +90,36 @@ func TestLiveMeSyncRealPair(t *testing.T) {
 			t.Fatalf("Offset run %d: %v", run+1, err)
 		}
 		found[run] = off
-		t.Logf("run %d: found %+.3fs, confidence %.2f, windows agree %d",
-			run+1, off.Seconds, off.Confidence, off.WindowsAgree)
+		t.Logf("run %d: found %+.3fs", run+1, off.Seconds)
 		if math.Abs(off.Seconds-3) > 0.125 {
 			t.Fatalf("run %d: found %+.3f, want ≈ +3 ± 0.125", run+1, off.Seconds)
-		}
-		if off.WindowsAgree < 2 || off.Confidence < 1 {
-			t.Fatalf("run %d verdict weak: %+v", run+1, off)
 		}
 	}
 	if drift := math.Abs(found[0].Seconds - found[1].Seconds); drift > 0.125 {
 		t.Fatalf("the offset drifted %.3fs between runs, want ≤ 0.125", drift)
 	}
 
-	// The FULL pipeline: RunSyncJob runs Stages A-D (video solo →
-	// decode → byte-exact shift → m4a → real mkvmerge → verification)
-	// from donorPath.
+	// The FULL pipeline, wired EXACTLY as real.go wires it (the v2
+	// contract): the donor ships MEASURED (the analysis phase ran
+	// above), the job carries the computed reference context and the
+	// ClosedLoop seam — Stage B then runs the closed loop (measure →
+	// shift → re-measure → one correction) instead of a verbatim
+	// shift. RunSyncJob runs Stages A-D (video solo → decode →
+	// byte-exact shift → m4a → real mkvmerge → verification) from
+	// donorPath.
 	dl := download.New(download.Options{MKVMerge: "mkvmerge"})
 	out := filepath.Join(dir, "EP_1_DUB_720p.mkv")
 	if err := dl.RunSyncJob(ctx, download.SyncJob{
-		Video:  contracts.VideoSource{URL: refPath},
-		Donors: []download.SyncDonor{{Dub: "DUB", Source: contracts.VideoSource{URL: donorPath}, Lang: "rus", Title: "DUB", Default: true, Offset: found[0].Seconds}},
-		Output: out,
-		Title:  "Тайтл — эп 1",
+		Video: contracts.VideoSource{URL: refPath},
+		Donors: []download.SyncDonor{{
+			Dub: "DUB", Source: contracts.VideoSource{URL: donorPath},
+			Lang: "rus", Title: "DUB", Default: true,
+			Offset: found[0].Seconds, Measured: true,
+		}},
+		Output:   out,
+		Title:    "Тайтл — эп 1",
+		SyncRef:  &ref,
+		SyncLoop: analyzer,
 	}, func(p float64) { t.Logf("progress %.0f%%", p) }); err != nil {
 		t.Fatalf("RunSyncJob: %v", err)
 	}

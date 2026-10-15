@@ -15,8 +15,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/an0nx/anicli-go/internal/audsync"
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
+
+// fakeDonorSync scripts the v2 closed-loop seam: it writes the
+// shifted fixture (the real ClosedLoop leaves shiftedWAV as the
+// product) and returns measuredLag + priming (the no-correction
+// behavior) unless a scripted applied value is set.
+type fakeDonorSync struct {
+	applied  float64
+	scripted bool
+	err      error
+	calls    []string // "rawWAV->shiftedWAV"
+}
+
+func (f *fakeDonorSync) ClosedLoop(_ context.Context, _ audsync.Reference, rawWAV, shiftedWAV string, measuredLag float64) (float64, error) {
+	f.calls = append(f.calls, rawWAV+"->"+shiftedWAV)
+	if f.err != nil {
+		return 0, f.err
+	}
+	if err := writeMiniWAV(shiftedWAV, 900000); err != nil {
+		return 0, err
+	}
+	if f.scripted {
+		return f.applied, nil
+	}
+	return measuredLag + audsync.AACPrimingSec, nil
+}
 
 // syncJobSeams scripts the Downloader's legs by argv shape and
 // records every call.
@@ -28,6 +54,10 @@ type syncJobSeams struct {
 	leadStderr  string     // the silencedetect answer
 	verifyFail  bool       // RMS answers silence
 	soloCreated []string   // files the fakes created per leg
+	// shiftedFrames captures the shifted-WAV frame counts at the
+	// moment the m4a encode consumes them (the temps die with the
+	// job, so the geometry is observable only mid-run).
+	shiftedFrames map[string]int64
 }
 
 func (s *syncJobSeams) wire(d *Downloader) {
@@ -52,6 +82,18 @@ func (s *syncJobSeams) wire(d *Downloader) {
 			// RIFF file (Stage B shifts its payload byte-exact), big
 			// enough for the ±17 s trims; everything else gets a
 			// plain fixture file.
+			if strings.Contains(joined, "-c:a aac") {
+				for i, a := range args {
+					if a == "-i" {
+						if frames, err := audsync.WAVFrames(args[i+1]); err == nil {
+							if s.shiftedFrames == nil {
+								s.shiftedFrames = map[string]int64{}
+							}
+							s.shiftedFrames[args[i+1]] = frames
+						}
+					}
+				}
+			}
 			out := args[len(args)-1]
 			var werr error
 			if strings.Contains(joined, "-f wav") {
@@ -114,9 +156,11 @@ func testSyncJob(t *testing.T) (SyncJob, string) {
 		Output: out,
 		Title:  "Тайтл — эп 1",
 		Donors: []SyncDonor{
-			{Dub: "DUB1", Source: contracts.VideoSource{URL: "https://d/dub1.m3u8"}, Lang: "rus", Title: "DUB1", Default: true, Offset: 17.042},
+			{Dub: "DUB1", Source: contracts.VideoSource{URL: "https://d/dub1.m3u8"}, Lang: "rus", Title: "DUB1", Default: true, Offset: 17.042, Measured: true},
 			{Dub: "DUB2", Source: contracts.VideoSource{URL: "https://d/dub2.m3u8"}, Lang: "eng", Title: "DUB2", Offset: 0},
 		},
+		SyncRef:  &audsync.Reference{Kind: audsync.RefAudio},
+		SyncLoop: &fakeDonorSync{},
 	}
 	return job, out
 }
@@ -266,10 +310,11 @@ func TestRunSyncJobLeadExpectation(t *testing.T) {
 		t.Fatalf("trim job with a 17-s lead must fail on lead, got %v", err)
 	}
 
-	// The pad twin: a negative offset expects the lead.
+	// The pad twin: a negative measured lag expects the lead —
+	// applied = lag + priming, so ≈16.979 s of head silence.
 	job, _ = testSyncJob(t)
 	job.Donors[0].Offset = -17
-	seams.leadStderr = "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 17.4 | silence_duration: 17.4\n"
+	seams.leadStderr = "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 17 | silence_duration: 17\n"
 	if err := d.RunSyncJob(context.Background(), job, nil); err != nil {
 		t.Fatalf("pad job with a matching lead must pass: %v", err)
 	}
@@ -289,6 +334,11 @@ func loudRMSBytes(t *testing.T) []byte {
 // VerifyAssembled measures (0:a:0). A later donor's pad must not set
 // the expectation: donors[0] unshifted + donors[1] padded −10 s has a
 // ≈0 file lead, and expecting 10 s deleted VALID episodes.
+//
+// Donors here carry the APPLIED shift (the v2 contract: lag + AAC
+// priming — exactly what ShiftWAVFile consumed), so the pad/pin
+// values are read directly: pad −10 s ⇒ ≈10 s lead, no second
+// priming subtraction.
 func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -296,10 +346,12 @@ func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
 		want   time.Duration
 	}{
 		{"empty", nil, 0},
-		{"first_zero_second_padded", []SyncDonor{{Offset: 0}, {Offset: -10}}, 0},
-		{"first_padded", []SyncDonor{{Offset: -10}}, 10 * time.Second},
-		{"first_trim", []SyncDonor{{Offset: 17.042}, {Offset: -10}}, 0},
-		{"all_zero", []SyncDonor{{Offset: 0}, {Offset: 0}}, 0},
+		// Unmeasured donors ship untouched — no lead, ever.
+		{"first_unmeasured_padded", []SyncDonor{{Offset: -10}, {Offset: -10, Measured: true}}, 0},
+		// Measured donors: Offset IS the applied shift (lag + priming).
+		{"first_padded", []SyncDonor{{Offset: -10, Measured: true}}, secondsToDuration(10)},
+		{"first_trim", []SyncDonor{{Offset: 17.042, Measured: true}, {Offset: -10, Measured: true}}, 0},
+		{"measured_zero", []SyncDonor{{Offset: 0, Measured: true}}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -307,5 +359,108 @@ func TestSyncExpectedLeadFirstDonorOnly(t *testing.T) {
 				t.Fatalf("syncExpectedLead = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRunSyncJobClosedLoopRuns: a measured donor with the v2 seams
+// runs the closed loop exactly once per donor, and the loop's applied
+// shift REPLACES the plain shift — the lead expectation follows the
+// applied value (a scripted 20 s trim expects ≈0 head silence; a
+// 20 s lead must FAIL the verification).
+func TestRunSyncJobClosedLoopRuns(t *testing.T) {
+	job, _ := testSyncJob(t)
+	loop := &fakeDonorSync{applied: 20, scripted: true}
+	job.SyncLoop = loop
+	var seams syncJobSeams
+	seams.rmsOut = loudRMSBytes(t)
+	seams.leadStderr = "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 20 | silence_duration: 20\n"
+	d := New(Options{})
+	seams.wire(d)
+
+	err := d.RunSyncJob(context.Background(), job, nil)
+	var silent *ErrSilentOutput
+	if !errors.As(err, &silent) || silent.Check != "lead" {
+		t.Fatalf("a scripted 20 s trim with a 20 s lead must fail on lead, got %v", err)
+	}
+	if len(loop.calls) != 1 {
+		t.Fatalf("closed loop calls = %v, want exactly one (donors[0] is the only measured donor)", loop.calls)
+	}
+	if !strings.Contains(loop.calls[0], ".donor0.tmp.wav->") {
+		t.Fatalf("loop call = %q, want the donor-0 WAV pair", loop.calls[0])
+	}
+}
+
+// TestRunSyncJobClosedLoopErrorFallsBack: a failed loop degrades to
+// the measured shift (lag + priming) — the episode still ships, the
+// lead expectation follows the fallback geometry.
+func TestRunSyncJobClosedLoopErrorFallsBack(t *testing.T) {
+	job, _ := testSyncJob(t)
+	loop := &fakeDonorSync{err: errors.New("decode exploded")}
+	job.SyncLoop = loop
+	job.Donors[0].Offset = -17
+	var seams syncJobSeams
+	seams.rmsOut = loudRMSBytes(t)
+	seams.leadStderr = "[silencedetect] silence_start: 0\n[silencedetect] silence_end: 17 | silence_duration: 17\n"
+	d := New(Options{})
+	seams.wire(d)
+
+	if err := d.RunSyncJob(context.Background(), job, nil); err != nil {
+		t.Fatalf("the loop failure must degrade, not fail: %v", err)
+	}
+	if len(loop.calls) != 1 {
+		t.Fatalf("the loop ran %v, want exactly one attempt", loop.calls)
+	}
+}
+
+// TestRunSyncJobUnmeasuredSkipsLoop: unmeasured donors (the
+// same-provider skip) never touch the closed loop and ship their WAV
+// verbatim — 0 frames moved, no priming compensation.
+func TestRunSyncJobUnmeasuredSkipsLoop(t *testing.T) {
+	job, _ := testSyncJob(t)
+	job.Donors = job.Donors[:1]
+	job.Donors[0].Offset = 0
+	job.Donors[0].Measured = false
+	loop := &fakeDonorSync{}
+	job.SyncLoop = loop
+	var seams syncJobSeams
+	seams.rmsOut = loudRMSBytes(t)
+	d := New(Options{})
+	seams.wire(d)
+
+	if err := d.RunSyncJob(context.Background(), job, nil); err != nil {
+		t.Fatalf("RunSyncJob: %v", err)
+	}
+	if len(loop.calls) != 0 {
+		t.Fatalf("the loop ran for an unmeasured donor: %v", loop.calls)
+	}
+	// The shifted fixture is the verbatim copy — 0 frames moved.
+	shifted := tempSibling(job.Output, ".donor0.tmp.wav.shifted")
+	if frames := seams.shiftedFrames[shifted]; frames != 900000 {
+		t.Fatalf("unmeasured donor frames = %d, want 900000 (verbatim)", frames)
+	}
+}
+
+// TestRunSyncJobMeasuredZeroGetsPriming: a measured clean-zero donor
+// still gets the priming compensation (1024 frames trimmed) — the
+// m4a encode would otherwise delay it.
+func TestRunSyncJobMeasuredZeroGetsPriming(t *testing.T) {
+	job, _ := testSyncJob(t)
+	job.Donors = job.Donors[:1]
+	job.Donors[0].Offset = 0
+	job.Donors[0].Measured = true
+	// No loop seam: the plain-shift path applies lag + priming.
+	job.SyncLoop = nil
+	var seams syncJobSeams
+	seams.rmsOut = loudRMSBytes(t)
+	d := New(Options{})
+	seams.wire(d)
+
+	if err := d.RunSyncJob(context.Background(), job, nil); err != nil {
+		t.Fatalf("RunSyncJob: %v", err)
+	}
+	shifted := tempSibling(job.Output, ".donor0.tmp.wav.shifted")
+	frames := seams.shiftedFrames[shifted]
+	if want := int64(900000) - audsync.FramesFor(audsync.AACPrimingSec, audsync.PipelineRate); frames != want {
+		t.Fatalf("measured-zero frames = %d, want %d (the priming trim)", frames, want)
 	}
 }

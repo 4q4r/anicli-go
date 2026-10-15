@@ -68,7 +68,7 @@ func TestLivePR110MinimalFanout(t *testing.T) {
 			t.Fatalf("loading frame must not carry table chrome %q:\n%s", banned, loading)
 		}
 	}
-	if !strings.Contains(loading, "Shikimori") && !strings.Contains(loading, "провайдеров,") {
+	if !strings.Contains(loading, "Shikimori") && !strings.Contains(loading, "providers,") {
 		t.Fatalf("loading frame must carry a loading line:\n%s", loading)
 	}
 

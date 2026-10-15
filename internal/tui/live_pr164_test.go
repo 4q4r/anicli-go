@@ -137,6 +137,17 @@ func TestLivePR164DownloadAskFirst(t *testing.T) {
 	}
 	ss.redubList.Jump(idx)
 	next, cmd := ss.Update(enter())
+	// PR165b: the default «ask» sync gate turns the dub pick into the
+	// sync prompt first; «Нет» dispatches the batch unsynchronized —
+	// the pre-gate semantics this probe pins.
+	if cmd == nil {
+		ask, ok := next.(*sessionScreen)
+		if !ok || ask.state != sessionStateSyncAsk {
+			t.Fatalf("the dub pick must dispatch the batch or open the sync ask, got %T", next)
+		}
+		ask.syncAskList.Jump(1) // «Нет» — the batch runs unsynchronized
+		next, cmd = ask.Update(enter())
+	}
 	if cmd == nil {
 		t.Fatal("the dub pick must dispatch the batch")
 	}

@@ -116,6 +116,17 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
 	next, cmd := ss.Update(enter()) // «Передний план»
+	// PR165b: the default «ask» sync gate opens the sync prompt before
+	// the batch; «Нет» dispatches it unsynchronized — the pre-gate
+	// semantics this probe pins.
+	if cmd == nil {
+		ask, ok := next.(*sessionScreen)
+		if !ok || ask.state != sessionStateSyncAsk {
+			t.Fatalf("the foreground pick must dispatch or open the sync ask, got %T", next)
+		}
+		ask.syncAskList.Jump(1) // «Нет» — the batch runs unsynchronized
+		next, cmd = ask.Update(enter())
+	}
 	if cmd == nil {
 		t.Fatalf("the foreground pick must dispatch")
 	}
@@ -170,7 +181,7 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 		t.Logf("LIVE RESOLUTION: ep %s -> %s [%s] (remembered %q was rotated away)",
 			task.EpisodeNum, task.DubID, task.ProviderID, s.videoDub)
 	}
-	if !contains(ss.status, "Episode "+rotated+" —") {
+	if !contains(ss.status, "Ep. "+rotated+" —") {
 		t.Fatalf("the report must type the rotated episode's verdict:\n%s", ss.status)
 	}
 }

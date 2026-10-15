@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -257,11 +258,15 @@ func TestBindEditorOverlapConfirm(t *testing.T) {
 		t.Fatalf("overlapping ranges must raise the confirm substate (cmd %v)", cmd != nil)
 	}
 
-	// ✖ Отмена: back to the editor, no file.
+	// ✖ Отмена: back to the editor, no file, and the «⚠ пересекаются»
+	// status clears with the confirm (n2).
 	e.confirm.Jump(1)
 	e.Update(enter()) //nolint:errcheck // clears the confirm in place
 	if e.confirm != nil {
 		t.Fatal("cancel must leave the confirm")
+	}
+	if e.status != "" {
+		t.Errorf("status = %q, want cleared after the cancel", e.status)
 	}
 	if _, err := os.Stat(filepath.Join(dir, download.RangesFilename)); !os.IsNotExist(err) {
 		t.Fatal("cancel must not write the file")
@@ -454,14 +459,261 @@ func TestOfflineSessionBindActionRow(t *testing.T) {
 		t.Error("the bind pick must push the bind editor")
 	}
 
-	// A range title's session shows no ✂️ row.
+	// A range title's session KEEPS the ✂️ row (review M3): a
+	// fully-bound folder renders only range titles, so each of them is
+	// an edit path — without the row the owner could never rebind.
 	ranged := titles[0]
 	ranged.Range = &download.RangeBinding{ID: "s1", Title: "S1"}
 	rangedSession := NewOfflineSession(deps, ranged)
-	for _, c := range rangedSession.list.Menu().Items {
-		if c.ID == "bind" {
-			t.Error("a range title's session must not offer the bind row")
+	if offlineActionIndex(rangedSession, "bind") < 0 {
+		t.Error("a range title's session must offer the bind row (the only edit path of a fully-bound folder)")
+	}
+}
+
+// TestBindEditorConfirmViewRenders (M1): while the overlap confirm is
+// armed the editor must RENDER the confirm — the question text and the
+// ✅/✖ rows — instead of the stale rows list silently intercepting
+// every key.
+func TestBindEditorConfirmViewRenders(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("ru"); err != nil {
+		t.Fatal(err)
+	}
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "g", Title: "G", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+		{ID: "x", Title: "X", Match: download.RangeMatch{Kind: "exact", Files: []string{"EP_1_a.mkv"}}},
+	}
+	e.buildList()
+	if cmd := resolvePick(t, e, e.list, "save"); cmd != nil || e.confirm == nil {
+		t.Fatalf("the overlap confirm must arm (cmd %v)", cmd != nil)
+	}
+	v := e.View().Content
+	if !strings.Contains(v, "пересекаются") && !strings.Contains(v, "overlap") {
+		t.Errorf("the armed confirm must render its question:\n%s", v)
+	}
+	if !strings.Contains(v, "Отмена") && !strings.Contains(v, "Cancel") {
+		t.Errorf("the armed confirm must render its ✅/✖ rows:\n%s", v)
+	}
+}
+
+// TestBindEditorRealGlobOverlapConfirmed (m2): glob×glob overlaps are
+// invisible to the static check but REAL — evaluated against the
+// editor's own scan they route through the same confirm.
+func TestBindEditorRealGlobOverlapConfirmed(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "g1", Title: "G1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+		{ID: "g2", Title: "G2", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_1*"}}},
+	}
+	e.buildList()
+	if len(download.RangeOverlaps(&download.RangesFile{Version: 1, Ranges: e.staged})) != 0 {
+		t.Fatal("precondition: the static check must see nothing here")
+	}
+	cmd := resolvePick(t, e, e.list, "save")
+	if cmd != nil || e.confirm == nil {
+		t.Fatalf("a real glob×glob overlap must raise the confirm (cmd %v)", cmd != nil)
+	}
+	if !strings.Contains(e.status, "EP_1_a.mkv") {
+		t.Errorf("status = %q, want the really-matched file listed", e.status)
+	}
+	// Confirming still lands the write (overlap = legal after confirm).
+	e.confirm.Jump(0)
+	_, cmd = e.Update(enter())
+	if cmd == nil {
+		t.Fatal("confirmed save must schedule the write")
+	}
+	if saved, ok := cmd().(bindSavedMsg); !ok || saved.err != nil {
+		t.Fatalf("save msg = %#v, want bindSavedMsg{nil}", cmd())
+	}
+}
+
+// TestBindEditorMissingExactFilesConfirmed (m3): an exact list naming
+// files absent from the folder warns through the same confirm instead
+// of saving silently.
+func TestBindEditorMissingExactFilesConfirmed(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "x", Title: "X", Match: download.RangeMatch{Kind: "exact", Files: []string{"EP_1_a.mkv", "ghost_99.mkv"}}},
+	}
+	e.buildList()
+	cmd := resolvePick(t, e, e.list, "save")
+	if cmd != nil || e.confirm == nil {
+		t.Fatalf("missing exact files must raise the confirm (cmd %v)", cmd != nil)
+	}
+	if !strings.Contains(e.status, "ghost_99.mkv") {
+		t.Errorf("status = %q, want the missing filename listed", e.status)
+	}
+	// Confirming proceeds; the present file stays in the list.
+	e.confirm.Jump(0)
+	_, cmd = e.Update(enter())
+	if msg, ok := cmd().(bindSavedMsg); !ok || msg.err != nil {
+		t.Fatalf("confirmed save msg = %#v, want bindSavedMsg{nil}", cmd())
+	}
+}
+
+// TestBindEditorUnsupportedVersionBlocked (m4): a foreign-version
+// ranges file opens the editor in a blocked state — the load error is
+// the status, no suggestions are seeded over the unreadable file and
+// saving is disabled.
+func TestBindEditorUnsupportedVersionBlocked(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("ru"); err != nil {
+		t.Fatal(err)
+	}
+	dir := rangesBindFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, download.RangesFilename),
+		[]byte(`{"version": 99, "ranges": [{"id": "foreign", "title": "F", "match": {"kind": "glob", "patterns": ["EP_*"]}}]}`),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	if e.loadErr == nil {
+		t.Fatal("the editor must surface the load error, not stage suggestions")
+	}
+	if len(e.staged) != 0 {
+		t.Errorf("staged = %+v, want nothing seeded over the unreadable file", e.staged)
+	}
+	if !strings.Contains(e.status, "версия") && !strings.Contains(e.status, "version") {
+		t.Errorf("status = %q, want the unsupported-version verdict", e.status)
+	}
+	for _, row := range bindRows(e) {
+		if row.ID == "save" {
+			t.Error("save must be disabled while the file is unreadable")
 		}
+	}
+	// Defense in depth: save() refuses even if invoked directly.
+	if cmd := e.save(); cmd != nil {
+		t.Error("save() must refuse while the load error stands")
+	}
+	if _, err := os.Stat(filepath.Join(dir, download.RangesFilename)); err != nil {
+		t.Errorf("the foreign file must stay untouched: %v", err)
+	}
+}
+
+// TestRenamePromptRejectsEmpty (m6): an empty rename cannot reach the
+// staged title — the shared ResolveText maps an empty submit to Back
+// (cancel), so the title stays unchanged and no invalid state is
+// staged. Pinned here: the prompt-level rejection is the structural
+// guard; a whitespace-only submit behaves as a cancel, not a staged
+// empty title.
+func TestRenamePromptRejectsEmpty(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	resolvePick(t, detail, detail.list, "rename")
+	detail.prompt.typeText("   ") // whitespace-only = empty
+	detail.Update(enter())        //nolint:errcheck // empty submit resolves to Back
+	if e.staged[0].Title != "S1" {
+		t.Errorf("title = %q, want unchanged S1 (an empty rename must not stage)", e.staged[0].Title)
+	}
+	if detail.prompt != nil {
+		t.Error("an empty submit resolves to Back: the prompt must close")
+	}
+}
+
+// TestOffsetPromptRejectsNegative (M5, editor leg): a negative episode
+// offset is meaningless for ranges — the prompt rejects it with an
+// i18n status instead of staging it.
+func TestOffsetPromptRejectsNegative(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("ru"); err != nil {
+		t.Fatal(err)
+	}
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	resolvePick(t, detail, detail.list, "offset")
+	detail.prompt.typeText("-3")
+	detail.Update(enter()) //nolint:errcheck // rejected submit
+	if e.staged[0].EpisodeOffset != 0 {
+		t.Errorf("offset = %d, want unchanged (negative offsets are rejected)", e.staged[0].EpisodeOffset)
+	}
+	if strings.TrimSpace(detail.status) == "" {
+		t.Error("the rejected offset must surface an i18n status")
+	}
+}
+
+// TestModeToggleClearsQuality (n3): toggling exact→glob must clear
+// Match.Quality — a leftover quality glob with no patterns is a
+// guaranteed hard-reject at save.
+func TestModeToggleClearsQuality(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{Offline: &fakeOffline{}}, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{
+			Kind: "exact", Files: []string{"EP_1_a.mkv"}, Quality: "1080p"}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	resolvePick(t, detail, detail.list, "mode") // exact → glob
+	if e.staged[0].Match.Kind != "glob" {
+		t.Fatalf("kind = %q, want glob", e.staged[0].Match.Kind)
+	}
+	if e.staged[0].Match.Quality != "" {
+		t.Errorf("quality = %q, want cleared on the exact→glob toggle", e.staged[0].Match.Quality)
+	}
+}
+
+// TestShikiSearchNilDepsGuard (n1): submitting a search without a
+// wired Shikimori service must not panic — it surfaces a status
+// message like the other search sites do.
+func TestShikiSearchNilDepsGuard(t *testing.T) {
+	dir := rangesBindFixture(t)
+	e := newBindEditorFor(t, &Deps{}, dir) // deps.Shiki == nil
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	search, ok := pushedScreen(t, resolvePick(t, detail, detail.list, "bind")).(*shikiSearch)
+	if !ok {
+		t.Fatal("bind must push the shiki search")
+	}
+	search.prompt.typeText("Тайтл")
+	_, cmd := search.Update(enter())
+	if cmd != nil {
+		t.Fatal("no Shiki service: nothing must be scheduled")
+	}
+	if strings.TrimSpace(search.status) == "" {
+		t.Error("the missing service must surface a status message")
+	}
+}
+
+// TestShikiSearchErrorRendersStatus (m8): a failed lookup renders the
+// verdict — with results still nil the View previously fell back to
+// the bare prompt and the user got no feedback.
+func TestShikiSearchErrorRendersStatus(t *testing.T) {
+	dir := rangesBindFixture(t)
+	shiki := &fakeShiki{enabled: true, searchErr: errors.New("shiki down")}
+	deps := &Deps{Shiki: shiki, Offline: &fakeOffline{}}
+	e := newBindEditorFor(t, deps, dir)
+	e.staged = []download.RangeBinding{
+		{ID: "r1", Title: "S1", Match: download.RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}
+	e.buildList()
+	detail := openRangeDetail(t, e, 0)
+	search, ok := pushedScreen(t, resolvePick(t, detail, detail.list, "bind")).(*shikiSearch)
+	if !ok {
+		t.Fatal("bind must push the shiki search")
+	}
+	search.prompt.typeText("Тайтл")
+	_, cmd := search.Update(enter())
+	search.Update(cmd()) //nolint:errcheck // settles the error
+	v := search.View().Content
+	if !strings.Contains(v, "shiki down") {
+		t.Errorf("the search error must render:\n%s", v)
 	}
 }
 

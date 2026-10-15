@@ -1,16 +1,24 @@
 package tui
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
+	anisync "github.com/an0nx/anicli-go/internal/sync"
+
 	"github.com/an0nx/anicli-go/internal/config"
 	"github.com/an0nx/anicli-go/internal/download"
 	"github.com/an0nx/anicli-go/internal/i18n"
+	"github.com/an0nx/anicli-go/internal/storage"
 )
 
 // rangesOfflineFixture builds a real library folder under t.TempDir():
@@ -283,6 +291,7 @@ type rangesProgressEnv struct {
 	pb     *fakePlayback
 	dir    string
 	relDir string
+	root   string
 }
 
 func rangesProgressSetup(t *testing.T, offset int) *rangesProgressEnv {
@@ -309,6 +318,7 @@ func rangesProgressSetup(t *testing.T, offset int) *rangesProgressEnv {
 		pb:     &fakePlayback{},
 		dir:    dir,
 		relDir: "Реинкарнация",
+		root:   root,
 	}
 	env.deps = &Deps{
 		Offline:  realOfflineFor(root),
@@ -384,7 +394,7 @@ func TestOfflineRangeProgressSaveAndSync(t *testing.T) {
 	if rec.SourceID != "offline" {
 		t.Errorf("SourceID = %q, want offline", rec.SourceID)
 	}
-	wantURL := download.SyntheticSourceURL(env.relDir, "s2")
+	wantURL := download.SyntheticSourceURL(env.root, env.relDir, "s2")
 	if rec.SourceURL != wantURL {
 		t.Errorf("SourceURL = %q, want %q", rec.SourceURL, wantURL)
 	}
@@ -524,6 +534,16 @@ func TestRealOfflineTitlesWatchedDirs(t *testing.T) {
 	if titles[0].Dir != filepath.Join(rootA, "Сериал") || titles[1].Dir != filepath.Join(rootB, "Сериал") {
 		t.Errorf("Dirs must point into their own roots: %q, %q", titles[0].Dir, titles[1].Dir)
 	}
+	// M2: the titles must carry their watched root so the synthetic
+	// progress key hashes THE ROOT — two same-named folders under two
+	// roots never share one anime_progress row.
+	if titles[0].Root != rootA || titles[1].Root != rootB {
+		t.Errorf("Roots = %q, %q; want their own watched roots", titles[0].Root, titles[1].Root)
+	}
+	if download.SyntheticSourceURL(titles[0].Root, titles[0].RelDir, "s1") ==
+		download.SyntheticSourceURL(titles[1].Root, titles[1].RelDir, "s1") {
+		t.Error("identical basenames under two roots must yield distinct synthetic keys")
+	}
 
 	// The same physical folder under both roots renders once.
 	shared := &realOffline{settings: config.Settings{Download: config.Download{
@@ -549,5 +569,316 @@ func TestRealOfflineTitlesWatchedDirs(t *testing.T) {
 	}
 	if len(titles) != 1 {
 		t.Fatalf("titles = %d, want the rootA one", len(titles))
+	}
+}
+
+// TestRealOfflineTitlesUnreadableExtraRootSkipped (m9): one unreadable
+// extra watched root (an unmounted NAS, EACCES/EIO) must not discard
+// the WHOLE library — the root is skipped with a log note while the
+// main downloads root still enumerates. The main root's own read error
+// still fails loudly.
+func TestRealOfflineTitlesUnreadableExtraRootSkipped(t *testing.T) {
+	rootA := t.TempDir()
+	dir := filepath.Join(rootA, "Сериал")
+	rangesOfflineFixture(t, dir, map[string]string{"EP_1_a.mkv": "1"})
+
+	// A FILE where an extra root directory should be: ReadDir fails
+	// with ENOTDIR — the unmounted/broken root simulation.
+	broken := filepath.Join(rootA, "not-a-dir")
+	if err := os.WriteFile(broken, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logBuf, nil))
+	svc := &realOffline{settings: config.Settings{Download: config.Download{
+		Dir:         rootA,
+		WatchedDirs: []string{broken},
+	}}, log: log}
+	titles, err := svc.Titles()
+	if err != nil {
+		t.Fatalf("an unreadable EXTRA root must not fail the library: %v", err)
+	}
+	if len(titles) != 1 || titles[0].Name != "Сериал" {
+		t.Fatalf("titles = %+v, want the rootA title", titles)
+	}
+	if !strings.Contains(logBuf.String(), broken) {
+		t.Errorf("the skipped root must be logged:\n%s", logBuf.String())
+	}
+
+	// The MAIN root's read error still surfaces.
+	mainSvc := &realOffline{settings: config.Settings{Download: config.Download{Dir: broken}}}
+	if _, err := mainSvc.Titles(); err == nil {
+		t.Fatal("a broken MAIN root must fail loudly")
+	} else if !strings.Contains(err.Error(), broken) {
+		t.Errorf("err = %v, want the failing root path in the message", err)
+	}
+}
+
+// TestRealOfflineTitlesDataDirErrorPropagates (m1): the DataDir
+// failure of the default downloads root must propagate out of Titles
+// — a swallowed error rendered the whole library silently empty.
+func TestRealOfflineTitlesDataDirErrorPropagates(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANICLI_DATA", blocker) // mkdir over a regular file fails
+	svc := &realOffline{settings: config.Settings{}}
+	if _, err := svc.Titles(); err == nil {
+		t.Fatal("the DataDir error must propagate, not render an empty library")
+	}
+}
+
+// TestRealOfflineTitlesRangesLoadErrorLogged (m5): a ranges file that
+// fails to load (a foreign version, a failed quarantine rename)
+// degrades the folder to the plain title AND leaves a log note — no
+// total silence.
+func TestRealOfflineTitlesRangesLoadErrorLogged(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Тайтл")
+	rangesOfflineFixture(t, dir, map[string]string{"EP_1_Kodik_1080p.mkv": "1"})
+	if err := os.WriteFile(filepath.Join(dir, download.RangesFilename),
+		[]byte(`{"version": 99, "ranges": []}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	svc := &realOffline{settings: config.Settings{Download: config.Download{Dir: root}},
+		log: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	titles, err := svc.Titles()
+	if err != nil {
+		t.Fatalf("one bad folder must not fail the library: %v", err)
+	}
+	if len(titles) != 1 || titles[0].Name != "Тайтл" || titles[0].Range != nil {
+		t.Fatalf("titles = %+v, want the single plain title", titles)
+	}
+	if !strings.Contains(logBuf.String(), "ranges") {
+		t.Errorf("the ranges load failure must be logged:\n%s", logBuf.String())
+	}
+}
+
+// TestOfflineRangeProgressSourceKeyCarriesRoot (M2): the row lands on
+// the root-hashed synthetic key of the ROOT the folder lives under —
+// identical basenames under two roots never share a progress row.
+func TestOfflineRangeProgressSourceKeyCarriesRoot(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	s := rangeSession(t, env)
+	progress := settleRangeProgress(t, s)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	want := download.SyntheticSourceURL(env.root, env.relDir, "s2")
+	if got := env.hist.records[0].SourceURL; got != want {
+		t.Errorf("SourceURL = %q, want the root-hashed %q", got, want)
+	}
+}
+
+// TestOfflineSessionRangeTitleKeepsBindRow (M3): a fully-bound folder
+// renders ONLY range titles — each of their sessions must offer the
+// ✂️ editor row, or the owner loses every edit/rebind/delete path the
+// moment the last stray file is bound.
+func TestOfflineSessionRangeTitleKeepsBindRow(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	s := rangeSession(t, env)
+	if offlineActionIndex(s, "bind") < 0 {
+		t.Fatal("a range title's action menu must offer the ✂️ bind row")
+	}
+	// And the pick actually opens the editor over the folder.
+	_, cmd := s.handleKeyRouteBind(t)
+	if _, ok := pushedScreen(t, cmd).(*bindEditor); !ok {
+		t.Error("the bind pick from a range title must push the bind editor")
+	}
+}
+
+// handleKeyRouteBind drives the episode pick + the bind row the way
+// the runtime does (the menu sits behind the episode picker).
+func (s *offlineSession) handleKeyRouteBind(t *testing.T) (Screen, tea.Cmd) {
+	t.Helper()
+	s.episodeList.Jump(0)
+	next, _ := s.Update(enter())
+	session := next.(*offlineSession)
+	session.list.Jump(offlineActionIndex(session, "bind"))
+	_, cmd := session.Update(enter())
+	return session, cmd
+}
+
+// TestRangeSaveKeepsOnlineRow (M4): an offline range save must not
+// touch an unrelated ONLINE row that carries the same shikimori id —
+// source-only lookup + upsert; the shikimori-id fallback (which MOVES
+// and retires the online row) stays online-path behavior.
+func TestRangeSaveKeepsOnlineRow(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	onlineID := int64(55888)
+	online := storage.AnimeProgress{
+		Title:          "Онлайн-строка",
+		SourceID:       "shikimori",
+		SourceURL:      "https://shikimori.io/animes/55888",
+		CurrentEpisode: "5",
+		ShikimoriID:    &onlineID,
+		UpdatedAt:      nowUTC(),
+	}
+	if err := store.Progress.Upsert(ctx, &online); err != nil {
+		t.Fatal(err)
+	}
+	env.deps.History = &realHistory{store: store}
+	env.hist.records = nil
+
+	s := rangeSession(t, env)
+	progress := settleRangeProgress(t, s)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+
+	// The online row is untouched: same key, same episode label.
+	kept, err := store.Progress.GetBySource(ctx, "shikimori", "https://shikimori.io/animes/55888")
+	if err != nil {
+		t.Fatalf("the online row must survive the offline save: %v", err)
+	}
+	if kept.CurrentEpisode != "5" {
+		t.Errorf("online row episode = %q, want untouched 5", kept.CurrentEpisode)
+	}
+	// The offline row exists under the synthetic key.
+	wantURL := download.SyntheticSourceURL(env.root, env.relDir, "s2")
+	off, err := store.Progress.GetBySource(ctx, "offline", wantURL)
+	if err != nil {
+		t.Fatalf("the offline row must exist under the synthetic key: %v", err)
+	}
+	if off.CurrentEpisode != "1" || off.ShikimoriID == nil || *off.ShikimoriID != 55888 {
+		t.Errorf("offline row = %+v, want episode 1 with the s2 binding", off)
+	}
+}
+
+// TestOfflineRangeProgressGuardPrecomputedPrior (M5): the no-rollback
+// guard must compare ENTRY units — the prior read BEFORE the save (a
+// stored position label converted by +offset), not the freshly
+// overwritten row. Rewatching position 1 of an offset-12 range with
+// the row at position 10 (entry 22) must NOT push 13 over 22.
+func TestOfflineRangeProgressGuardPrecomputedPrior(t *testing.T) {
+	env := rangesProgressSetup(t, 12)
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	shikiID := int64(55888)
+	wantURL := download.SyntheticSourceURL(env.root, env.relDir, "s2")
+	seeded := storage.AnimeProgress{
+		Title:          "Реинкарнация — S2 ч.2",
+		SourceID:       "offline",
+		SourceURL:      wantURL,
+		CurrentEpisode: "10",
+		ShikimoriID:    &shikiID,
+		UpdatedAt:      nowUTC(),
+	}
+	if err := store.Progress.Upsert(ctx, &seeded); err != nil {
+		t.Fatal(err)
+	}
+	env.deps.History = &realHistory{store: store}
+
+	s := rangeSession(t, env)
+	s.current = "1"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	_, saveCmd := next.Update(playCmd())
+	if saveCmd == nil {
+		t.Fatal("save cmd missing")
+	}
+	progress := saveCmd().(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	// The guard blocked the push: no episode ever reached shikimori.
+	if len(env.shiki.epPushes) != 0 {
+		t.Errorf("shiki pushes = %d (%+v), want 0 — prior 22 must block episode 13",
+			len(env.shiki.epPushes), env.shiki.epPushes)
+	}
+	if !strings.Contains(progress.note, "22") {
+		t.Errorf("note = %q, want the no-rollback verdict carrying prior 22", progress.note)
+	}
+}
+
+// TestOfflineRangeProgressPassesPriorToDispatcher (M5, dispatcher
+// leg): the precomputed prior rides into the ProgressSyncPrior seam —
+// same units, same guard — instead of the dispatcher re-reading the
+// freshly overwritten row.
+func TestOfflineRangeProgressPassesPriorToDispatcher(t *testing.T) {
+	env := rangesProgressSetup(t, 12)
+	var got struct {
+		shikiID  int64
+		episode  int
+		prior    int
+		hasPrior bool
+	}
+	env.deps.ProgressSyncPrior = func(_ context.Context, shikiID int64, episode, prior int, hasPrior bool) anisync.Report {
+		got = struct {
+			shikiID  int64
+			episode  int
+			prior    int
+			hasPrior bool
+		}{shikiID, episode, prior, hasPrior}
+		return anisync.Report{Participated: true, Verdicts: []anisync.Verdict{
+			{Key: "shikimori", Synced: true},
+		}}
+	}
+	// A prior row exists (position 3 from the last watch): the
+	// dispatcher receives the ENTRY-unit prior 15 (3 + offset 12).
+	env.hist.byShiki = map[int64]*storage.AnimeProgress{
+		55888: {ID: 9, CurrentEpisode: "3"},
+	}
+	s := rangeSession(t, env)
+	s.current = "3"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	_, saveCmd := next.Update(playCmd())
+	progress := saveCmd().(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	if !got.hasPrior {
+		t.Fatal("the offline range path must pass the precomputed prior")
+	}
+	if got.episode != 15 || got.prior != 15 {
+		t.Errorf("dispatcher got episode=%d prior=%d, want 15/15 (prior = position 3 + offset 12)",
+			got.episode, got.prior)
+	}
+	if got.shikiID != 55888 {
+		t.Errorf("dispatcher shikiID = %d, want 55888", got.shikiID)
+	}
+}
+
+// TestOfflineProgressSettlesPlayedEpisode (m7): the settle writes the
+// PLAYED episode, not the live session state — starting ep1 and
+// switching to ep3 before ep1's playback settles must still record 1.
+func TestOfflineProgressSettlesPlayedEpisode(t *testing.T) {
+	env := rangesProgressSetup(t, 0)
+	s := rangeSession(t, env)
+	s.current = "1"
+	_, watchCmd := s.watch()
+	next, playCmd := s.Update(watchCmd())
+	// The playback is still running while the user moves on.
+	s.current = "3"
+	s.videoKey, s.audioKey = "Other", "Other"
+	// ep1's playback settles now.
+	_, saveCmd := next.Update(playCmd())
+	if saveCmd == nil {
+		t.Fatal("settle must schedule the progress save")
+	}
+	progress := saveCmd().(offlineProgressMsg)
+	if progress.saveErr != nil {
+		t.Fatalf("saveErr = %v", progress.saveErr)
+	}
+	if got := env.hist.records[0].CurrentEpisode; got != "1" {
+		t.Errorf("stored episode = %q, want the PLAYED 1 (not the live 3)", got)
+	}
+	if env.hist.records[0].VideoDub == nil || *env.hist.records[0].VideoDub != "Kodik" {
+		t.Errorf("stored dub = %v, want the PLAYED variant keys", env.hist.records[0].VideoDub)
 	}
 }

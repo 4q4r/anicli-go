@@ -254,6 +254,44 @@ func TestDispatcherNoRollbackGuard(t *testing.T) {
 	}
 }
 
+// TestDispatcherPrecomputedPriorGuard (PR #24 M5): the caller-supplied
+// prior replaces the row read for the no-rollback guard — the offline
+// range path saves range-position labels into the row BEFORE the push,
+// so the dispatcher's own row read compares mismatched units.
+func TestDispatcherPrecomputedPriorGuard(t *testing.T) {
+	t.Parallel()
+
+	shiki := &fakeProvider{key: "shikimori", participates: true, ready: true}
+	// The row holds the freshly overwritten position label "1"; the
+	// real prior in entry units is 22.
+	d := NewDispatcher(&fakeHistory{row: &storage.AnimeProgress{
+		ID: 7, CurrentEpisode: "1", ShikimoriRateID: &[]int64{55}[0],
+	}}, nil, shiki)
+
+	rep := d.SyncEpisodeProgressPrior(context.Background(), 21, 13, 22, true)
+	if !rep.NoRollback || !rep.Participated {
+		t.Fatalf("report = %+v, want the passed prior 22 to block episode 13", rep)
+	}
+	if rep.Prior != 22 {
+		t.Errorf("report.Prior = %d, want the precomputed 22", rep.Prior)
+	}
+	if shiki.calls != 0 {
+		t.Error("guarded push must not reach the provider")
+	}
+
+	// Forward watch: the passed prior does not block (entry 23 is past
+	// the prior 22).
+	rep = d.SyncEpisodeProgressPrior(context.Background(), 21, 23, 22, true)
+	if rep.NoRollback || len(rep.Verdicts) != 1 {
+		t.Fatalf("report = %+v, want the push through at episode 23", rep)
+	}
+	// hasPrior=false keeps the row-read semantics (the legacy path).
+	rep = d.SyncEpisodeProgressPrior(context.Background(), 21, 13, 0, false)
+	if rep.NoRollback || len(rep.Verdicts) != 1 {
+		t.Fatalf("report = %+v, want the row counter 1 to allow episode 13", rep)
+	}
+}
+
 // TestDispatcherResolvesRowContext pins: the dispatcher resolves the
 // local row once (rate id, planned→watching on play) and shares it with
 // both providers.

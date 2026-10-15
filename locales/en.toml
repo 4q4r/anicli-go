@@ -150,6 +150,10 @@
 "offline.ranges.search_skip" = "⏩ Skip (no sync)"
 "offline.ranges.saved" = "Ranges saved"
 "offline.ranges.invalid_number" = "A whole number is required"
+"offline.ranges.offset_negative" = "The episode offset must not be negative"
+"offline.ranges.name_empty" = "The range title must not be empty"
+"offline.ranges.missing_confirm" = "⚠ Exact list names missing files: {files}. Save anyway?"
+"offline.ranges.search_unavailable" = "Shikimori search is unavailable"
 
 # ---- playback / skip notes ------------------------------------------------------------
 "real.skips_note" = "skips: {ranges}"

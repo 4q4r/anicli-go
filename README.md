@@ -432,23 +432,31 @@ from producing phantom episode positions — only quality-matching files join th
 **Positions and offsets.** Inside a range the episode label is the 1-based position
 ("1", "2", …) — the offline index's own episode labels never surface, so S1E1 and S2E1
 in one folder never collide. Progress lives in the regular history row keyed by a
-synthetic source (`anicli-offline:<folder>#<range>`); the Shikimori push sends
+synthetic source (`anicli-offline:<roothash>#<folder>#<range>`, where `<roothash>` is
+the first 8 hex digits of sha256 over the watched root's absolute path — same-named
+folders under different roots never share a row); the Shikimori push sends
 `position + episode_offset` (files named 1–12 under a Shikimori entry counting 13–24 →
-offset 12), while the stored label stays the position. A range without `shikimori_id`
-plays but never syncs.
+offset 12), while the stored label stays the position. The no-rollback guard compares
+entry units: a rewatch of an early position never rolls the remote counter back. A
+range without `shikimori_id` plays but never syncs.
 
-**Binding flow.** Open a plain folder's session and pick «✂️ Разбить по записям
-Shikimori»: the editor stages a deterministic name-prefix suggestion (a disposable
-starting point), each range opens the detail editor (✏️ title, 🎯 Shikimori search,
-#️⃣ offset, ⇄ glob/exact mode, 📐 patterns, 📋 file order), and 💾 writes the file
-atomically. Files matched by no range render as a trailing «<folder> · несортированное»
-title. Duplicate Shikimori bindings in one folder are rejected; provable overlaps ask
-for confirmation.
+**Binding flow.** Open any offline folder session (plain or range title) and pick
+«✂️ Разбить по записям Shikimori»: the editor stages a deterministic name-prefix
+suggestion (a disposable starting point), each range opens the detail editor (✏️ title,
+🎯 Shikimori search, #️⃣ offset — non-negative, ⇄ glob/exact mode, 📐 patterns, 📋 file
+order), and 💾 writes the file atomically. Files matched by no range render as a
+trailing «<folder> · несортированное» title. Duplicate Shikimori bindings in one folder
+are rejected; overlaps — including glob×glob ones, evaluated against the real folder
+scan — and exact lists naming missing files ask for confirmation. A ranges file that
+cannot be read (a foreign version) opens the editor blocked: the error is shown and
+saving stays disabled until the file is recovered manually.
 
 **Extra library roots.** `[download] watched_dirs` lists additional roots the downloads
-screen scans alongside `[download] dir` — the ranges file lives inside the folder, so a
-moved or remounted folder keeps its progress as long as it stays under some watched
-root.
+screen scans alongside `[download] dir`. Progress identity binds to the watched root
+path: a folder moved between roots starts a fresh progress row (the root is part of
+the key), while a moved or remounted root itself keeps everything as long as the
+configured path is unchanged. An unreadable extra root (an unmounted NAS) is skipped
+with a log note — the rest of the library still renders.
 
 **Known limits.** One position = one playable file (multi-variant positions only come
 through the offline index's `relative_path` match — R3). A pre-existing index

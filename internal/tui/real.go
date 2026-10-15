@@ -200,7 +200,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 		Episode:  &realEpisode{registry: registry},
 		Playback: &realPlayback{player: real.player, skips: real.skips, presence: presence, log: logf(o.logger)},
 		History:  &realHistory{store: store},
-		Offline:  &realOffline{settings: settings},
+		Offline:  &realOffline{settings: settings, log: logf(o.logger)},
 		Database: &realDatabase{store: store},
 		Health:   &realHealth{registry: registry, timeout: settings.Network.ConnectTimeout},
 		Shiki:    &realShiki{client: real.shiki, enabled: settings.Shikimori.Enabled},
@@ -229,7 +229,7 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 	// first, MAL as the authenticated fallback.
 	deps.Seasonal = newRealSeasonal(real.shiki, real.mal, logf(o.logger))
 	syncLog := logf(o.logger)
-	deps.ProgressSync = syncr.NewDispatcher(
+	dispatcher := syncr.NewDispatcher(
 		deps.History,
 		syncLog,
 		&syncr.ShikimoriSync{Shiki: deps.Shiki, History: deps.History, Log: syncLog},
@@ -238,7 +238,11 @@ func NewRealDeps(settings config.Settings, store *storage.Store, opts ...RealOpt
 			Resolver: &syncr.CardMALIDResolver{Cards: deps.Shiki, Store: store.MALMap, Log: syncLog},
 			Log:      syncLog,
 		},
-	).SyncEpisodeProgress
+	)
+	deps.ProgressSync = dispatcher.SyncEpisodeProgress
+	// M5: the offline range path passes its precomputed entry-unit
+	// prior so the no-rollback guard never compares mismatched units.
+	deps.ProgressSyncPrior = dispatcher.SyncEpisodeProgressPrior
 	return &RealDeps{
 		Deps: deps, Store: store, Downloads: manager, ShikiNet: shikiNet,
 		registry: registry, buffered: real.buffered, presence: presence,
@@ -561,6 +565,19 @@ func (s *realHistory) List(ctx context.Context) ([]storage.AnimeProgress, error)
 }
 
 func (s *realHistory) SavePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error {
+	return s.savePlayback(ctx, rec, episode, videoDub, audioDub, true)
+}
+
+// SavePlaybackSourceOnly records progress without the shikimori-id
+// fallback (review M4): only the (source_id, source_url) row is looked
+// up and upserted. The offline range path uses it — moving or retiring
+// an unrelated ONLINE row that merely shares the range's shikimori id
+// would corrupt the online history.
+func (s *realHistory) SavePlaybackSourceOnly(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error {
+	return s.savePlayback(ctx, rec, episode, videoDub, audioDub, false)
+}
+
+func (s *realHistory) savePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string, fallbackShiki bool) error {
 	rec.CurrentEpisode = episode
 	rec.VideoDub = &videoDub
 	rec.AudioDub = &audioDub
@@ -577,7 +594,7 @@ func (s *realHistory) SavePlayback(ctx context.Context, rec storage.AnimeProgres
 	if err != nil && !errors.Is(err, contracts.ErrNotFound) {
 		return err
 	}
-	if found == nil && rec.ShikimoriID != nil && *rec.ShikimoriID != 0 {
+	if found == nil && fallbackShiki && rec.ShikimoriID != nil && *rec.ShikimoriID != 0 {
 		found, err = s.store.Progress.GetByShikimoriID(ctx, *rec.ShikimoriID)
 		if err != nil && !errors.Is(err, contracts.ErrNotFound) {
 			return err
@@ -678,24 +695,38 @@ func (s *realHistory) SetRateID(ctx context.Context, animeID, rateID int64) erro
 
 // --- OfflineService ---
 
-type realOffline struct{ settings config.Settings }
+type realOffline struct {
+	settings config.Settings
+	// log is the file diagnostics sink; nil degrades to discard (never
+	// stderr — it corrupts alt-screen).
+	log *slog.Logger
+}
+
+// logger normalizes the optional sink (the logf convention).
+func (s *realOffline) logger() *slog.Logger {
+	if s.log == nil {
+		return discardSlog
+	}
+	return s.log
+}
 
 // offlineRoots lists the watched library roots: the download dir
 // first ("" = DataDir()/downloads), then the extra [download]
-// watched_dirs entries.
-func (s *realOffline) offlineRoots() []string {
+// watched_dirs entries. The DataDir failure propagates (review m1) —
+// swallowing it rendered the whole library silently empty.
+func (s *realOffline) offlineRoots() ([]string, error) {
 	dir := s.settings.Download.Dir
 	if dir == "" {
 		base, err := config.DataDir()
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		dir = filepath.Join(base, "downloads")
 	}
 	roots := make([]string, 0, 1+len(s.settings.Download.WatchedDirs))
 	roots = append(roots, dir)
 	roots = append(roots, s.settings.Download.WatchedDirs...)
-	return roots
+	return roots, nil
 }
 
 // Titles enumerates the offline library: one plain title per folder,
@@ -704,11 +735,25 @@ func (s *realOffline) offlineRoots() []string {
 // without a ranges file behave byte-identically to the pre-ranges
 // library (the backward-compat anchor).
 func (s *realOffline) Titles() ([]OfflineTitle, error) {
+	roots, err := s.offlineRoots()
+	if err != nil {
+		return nil, err
+	}
 	var out []OfflineTitle
 	seen := map[string]bool{}
-	for _, root := range s.offlineRoots() {
+	for i, root := range roots {
 		if err := s.scanRoot(root, seen, &out); err != nil {
-			return nil, err
+			if i == 0 {
+				// The main downloads root failing is fatal: an empty
+				// library must never masquerade as a healthy one.
+				return nil, err
+			}
+			// One unreadable EXTRA root (an unmounted NAS, EACCES/
+			// EIO) must not discard the whole library (review m9):
+			// skip it loudly and keep enumerating.
+			s.logger().Warn("tui: offline library: skipping unreadable watched root",
+				"root", root, "error", err)
+			continue
 		}
 	}
 	return out, nil
@@ -722,7 +767,9 @@ func (s *realOffline) scanRoot(root string, seen map[string]bool, out *[]Offline
 		if os.IsNotExist(err) {
 			return nil // a missing watched dir is tolerated like the download dir always was
 		}
-		return fmt.Errorf("tui: read download dir: %w", err)
+		// The root path belongs in the message: the old fixed
+		// "read download dir" text lied for extra watched roots.
+		return fmt.Errorf("tui: read library root %s: %w", root, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -747,10 +794,15 @@ func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineT
 	if err != nil {
 		return // malformed index reads as empty (python parity)
 	}
+	rel := filepath.ToSlash(relDirOrDefault(root, dir))
 	rf, err := download.LoadRanges(dir)
-	if err != nil && !errors.Is(err, download.ErrRangesUnsupportedVersion) {
-		// A quarantine rename failure surfaces here; without a usable
-		// document the folder degrades to the plain title below.
+	if err != nil {
+		// A quarantine rename failure or a foreign version surfaces
+		// here; the folder degrades to the plain title below, but the
+		// failure is logged — total silence hid broken sidecars
+		// (review m5). One bad folder never fails the library.
+		s.logger().Warn("tui: offline library: ranges file unusable; falling back to the plain title",
+			"dir", dir, "error", err)
 		rf = nil
 	}
 	if rf == nil || len(rf.Ranges) == 0 {
@@ -760,7 +812,8 @@ func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineT
 		}
 		*out = append(*out, OfflineTitle{
 			Dir: dir, Name: base, Snapshot: snapshot,
-			RelDir: filepath.ToSlash(relDirOrDefault(root, dir)),
+			RelDir: rel,
+			Root:   root,
 		})
 		return
 	}
@@ -769,7 +822,6 @@ func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineT
 	if len(views) == 0 && len(unsorted) == 0 {
 		return // no index and zero media: skip the folder entirely
 	}
-	rel := filepath.ToSlash(relDirOrDefault(root, dir))
 	for _, view := range views {
 		binding := view.Binding
 		name := binding.Title
@@ -781,6 +833,7 @@ func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineT
 			Name:     name,
 			Snapshot: download.Snapshot{TitleDir: dir, Entries: view.Entries},
 			RelDir:   rel,
+			Root:     root,
 			Range:    &binding,
 		})
 	}
@@ -790,6 +843,7 @@ func (s *realOffline) appendFolderTitles(root, dir, base string, out *[]OfflineT
 			Name:     i18n.T("offline.unsorted_name", i18n.Vals{"dir": base}),
 			Snapshot: download.Snapshot{TitleDir: dir, Entries: unsorted},
 			RelDir:   rel,
+			Root:     root,
 		})
 	}
 }

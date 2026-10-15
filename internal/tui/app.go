@@ -438,6 +438,12 @@ type Deps struct {
 	// tracker (PR112 dual sync; the CLI wires the sync dispatcher). nil
 	// keeps the legacy shiki-only push.
 	ProgressSync func(ctx context.Context, shikimoriID int64, episode int) syncr.Report
+	// ProgressSyncPrior is ProgressSync with the caller's precomputed
+	// local counter for the no-rollback guard (review M5): the offline
+	// range path overwrites the row with a range-position label before
+	// the push, so the dispatcher's own row read would compare
+	// mismatched units. nil falls back to the legacy push.
+	ProgressSyncPrior func(ctx context.Context, shikimoriID int64, episode, prior int, hasPrior bool) syncr.Report
 }
 
 // logger returns the diagnostics sink, defaulting to slog.Default().

@@ -17,14 +17,25 @@ const (
 	offlineSessionID = "offline-session"
 )
 
-// offlinePlayMsg carries one resolved local playback.
+// offlinePlayMsg carries one resolved local playback: the episode
+// label and variant keys ride along so the settle records the PLAYED
+// state, not whatever the session switched to meanwhile (review m7).
 type offlinePlayMsg struct {
-	path  string
-	title string
+	path     string
+	title    string
+	episode  string
+	videoKey string
+	audioKey string
 }
 
-// offlinePlayedMsg settles one offline playback (C3).
-type offlinePlayedMsg struct{ err error }
+// offlinePlayedMsg settles one offline playback (C3), carrying the
+// played episode label and variant keys into the progress save.
+type offlinePlayedMsg struct {
+	err      error
+	episode  string
+	videoKey string
+	audioKey string
+}
 
 // offlineProgressMsg settles one offline progress round: the local
 // save verdict plus the (optional) Shikimori sync verdict line.
@@ -179,9 +190,10 @@ func (s *offlineSession) buildEpisodeList() {
 
 // buildActionMenu renders the offline action set (python
 // _offline_session menu). The trailing Back row appended by NewMenu is
-// the menu's exit path (PR24 bottom pin). Plain folders gain the ✂️
-// binding-editor row; a range title's binding already exists and the
-// plain/unsorted sibling session is the edit path.
+// the menu's exit path (PR24 bottom pin). Every offline session keeps
+// the ✂️ binding-editor row (review M3): a fully-bound folder renders
+// ONLY range titles, so each range title is an edit path — without the
+// row the owner could never edit/rebind/delete ranges again.
 func (s *offlineSession) buildActionMenu() {
 	choices := []Choice{
 		{ID: "watch", Label: i18n.T("menu.watch")},
@@ -189,9 +201,7 @@ func (s *offlineSession) buildActionMenu() {
 		{ID: "prev", Label: i18n.T("common.prev_ep")},
 		{ID: "jump", Label: i18n.T("common.jump_ep")},
 		{ID: "variant", Label: i18n.T("offline.switch_variant")},
-	}
-	if s.title.Range == nil {
-		choices = append(choices, Choice{ID: "bind", Label: i18n.T("offline.ranges.open")})
+		{ID: "bind", Label: i18n.T("offline.ranges.open")},
 	}
 	s.list = NewPinList(NewMenu(s.header(), "", choices...), defaultListHeight)
 }
@@ -220,7 +230,9 @@ func (s *offlineSession) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return s, nil
 		}
 		s.setStatus(i18n.T("common.play_done"))
-		return s, s.saveRangeProgress()
+		// The played state rides the message: two overlapping plays
+		// each settle their own episode (review m7).
+		return s, s.saveRangeProgressFor(m.episode, m.videoKey, m.audioKey)
 	case offlineProgressMsg:
 		if m.saveErr != nil {
 			s.setStatus(i18n.T("offline.progress_failed", i18n.Vals{"err": m.saveErr.Error()}))
@@ -344,7 +356,8 @@ func (s *offlineSession) handleVariantKey(key tea.KeyPressMsg) (Screen, tea.Cmd)
 }
 
 // playLocal runs the resolved local file through the playback
-// service (C3): [OFFLINE] title, no skip lookups ever.
+// service (C3): [OFFLINE] title, no skip lookups ever. The played
+// episode and variant keys ride the messages into the settle.
 func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	if s.deps == nil || s.deps.Playback == nil {
 		s.setStatus(i18n.T("offline.player_unavailable"))
@@ -352,12 +365,13 @@ func (s *offlineSession) playLocal(m offlinePlayMsg) (Screen, tea.Cmd) {
 	}
 	deps := s.deps
 	return s, safeCmd(offlineSessionID, func() tea.Msg {
-		return offlinePlayedMsg{err: deps.Playback.Play(context.Background(), PlayRequest{
+		err := deps.Playback.Play(context.Background(), PlayRequest{
 			URL:        m.path,
 			Title:      m.title,
 			AnimeTitle: s.title.Name,
-			EpisodeNum: s.current,
-		})}
+			EpisodeNum: m.episode,
+		})
+		return offlinePlayedMsg{err: err, episode: m.episode, videoKey: m.videoKey, audioKey: m.audioKey}
 	})
 }
 
@@ -375,32 +389,39 @@ func (s *offlineSession) shiftEpisode(delta int, eps []string) {
 }
 
 // saveRangeProgress schedules the per-range progress round after a
-// successful offline playback: one bounded save onto the range's
-// synthetic anime_progress key, then — for a bound range — the
-// episode push (`position + episode_offset`) through the same dual
-// dispatch the online session uses. Plain folders (Range nil) keep
+// successful offline playback: one bounded source-only save onto the
+// range's synthetic anime_progress key, then — for a bound range — the
+// episode push (`position + episode_offset`) with the PRE-SAVE local
+// counter as the no-rollback prior. Plain folders (Range nil) keep
 // today's write-nothing behavior; unsorted limbo titles likewise.
 func (s *offlineSession) saveRangeProgress() tea.Cmd {
+	return s.saveRangeProgressFor(s.current, s.videoKey, s.audioKey)
+}
+
+// saveRangeProgressFor is saveRangeProgress with the explicitly played
+// episode label and variant keys (review m7): the settle writes the
+// played state even after the session moved on.
+func (s *offlineSession) saveRangeProgressFor(episode, videoKey, audioKey string) tea.Cmd {
 	if s.deps == nil || s.deps.History == nil {
 		return nil
 	}
-	if s.title.Range == nil || s.current == "" {
+	if s.title.Range == nil || episode == "" {
 		return nil
 	}
 	deps := s.deps
 	shikiID := s.title.Range.ShikimoriID
 	offset := s.title.Range.EpisodeOffset
-	position := s.current
+	position := episode
 	title := s.title.Name
 	relDir := s.title.RelDir
+	root := s.title.Root
 	rangeID := s.title.Range.ID
 	shikiTitle := s.title.Range.ShikimoriTitle
-	videoKey, audioKey := s.videoKey, s.audioKey
 	return safeCmd(offlineSessionID, func() tea.Msg {
 		rec := storage.AnimeProgress{
 			Title:          title,
 			SourceID:       "offline",
-			SourceURL:      download.SyntheticSourceURL(relDir, rangeID),
+			SourceURL:      download.SyntheticSourceURL(root, relDir, rangeID),
 			CurrentEpisode: position,
 			UpdatedAt:      nowUTC(),
 		}
@@ -414,7 +435,20 @@ func (s *offlineSession) saveRangeProgress() tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), statWriteTimeout)
 		defer cancel()
-		err := deps.History.SavePlayback(ctx, rec, position, videoKey, audioKey)
+		// The no-rollback prior must be read BEFORE the save
+		// overwrites the row with the new position label (review M5):
+		// converted to entry units it guards the push below.
+		priorEntry := 0
+		hasPrior := false
+		if shikiID != 0 {
+			if existing, err := deps.History.GetByShikimoriID(ctx, shikiID); err == nil && existing != nil {
+				priorEntry = parseWatchEpisode(existing.CurrentEpisode) + offset
+				hasPrior = true
+			}
+		}
+		// Source-only upsert (review M4): the shikimori-id fallback
+		// would move/retire an unrelated ONLINE row sharing the id.
+		err := deps.History.SavePlaybackSourceOnly(ctx, rec, position, videoKey, audioKey)
 		if err != nil {
 			return offlineProgressMsg{saveErr: err}
 		}
@@ -423,13 +457,13 @@ func (s *offlineSession) saveRangeProgress() tea.Cmd {
 			// Entry units: the Shikimori counter is the position plus
 			// the range offset; the stored row keeps the position
 			// label — the units never mix (Review Focus #2).
-			episode := parseWatchEpisode(position) + offset
+			episodeNum := parseWatchEpisode(position) + offset
 			syncCtx, syncCancel := context.WithTimeout(context.Background(), shikiSyncTimeout)
 			defer syncCancel()
-			if deps.ProgressSync != nil {
-				note = renderSyncReport(deps, deps.ProgressSync(syncCtx, shikiID, episode), episode)
+			if deps.ProgressSyncPrior != nil {
+				note = renderSyncReport(deps, deps.ProgressSyncPrior(syncCtx, shikiID, episodeNum, priorEntry, hasPrior), episodeNum)
 			} else {
-				note = syncWatchProgress(syncCtx, deps, shikiID, episode).note
+				note = syncWatchProgressPrior(syncCtx, deps, shikiID, episodeNum, priorEntry, hasPrior).note
 			}
 		}
 		return offlineProgressMsg{note: note}
@@ -450,8 +484,16 @@ func (s *offlineSession) watch() (Screen, tea.Cmd) {
 	s.videoKey, s.audioKey, s.quality = variant.VideoKey, variant.AudioKey, variant.Quality
 	path := s.title.Dir + "/" + variant.RelativePath
 	title := offlineTitle(s.videoKey, s.audioKey, s.title.Name, s.current)
+	played := s.current
+	videoKey, audioKey := s.videoKey, s.audioKey
 	return s, func() tea.Msg {
-		return offlinePlayMsg{path: path, title: title}
+		return offlinePlayMsg{
+			path:     path,
+			title:    title,
+			episode:  played,
+			videoKey: videoKey,
+			audioKey: audioKey,
+		}
 	}
 }
 

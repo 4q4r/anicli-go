@@ -115,6 +115,12 @@ type HistoryService interface {
 	List(ctx context.Context) ([]storage.AnimeProgress, error)
 	// SavePlayback records the watched episode and dub preferences.
 	SavePlayback(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
+	// SavePlaybackSourceOnly records progress WITHOUT the shikimori-id
+	// fallback: only the (source_id, source_url) row is looked up and
+	// upserted. The offline range path uses it — an unrelated online
+	// row sharing the range's shikimori id must never be moved or
+	// retired by an offline save (review M4).
+	SavePlaybackSourceOnly(ctx context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error
 	// BindSource rebinds a record onto a new (source_id, url) pair
 	// (python search_and_bind record patch). boundTitle is the
 	// provider-side title the record is bound to; needs_correction
@@ -139,6 +145,11 @@ type OfflineTitle struct {
 	// RelDir is Dir's slash-separated path under its watched library
 	// root ("" when unknown — fakes). Feeds SyntheticSourceURL.
 	RelDir string
+	// Root is the watched library root Dir lives under ("" when
+	// unknown — fakes). Feeds the SyntheticSourceURL root hash, so
+	// same-named folders under different roots never share a progress
+	// row (review M2).
+	Root string
 	// Range is non-nil for a virtual range title (a folder split by
 	// .anicli_ranges.json renders one title per range).
 	Range *download.RangeBinding

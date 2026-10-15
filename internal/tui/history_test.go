@@ -34,13 +34,25 @@ func (f *fakeHistory) List(_ context.Context) ([]storage.AnimeProgress, error) {
 	return f.items, nil
 }
 
-func (f *fakeHistory) SavePlayback(_ context.Context, rec storage.AnimeProgress, _, _, _ string) error {
+func (f *fakeHistory) SavePlayback(_ context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error {
 	if f.saveErr != nil {
 		return f.saveErr
 	}
+	// The real contract writes these three onto the row (real.go
+	// savePlayback) — the fake mirrors them so tests can assert the
+	// PLAYED state rode the messages.
+	rec.CurrentEpisode = episode
+	rec.VideoDub = &videoDub
+	rec.AudioDub = &audioDub
 	f.records = append(f.records, rec)
 	f.saved = append(f.saved, rec.ID)
 	return nil
+}
+
+// SavePlaybackSourceOnly mirrors SavePlayback (the fake has one row
+// store; the fallback difference is pinned by the real-store test).
+func (f *fakeHistory) SavePlaybackSourceOnly(_ context.Context, rec storage.AnimeProgress, episode, videoDub, audioDub string) error {
+	return f.SavePlayback(context.TODO(), rec, episode, videoDub, audioDub)
 }
 
 func (f *fakeHistory) BindSource(_ context.Context, id int64, sourceID, sourceURL, boundTitle string) error {
@@ -79,6 +91,8 @@ type fakeShiki struct {
 	// queries records SearchIDs lookups; ids is their fixture.
 	queries []string
 	ids     map[string]int64
+	// searchErr fails every SearchIDs lookup (m8 error rendering).
+	searchErr error
 	// items is the Autocomplete fixture (PR42 enrichment binding).
 	items []shikimori.AutocompleteItem
 	// animes is the GetAnime fixture keyed by Shikimori ID (PR97
@@ -130,6 +144,9 @@ func (f *fakeShiki) UpdateStatus(_ context.Context, shikimoriID, rateID int64, s
 
 func (f *fakeShiki) SearchIDs(_ context.Context, query string) (map[string]int64, error) {
 	f.queries = append(f.queries, query)
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	return f.ids, nil
 }
 

@@ -33,8 +33,9 @@ type shikiSearchMsg struct {
 
 // bindEditor is the ✂️ binding editor over one offline folder: the
 // staged ranges render as rows, each opens the range detail; the save
-// path guards duplicate Shikimori bindings (hard reject) and
-// overlapping ranges (explicit confirm) before the atomic write.
+// path guards duplicate Shikimori bindings (hard reject), overlapping
+// ranges (real, scan-evaluated — explicit confirm) and exact lists
+// naming missing files (the same confirm) before the atomic write.
 type bindEditor struct {
 	deps   *Deps
 	dir    string
@@ -44,16 +45,24 @@ type bindEditor struct {
 	staged []download.RangeBinding
 	list   *PinList
 	status string
+	// loadErr is the ranges-file load failure (a foreign version, a
+	// failed quarantine rename): the editor opens read-blocked — the
+	// error is the status, nothing is staged over the unreadable file
+	// and saving is disabled (review m4).
+	loadErr error
 	// dirty marks staged mutations: the rows rebuild at the next
 	// render (the sub-screens mutate through the shared pointer).
 	dirty bool
-	// confirm is the overlap-confirmation substate menu (nil = off).
+	// confirm is the save-confirmation substate menu (nil = off); it
+	// covers the overlap and missing-file warnings alike.
 	confirm *PinList
 }
 
 // NewBindEditor builds the editor for one offline title's folder: an
 // existing ranges file stages verbatim (edit mode), otherwise the
-// disposable SuggestRanges grouping seeds the editor.
+// disposable SuggestRanges grouping seeds the editor. A load failure
+// (m4) blocks the editor instead: suggestions must never overwrite a
+// file LoadRanges promised untouched.
 //
 //nolint:revive // internal screen type (NewOfflineSession pattern)
 func NewBindEditor(deps *Deps, title OfflineTitle) *bindEditor {
@@ -62,9 +71,13 @@ func NewBindEditor(deps *Deps, title OfflineTitle) *bindEditor {
 		e.files = download.ScanMediaFiles(e.dir)
 	}
 	rf, err := download.LoadRanges(e.dir)
-	if err == nil && rf != nil && len(rf.Ranges) > 0 {
+	switch {
+	case err != nil:
+		e.loadErr = err
+		e.status = i18n.T("common.error_with", i18n.Vals{"err": err.Error()})
+	case rf != nil && len(rf.Ranges) > 0:
 		e.staged = append([]download.RangeBinding(nil), rf.Ranges...)
-	} else {
+	default:
 		e.staged = download.SuggestRanges(e.dir)
 	}
 	e.buildList()
@@ -77,7 +90,9 @@ func (e *bindEditor) ID() string { return offlineBindID }
 // Init implements Screen.
 func (e *bindEditor) Init() tea.Cmd { return nil }
 
-// buildList renders the staged rows plus the add and save rows.
+// buildList renders the staged rows plus the add and save rows; a
+// load-blocked editor renders no add/save rows (m4 — nothing can be
+// written over an unreadable file).
 func (e *bindEditor) buildList() {
 	choices := make([]Choice, 0, len(e.staged)+2)
 	for i, r := range e.staged {
@@ -93,18 +108,26 @@ func (e *bindEditor) buildList() {
 			Value: i,
 		})
 	}
-	choices = append(choices,
-		Choice{ID: "add", Label: i18n.T("offline.ranges.add")},
-		Choice{ID: "save", Label: i18n.T("offline.ranges.save")},
-	)
+	if e.loadErr == nil {
+		choices = append(choices,
+			Choice{ID: "add", Label: i18n.T("offline.ranges.add")},
+			Choice{ID: "save", Label: i18n.T("offline.ranges.save")},
+		)
+	}
 	e.list = NewPinList(NewMenu(i18n.T("offline.ranges.editor_title"), "", choices...), defaultListHeight)
 }
 
-// View implements Screen.
+// View implements Screen: the armed confirm takes over the body (M1 —
+// a hidden confirm intercepted every key while the stale list
+// rendered); otherwise the rows render.
 func (e *bindEditor) View() tea.View {
 	if e.dirty {
 		e.buildList()
 		e.dirty = false
+	}
+	if e.confirm != nil {
+		body := theme.Title.Render(e.status) + "\n\n" + e.confirm.Render()
+		return tea.NewView(body)
 	}
 	body := theme.Title.Render(i18n.T("offline.ranges.editor_title")) + "\n\n" + e.list.Render()
 	if e.status != "" {
@@ -145,12 +168,16 @@ func (e *bindEditor) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		if resolved == Back {
 			e.confirm = nil
+			e.status = "" // n2: the ⚠ verdict must not linger
 			return e, nil
 		}
 		if id, _ := resolved.(string); id == "confirm" {
+			// The armed confirm stays set: save() sees it and proceeds
+			// past the warnings (the owner just accepted them).
 			return e, e.save()
 		}
 		e.confirm = nil
+		e.status = "" // n2
 		return e, nil
 	}
 	if IsCancelKey(key) {
@@ -204,11 +231,17 @@ func (e *bindEditor) newStagedBinding() download.RangeBinding {
 	}
 }
 
-// save runs the guarded write: duplicate non-zero Shikimori bindings
-// hard-reject (two ranges on one entry break the sync dispatch);
-// provable overlaps raise the explicit confirm; the confirmed (or
-// clean) path schedules the atomic write.
+// save runs the guarded write: a load-blocked editor refuses (m4);
+// duplicate non-zero Shikimori bindings hard-reject (two ranges on one
+// entry break the sync dispatch); overlaps — static and real, i.e.
+// glob×glob evaluated against the editor's own scan (m2) — and exact
+// lists naming missing files (m3) raise the explicit confirm; the
+// confirmed (or clean) path schedules the atomic write.
 func (e *bindEditor) save() tea.Cmd {
+	if e.loadErr != nil {
+		e.status = i18n.T("common.error_with", i18n.Vals{"err": e.loadErr.Error()})
+		return nil
+	}
 	bound := map[int64]string{}
 	for _, r := range e.staged {
 		if r.ShikimoriID == 0 {
@@ -222,18 +255,43 @@ func (e *bindEditor) save() tea.Cmd {
 		}
 		bound[r.ShikimoriID] = r.Title
 	}
-	if overlaps := download.RangeOverlaps(&download.RangesFile{Version: 1, Ranges: e.staged}); len(overlaps) > 0 && e.confirm == nil {
-		files := make([]string, 0, len(overlaps))
-		for file := range overlaps {
-			files = append(files, file)
+	// The warnings share one explicit confirm: while it is armed the
+	// owner has already accepted whatever raised it.
+	if e.confirm == nil {
+		doc := &download.RangesFile{Version: 1, Ranges: e.staged}
+		var warnings []string
+		appendOverlap := func(overlaps map[string][]string) {
+			if len(overlaps) == 0 {
+				return
+			}
+			files := make([]string, 0, len(overlaps))
+			for file := range overlaps {
+				files = append(files, file)
+			}
+			sort.Strings(files)
+			warnings = append(warnings, i18n.T("offline.ranges.overlap_confirm",
+				i18n.Vals{"files": strings.Join(files, ", ")}))
 		}
-		sort.Strings(files)
-		e.status = i18n.T("offline.ranges.overlap_confirm", i18n.Vals{"files": strings.Join(files, ", ")})
-		e.confirm = NewPinList(NewMenu(i18n.T("offline.ranges.overlap_title"), "", []Choice{
-			{ID: "confirm", Label: i18n.T("offline.ranges.confirm")},
-			{ID: "cancel", Label: i18n.T("offline.ranges.cancel")},
-		}...), defaultListHeight)
-		return nil
+		// Static overlap: exact lists colliding with each other or
+		// with a glob pattern.
+		appendOverlap(download.RangeOverlaps(doc))
+		// Real overlap (m2): the static check cannot see glob×glob —
+		// the editor's own scan can.
+		appendOverlap(download.RangeOverlapsAmong(e.files, doc))
+		// Missing exact files (m3): an exact list naming absent files
+		// warns instead of saving silently.
+		if missing := e.missingExactFiles(); len(missing) > 0 {
+			warnings = append(warnings, i18n.T("offline.ranges.missing_confirm",
+				i18n.Vals{"files": strings.Join(missing, ", ")}))
+		}
+		if len(warnings) > 0 {
+			e.status = strings.Join(warnings, "\n")
+			e.confirm = NewPinList(NewMenu(i18n.T("offline.ranges.overlap_title"), "", []Choice{
+				{ID: "confirm", Label: i18n.T("offline.ranges.confirm")},
+				{ID: "cancel", Label: i18n.T("offline.ranges.cancel")},
+			}...), defaultListHeight)
+			return nil
+		}
 	}
 	e.confirm = nil
 	staged := append([]download.RangeBinding(nil), e.staged...)
@@ -241,6 +299,34 @@ func (e *bindEditor) save() tea.Cmd {
 	return safeCmd(offlineBindID, func() tea.Msg {
 		return bindSavedMsg{err: download.SaveRanges(dir, &download.RangesFile{Version: 1, Ranges: staged})}
 	})
+}
+
+// missingExactFiles lists the exact-mode files absent from the
+// editor's scan (byte-sorted, deduplicated).
+func (e *bindEditor) missingExactFiles() []string {
+	scan := make(map[string]struct{}, len(e.files))
+	for _, f := range e.files {
+		scan[f] = struct{}{}
+	}
+	seen := map[string]struct{}{}
+	var missing []string
+	for _, r := range e.staged {
+		if r.Match.Kind != "exact" {
+			continue
+		}
+		for _, f := range r.Match.Files {
+			if _, ok := scan[f]; ok {
+				continue
+			}
+			if _, dup := seen[f]; dup {
+				continue
+			}
+			seen[f] = struct{}{}
+			missing = append(missing, f)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 // rangeDetail edits one staged range: title, Shikimori binding,
@@ -388,6 +474,10 @@ func (d *rangeDetail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			r.Match.Kind = "glob"
 			r.Match.Patterns = nil
 			r.Match.Files = nil
+			// A leftover quality glob with no patterns is a
+			// guaranteed hard-reject at save — clear it on the toggle
+			// (review n3).
+			r.Match.Quality = ""
 		} else {
 			// glob → exact: preseed the owner list with the current
 			// resolution (selection order = episode order from here).
@@ -435,11 +525,25 @@ func (d *rangeDetail) submitPrompt(resolved any) tea.Cmd {
 	text, _ := resolved.(string)
 	switch kind {
 	case "rename":
+		// ResolveText already maps an empty submit to Back; this
+		// guard keeps the staged title non-empty should the text
+		// path ever carry blanks.
+		if strings.TrimSpace(text) == "" {
+			d.status = i18n.T("offline.ranges.name_empty")
+			return nil
+		}
 		d.binding().Title = text
 	case "offset":
 		n, err := strconv.Atoi(text)
 		if err != nil {
 			d.status = i18n.T("offline.ranges.invalid_number")
+			return nil
+		}
+		// Negative offsets are meaningless for ranges: the sync
+		// counter is position + offset and the guard compares entry
+		// units — a negative offset would block every push (review M5).
+		if n < 0 {
+			d.status = i18n.T("offline.ranges.offset_negative")
 			return nil
 		}
 		d.binding().EpisodeOffset = n
@@ -596,6 +700,12 @@ func (s *shikiSearch) submit(resolved any) tea.Cmd {
 	}
 	query, _ := resolved.(string)
 	deps := s.editor.deps
+	if deps == nil || deps.Shiki == nil {
+		// The same nil-guard the other search sites carry (n1): no
+		// wired service must not panic the submit.
+		s.status = i18n.T("offline.ranges.search_unavailable")
+		return nil
+	}
 	return safeCmd(offlineBindSearchID, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
@@ -616,7 +726,9 @@ func (s *shikiSearch) apply(id int64, title string) tea.Cmd {
 	return pop()
 }
 
-// View implements Screen.
+// View implements Screen: a lookup failure renders its verdict over
+// the prompt (m8 — results stay nil and the bare prompt previously
+// gave the user no feedback); the results menu takes over when set.
 func (s *shikiSearch) View() tea.View {
 	if s.results != nil {
 		body := theme.Title.Render(i18n.T("offline.ranges.search_results")) + "\n\n" + s.results.Render()
@@ -625,7 +737,11 @@ func (s *shikiSearch) View() tea.View {
 		}
 		return tea.NewView(body)
 	}
-	return s.prompt.View()
+	body := s.prompt.View().Content
+	if s.status != "" {
+		body += "\n" + theme.StatusLine.Render(s.status)
+	}
+	return tea.NewView(body)
 }
 
 // Update implements Screen: the prompt drives until the lookup

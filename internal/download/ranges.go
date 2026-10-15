@@ -2,6 +2,8 @@ package download
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -185,6 +187,12 @@ func validateBinding(all []RangeBinding, self int) error {
 	default:
 		return fmt.Errorf("offline ranges: range %s: unknown match kind %q (want glob or exact)", b.ID, b.Match.Kind)
 	}
+	// A negative offset is meaningless for ranges: the sync counter is
+	// position + offset and the no-rollback guard compares in entry
+	// units — a negative offset would block every push (review M5).
+	if b.EpisodeOffset < 0 {
+		return fmt.Errorf("offline ranges: range %s: episode offset must not be negative (got %d)", b.ID, b.EpisodeOffset)
+	}
 	for i, other := range all {
 		if i == self {
 			continue
@@ -277,6 +285,68 @@ func RangeOverlaps(rf *RangesFile) map[string][]string {
 		sort.Strings(out[file])
 	}
 	return out
+}
+
+// RangeOverlapsAmong maps every file of the given scan matched by more
+// than one range onto the sorted range ids (review m2): the editor's
+// real overlap — glob×glob overlaps included, evaluated against the
+// folder scan it already holds. Matching follows the resolution
+// semantics (glob pattern order-independent here: a file counts for
+// every range whose patterns match it, the quality filter included).
+func RangeOverlapsAmong(files []string, rf *RangesFile) map[string][]string {
+	if rf == nil {
+		return nil
+	}
+	// matchedBy pairs every scanned file with the ranges selecting it.
+	matchedBy := make(map[string][]string)
+	for _, r := range rf.Ranges {
+		for _, file := range files {
+			if rangeMatchesFile(r, file) {
+				matchedBy[file] = append(matchedBy[file], r.ID)
+			}
+		}
+	}
+	out := map[string][]string{}
+	for file, ids := range matchedBy {
+		if len(ids) < 2 {
+			continue
+		}
+		sort.Strings(ids)
+		out[file] = ids
+	}
+	return out
+}
+
+// rangeMatchesFile reports whether one binding selects one file of the
+// scan: the match kind against the base name plus the quality filter.
+func rangeMatchesFile(r RangeBinding, file string) bool {
+	switch r.Match.Kind {
+	case "glob":
+		hit := false
+		for _, pattern := range r.Match.Patterns {
+			if ok, err := filepath.Match(pattern, file); err == nil && ok {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	case "exact":
+		listed := false
+		for _, f := range r.Match.Files {
+			if f == file {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			return false
+		}
+	default:
+		return false
+	}
+	return r.Match.Quality == "" || qualityMatches(r.Match.Quality, file)
 }
 
 // mediaExtensions are the file extensions ScanMediaFiles picks up
@@ -463,11 +533,22 @@ func entryForFile(dir, file, label string, byBase map[string]Entry) Entry {
 }
 
 // SyntheticSourceURL composes the range's progress source key:
-// source_id "offline" + this URL give the anime_progress row its
-// unique identity (the relDir is slash-separated and relative to the
-// watched root, so a moved/remounted folder keeps its progress).
-func SyntheticSourceURL(relDir, rangeID string) string {
-	return "anicli-offline:" + relDir + "#" + rangeID
+// `anicli-offline:<rootHash>#<relDir>#<rangeID>`. The rootHash is the
+// first 8 hex digits of sha256 over the CLEANED ABSOLUTE watched-root
+// path: two roots sharing a base name and range ids («Сериал»/«r1» in
+// both) must never share one anime_progress row (review M2 — watched
+// roots are absolute config paths, so binding the identity to the
+// root is stable for the default downloads root and honest for the
+// extra ones). The relDir is slash-separated and relative to that
+// root; nothing parses the key back — the format only has to stay
+// collision-free.
+func SyntheticSourceURL(root, relDir, rangeID string) string {
+	cleaned := filepath.Clean(root)
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		cleaned = abs
+	}
+	sum := sha256.Sum256([]byte(cleaned))
+	return "anicli-offline:" + hex.EncodeToString(sum[:])[:8] + "#" + relDir + "#" + rangeID
 }
 
 // SuggestRanges proposes the folder's groupings deterministically:
@@ -502,10 +583,37 @@ func SuggestRanges(dir string) []RangeBinding {
 		out = append(out, RangeBinding{
 			ID:    fmt.Sprintf("r%d", i+1),
 			Title: title,
-			Match: RangeMatch{Kind: "glob", Patterns: []string{prefix + "*"}},
+			// The prefix is DATA, not a pattern: fansub names carry
+			// glob metacharacters («[SubsPlease] Frieren - 01 …»)
+			// and a raw prefix reads as a bracket class matching
+			// zero files (review M6). Escape without backslashes —
+			// filepath.Match treats `\` literally on Windows.
+			Match: RangeMatch{Kind: "glob", Patterns: []string{globQuote(prefix) + "*"}},
 		})
 	}
 	return out
+}
+
+// globQuote escapes every filepath.Match metacharacter as a bracketed
+// literal class: `[`→`[[]`, `*`→`[*]`, `?`→`[?]`, `\`→`[\\]`. Portable
+// by construction — no backslash escaping (filepath.Match treats `\`
+// literally on Windows).
+func globQuote(pattern string) string {
+	var b strings.Builder
+	for _, r := range pattern {
+		switch r {
+		case '[', '*', '?', '\\':
+			b.WriteByte('[')
+			b.WriteRune(r)
+			if r == '\\' {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(']')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // leadingNonDigitPrefix returns the file name's run of leading

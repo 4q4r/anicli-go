@@ -151,6 +151,10 @@
 "offline.ranges.search_skip" = "⏩ Пропустить (без синхронизации)"
 "offline.ranges.saved" = "Диапазоны сохранены"
 "offline.ranges.invalid_number" = "Нужно целое число"
+"offline.ranges.offset_negative" = "Смещение серий не может быть отрицательным"
+"offline.ranges.name_empty" = "Название диапазона не может быть пустым"
+"offline.ranges.missing_confirm" = "⚠ В списке файлов есть отсутствующие: {files}. Сохранить всё равно?"
+"offline.ranges.search_unavailable" = "Поиск Shikimori недоступен"
 
 # ---- воспроизведение / скипы ----
 "real.skips_note" = "скипы: {ranges}"

@@ -1,6 +1,8 @@
 package download
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -437,13 +439,82 @@ func TestExpandRangesFirstRangeWins(t *testing.T) {
 	}
 }
 
-// TestSyntheticSourceURL: the synthetic progress source key.
+// TestSyntheticSourceURL: the synthetic progress source key —
+// `anicli-offline:<rootHash>#<relDir>#<rangeID>` where rootHash is the
+// first 8 hex digits of sha256 over the cleaned absolute root path.
 func TestSyntheticSourceURL(t *testing.T) {
-	if got := SyntheticSourceURL("Реинкарнация/s1", "s2"); got != "anicli-offline:Реинкарнация/s1#s2" {
-		t.Fatalf("SyntheticSourceURL = %q", got)
+	root := filepath.Join(t.TempDir(), "Библиотека")
+	got := SyntheticSourceURL(root, "Реинкарнация/s1", "s2")
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := SyntheticSourceURL("", "s1"); got != "anicli-offline:#s1" {
-		t.Fatalf("empty relDir = %q, want anicli-offline:#s1 (legal, pinned)", got)
+	sum := sha256.Sum256([]byte(filepath.Clean(abs)))
+	want := "anicli-offline:" + hex.EncodeToString(sum[:])[:8] + "#Реинкарнация/s1#s2"
+	if got != want {
+		t.Fatalf("SyntheticSourceURL = %q, want %q", got, want)
+	}
+	// Trailing separators and non-cleaned paths hash identically (the
+	// CLEANED ABSOLUTE root is the identity).
+	if again := SyntheticSourceURL(root+string(filepath.Separator), "Реинкарнация/s1", "s2"); again != want {
+		t.Errorf("uncleaned root = %q, want %q", again, want)
+	}
+}
+
+// TestSyntheticSourceURLDistinctRoots pins the M2 collision fix: two
+// watched roots with the SAME base name and the same relDir + rangeID
+// must produce two DISTINCT progress keys (the pre-rootHash key
+// collided and both roots overwrote one anime_progress row).
+func TestSyntheticSourceURLDistinctRoots(t *testing.T) {
+	base := t.TempDir()
+	rootA := filepath.Join(base, "Библиотека A")
+	rootB := filepath.Join(base, "Библиотека B")
+	keyA := SyntheticSourceURL(rootA, "Сериал", "r1")
+	keyB := SyntheticSourceURL(rootB, "Сериал", "r1")
+	if keyA == keyB {
+		t.Fatalf("identical basenames must not collide: %q", keyA)
+	}
+	if keyA != SyntheticSourceURL(rootA, "Сериал", "r1") {
+		t.Fatal("the key must be deterministic for one root")
+	}
+}
+
+// TestSuggestRangesGlobMetacharacters (M6): fansub names carry glob
+// metacharacters — the raw prefix `[SubsPlease] Frieren - ` reads as a
+// bracket class and matches zero files. The suggestion must escape
+// the metacharacters (portably — no backslash escaping) so the
+// proposed range resolves its files.
+func TestSuggestRangesGlobMetacharacters(t *testing.T) {
+	dir := rangesMediaDir(t,
+		"[Group] Name - 01 (1080p).mkv",
+		"[Group] Name - 02 (1080p).mkv",
+	)
+	got := SuggestRanges(dir)
+	if len(got) != 1 {
+		t.Fatalf("suggestions = %d (%+v), want 1", len(got), got)
+	}
+	files := ResolveRangeFiles(dir, got[0].Match)
+	if len(files) != 2 {
+		t.Fatalf("suggested pattern %q matched %v, want both bracketed files", got[0].Match.Patterns, files)
+	}
+}
+
+// TestSaveRangesRejectsNegativeOffset (M5): a negative episode offset
+// is meaningless for ranges (the counter is position + offset and the
+// no-rollback guard compares in entry units) — the save hard-rejects
+// before any write.
+func TestSaveRangesRejectsNegativeOffset(t *testing.T) {
+	dir := rangesMediaDir(t, "EP_1.mkv")
+	rf := &RangesFile{Version: 1, Ranges: []RangeBinding{
+		{ID: "r1", Title: "S1", EpisodeOffset: -1, Match: RangeMatch{Kind: "glob", Patterns: []string{"EP_*"}}},
+	}}
+	if err := SaveRanges(dir, rf); err == nil {
+		t.Fatal("a negative episode offset must hard-reject the save")
+	} else if !strings.Contains(err.Error(), "offset") {
+		t.Fatalf("err = %v, want an offset verdict", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, RangesFilename)); !os.IsNotExist(err) {
+		t.Error("the rejected document must not be written")
 	}
 }
 

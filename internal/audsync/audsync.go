@@ -172,7 +172,7 @@ const (
 	// EnvBins is the fixed envelope canvas: MaxEnvSec × EnvRate.
 	EnvBins = MaxEnvSec * EnvRate
 	// EnvStep is the analysis-rate samples per envelope bin
-	// (8000 / EnvRate — 0.2 s of audio per bin).
+	// (8000 / EnvRate — 0.02 s of audio per bin).
 	EnvStep = 8000 / EnvRate
 	// AACPrimingSec is the AAC encoder delay the m4a encode inserts
 	// after the byte shift (1024 samples at 48 kHz). mkvmerge does

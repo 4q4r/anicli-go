@@ -110,10 +110,11 @@ func (a *Analyzer) decodeEnvelope(ctx context.Context, src contracts.VideoSource
 
 // Reference builds the episode's reference envelope from the video's
 // own streams. Budgets, both derived from the parent context: the
-// stream probe and the ASS extractions ride the per-analysis Budget,
-// every candidate decode shares ONE DecodeBudget (a hung or giant
-// source must not hold the caller forever, and N candidates must not
-// multiply the wait). Every failure wraps ErrNoReference.
+// stream probe rides the per-analysis Budget (a fast metadata read);
+// the ASS extractions and every candidate decode share ONE
+// DecodeBudget — a remote ASS leg converts the whole subtitle track
+// off the full media stream (whole-source-decode work), and N legs
+// must not multiply the wait. Every failure wraps ErrNoReference.
 func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource, donorLangs ...string) (Reference, error) {
 	probeCtx, cancelProbe := context.WithTimeout(ctx, a.budget)
 	defer cancelProbe()
@@ -132,7 +133,7 @@ func (a *Analyzer) Reference(ctx context.Context, video contracts.VideoSource, d
 		if track >= len(subs) {
 			continue // the `?` answer, precomputed: an absent track yields nothing
 		}
-		out, _, err := a.exec(probeCtx, a.ffmpeg, assExtractArgs(video, track))
+		out, _, err := a.exec(decodeCtx, a.ffmpeg, assExtractArgs(video, track))
 		if err != nil || len(out) == 0 {
 			continue
 		}

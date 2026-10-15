@@ -222,7 +222,7 @@ func (d *Downloader) RunSyncJob(ctx context.Context, job SyncJob, progress func(
 // donors[0] ONLY — that is the track VerifyAssembled measures
 // (0:a:0). Offset here is the APPLIED shift (the lag plus the AAC
 // priming compensation — exactly what ShiftWAVFile consumed), so the
-// lead derives from it directly: a nonpositive applied shift is trim
+// lead derives from it directly: a nonnegative applied shift is trim
 // geometry (≈0 lead), a negative one pads (≈|Offset|). No second
 // priming addition happens here. Unmeasured donors ship untouched —
 // no lead. A later donor's pad never sets the expectation for a head

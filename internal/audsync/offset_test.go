@@ -131,6 +131,7 @@ func decimateWAV(path string) ([]byte, error) {
 // "URL" (bare decodes) or "URL|0:a:N" (per-track reference decodes).
 type fakeExec struct {
 	calls       [][]string
+	ctxLeft     []time.Duration // per-call context slack (0 = no deadline)
 	streamsJSON string
 	assByTrack  map[int]string
 	timelines   map[string][]float64
@@ -142,6 +143,11 @@ type fakeExec struct {
 func (f *fakeExec) exec(ctx context.Context, bin string, args []string) ([]byte, string, error) {
 	argv := append([]string{bin}, args...)
 	f.calls = append(f.calls, argv)
+	left := time.Duration(0)
+	if dl, ok := ctx.Deadline(); ok {
+		left = time.Until(dl)
+	}
+	f.ctxLeft = append(f.ctxLeft, left)
 	joined := strings.Join(args, " ")
 	switch {
 	case strings.Contains(joined, "-show_streams"):
@@ -529,6 +535,44 @@ func TestReferenceDecodeBudgetKillsDecode(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Reference ignored the decode budget")
+	}
+}
+
+// TestReferenceASSExtractionUnderDecodeBudget: a remote ASS leg
+// converts the whole subtitle track off the FULL media stream —
+// whole-source-decode work, the DecodeBudget's class, not the fast
+// probe's. On the probe Budget a legitimate slow extraction gets
+// killed and the highest-priority reference silently drops down the
+// hierarchy (CodeRabbit A1). The fake records each call's context
+// slack; with the DecodeBudget far above the Budget, every ASS leg
+// must carry decode-scale time left.
+func TestReferenceASSExtractionUnderDecodeBudget(t *testing.T) {
+	fe := &fakeExec{
+		streamsJSON: streamsJSON([2]string{"subtitle", "rus"}),
+		assByTrack:  map[int]string{0: richASS(15)},
+		timelines:   map[string][]float64{},
+	}
+	const probeBudget = 200 * time.Millisecond
+	a := New(Options{Exec: fe.exec, Budget: probeBudget, DecodeBudget: 10 * time.Second})
+	ref, err := a.Reference(context.Background(), contracts.VideoSource{URL: "https://v/video.m3u8"}, "rus")
+	if err != nil {
+		t.Fatalf("Reference: %v", err)
+	}
+	if ref.Kind != RefSubs {
+		t.Fatalf("kind = %v, want RefSubs", ref.Kind)
+	}
+	found := 0
+	for i, call := range fe.calls {
+		if !strings.Contains(strings.Join(call[1:], " "), "-f ass pipe:") {
+			continue
+		}
+		found++
+		if left := fe.ctxLeft[i]; left <= probeBudget {
+			t.Fatalf("ASS leg %d carried %v of context slack — it rode the probe Budget, not the DecodeBudget", i, left)
+		}
+	}
+	if found == 0 {
+		t.Fatal("no ASS extraction call recorded")
 	}
 }
 

@@ -878,7 +878,7 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	}
 	// The cursor starts on the direct row (first item): Enter pushes
 	// the download screen; its batch downloads both episodes.
-	next, cmd := ss.Update(enter())
+	_, cmd := ss.Update(enter())
 	if cmd == nil {
 		t.Fatalf("the direct pick must push the download screen")
 	}

@@ -117,7 +117,7 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
+	s, _ := pr165bAskSession(t, "ask")
 	s.videoDub = "[animego] Дубль 1"
 	s.markedAudio = []string{"[anilib] AniLib"}
 	ss := pr165bDriveToStart(t, s)
@@ -127,7 +127,7 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 
 	// «Да»: the first choice — the screen pushes, every task carries
 	// AudioSync.
-	_, dl = pr165bAnswerDrive(t, ss, enter())
+	_, dl := pr165bAnswerDrive(t, ss, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("«Да» must start the batch, got %d downloads", len(dl.downloads))
 	}
@@ -139,12 +139,12 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 
 	// «Нет»: a fresh batch — the second choice, sync off, still
 	// downloaded.
-	s2, dl2 := pr165bAskSession(t, "ask")
+	s2, _ := pr165bAskSession(t, "ask")
 	s2.videoDub = "[animego] Дубль 1"
 	s2.markedAudio = []string{"[anilib] AniLib"}
 	ss2b := pr165bDriveToStart(t, s2)
 	ss2b.syncAskList.Jump(1)
-	_, dl2 = pr165bAnswerDrive(t, ss2b, enter())
+	_, dl2 := pr165bAnswerDrive(t, ss2b, enter())
 	if len(dl2.downloads) == 0 {
 		t.Fatalf("«Нет» must still start the batch (не отмена), got %d", len(dl2.downloads))
 	}
@@ -162,11 +162,11 @@ func TestSyncAskEscMeansNo(t *testing.T) {
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
+	s, _ := pr165bAskSession(t, "ask")
 	s.videoDub = "[animego] Дубль 1"
 	s.markedAudio = []string{"[anilib] AniLib"} // mixing — the ask qualifier
 	ss := pr165bDriveToStart(t, s)
-	_, dl = pr165bAnswerDrive(t, ss, esc())
+	_, dl := pr165bAnswerDrive(t, ss, esc())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("Esc must continue the batch, got %d downloads", len(dl.downloads))
 	}
@@ -263,7 +263,7 @@ func TestSyncAskStrictRestoredThroughTheDubMenu(t *testing.T) {
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
+	s, _ := pr165bAskSession(t, "ask")
 	// NO remembered dub: the PR174 stream picker opens first. The
 	// marked audio set qualifies the batch as mixing — the ask
 	// follows the pick.
@@ -311,7 +311,7 @@ func TestSyncAskStrictRestoredThroughTheDubMenu(t *testing.T) {
 		t.Fatalf("state = %v, want the sync ask after the mode pick", ss2.state)
 	}
 	// «Да»: the batch runs STRICT (the picked dub alone) and synced.
-	_, dl = pr165bAnswerDrive(t, ss2, enter())
+	_, dl := pr165bAnswerDrive(t, ss2, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatal("the strict batch must start")
 	}

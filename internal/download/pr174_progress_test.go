@@ -32,7 +32,7 @@ func (f *fakeProgressRunner) run(ctx context.Context, bin string, args []string,
 	if !strings.Contains(filepath.Base(last), TempSuffix) {
 		return nil
 	}
-	if err := os.WriteFile(last, []byte("the merged output"), 0o640); err != nil {
+	if err := os.WriteFile(last, []byte("the merged output"), 0o600); err != nil {
 		return err
 	}
 	for _, l := range f.lines {
@@ -129,7 +129,7 @@ func TestDownloadDetailedUnknownDurationStaysIndeterminate(t *testing.T) {
 func TestDownloadFinalizeTolerantWhenFinalExists(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "EP_14_720p.mp4")
-	if err := os.WriteFile(out, []byte("a full healthy episode file, really"), 0o640); err != nil {
+	if err := os.WriteFile(out, []byte("a full healthy episode file, really"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Options{})
@@ -169,7 +169,7 @@ func TestDownloadFinalizeStillFailsWithoutFinal(t *testing.T) {
 func TestDownloadFinalizeFailsOnEmptyFinal(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "EP_14_720p.mp4")
-	if err := os.WriteFile(out, nil, 0o640); err != nil {
+	if err := os.WriteFile(out, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Options{})

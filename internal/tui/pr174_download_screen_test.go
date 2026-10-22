@@ -92,7 +92,7 @@ func pr174PushDirectScreen(t *testing.T, s *sessionScreen) *directDownloadScreen
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
-	next, cmd := ss.Update(enter()) // the direct row
+	_, cmd := ss.Update(enter()) // the direct row
 	if cmd == nil {
 		t.Fatal("the direct pick must push the download screen")
 	}

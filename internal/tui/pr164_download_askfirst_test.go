@@ -177,20 +177,21 @@ func TestPR164AskFirstPickedDubDrivesBatch(t *testing.T) {
 	if ss.videoDub != "[animego] Дубль 1" || ss.lastQuality != "720" {
 		t.Fatalf("the pick must record dub+quality, got %q/%q", ss.videoDub, ss.lastQuality)
 	}
-	next, cmd := ss.Update(enter()) // foreground, the first mode row
+	_, cmd := ss.Update(enter()) // the direct download row
 	if cmd == nil {
-		t.Fatal("the mode pick must dispatch the download batch")
+		t.Fatal("the mode pick must push the download screen")
 	}
-	ss = next.(*sessionScreen)
-
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
 	}
-	applied, _ := ss.Update(settled)
-	status := applied.(*sessionScreen).status
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	status := ds.summary
 
 	if settled.count != 1 || settled.total != 3 {
 		t.Fatalf("only ep 1 carries the picked dub: 1 of 3 must download, got %d/%d",
@@ -224,33 +225,45 @@ func TestPR164AskFirstPickSettlesOnMenuSurface(t *testing.T) {
 	ss := openDownloadPicker(t, s)
 	ss = pickDownloadStream(t, ss, "720", "[animego] Дубль 1")
 
-	next, cmd := ss.Update(enter()) // foreground
+	next, cmd := ss.Update(enter()) // the direct download row
 	if cmd == nil {
-		t.Fatal("the mode pick must dispatch the download batch")
+		t.Fatal("the mode pick must push the download screen")
 	}
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateMenu {
 		t.Fatalf("the mode pick must return to the session menu, got %v", ss.state)
 	}
 
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	// The settle lands ON THE SCREEN (its rows + summary) — the
+	// session below stays on its menu, untouched by the batch.
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
 	}
-	applied, _ := ss.Update(settled)
-	ss = applied.(*sessionScreen)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	if !ds.done {
+		t.Fatal("the screen must settle done")
+	}
+	if !contains(ds.summary, "skipped: 2–3 (no dub [animego] Дубль 1)") {
+		t.Fatalf("the settle report must render on the screen:\n%s", ds.summary)
+	}
 	if ss.state != sessionStateMenu {
-		t.Fatalf("the settle must land on the session menu, got %v", ss.state)
-	}
-	if !contains(ss.status, "skipped: 2–3 (no dub [animego] Дубль 1)") {
-		t.Fatalf("the settle report must render on the menu surface:\n%s", ss.status)
+		t.Fatalf("the session below must stay on its menu, got %v", ss.state)
 	}
 
-	// Enter-after-settle: a visible surface (the download prompt
-	// re-entry), never a second batch, never a silent nothing.
+	// Any key on the settled screen pops back; Enter-after-pop opens
+	// a visible surface (the download prompt re-entry), never a
+	// second batch, never a silent nothing.
 	downloads := len(dl.downloads)
+	_, popCmd := ds.Update(enter())
+	if _, ok := popCmd().(popMsg); !ok {
+		t.Fatalf("a key on the settled screen must pop, got %T", popCmd)
+	}
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadRange {
@@ -259,6 +272,7 @@ func TestPR164AskFirstPickSettlesOnMenuSurface(t *testing.T) {
 	if len(dl.downloads) != downloads {
 		t.Fatalf("enter after the settle must not re-dispatch, got %d downloads", len(dl.downloads))
 	}
+	_ = settled
 }
 
 // pr164LazySession builds a loaded session whose listing knows NO

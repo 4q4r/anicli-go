@@ -31,6 +31,12 @@ func (c *capturingDownloader) Download(_ context.Context, in download.CommandInp
 	return c.err
 }
 
+// DownloadDetailed keeps the byte-identical legacy capture (the
+// pipeline tests pin the argv shapes; no progress plumbing here).
+func (c *capturingDownloader) DownloadDetailed(ctx context.Context, in download.CommandInput, _ func(download.Progress)) error {
+	return c.Download(ctx, in)
+}
+
 // stubProber answers every probe with a fixed codec per kind.
 type stubProber struct {
 	video string

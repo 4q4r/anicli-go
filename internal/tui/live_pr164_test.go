@@ -72,7 +72,11 @@ func TestLivePR164DownloadAskFirst(t *testing.T) {
 	s.episodes[s.order[1]] = ep2
 	t.Logf("will pick %q; removed it from ep %q's listing embeds", picked, s.order[1])
 
-	openFlow := func() *sessionScreen {
+	// openPickerFlow drives the real path to the PR174 stream picker:
+	// «Скачать серии» → the range → the content pick (видео+аудио) →
+	// the picker resolve settle (live streams of the representative
+	// episode).
+	openPickerFlow := func() *sessionScreen {
 		t.Helper()
 		s.list.Jump(sessionActionIndex(s, "download"))
 		next, _ := s.Update(enter())
@@ -86,27 +90,31 @@ func TestLivePR164DownloadAskFirst(t *testing.T) {
 		if ss.state != sessionStateDownloadContent {
 			t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
 		}
-		next, _ = ss.Update(enter()) // видео+аудио, the default first row
+		next, cmd := ss.Update(enter()) // видео+аудио, the default first row
 		ss = next.(*sessionScreen)
-		if ss.state != sessionStateDownloadMode {
-			t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
+		if ss.state != sessionStateDownloadStream {
+			t.Fatalf("the content pick must open the stream picker, got %v", ss.state)
 		}
-		next, _ = ss.Update(enter()) // «Передний план»
+		if cmd == nil {
+			t.Fatal("the content pick must start the stream resolve")
+		}
+		next, _ = ss.Update(cmd())
 		return next.(*sessionScreen)
 	}
 
-	// --- Proof 1: no dub chosen → the menu opens, nothing downloads.
-	ss := openFlow()
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("no dub chosen must open the ask-first dub menu, got %v", ss.state)
+	// --- Proof 1: no dub chosen → the stream picker opens (the
+	// ask-first surface of the PR174 flow), nothing downloads.
+	ss := openPickerFlow()
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("no dub chosen must open the stream picker, got %v", ss.state)
 	}
 	if len(rec.tasks) != 0 {
 		t.Fatalf("nothing may download before the pick, got %+v", rec.tasks)
 	}
 	view := ss.View().Content
-	t.Logf("ASK-FIRST MENU VIEW:\n%s", view)
-	if !contains(view, "Dub to download:") {
-		t.Fatalf("the ask-first dub menu must render:\n%s", view)
+	t.Logf("STREAM PICKER VIEW:\n%s", view)
+	if !contains(view, "Pick a stream (quality") {
+		t.Fatalf("the stream picker must render:\n%s", view)
 	}
 
 	// --- Proof 2: Esc (cancel) aborts — nothing recorded.
@@ -120,49 +128,55 @@ func TestLivePR164DownloadAskFirst(t *testing.T) {
 	}
 	t.Logf("CANCEL PROOF: back at the menu, %d tasks recorded", len(rec.tasks))
 
-	// --- Proof 3: the pick drives the whole batch.
-	ss = openFlow()
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("the ask-first menu must reopen for the second pass, got %v", ss.state)
+	// --- Proof 3: the stream pick drives the whole batch on the
+	// direct screen.
+	ss = openPickerFlow()
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the picker must reopen for the second pass, got %v", ss.state)
 	}
 	idx := -1
-	for i, item := range ss.redubList.Menu().Items {
-		if item.ID == picked {
+	for i, e := range ss.streamEntries {
+		if e.DubKey == picked {
 			idx = i
 			break
 		}
 	}
 	if idx == -1 {
-		t.Fatalf("the menu must list the picked dub %q:\n%s", picked, ss.View().Content)
+		t.Fatalf("the picker must list the picked dub %q:\n%s", picked, ss.View().Content)
 	}
-	ss.redubList.Jump(idx)
-	next, cmd := ss.Update(enter())
-	// PR165b: the default «ask» sync gate turns the dub pick into the
-	// sync prompt first; «Нет» dispatches the batch unsynchronized —
-	// the pre-gate semantics this probe pins.
+	ss.qualityList.Jump(idx)
+	next, _ = ss.Update(enter()) // the stream pick → the mode menu
+	ss = next.(*sessionScreen)
+	next, cmd := ss.Update(enter()) // the direct download row
+	// A MIXING batch opens the sync ask first; «Нет» pushes the
+	// screen unsynchronized (a plain batch pushes directly — the
+	// PR174 mixing-only gate).
 	if cmd == nil {
 		ask, ok := next.(*sessionScreen)
 		if !ok || ask.state != sessionStateSyncAsk {
-			t.Fatalf("the dub pick must dispatch the batch or open the sync ask, got %T", next)
+			t.Fatalf("the direct pick must push the screen or open the sync ask, got %T", next)
 		}
-		ask.syncAskList.Jump(1) // «Нет» — the batch runs unsynchronized
+		ask.syncAskList.Jump(1) // «Нет»
 		next, cmd = ask.Update(enter())
 	}
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the batch")
+		t.Fatal("the direct pick must push the download screen")
 	}
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	msg := cmd()
+	pushed, ok := msg.(pushMsg)
+	if !ok {
+		t.Fatalf("the direct pick must push the screen, got %T", msg)
 	}
-	next, _ = ss.Update(settled)
-	ss = next.(*sessionScreen)
-	t.Logf("SETTLE REPORT:\n%s", ss.status)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct download screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	screen := ds.View().Content
+	t.Logf("DIRECT SCREEN:\n%s", screen)
 
 	if len(rec.tasks) == 0 {
-		t.Fatalf("the pick must download the carrying episodes, report:\n%s", ss.status)
+		t.Fatalf("the pick must download the carrying episodes, screen:\n%s", screen)
 	}
 	if settled.count != len(rec.tasks) {
 		t.Fatalf("settled count %d must match the recorded tasks %d", settled.count, len(rec.tasks))
@@ -175,8 +189,8 @@ func TestLivePR164DownloadAskFirst(t *testing.T) {
 		if task.ProviderID != providerOfTrackKey(picked) {
 			t.Fatalf("ep %s provider must match the picked dub, got %q", task.EpisodeNum, task.ProviderID)
 		}
-		t.Logf("LIVE RESOLUTION: ep %s -> %s [%s] (the dub picked in the menu)",
+		t.Logf("LIVE RESOLUTION: ep %s -> %s [%s] (the dub picked in the stream picker)",
 			task.EpisodeNum, task.DubID, task.ProviderID)
 	}
-	t.Logf("ASK-FIRST PROOF: menu → pick %q → %d episode(s) downloaded, 0 substitutes", picked, len(rec.tasks))
+	t.Logf("ASK-FIRST PROOF: picker → pick %q → %d episode(s) downloaded, 0 substitutes", picked, len(rec.tasks))
 }

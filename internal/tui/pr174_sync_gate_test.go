@@ -51,9 +51,11 @@ func pr174SyncSession(t *testing.T, downloadSync string, marked []string) (*sess
 	return s, deps.Download.(*fakeDownload)
 }
 
-// pr174DriveToBatch walks range 1-2 → видео+аудио → the first mode
-// row, running any directly-dispatched batch command.
-func pr174DriveToBatch(t *testing.T, s *sessionScreen) (*sessionScreen, *fakeDownload) {
+// pr174DriveToBatch walks range 1-2 → видео+аудио → the direct mode
+// row. A non-nil second return is the pushed direct download screen
+// (the batch ran to its settle inside it); nil means the sync-ask
+// opened instead (the caller answers it).
+func pr174DriveToBatch(t *testing.T, s *sessionScreen) (*sessionScreen, *directDownloadScreen, *fakeDownload) {
 	t.Helper()
 	dl := s.deps.Download.(*fakeDownload)
 	s.list.Jump(sessionActionIndex(s, "download"))
@@ -62,13 +64,23 @@ func pr174DriveToBatch(t *testing.T, s *sessionScreen) (*sessionScreen, *fakeDow
 	ss.rangeInput.typeText("1-2")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	next, _ = ss.Update(enter()) // видео+аудио (remembered pair → mode menu)
 	ss = next.(*sessionScreen)
-	next, cmd := ss.Update(enter()) // the first mode row
-	if cmd != nil {
-		runLaunchBatch(t, cmd)
+	next, cmd := ss.Update(enter()) // the direct row
+	if cmd == nil {
+		return next.(*sessionScreen), nil, dl
 	}
-	return next.(*sessionScreen), dl
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the direct pick must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
+	return next.(*sessionScreen), ds, dl
 }
 
 // TestSyncAskAbsentOnPlainDownload (PR174 S3): a plain single-dub
@@ -82,8 +94,8 @@ func TestSyncAskAbsentOnPlainDownload(t *testing.T) {
 		t.Fatalf("Init(en): %v", err)
 	}
 	s, _ := pr174SyncSession(t, "ask", nil)
-	ss, dl := pr174DriveToBatch(t, s)
-	if ss.state == sessionStateSyncAsk {
+	_, ds, dl := pr174DriveToBatch(t, s)
+	if ds == nil {
 		t.Fatal("a plain single-dub download must not open the sync-ask prompt")
 	}
 	if len(dl.downloads) == 0 {
@@ -106,15 +118,27 @@ func TestSyncAskFiresOnMarkedAudioSet(t *testing.T) {
 		t.Fatalf("Init(en): %v", err)
 	}
 	s, _ := pr174SyncSession(t, "ask", []string{"[anilib] AniLib"})
-	ss, dl := pr174DriveToBatch(t, s)
+	ss, ds, dl := pr174DriveToBatch(t, s)
+	if ds != nil {
+		t.Fatal("the mixing batch must open the sync-ask menu first")
+	}
 	if ss.state != sessionStateSyncAsk {
 		t.Fatalf("state = %v, want the sync-ask menu on the mixing batch", ss.state)
 	}
 	_, cmd := ss.Update(enter()) // «Да»
 	if cmd == nil {
-		t.Fatal("«Да» must dispatch the batch")
+		t.Fatal("«Да» must push the download screen")
 	}
-	runLaunchBatch(t, cmd)
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("«Да» must push the screen, got %T", pushedMsg)
+	}
+	dscreen, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, dscreen)
 	if len(dl.downloads) == 0 {
 		t.Fatal("the mixing batch must start")
 	}
@@ -138,10 +162,7 @@ func TestSyncAskYesConfigNeedsMixingToo(t *testing.T) {
 		t.Fatalf("Init(en): %v", err)
 	}
 	s, _ := pr174SyncSession(t, "yes", nil)
-	ss, dl := pr174DriveToBatch(t, s)
-	if ss.state == sessionStateSyncAsk {
-		t.Fatal("config yes must not open the menu")
-	}
+	_, _, dl := pr174DriveToBatch(t, s)
 	for _, task := range dl.downloads {
 		if task.AudioSync {
 			t.Fatalf("plain task %s under config yes must stay unsynchronized (nothing to analyze)", task.EpisodeNum)
@@ -149,8 +170,8 @@ func TestSyncAskYesConfigNeedsMixingToo(t *testing.T) {
 	}
 
 	s2, _ := pr174SyncSession(t, "yes", []string{"[anilib] AniLib"})
-	ss2, dl2 := pr174DriveToBatch(t, s2)
-	if ss2.state == sessionStateSyncAsk {
+	_, ds2, dl2 := pr174DriveToBatch(t, s2)
+	if ds2 == nil {
 		t.Fatal("config yes must not open the menu")
 	}
 	for _, task := range dl2.downloads {

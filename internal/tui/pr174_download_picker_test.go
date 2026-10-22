@@ -160,13 +160,22 @@ func TestDownloadPickerQualityRidesTasks(t *testing.T) {
 	}
 	next, _ := ss.Update(enter())
 	ss = next.(*sessionScreen)
-	// The mode pick dispatches; any directly-run batch lands in the
-	// fake (foreground shapes) - background here keeps it hermetic.
-	next, modeCmd := ss.Update(enter())
-	if modeCmd != nil {
-		runLaunchBatch(t, modeCmd)
+	// The direct mode row pushes the download screen; drive its batch
+	// to the settle (the fake records the downloads).
+	_, modeCmd := ss.Update(enter())
+	if modeCmd == nil {
+		t.Fatal("the mode pick must push the download screen")
 	}
-	ss = next.(*sessionScreen)
+	pushedMsg := modeCmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
 	dl := ss.deps.Download.(*fakeDownload)
 	joined := len(dl.downloads) + len(dl.submitted)
 	if joined == 0 {

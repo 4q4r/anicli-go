@@ -235,9 +235,10 @@ type bufferedProgressMsg struct {
 
 type bufferedProgressEnd struct{ gen int }
 
-// downloadSettledMsg reports a finished foreground download batch
-// (I8) with its per-episode report (PR64 #3): count/total successes,
-// the first error for the headline and one report line per episode.
+// downloadSettledMsg reports a finished download batch (I8) with its
+// per-episode report (PR64 #3): count/total successes, the first
+// error for the headline and one report line per episode. PR174: the
+// direct download screen reuses the shape for its settle summary.
 type downloadSettledMsg struct {
 	count  int
 	total  int
@@ -253,29 +254,6 @@ type backgroundQueuedMsg struct {
 	queued int
 	total  int
 	report []downloadEpisodeReport
-}
-
-// downloadProgressMsg is one per-episode tick of a running foreground
-// range download (review fix 2): a resolve verdict or a download
-// start/finish. gen tags the batch — a superseded batch's ticks drop.
-// downloadProgressEnd closes the pump (channel drained).
-type downloadProgressMsg struct {
-	gen  int
-	line string
-}
-
-type downloadProgressEnd struct{ gen int }
-
-// waitDownloadProgress is the re-arming pump of the range-download
-// progress channel (the buffered-watch pattern).
-func waitDownloadProgress(ch <-chan string, gen int) tea.Cmd {
-	return func() tea.Msg {
-		line, ok := <-ch
-		if !ok {
-			return downloadProgressEnd{gen: gen}
-		}
-		return downloadProgressMsg{gen: gen, line: line}
-	}
 }
 
 // sessionScreen is the watch-session state machine: a merged episode
@@ -340,12 +318,6 @@ type sessionScreen struct {
 	bufferCancel context.CancelFunc
 	bufferGen    int
 	bufferProgCh chan buffered.Progress
-
-	// Range-download batch state (review fix 2): downloadGen tags the
-	// active batch (a newer batch drops the stale pump) and
-	// downloadProgCh carries the per-episode progress ticks.
-	downloadGen    int
-	downloadProgCh chan string
 
 	state sessionState
 
@@ -974,17 +946,6 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.setShikimoriBinding(msg.id)
 		}
 		return s, nil
-	case downloadProgressMsg:
-		if msg.gen != s.downloadGen {
-			return s, nil
-		}
-		s.setStatus(msg.line)
-		return s, waitDownloadProgress(s.downloadProgCh, msg.gen)
-	case downloadProgressEnd:
-		return s, nil
-	case downloadSettledMsg:
-		s.setStatus(renderDownloadSettle(msg))
-		return s, nil
 	case backgroundQueuedMsg:
 		s.setStatus(renderBackgroundQueued(msg))
 		return s, nil
@@ -1189,6 +1150,14 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "download":
 		if s.deps == nil || s.deps.Download == nil {
 			s.setStatus(i18n.T("session.download_unavailable"))
+			return s, nil
+		}
+		// PR174 S4 single-flight: while ANY download is in flight
+		// (a background batch — the direct screen below the lock
+		// cannot be bypassed), a second request is rejected: the
+		// FIRST request keeps running untouched.
+		if s.downloadBusy() {
+			s.setStatus(i18n.T("download.already_running"))
 			return s, nil
 		}
 		s.setState(sessionStateDownloadRange)
@@ -3041,6 +3010,13 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	}
 	mode, _ := resolved.(string)
 	s.setState(sessionStateMenu)
+	// PR174 S4 single-flight (defense at the dispatch seam): a batch
+	// started from elsewhere while the prompts were open is rejected
+	// here — never a second concurrent batch on the same files.
+	if s.downloadBusy() {
+		s.setStatus(i18n.T("download.already_running"))
+		return s, nil
+	}
 	// Defensive #164 shape: a batch can only reach the mode menu with
 	// a chosen dub (the picker or the remembered pair); if one ever
 	// arrives without one, the ask-first union menu opens instead of a
@@ -3138,20 +3114,19 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		})
 	}
 	switch mode {
-	case "foreground":
-		count := len(tasks)
-		s.setStatus(i18n.T("download.starting_foreground", i18n.Vals{"count": strconv.Itoa(count)}))
-		s.downloadGen++
-		gen := s.downloadGen
-		progCh := make(chan string, 16)
-		s.downloadProgCh = progCh
-		return s, tea.Batch(
-			safeCmd(sessionScreenID, func() tea.Msg {
-				defer close(progCh)
-				return runForegroundDownload(context.Background(), deps, tasks, preferred, strict, progCh)
-			}),
-			waitDownloadProgress(progCh, gen),
-		)
+	case "direct":
+		// PR174 S5: the direct download runs on its dedicated locked
+		// screen — per-episode progress rows, cancel-with-confirm, the
+		// settle summary. Navigation below is structurally blocked
+		// while the screen is up (the single-flight pair of the
+		// downloadBusy guard).
+		labels := append([]string(nil), s.downloadEpisodes...)
+		return s, push(newDirectDownloadScreen(deps, directBatch{
+			tasks:     tasks,
+			preferred: preferred,
+			strict:    strict,
+			episodes:  labels,
+		}))
 	case "background":
 		s.setStatus(i18n.T("download.resolving_dubs", i18n.Vals{"count": strconv.Itoa(len(tasks))}))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {
@@ -3160,6 +3135,16 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 	default:
 		return s, nil
 	}
+}
+
+// downloadBusy reports whether ANY download work is in flight (PR174
+// S4): a background batch (the manager's active banner) or a direct
+// batch (its screen locks the session below — unreachable, checked
+// anyway). The guard is consulted at the download ENTRY and the mode
+// pick; a second request while one runs is rejected — the FIRST
+// request keeps running untouched.
+func (s *sessionScreen) downloadBusy() bool {
+	return s.deps != nil && s.deps.Download != nil && s.deps.Download.ActiveBanner() != ""
 }
 
 // syncYes/syncNo render the sync-ask answers as pointers.
@@ -3262,11 +3247,12 @@ func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.C
 	return s, nil
 }
 
-// buildModeList renders the foreground/background picker once per
-// visit (C2).
+// buildModeList renders the PR174 download-mode picker once per
+// visit (C2): the direct download screen first (the owner's primary
+// path), the background queue second.
 func (s *sessionScreen) buildModeList() {
 	s.modeList = NewPinList(NewMenu(i18n.T("download.mode_title"), "", []Choice{
-		{ID: "foreground", Label: i18n.T("download.mode_foreground"), Value: "foreground"},
+		{ID: "direct", Label: i18n.T("download.mode_direct"), Value: "direct"},
 		{ID: "background", Label: i18n.T("download.mode_background"), Value: "background"},
 	}...), defaultListHeight)
 }

@@ -621,6 +621,8 @@ func TestSessionInfoMenu(t *testing.T) {
 type fakeDownload struct {
 	submitted []DownloadTask
 	downloads []DownloadTask
+	// banner feeds downloadBusy guard tests ("" = idle).
+	banner string
 }
 
 func (f *fakeDownload) Download(_ context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
@@ -628,9 +630,15 @@ func (f *fakeDownload) Download(_ context.Context, task DownloadTask) (string, [
 	return "/dl/" + task.AnimeTitle + "/EP_" + task.EpisodeNum + ".mp4", nil, nil, nil
 }
 
+// DownloadDetailed delegates to Download (the PR174 progress sink is
+// the direct screen's concern; hermetic flow tests don't need ticks).
+func (f *fakeDownload) DownloadDetailed(ctx context.Context, task DownloadTask, _ func(DownloadProgress)) (string, []string, []SyncNote, error) {
+	return f.Download(ctx, task)
+}
+
 func (f *fakeDownload) Submit(task DownloadTask) { f.submitted = append(f.submitted, task) }
 
-func (f *fakeDownload) ActiveBanner() string { return "" }
+func (f *fakeDownload) ActiveBanner() string { return f.banner }
 
 var _ DownloadService = (*fakeDownload)(nil)
 
@@ -681,7 +689,7 @@ func TestSessionDownloadRange(t *testing.T) {
 		t.Fatalf("the dub pick must open the mode menu, got %v", ss.state)
 	}
 	v = ss.View().Content
-	if !strings.Contains(v, "Foreground") || !strings.Contains(v, "Background") {
+	if !strings.Contains(v, "Download (progress screen)") || !strings.Contains(v, "Download in background") {
 		t.Fatalf("download modes must be offered:\n%s", v)
 	}
 }
@@ -868,35 +876,38 @@ func TestSessionDownloadForegroundDispatch(t *testing.T) {
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
-	// The cursor starts on «Передний план» (first item), Enter
-	// dispatches.
+	// The cursor starts on the direct row (first item): Enter pushes
+	// the download screen; its batch downloads both episodes.
 	next, cmd := ss.Update(enter())
 	if cmd == nil {
-		t.Fatalf("foreground pick must dispatch the download")
+		t.Fatalf("the direct pick must push the download screen")
 	}
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the direct pick must push the screen, got %T", pushedMsg)
 	}
-	if settled.err != nil {
-		t.Fatalf("fake download must succeed, got %v", settled.err)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	if settled.firstErr != nil {
+		t.Fatalf("fake download must succeed, got %v", settled.firstErr)
 	}
 	if settled.count != 2 || settled.total != 2 {
 		t.Fatalf("both episodes must download, got %d/%d", settled.count, settled.total)
 	}
 	if len(dl.downloads) != 2 {
-		t.Fatalf("foreground must download both episodes, got %d", len(dl.downloads))
+		t.Fatalf("the direct batch must download both episodes, got %d", len(dl.downloads))
 	}
 	for _, task := range dl.downloads {
 		if task.DubID != "[animego] Дубль 1" {
 			t.Fatalf("ep %s must carry its resolved dub, got %q", task.EpisodeNum, task.DubID)
 		}
 	}
-	next, _ = next.Update(settled)
-	if !contains(next.(*sessionScreen).status, "Episodes downloaded") {
-		t.Fatalf("settle must update the status line, got %q", next.(*sessionScreen).status)
+	if !contains(ds.summary, "Episodes downloaded") {
+		t.Fatalf("the settle must render on the screen, got %q", ds.summary)
 	}
 }
 
@@ -964,27 +975,39 @@ func TestSessionDownloadSettledFailure(t *testing.T) {
 	ss = next.(*sessionScreen)
 	next, _ = ss.Update(enter()) // видео+аудио, the default first row
 	ss = next.(*sessionScreen)
-	next, cmd := ss.Update(enter())
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	_, cmd := ss.Update(enter()) // the direct row
+	if cmd == nil {
+		t.Fatal("the direct pick must push the download screen")
 	}
-	if settled.err == nil {
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the direct pick must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	if settled.firstErr == nil {
 		t.Fatalf("download failure must be carried")
 	}
-	next, _ = next.Update(settled)
-	if !contains(next.(*sessionScreen).status, "Download failed") {
-		t.Fatalf("failure must surface on the status line, got %q", next.(*sessionScreen).status)
+	if !contains(ds.summary, "Download failed") {
+		t.Fatalf("failure must surface on the screen summary, got %q", ds.summary)
 	}
 }
 
-// errDownload fails every foreground download.
+// errDownload fails every direct download.
 type errDownload struct{ fakeDownload }
 
 func (f *errDownload) Download(_ context.Context, _ DownloadTask) (string, []string, []SyncNote, error) {
 	return "", nil, nil, errors.New("disk full")
+}
+
+// DownloadDetailed fails exactly like Download (the direct screen's
+// leg).
+func (f *errDownload) DownloadDetailed(ctx context.Context, task DownloadTask, _ func(DownloadProgress)) (string, []string, []SyncNote, error) {
+	return f.Download(ctx, task)
 }
 
 // watchStreaming drives «▶ Watch» through the PR44 format selector

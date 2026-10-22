@@ -10,8 +10,33 @@ import (
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/an0nx/anicli-go/internal/i18n"
 )
+
+// pr165bAnswerDrive answers the sync ask with the given key (Enter
+// on the cursor row, or Esc): both answers PUSH the direct download
+// screen — only AudioSync differs — and the helper drives the pushed
+// batch to its settle.
+func pr165bAnswerDrive(t *testing.T, ss *sessionScreen, key tea.KeyPressMsg) (*sessionScreen, *fakeDownload) {
+	t.Helper()
+	_, cmd := ss.Update(key)
+	if cmd == nil {
+		t.Fatal("the sync answer must push the download screen")
+	}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the sync answer must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
+	return ss, ss.deps.Download.(*fakeDownload)
+}
 
 // pr165bAskSession builds a loaded two-provider session (the merge
 // parts ≥2 — the ask gate qualifies) with the given config.
@@ -68,11 +93,16 @@ func pr165bDriveToStart(t *testing.T, s *sessionScreen) *sessionScreen {
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
-	next, cmd := ss.Update(enter()) // foreground, the default first row
+	next, cmd := ss.Update(enter()) // the direct download row
 	if cmd != nil {
-		// A directly-dispatched batch (config yes/no, single-provider)
-		// runs here; a menu opening leaves cmd nil.
-		runLaunchBatch(t, cmd)
+		// A directly-pushed batch (config yes/no) runs here; a menu
+		// opening (config ask) leaves cmd nil.
+		pushedMsg := cmd()
+		if pushed, ok := pushedMsg.(pushMsg); ok {
+			if ds, ok := pushed.screen.(*directDownloadScreen); ok {
+				driveDirectScreen(t, ds)
+			}
+		}
 	}
 	return next.(*sessionScreen)
 }
@@ -95,13 +125,9 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 		t.Fatalf("state = %v, want the sync-ask menu", ss.state)
 	}
 
-	// «Да»: the first choice — the batch starts, every task carries
+	// «Да»: the first choice — the screen pushes, every task carries
 	// AudioSync.
-	_, cmd := ss.Update(enter())
-	if cmd == nil {
-		t.Fatal("«Да» must dispatch the batch")
-	}
-	runLaunchBatch(t, cmd)
+	_, dl = pr165bAnswerDrive(t, ss, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("«Да» must start the batch, got %d downloads", len(dl.downloads))
 	}
@@ -118,11 +144,7 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 	s2.markedAudio = []string{"[anilib] AniLib"}
 	ss2b := pr165bDriveToStart(t, s2)
 	ss2b.syncAskList.Jump(1)
-	_, cmd2 := ss2b.Update(enter())
-	if cmd2 == nil {
-		t.Fatal("«Нет» must dispatch the batch")
-	}
-	runLaunchBatch(t, cmd2)
+	_, dl2 = pr165bAnswerDrive(t, ss2b, enter())
 	if len(dl2.downloads) == 0 {
 		t.Fatalf("«Нет» must still start the batch (не отмена), got %d", len(dl2.downloads))
 	}
@@ -142,9 +164,9 @@ func TestSyncAskEscMeansNo(t *testing.T) {
 	}
 	s, dl := pr165bAskSession(t, "ask")
 	s.videoDub = "[animego] Дубль 1"
+	s.markedAudio = []string{"[anilib] AniLib"} // mixing — the ask qualifier
 	ss := pr165bDriveToStart(t, s)
-	_, cmd := ss.Update(esc())
-	runLaunchBatch(t, cmd)
+	_, dl = pr165bAnswerDrive(t, ss, esc())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("Esc must continue the batch, got %d downloads", len(dl.downloads))
 	}
@@ -289,11 +311,7 @@ func TestSyncAskStrictRestoredThroughTheDubMenu(t *testing.T) {
 		t.Fatalf("state = %v, want the sync ask after the mode pick", ss2.state)
 	}
 	// «Да»: the batch runs STRICT (the picked dub alone) and synced.
-	_, cmd2 := ss2.Update(enter())
-	if cmd2 == nil {
-		t.Fatal("the strict batch must dispatch")
-	}
-	runLaunchBatch(t, cmd2)
+	_, dl = pr165bAnswerDrive(t, ss2, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatal("the strict batch must start")
 	}

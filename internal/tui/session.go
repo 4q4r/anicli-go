@@ -2902,12 +2902,17 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 // with the compact attribution, never substituted. A remembered dub
 // keeps the PR63 smart rotation (python resolve_dubs_smart parity).
 //
-// PR165b: syncChoice carries the audio_sync decision (nil = decide
-// here): config "no" or a non-qualifying batch (not видео+аудио, a
-// single-provider merge — no cross-provider pairs to fix) answers no
-// silently; config "yes" answers yes; "ask" opens the two-choice
-// menu (stashing mode+strict) and the answer re-enters with the
-// choice set.
+// PR165b/PR174: syncChoice carries the audio_sync decision (nil =
+// decide here). The analysis belongs to MIXING downloads alone — a
+// video+аудио batch carrying a marked audio set (external dub tracks
+// muxed onto the video). A plain single-dub batch has nothing to
+// sync — no prompt, whatever the session's provider topology (PR174
+// S3: the pre-174 gate keyed on `len(parts) >= 2`, so every merged
+// session asked on every plain download, and «Да» analyzed nothing
+// — no donors ride a plain task). Config "no" or a non-mixing batch
+// answers no silently; config "yes" answers yes; "ask" opens the
+// two-choice menu (stashing mode+strict) and the answer re-enters
+// with the choice set.
 func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice *bool) (Screen, tea.Cmd) {
 	deps := s.deps
 	preferred := s.videoDub
@@ -2919,6 +2924,14 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 	if content == "" {
 		content = "video_audio"
 	}
+	// The PR165 marked audio set rides every video+аудио task: every
+	// episode muxes the whole set (per-episode resolution inside the
+	// batch); the other modes resolve the chosen dub alone. Computed
+	// BEFORE the sync gate — mixing is the gate's qualifier.
+	var audioSet []string
+	if content == "video_audio" && len(s.markedAudio) > 0 {
+		audioSet = append([]string(nil), s.markedAudio...)
+	}
 	ask := false
 	if syncChoice == nil {
 		cfg := deps.DownloadSync // "ask" | "yes" | "no"; "" = the sync
@@ -2926,7 +2939,7 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		// exactly as pre-sync. Production never passes "": the config
 		// layer normalizes every unknown to "ask" before the snapshot.
 		switch {
-		case content != "video_audio" || len(s.parts) < 2 || cfg == "no" || cfg == "":
+		case content != "video_audio" || len(audioSet) == 0 || cfg == "no" || cfg == "":
 			syncChoice = syncNo()
 		case cfg == "yes":
 			syncChoice = syncYes()
@@ -2943,13 +2956,6 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		s.syncAskMode, s.syncAskStrict = mode, strict
 		s.openSyncAskMenu()
 		return s, nil
-	}
-	// The PR165 marked audio set rides every video+аудио task: every
-	// episode muxes the whole set (per-episode resolution inside the
-	// batch); the other modes resolve the chosen dub alone.
-	var audioSet []string
-	if content == "video_audio" && len(s.markedAudio) > 0 {
-		audioSet = append([]string(nil), s.markedAudio...)
 	}
 	// The dub is resolved PER EPISODE inside the command (PR64 #3):
 	// the remembered dub first, per-episode fallback otherwise (the

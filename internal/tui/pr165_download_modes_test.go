@@ -211,12 +211,27 @@ func TestPR165DownloadContentModeMenu(t *testing.T) {
 		}
 	}
 
-	// Pick «Video only» (second row): the execution-mode menu follows.
+	// Pick «Video only» (second row): the stream/dub pick follows
+	// (PR174: the picker precedes the mode choice), then the
+	// execution-mode menu.
 	ss.contentList.Jump(1)
-	next, _ = ss.Update(enter())
+	next, cmd := ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if cmd == nil {
+		t.Fatal("the content pick must start the batch stream resolve")
+	}
+	msg := cmd()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadDub {
+		// No resolved streams in this fixture: the #164 union menu is
+		// the honest fallback.
+		t.Fatalf("the empty resolve must fall back to the union menu, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // pick the union's first dub
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the execution-mode menu, got %v", ss.state)
+		t.Fatalf("the dub pick must open the execution-mode menu, got %v", ss.state)
 	}
 	if ss.downloadContentMode != "video_only" {
 		t.Fatalf("the pick must be remembered, got %q", ss.downloadContentMode)
@@ -254,29 +269,32 @@ func TestPR165BatchCarriesModeAndAudioSet(t *testing.T) {
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	// видео+аудио is the first row: Enter picks the default mode and
-	// lands on the execution-mode menu.
-	next, _ = ss.Update(enter())
-	ss = next.(*sessionScreen)
-	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
-	}
-
-	// pr164AskSession has no remembered dub — the ask-first menu opens
-	// on the execution pick.
+	// opens the PR174 stream picker (no remembered dub in this
+	// fixture). Feed the resolve settle and pick the first stream row.
 	next, cmd := ss.Update(enter())
 	ss = next.(*sessionScreen)
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("no dub chosen must open the dub menu, got %v", ss.state)
-	}
-	if cmd != nil {
-		t.Fatal("the execution pick must not dispatch before the dub pick")
-	}
-	_, cmd = ss.Update(enter()) // pick the first menu dub
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the batch")
+		t.Fatal("the content pick must start the stream resolve")
+	}
+	msg := cmd()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the content pick must open the stream picker, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // pick the first stream row
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("the stream pick must open the mode menu, got %v", ss.state)
+	}
+
+	next, cmd2 := ss.Update(enter()) // foreground
+	ss = next.(*sessionScreen)
+	if cmd2 == nil {
+		t.Fatal("the mode pick must dispatch the batch")
 	}
 	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
+	for _, m := range runLaunchBatch(t, cmd2) {
 		if d, ok := m.(downloadSettledMsg); ok {
 			settled = d
 		}
@@ -564,19 +582,39 @@ func TestPR165AudioOnlyModeSkipsAudioSet(t *testing.T) {
 	ss.rangeInput.typeText("1-3")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(contentPick(t, ss, "audio_only")) // «только аудио»
-	next, _ = next.Update(enter())                        // foreground
+	next, cmd0 := ss.Update(contentPick(t, ss, "audio_only")) // «только аудио»
 	ss = next.(*sessionScreen)
-	// Ask-first: the dub menu opens; pick the SECOND row ([animego]
+	if cmd0 == nil {
+		t.Fatal("the content pick must start the stream resolve")
+	}
+	msg := cmd0()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	// The picker resolves live streams; pick the SECOND row ([animego]
 	// Дубль 1 — only ep1 carries it).
-	ss.redubList.Jump(1)
-	next, cmd := ss.Update(enter())
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the stream picker must open, got %v", ss.state)
+	}
+	found := false
+	for i, e := range ss.streamEntries {
+		if e.DubKey == "[animego] Дубль 1" {
+			ss.qualityList.Jump(i)
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no animego stream row: %+v", ss.streamEntries)
+	}
+	next, _ = ss.Update(enter()) // the stream pick
+	ss = next.(*sessionScreen)
+	next, cmd := ss.Update(enter()) // foreground
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateMenu {
 		t.Fatalf("the pick must leave the menu, got %v", ss.state)
 	}
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the audio-only batch")
+		t.Fatal("the mode pick must dispatch the audio-only batch")
 	}
 	var settled downloadSettledMsg
 	for _, m := range runLaunchBatch(t, cmd) {

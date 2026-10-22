@@ -232,7 +232,7 @@ func TestSyncAskSingleProviderSkips(t *testing.T) {
 	}
 }
 
-// TestSyncAskStrictRestoredThroughTheDubMenu: the #164 dub-menu pick
+// TestSyncAskStrictRestoredThroughTheDubMenu: the stream pick
 // re-enters startRangeDownload with the strict mode; the sync ask
 // stashes it and the answer restores the STRICT batch. The ask
 // qualifies through the marked audio set (PR174: mixing-only).
@@ -242,22 +242,51 @@ func TestSyncAskStrictRestoredThroughTheDubMenu(t *testing.T) {
 		t.Fatalf("Init(en): %v", err)
 	}
 	s, dl := pr165bAskSession(t, "ask")
-	// NO remembered dub: the #164 dub menu opens first. The marked
-	// audio set qualifies the batch as mixing — the ask follows the
-	// pick.
+	// NO remembered dub: the PR174 stream picker opens first. The
+	// marked audio set qualifies the batch as mixing — the ask
+	// follows the pick.
 	s.markedAudio = []string{"[anilib] AniLib"}
-	ss := pr165bDriveToStart(t, s)
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("state = %v, want the #164 dub menu", ss.state)
+	s.list.Jump(sessionActionIndex(s, "download"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.rangeInput.typeText("1-2")
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	next, cmd0 := ss.Update(enter()) // видео+аудио → the stream picker
+	ss = next.(*sessionScreen)
+	if cmd0 == nil {
+		t.Fatal("the content pick must start the stream resolve")
 	}
-	// Pick the dub (Jump(1): sortedEmbedKeys lists AniLib first): the
-	// batch re-enters startRangeDownload strict, the sync ask opens
-	// on top (stashing mode+strict).
-	ss.redubList.Jump(1)
-	next, _ := ss.Update(enter())
+	next, _ = ss.Update(cmd0())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("state = %v, want the stream picker", ss.state)
+	}
+	// Pick the animego stream (Jump to its row): the batch re-enters
+	// startRangeDownload strict, the sync ask opens on top (stashing
+	// mode+strict).
+	picked := false
+	for i, e := range ss.streamEntries {
+		if e.DubKey == "[animego] Дубль 1" {
+			ss.qualityList.Jump(i)
+			picked = true
+			break
+		}
+	}
+	if !picked {
+		t.Fatalf("no animego stream row: %+v", ss.streamEntries)
+	}
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("state = %v, want the mode menu after the stream pick", ss.state)
+	}
+	// The mode pick re-enters startRangeDownload strict; the sync ask
+	// opens on top (stashing mode+strict).
+	next, _ = ss.Update(enter()) // foreground, the first row
 	ss2 := next.(*sessionScreen)
 	if ss2.state != sessionStateSyncAsk {
-		t.Fatalf("state = %v, want the sync ask after the dub pick", ss2.state)
+		t.Fatalf("state = %v, want the sync ask after the mode pick", ss2.state)
 	}
 	// «Да»: the batch runs STRICT (the picked dub alone) and synced.
 	_, cmd2 := ss2.Update(enter())

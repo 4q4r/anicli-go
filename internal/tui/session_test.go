@@ -660,12 +660,25 @@ func TestSessionDownloadRange(t *testing.T) {
 	if !strings.Contains(v, "Video+Audio") || !strings.Contains(v, "Video only") || !strings.Contains(v, "Audio only") {
 		t.Fatalf("the content modes must be offered:\n%s", v)
 	}
-	// The default pick («Video+Audio», the first row) opens the
-	// execution-mode menu with its Foreground/Background pair.
-	next, _ = ss.Update(enter())
+	// The default pick («Video+Audio», the first row) opens the PR174
+	// stream picker (no remembered dub in this fixture); the empty
+	// resolve (no streams faked) falls back to the #164 union menu,
+	// and the dub pick opens the execution-mode menu with its
+	// Foreground/Background pair.
+	next, cmd = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if cmd == nil {
+		t.Fatalf("the content pick must start the stream resolve")
+	}
+	next, _ = ss.Update(cmd())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadDub {
+		t.Fatalf("the empty resolve must fall back to the union dub menu, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // the union's first dub
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
+		t.Fatalf("the dub pick must open the mode menu, got %v", ss.state)
 	}
 	v = ss.View().Content
 	if !strings.Contains(v, "Foreground") || !strings.Contains(v, "Background") {

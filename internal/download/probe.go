@@ -72,14 +72,25 @@ func (d *Downloader) probeBin() string {
 }
 
 // ProbeCodec returns the codec_name of the source's first stream of
-// the given kind ("a" audio, "v" video) via ffprobe. The runner is
-// the injectable ffmpeg/ffprobe seam; a missing ffprobe binary or a
-// failed probe surfaces as the error (the caller decides the
-// fallback — the download itself never fails on a probe).
+// the given kind ("a" audio, "v" video) via ffprobe. ffprobe prints
+// its -of json payload to STDOUT — the probe reads the stdout-
+// capturing seam (PR175: the stderr-capturing run seam read an empty
+// pipe and every real probe came back "", silently degrading the
+// container decision to the safe-Matroska fallback — the same class
+// realProbeDuration fixed in PR27). A missing ffprobe binary or a
+// failed probe surfaces as the error; the caller decides the
+// fallback — the download itself never fails on a probe.
 func (d *Downloader) ProbeCodec(ctx context.Context, kind string, src contracts.VideoSource) (string, error) {
-	out, err := d.run(ctx, d.probeBin(), ffprobeCodecArgs(kind, src))
+	out, _, err := d.runOut(ctx, d.probeBin(), ffprobeCodecArgs(kind, src))
 	if err != nil {
 		return "", fmt.Errorf("download: probe %s codec: %w", kind, err)
 	}
-	return parseCodecName([]byte(out)), nil
+	codec := parseCodecName(out)
+	if codec == "" {
+		// Diagnostics only (the probeDuration warn pattern,
+		// downloader.go:335): the failure typing stays "" without an
+		// error — the callers keep the safe Matroska fallback.
+		d.warnf("download: codec probe for %s (%s) returned no codec; container falls back to Matroska", kind, src.URL)
+	}
+	return codec, nil
 }

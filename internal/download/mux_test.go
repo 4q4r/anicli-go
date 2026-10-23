@@ -413,10 +413,10 @@ func TestProbeCodecRunsFFprobe(t *testing.T) {
 	d := New(Options{})
 	var gotBin string
 	var gotArgs []string
-	d.run = func(_ context.Context, bin string, args []string) (string, error) {
+	d.runOut = func(_ context.Context, bin string, args []string) ([]byte, string, error) {
 		gotBin = bin
 		gotArgs = args
-		return `{"streams":[{"codec_name":"dts"}]}`, nil
+		return []byte(`{"streams":[{"codec_name":"dts"}]}`), "", nil
 	}
 	codec, err := d.ProbeCodec(context.Background(), "a", contracts.VideoSource{URL: "https://cdn/a"})
 	if err != nil {
@@ -432,8 +432,8 @@ func TestProbeCodecRunsFFprobe(t *testing.T) {
 		t.Errorf("args = %v, want the codec probe argv", gotArgs)
 	}
 
-	d.run = func(_ context.Context, _ string, _ []string) (string, error) {
-		return "", errors.New("boom")
+	d.runOut = func(_ context.Context, _ string, _ []string) ([]byte, string, error) {
+		return nil, "boom", errors.New("boom")
 	}
 	if _, err := d.ProbeCodec(context.Background(), "v", contracts.VideoSource{URL: "https://cdn/v"}); err == nil {
 		t.Error("a runner failure must surface, not degrade silently")
@@ -479,9 +479,9 @@ func TestProbeCodecUsesConfiguredFFmpegLocation(t *testing.T) {
 
 	d := New(Options{FFmpeg: "/opt/ffmpeg/bin/ffmpeg"})
 	var gotBin string
-	d.run = func(_ context.Context, bin string, _ []string) (string, error) {
+	d.runOut = func(_ context.Context, bin string, _ []string) ([]byte, string, error) {
 		gotBin = bin
-		return `{"streams":[{"codec_name":"aac"}]}`, nil
+		return []byte(`{"streams":[{"codec_name":"aac"}]}`), "", nil
 	}
 	if _, err := d.ProbeCodec(context.Background(), "a", contracts.VideoSource{URL: "u"}); err != nil {
 		t.Fatalf("ProbeCodec: %v", err)
@@ -495,9 +495,9 @@ func TestProbeCodecUsesConfiguredFFmpegLocation(t *testing.T) {
 
 	bare := New(Options{FFmpeg: "ffmpeg"})
 	var bareBin string
-	bare.run = func(_ context.Context, bin string, _ []string) (string, error) {
+	bare.runOut = func(_ context.Context, bin string, _ []string) ([]byte, string, error) {
 		bareBin = bin
-		return `{"streams":[{"codec_name":"aac"}]}`, nil
+		return []byte(`{"streams":[{"codec_name":"aac"}]}`), "", nil
 	}
 	if _, err := bare.ProbeCodec(context.Background(), "v", contracts.VideoSource{URL: "u"}); err != nil {
 		t.Fatalf("ProbeCodec: %v", err)

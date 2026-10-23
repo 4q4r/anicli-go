@@ -39,6 +39,12 @@ func (r *recordingDownload) Download(_ context.Context, task DownloadTask) (stri
 	return "/live-proof/EP_" + task.EpisodeNum + "_" + task.DubID + ".mp4", nil, nil, nil
 }
 
+// DownloadDetailed records exactly like Download (the live probe
+// pins the FLOW, not the progress plumbing).
+func (r *recordingDownload) DownloadDetailed(ctx context.Context, task DownloadTask, _ func(DownloadProgress)) (string, []string, []SyncNote, error) {
+	return r.Download(ctx, task)
+}
+
 func (r *recordingDownload) Submit(task DownloadTask) {
 	r.tasks = append(r.tasks, task)
 }
@@ -115,51 +121,39 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
-	next, cmd := ss.Update(enter()) // «Передний план»
-	// PR165b: the default «ask» sync gate opens the sync prompt before
-	// the batch; «Нет» dispatches it unsynchronized — the pre-gate
-	// semantics this probe pins.
+	next, cmd := ss.Update(enter()) // the direct download row
+	// PR165b/PR174: a MIXING batch (marked set) opens the sync prompt
+	// before the screen; «Нет» pushes it unsynchronized. A plain batch
+	// pushes directly.
 	if cmd == nil {
 		ask, ok := next.(*sessionScreen)
 		if !ok || ask.state != sessionStateSyncAsk {
-			t.Fatalf("the foreground pick must dispatch or open the sync ask, got %T", next)
+			t.Fatalf("the direct pick must push the screen or open the sync ask, got %T", next)
 		}
 		ask.syncAskList.Jump(1) // «Нет» — the batch runs unsynchronized
 		next, cmd = ask.Update(enter())
 	}
 	if cmd == nil {
-		t.Fatalf("the foreground pick must dispatch")
+		t.Fatalf("the direct pick must push the download screen")
 	}
-	// The batch arms the progress pump: collect the per-episode
-	// ticks while the worker runs (the worker closes the channel).
-	var lines []string
-	var lineDone = make(chan struct{})
-	go func() {
-		defer close(lineDone)
-		for line := range ss.downloadProgCh {
-			lines = append(lines, line)
-		}
-	}()
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	msg := cmd()
+	pushed, ok := msg.(pushMsg)
+	if !ok {
+		t.Fatalf("the direct pick must push the screen, got %T", msg)
 	}
-	<-lineDone
-	next, _ = ss.Update(settled)
-	ss = next.(*sessionScreen)
-	for _, line := range lines {
-		t.Logf("PROGRESS: %s", line)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct download screen, got %T", pushed.screen)
 	}
-	t.Logf("SETTLE REPORT:\n%s", ss.status)
+	// The screen runs the batch: drive it to the settle (the
+	// per-episode rows flow through its own event pump).
+	settled := driveDirectScreen(t, ds)
+	v := ds.View().Content
+	t.Logf("DIRECT SCREEN:\n%s", v)
 
 	if settled.count != 2 || settled.total != 2 {
 		t.Fatalf("both range episodes must resolve and download, got %d/%d, report:\n%s",
-			settled.count, settled.total, ss.status)
-	}
-	if len(lines) < 4 {
-		t.Fatalf("per-episode progress lines expected (2 resolve + 2 download), got %v", lines)
+			settled.count, settled.total, v)
 	}
 	if len(rec.tasks) != 2 {
 		t.Fatalf("2 recorded tasks expected, got %d", len(rec.tasks))
@@ -181,8 +175,8 @@ func TestLivePR64DownloadPromptAndRangeResolution(t *testing.T) {
 		t.Logf("LIVE RESOLUTION: ep %s -> %s [%s] (remembered %q was rotated away)",
 			task.EpisodeNum, task.DubID, task.ProviderID, s.videoDub)
 	}
-	if !contains(ss.status, "Ep. "+rotated+" —") {
-		t.Fatalf("the report must type the rotated episode's verdict:\n%s", ss.status)
+	if !contains(v, "Ep. "+rotated) && !contains(v, "episode "+rotated) {
+		t.Fatalf("the report must type the rotated episode's verdict:\n%s", v)
 	}
 }
 

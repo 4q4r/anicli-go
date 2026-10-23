@@ -211,12 +211,27 @@ func TestPR165DownloadContentModeMenu(t *testing.T) {
 		}
 	}
 
-	// Pick «Video only» (second row): the execution-mode menu follows.
+	// Pick «Video only» (second row): the stream/dub pick follows
+	// (PR174: the picker precedes the mode choice), then the
+	// execution-mode menu.
 	ss.contentList.Jump(1)
-	next, _ = ss.Update(enter())
+	next, cmd := ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if cmd == nil {
+		t.Fatal("the content pick must start the batch stream resolve")
+	}
+	msg := cmd()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadDub {
+		// No resolved streams in this fixture: the #164 union menu is
+		// the honest fallback.
+		t.Fatalf("the empty resolve must fall back to the union menu, got %v", ss.state)
+	}
+	next, _ = ss.Update(enter()) // pick the union's first dub
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the execution-mode menu, got %v", ss.state)
+		t.Fatalf("the dub pick must open the execution-mode menu, got %v", ss.state)
 	}
 	if ss.downloadContentMode != "video_only" {
 		t.Fatalf("the pick must be remembered, got %q", ss.downloadContentMode)
@@ -254,34 +269,39 @@ func TestPR165BatchCarriesModeAndAudioSet(t *testing.T) {
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	// видео+аудио is the first row: Enter picks the default mode and
-	// lands on the execution-mode menu.
-	next, _ = ss.Update(enter())
-	ss = next.(*sessionScreen)
-	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
-	}
-
-	// pr164AskSession has no remembered dub — the ask-first menu opens
-	// on the execution pick.
+	// opens the PR174 stream picker (no remembered dub in this
+	// fixture). Feed the resolve settle and pick the first stream row.
 	next, cmd := ss.Update(enter())
 	ss = next.(*sessionScreen)
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("no dub chosen must open the dub menu, got %v", ss.state)
-	}
-	if cmd != nil {
-		t.Fatal("the execution pick must not dispatch before the dub pick")
-	}
-	_, cmd = ss.Update(enter()) // pick the first menu dub
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the batch")
+		t.Fatal("the content pick must start the stream resolve")
 	}
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	msg := cmd()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the content pick must open the stream picker, got %v", ss.state)
 	}
-	_, _ = ss.Update(settled)
+	next, _ = ss.Update(enter()) // pick the first stream row
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("the stream pick must open the mode menu, got %v", ss.state)
+	}
+
+	_, cmd2 := ss.Update(enter()) // the direct download row
+	if cmd2 == nil {
+		t.Fatal("the mode pick must push the download screen")
+	}
+	pushedMsg := cmd2()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
 
 	if len(dl.downloads) == 0 {
 		t.Fatal("the batch must download")
@@ -351,17 +371,7 @@ func TestPR165PerEpisodeAudioDegradation(t *testing.T) {
 		{AnimeTitle: "Тайтл", EpisodeNum: "3", Episode: s.episodes["3"], AudioSet: marked},
 	}
 
-	ch := make(chan string, 64)
-	var settled downloadSettledMsg
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		settled = runForegroundDownload(context.Background(), deps, tasks, "[animego] Дубль 1", false, ch)
-		close(ch)
-	}()
-	for range ch {
-	}
-	<-done
+	settled := runDirectBatchCollect(context.Background(), deps, tasks, "[animego] Дубль 1", false)
 
 	if settled.count != 2 || settled.total != 3 {
 		t.Fatalf("ep1 and ep2 download (ep3 skips): got %d/%d", settled.count, settled.total)
@@ -376,7 +386,7 @@ func TestPR165PerEpisodeAudioDegradation(t *testing.T) {
 		t.Fatalf("ep2 must drop the missing marked dub, got %v", settled.report[1].DroppedAudio)
 	}
 
-	status := renderDownloadSettle(settled)
+	status := renderDownloadSettle(downloadSettledMsg{count: settled.count, total: settled.total, err: settled.firstErr, report: settled.report})
 	if !strings.Contains(status, "skipped: 3") || !strings.Contains(status, "no marked audios") {
 		t.Fatalf("the compact audio-set skip line missing:\n%s", status)
 	}
@@ -417,6 +427,12 @@ type droppingDownload struct {
 func (f *droppingDownload) Download(ctx context.Context, task DownloadTask) (string, []string, []SyncNote, error) {
 	path, _, _, err := f.fakeDownload.Download(ctx, task)
 	return path, f.dropped, nil, err
+}
+
+// DownloadDetailed carries the same drops as Download (the direct
+// screen's leg — Go promotion would otherwise bypass the override).
+func (f *droppingDownload) DownloadDetailed(ctx context.Context, task DownloadTask, p func(DownloadProgress)) (string, []string, []SyncNote, error) {
+	return f.Download(ctx, task)
 }
 
 // mergedEpisodeOne runs the session merge for one animego episode and
@@ -469,25 +485,15 @@ func TestDownloadTimeDropLandsOnReportRow(t *testing.T) {
 		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps), AudioSet: marked},
 	}
 
-	ch := make(chan string, 64)
-	var settled downloadSettledMsg
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		settled = runForegroundDownload(context.Background(), deps, tasks, "[animego] Дубль 1", false, ch)
-		close(ch)
-	}()
-	for range ch {
-	}
-	<-done
+	settled := runDirectBatchCollect(context.Background(), deps, tasks, "[animego] Дубль 1", false)
 
-	if settled.err != nil || settled.count != 1 {
-		t.Fatalf("the episode downloads: err %v count %d", settled.err, settled.count)
+	if settled.firstErr != nil || settled.count != 1 {
+		t.Fatalf("the episode downloads: err %v count %d", settled.firstErr, settled.count)
 	}
 	if len(settled.report[0].DroppedAudio) != 1 || settled.report[0].DroppedAudio[0] != "[animego] AniDub" {
 		t.Fatalf("the download-time drop must merge into the report, got %v", settled.report[0].DroppedAudio)
 	}
-	status := renderDownloadSettle(settled)
+	status := renderDownloadSettle(downloadSettledMsg{count: settled.count, total: settled.total, err: settled.firstErr, report: settled.report})
 	if !strings.Contains(status, "without marked: AniDub") {
 		t.Fatalf("the path row must name the download-time drop:\n%s", status)
 	}
@@ -498,18 +504,8 @@ func TestDownloadTimeDropLandsOnReportRow(t *testing.T) {
 	tasks2 := []DownloadTask{
 		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps2), AudioSet: marked},
 	}
-	ch2 := make(chan string, 64)
-	done2 := make(chan struct{})
-	var settled2 downloadSettledMsg
-	go func() {
-		defer close(done2)
-		settled2 = runForegroundDownload(context.Background(), deps2, tasks2, "[animego] Дубль 1", false, ch2)
-		close(ch2)
-	}()
-	for range ch2 {
-	}
-	<-done2
-	status2 := renderDownloadSettle(settled2)
+	settled2 := runDirectBatchCollect(context.Background(), deps2, tasks2, "[animego] Дубль 1", false)
+	status2 := renderDownloadSettle(downloadSettledMsg{count: settled2.count, total: settled2.total, err: settled2.firstErr, report: settled2.report})
 	if strings.Contains(status2, "without marked") {
 		t.Fatalf("a no-drop download must keep the row clean:\n%s", status2)
 	}
@@ -529,22 +525,12 @@ func TestAllDroppedAtDownloadRowNamesEveryDub(t *testing.T) {
 		{AnimeTitle: "Тайтл", EpisodeNum: "1", Episode: mergedEpisodeOne(t, deps), AudioSet: marked},
 	}
 
-	ch := make(chan string, 64)
-	var settled downloadSettledMsg
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		settled = runForegroundDownload(context.Background(), deps, tasks, "[animego] Дубль 1", false, ch)
-		close(ch)
-	}()
-	for range ch {
-	}
-	<-done
+	settled := runDirectBatchCollect(context.Background(), deps, tasks, "[animego] Дубль 1", false)
 
-	if settled.err != nil || settled.count != 1 {
-		t.Fatalf("the episode downloads video-only: err %v count %d", settled.err, settled.count)
+	if settled.firstErr != nil || settled.count != 1 {
+		t.Fatalf("the episode downloads video-only: err %v count %d", settled.firstErr, settled.count)
 	}
-	status := renderDownloadSettle(settled)
+	status := renderDownloadSettle(downloadSettledMsg{count: settled.count, total: settled.total, err: settled.firstErr, report: settled.report})
 	if !strings.Contains(status, "without marked: Дубль 1, AniDub") {
 		t.Fatalf("the video-only row must name every dropped dub:\n%s", status)
 	}
@@ -564,27 +550,50 @@ func TestPR165AudioOnlyModeSkipsAudioSet(t *testing.T) {
 	ss.rangeInput.typeText("1-3")
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
-	next, _ = ss.Update(contentPick(t, ss, "audio_only")) // «только аудио»
-	next, _ = next.Update(enter())                        // foreground
+	next, cmd0 := ss.Update(contentPick(t, ss, "audio_only")) // «только аудио»
 	ss = next.(*sessionScreen)
-	// Ask-first: the dub menu opens; pick the SECOND row ([animego]
+	if cmd0 == nil {
+		t.Fatal("the content pick must start the stream resolve")
+	}
+	msg := cmd0()
+	next, _ = ss.Update(msg)
+	ss = next.(*sessionScreen)
+	// The picker resolves live streams; pick the SECOND row ([animego]
 	// Дубль 1 — only ep1 carries it).
-	ss.redubList.Jump(1)
-	next, cmd := ss.Update(enter())
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the stream picker must open, got %v", ss.state)
+	}
+	found := false
+	for i, e := range ss.streamEntries {
+		if e.DubKey == "[animego] Дубль 1" {
+			ss.qualityList.Jump(i)
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no animego stream row: %+v", ss.streamEntries)
+	}
+	next, _ = ss.Update(enter()) // the stream pick
+	ss = next.(*sessionScreen)
+	_, cmd := ss.Update(enter()) // the direct download row
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateMenu {
 		t.Fatalf("the pick must leave the menu, got %v", ss.state)
 	}
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the audio-only batch")
+		t.Fatal("the mode pick must push the audio-only download screen")
 	}
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
 	}
-	_, _ = ss.Update(settled)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
 
 	if len(dl.downloads) != 1 || dl.downloads[0].EpisodeNum != "1" {
 		t.Fatalf("only ep1 carries the picked dub, got %+v", dl.downloads)

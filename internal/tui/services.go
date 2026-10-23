@@ -288,10 +288,25 @@ type DownloadResult struct {
 	Err error
 }
 
-// DownloadService backs «Скачать серии» with foreground and background
-// modes.
+// DownloadProgress is one honest progress sample of a running
+// download (PR174): the completion ratio when measurable (Known),
+// the raw output time otherwise. Known=false stays indeterminate —
+// never a fabricated fraction.
+type DownloadProgress struct {
+	// Fraction is 0..1 when Known.
+	Fraction float64
+	// Known reports whether Fraction is meaningful.
+	Known bool
+	// TimeSec is the output time written so far (always honest, even
+	// without a total).
+	TimeSec float64
+}
+
+// DownloadService backs «Скачать серии» with the direct progress
+// screen and the background manager queue.
 type DownloadService interface {
-	// Download runs one download to completion (foreground mode) and
+	// Download runs one download to completion (the direct download
+	// screen's batch leg) and
 	// returns the written file path (PR64 #3 — the per-episode report
 	// shows where the episode landed) plus the marked dubs that died
 	// between the resolve and the download (M2 — the report row names
@@ -300,6 +315,12 @@ type DownloadService interface {
 	// unavailable — the report row renders them as one suffix). A
 	// non-nil error means the episode failed; the path is then empty.
 	Download(ctx context.Context, task DownloadTask) (path string, dropped []string, sync []SyncNote, err error)
+	// DownloadDetailed runs one download reporting honest progress
+	// samples (PR174: the direct download screen's bars — ffmpeg
+	// out_time against the probed duration on the plain mux, the sync
+	// job's stage ticks on the assembly path). A nil progress sink
+	// behaves exactly like Download.
+	DownloadDetailed(ctx context.Context, task DownloadTask, progress func(DownloadProgress)) (path string, dropped []string, sync []SyncNote, err error)
 	// Submit queues one background download.
 	Submit(task DownloadTask)
 	// ActiveBanner renders the background-task summary line ("" when

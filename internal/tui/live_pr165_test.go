@@ -106,9 +106,9 @@ func TestLivePR165MultiAudioMux(t *testing.T) {
 	}
 
 	dlStart := time.Now()
-	settled := runForegroundDownload(ctx, deps, tasks, video.DubKey, false, nil)
+	settled := runDirectBatchCollect(ctx, deps, tasks, video.DubKey, false)
 	t.Logf("batch settled in %s: %d/%d, err=%v", time.Since(dlStart).Round(time.Second),
-		settled.count, settled.total, settled.err)
+		settled.count, settled.total, settled.firstErr)
 	for _, r := range settled.report {
 		t.Logf("report: ep %s dub %q path %q err %v dropped %v skipAudioSet %v",
 			r.Episode, r.Dub, r.Path, r.Err, r.DroppedAudio, r.SkipAudioSet)

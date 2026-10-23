@@ -2,15 +2,41 @@ package tui
 
 // PR165b T11 tests: the audio_sync ask prompt on download batches —
 // the config gate (ask/yes/no), the two-choice menu in the #164
-// dub-menu form, the single-provider skip, and the strict-restore
-// through the two-menu chain.
+// dub-menu form, the mixing-only qualifier (PR174: the marked
+// download audio set — a plain single-dub batch never asks), and the
+// strict-restore through the two-menu chain.
 
 import (
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/an0nx/anicli-go/internal/i18n"
 )
+
+// pr165bAnswerDrive answers the sync ask with the given key (Enter
+// on the cursor row, or Esc): both answers PUSH the direct download
+// screen — only AudioSync differs — and the helper drives the pushed
+// batch to its settle.
+func pr165bAnswerDrive(t *testing.T, ss *sessionScreen, key tea.KeyPressMsg) (*sessionScreen, *fakeDownload) {
+	t.Helper()
+	_, cmd := ss.Update(key)
+	if cmd == nil {
+		t.Fatal("the sync answer must push the download screen")
+	}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the sync answer must push the screen, got %T", pushedMsg)
+	}
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	driveDirectScreen(t, ds)
+	return ss, ss.deps.Download.(*fakeDownload)
+}
 
 // pr165bAskSession builds a loaded two-provider session (the merge
 // parts ≥2 — the ask gate qualifies) with the given config.
@@ -67,37 +93,41 @@ func pr165bDriveToStart(t *testing.T, s *sessionScreen) *sessionScreen {
 	if ss.state != sessionStateDownloadMode {
 		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
 	}
-	next, cmd := ss.Update(enter()) // foreground, the default first row
+	next, cmd := ss.Update(enter()) // the direct download row
 	if cmd != nil {
-		// A directly-dispatched batch (config yes/no, single-provider)
-		// runs here; a menu opening leaves cmd nil.
-		runLaunchBatch(t, cmd)
+		// A directly-pushed batch (config yes/no) runs here; a menu
+		// opening (config ask) leaves cmd nil.
+		pushedMsg := cmd()
+		if pushed, ok := pushedMsg.(pushMsg); ok {
+			if ds, ok := pushed.screen.(*directDownloadScreen); ok {
+				driveDirectScreen(t, ds)
+			}
+		}
 	}
 	return next.(*sessionScreen)
 }
 
-// TestSyncAskMenuOpensOnAskConfig: config "ask" + a merged session +
-// видео+аудио → the two-choice menu opens; «Да» starts the batch with
-// AudioSync on every task; «Нет» starts it with sync off (не отмена).
+// TestSyncAskMenuOpensOnAskConfig: config "ask" + a MIXING batch
+// (видео+аудио with a marked download audio set — external dub
+// tracks beyond the video's own audio) → the two-choice menu opens;
+// «Да» starts the batch with AudioSync on every task; «Нет» starts
+// it with sync off (не отмена).
 func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 	t.Cleanup(func() { _ = i18n.Init("en") })
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
+	s, _ := pr165bAskSession(t, "ask")
 	s.videoDub = "[animego] Дубль 1"
+	s.markedAudio = []string{"[anilib] AniLib"}
 	ss := pr165bDriveToStart(t, s)
 	if ss.state != sessionStateSyncAsk {
 		t.Fatalf("state = %v, want the sync-ask menu", ss.state)
 	}
 
-	// «Да»: the first choice — the batch starts, every task carries
+	// «Да»: the first choice — the screen pushes, every task carries
 	// AudioSync.
-	_, cmd := ss.Update(enter())
-	if cmd == nil {
-		t.Fatal("«Да» must dispatch the batch")
-	}
-	runLaunchBatch(t, cmd)
+	_, dl := pr165bAnswerDrive(t, ss, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("«Да» must start the batch, got %d downloads", len(dl.downloads))
 	}
@@ -109,15 +139,12 @@ func TestSyncAskMenuOpensOnAskConfig(t *testing.T) {
 
 	// «Нет»: a fresh batch — the second choice, sync off, still
 	// downloaded.
-	s2, dl2 := pr165bAskSession(t, "ask")
+	s2, _ := pr165bAskSession(t, "ask")
 	s2.videoDub = "[animego] Дубль 1"
+	s2.markedAudio = []string{"[anilib] AniLib"}
 	ss2b := pr165bDriveToStart(t, s2)
 	ss2b.syncAskList.Jump(1)
-	_, cmd2 := ss2b.Update(enter())
-	if cmd2 == nil {
-		t.Fatal("«Нет» must dispatch the batch")
-	}
-	runLaunchBatch(t, cmd2)
+	_, dl2 := pr165bAnswerDrive(t, ss2b, enter())
 	if len(dl2.downloads) == 0 {
 		t.Fatalf("«Нет» must still start the batch (не отмена), got %d", len(dl2.downloads))
 	}
@@ -135,11 +162,11 @@ func TestSyncAskEscMeansNo(t *testing.T) {
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
+	s, _ := pr165bAskSession(t, "ask")
 	s.videoDub = "[animego] Дубль 1"
+	s.markedAudio = []string{"[anilib] AniLib"} // mixing — the ask qualifier
 	ss := pr165bDriveToStart(t, s)
-	_, cmd := ss.Update(esc())
-	runLaunchBatch(t, cmd)
+	_, dl := pr165bAnswerDrive(t, ss, esc())
 	if len(dl.downloads) == 0 {
 		t.Fatalf("Esc must continue the batch, got %d downloads", len(dl.downloads))
 	}
@@ -150,8 +177,9 @@ func TestSyncAskEscMeansNo(t *testing.T) {
 	}
 }
 
-// TestSyncAskConfigYesAndNoSkipTheMenu: "yes" starts synced without
-// any menu; "no" starts unsynchronized without one.
+// TestSyncAskConfigYesAndNoSkipTheMenu: "yes" starts a MIXING batch
+// synced without any menu (a plain batch runs unsynchronized —
+// nothing to analyze); "no" starts it unsynchronized without one.
 func TestSyncAskConfigYesAndNoSkipTheMenu(t *testing.T) {
 	t.Cleanup(func() { _ = i18n.Init("en") })
 	if err := i18n.Init("en"); err != nil {
@@ -159,6 +187,7 @@ func TestSyncAskConfigYesAndNoSkipTheMenu(t *testing.T) {
 	}
 	s, dl := pr165bAskSession(t, "yes")
 	s.videoDub = "[animego] Дубль 1"
+	s.markedAudio = []string{"[anilib] AniLib"}
 	ss := pr165bDriveToStart(t, s)
 	if ss.state == sessionStateSyncAsk {
 		t.Fatal("config yes must not open the menu")
@@ -174,6 +203,7 @@ func TestSyncAskConfigYesAndNoSkipTheMenu(t *testing.T) {
 
 	s2, dl2 := pr165bAskSession(t, "no")
 	s2.videoDub = "[animego] Дубль 1"
+	s2.markedAudio = []string{"[anilib] AniLib"}
 	ss2 := pr165bDriveToStart(t, s2)
 	if ss2.state == sessionStateSyncAsk {
 		t.Fatal("config no must not open the menu")
@@ -185,8 +215,10 @@ func TestSyncAskConfigYesAndNoSkipTheMenu(t *testing.T) {
 	}
 }
 
-// TestSyncAskSingleProviderSkips: a single-provider session has no
-// cross-provider pairs — the gate passes with sync off, no menu.
+// TestSyncAskSingleProviderSkips: a plain batch (no marked audio set)
+// never opens the menu — the single-provider session here is the
+// plainest case of the PR174 mixing-only gate: no external tracks,
+// nothing to sync, sync off without any prompt.
 func TestSyncAskSingleProviderSkips(t *testing.T) {
 	t.Cleanup(func() { _ = i18n.Init("en") })
 	if err := i18n.Init("en"); err != nil {
@@ -222,35 +254,64 @@ func TestSyncAskSingleProviderSkips(t *testing.T) {
 	}
 }
 
-// TestSyncAskStrictRestoredThroughTheDubMenu: the #164 dub-menu pick
+// TestSyncAskStrictRestoredThroughTheDubMenu: the stream pick
 // re-enters startRangeDownload with the strict mode; the sync ask
-// stashes it and the answer restores the STRICT batch.
+// stashes it and the answer restores the STRICT batch. The ask
+// qualifies through the marked audio set (PR174: mixing-only).
 func TestSyncAskStrictRestoredThroughTheDubMenu(t *testing.T) {
 	t.Cleanup(func() { _ = i18n.Init("en") })
 	if err := i18n.Init("en"); err != nil {
 		t.Fatalf("Init(en): %v", err)
 	}
-	s, dl := pr165bAskSession(t, "ask")
-	// NO remembered dub: the #164 dub menu opens first.
-	ss := pr165bDriveToStart(t, s)
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("state = %v, want the #164 dub menu", ss.state)
+	s, _ := pr165bAskSession(t, "ask")
+	// NO remembered dub: the PR174 stream picker opens first. The
+	// marked audio set qualifies the batch as mixing — the ask
+	// follows the pick.
+	s.markedAudio = []string{"[anilib] AniLib"}
+	s.list.Jump(sessionActionIndex(s, "download"))
+	next, _ := s.Update(enter())
+	ss := next.(*sessionScreen)
+	ss.rangeInput.typeText("1-2")
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	next, cmd0 := ss.Update(enter()) // видео+аудио → the stream picker
+	ss = next.(*sessionScreen)
+	if cmd0 == nil {
+		t.Fatal("the content pick must start the stream resolve")
 	}
-	// Pick the dub (Jump(1): sortedEmbedKeys lists AniLib first): the
-	// batch re-enters startRangeDownload strict, the sync ask opens
-	// on top (stashing mode+strict).
-	ss.redubList.Jump(1)
-	next, _ := ss.Update(enter())
+	next, _ = ss.Update(cmd0())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("state = %v, want the stream picker", ss.state)
+	}
+	// Pick the animego stream (Jump to its row): the batch re-enters
+	// startRangeDownload strict, the sync ask opens on top (stashing
+	// mode+strict).
+	picked := false
+	for i, e := range ss.streamEntries {
+		if e.DubKey == "[animego] Дубль 1" {
+			ss.qualityList.Jump(i)
+			picked = true
+			break
+		}
+	}
+	if !picked {
+		t.Fatalf("no animego stream row: %+v", ss.streamEntries)
+	}
+	next, _ = ss.Update(enter())
+	ss = next.(*sessionScreen)
+	if ss.state != sessionStateDownloadMode {
+		t.Fatalf("state = %v, want the mode menu after the stream pick", ss.state)
+	}
+	// The mode pick re-enters startRangeDownload strict; the sync ask
+	// opens on top (stashing mode+strict).
+	next, _ = ss.Update(enter()) // foreground, the first row
 	ss2 := next.(*sessionScreen)
 	if ss2.state != sessionStateSyncAsk {
-		t.Fatalf("state = %v, want the sync ask after the dub pick", ss2.state)
+		t.Fatalf("state = %v, want the sync ask after the mode pick", ss2.state)
 	}
 	// «Да»: the batch runs STRICT (the picked dub alone) and synced.
-	_, cmd2 := ss2.Update(enter())
-	if cmd2 == nil {
-		t.Fatal("the strict batch must dispatch")
-	}
-	runLaunchBatch(t, cmd2)
+	_, dl := pr165bAnswerDrive(t, ss2, enter())
 	if len(dl.downloads) == 0 {
 		t.Fatal("the strict batch must start")
 	}

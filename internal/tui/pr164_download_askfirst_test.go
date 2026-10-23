@@ -6,10 +6,11 @@ package tui
 // dub with live streams won (deterministic, but random to the owner:
 // «вообще рандомную озвучку даже не спросив какую я хочу»).
 //
-// The ask-first doctrine (the PR #10/#11 playback settle semantics)
-// ports to the download path here: no dub chosen → the dub menu opens
-// BEFORE anything downloads (typed warning + menu); cancel aborts with
-// nothing downloaded; the picked dub drives the whole batch STRICTLY —
+// The ask-first doctrine survives the PR174 stream picker: no dub
+// chosen → the STREAM picker opens BEFORE anything downloads (the
+// merged quality·dub·provider list — the owner picks streams, not
+// «one studio for everything»); cancel aborts with nothing
+// downloaded; the picked stream drives the whole batch STRICTLY —
 // episodes not carrying it are skipped with the compact «пропущены»
 // attribution (#161 format), never substituted per episode.
 
@@ -54,11 +55,12 @@ func pr164AskSession(t *testing.T) (*sessionScreen, *fakeDownload) {
 	return s, deps.Download.(*fakeDownload)
 }
 
-// openDownloadAsk drives the real path to the ask-first surface:
-// «Скачать серии» → the range 1-3 → the content-mode pick (the
-// видео+аудио default) → the execution mode pick (cursor on
-// foreground unless jumpBackground).
-func openDownloadAsk(t *testing.T, s *sessionScreen, jumpBackground bool) *sessionScreen {
+// openDownloadPicker drives the real path to the PR174 stream picker
+// and settles its resolve: «Скачать серии» → the range 1-3 → the
+// content-mode pick (the видео+аудио default) → the picker with the
+// merged stream rows. jumpBackground is applied later, on the mode
+// menu (the returned screen sits on the picker).
+func openDownloadPicker(t *testing.T, s *sessionScreen) *sessionScreen {
 	t.Helper()
 	s.list.Jump(sessionActionIndex(s, "download"))
 	next, _ := s.Update(enter())
@@ -72,38 +74,68 @@ func openDownloadAsk(t *testing.T, s *sessionScreen, jumpBackground bool) *sessi
 	if ss.state != sessionStateDownloadContent {
 		t.Fatalf("after the range the content-mode menu opens, got %v", ss.state)
 	}
-	next, _ = ss.Update(enter()) // видео+аудио, the default first row
+	next, cmd := ss.Update(enter()) // видео+аудио, the default first row
 	ss = next.(*sessionScreen)
-	if ss.state != sessionStateDownloadMode {
-		t.Fatalf("the content pick must open the mode menu, got %v", ss.state)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("the content pick must open the stream picker, got %v", ss.state)
 	}
-	if jumpBackground {
-		ss.modeList.Jump(1)
+	if cmd == nil {
+		t.Fatal("the content pick must start the stream resolve command")
 	}
-	next, _ = ss.Update(enter())
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("the stream resolve must settle with a msg")
+	}
+	next, _ = ss.Update(msg)
 	return next.(*sessionScreen)
 }
 
-// TestPR164AskFirstNoDubChosenOpensDubMenu: the owner's scenario — a
-// fresh session (never played, no resumed dub) downloads all episodes.
-// The mode pick must NOT dispatch a batch: the dub menu opens first,
-// listing the batch's dubs, and nothing has been downloaded yet.
-func TestPR164AskFirstNoDubChosenOpensDubMenu(t *testing.T) {
+// pickDownloadStream picks the picker row of the given quality+dub
+// and lands the screen on the execution-mode menu.
+func pickDownloadStream(t *testing.T, ss *sessionScreen, quality, dub string) *sessionScreen {
+	t.Helper()
+	found := false
+	for i, e := range ss.streamEntries {
+		if e.Quality == quality && e.DubKey == dub {
+			ss.qualityList.Jump(i)
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no %s %s row in the picker: %+v", quality, dub, ss.streamEntries)
+	}
+	next, _ := ss.Update(enter())
+	picked := next.(*sessionScreen)
+	if picked.state != sessionStateDownloadMode {
+		t.Fatalf("the stream pick must open the mode menu, got %v", picked.state)
+	}
+	return picked
+}
+
+// TestPR164AskFirstNoDubChosenOpensStreamPicker: the owner's scenario
+// — a fresh session (never played, no resumed dub) downloads episodes.
+// The content pick must NOT dispatch a batch: the stream picker opens
+// first, listing the merged quality·dub·provider rows, and nothing
+// has been downloaded yet.
+func TestPR164AskFirstNoDubChosenOpensStreamPicker(t *testing.T) {
 	s, dl := pr164AskSession(t)
 	if s.videoDub != "" {
 		t.Fatalf("precondition: a fresh session has no remembered dub, got %q", s.videoDub)
 	}
-	ss := openDownloadAsk(t, s, false)
+	ss := openDownloadPicker(t, s)
 
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("no dub chosen must open the download dub menu, got %v", ss.state)
+	if ss.state != sessionStateDownloadStream {
+		t.Fatalf("no dub chosen must open the stream picker, got %v", ss.state)
 	}
 	v := ss.View().Content
-	if !contains(v, "Dub to download") {
-		t.Fatalf("the dub menu must render:\n%s", v)
+	if !contains(v, "Pick a stream (quality · dub · provider):") {
+		t.Fatalf("the stream picker must render:\n%s", v)
 	}
-	if !contains(v, "Дубль 1 · animego") || !contains(v, "AniLib · anilib") {
-		t.Fatalf("the menu must list the batch's dubs:\n%s", v)
+	for _, want := range []string{"1080p", "720p", "AniLib", "Дубль 1"} {
+		if !contains(v, want) {
+			t.Fatalf("the picker rows must carry %q:\n%s", want, v)
+		}
 	}
 	if len(dl.downloads) != 0 || len(dl.submitted) != 0 {
 		t.Fatalf("nothing may download before the pick, got %d downloads/%d submitted",
@@ -111,11 +143,11 @@ func TestPR164AskFirstNoDubChosenOpensDubMenu(t *testing.T) {
 	}
 }
 
-// TestPR164AskFirstCancelDownloadsNothing: Back from the dub menu
-// aborts the download — nothing is downloaded or queued.
+// TestPR164AskFirstCancelDownloadsNothing: Esc from the stream
+// picker aborts the download — nothing is downloaded or queued.
 func TestPR164AskFirstCancelDownloadsNothing(t *testing.T) {
 	s, dl := pr164AskSession(t)
-	ss := openDownloadAsk(t, s, false)
+	ss := openDownloadPicker(t, s)
 
 	next, _ := ss.Update(esc())
 	ss = next.(*sessionScreen)
@@ -128,36 +160,38 @@ func TestPR164AskFirstCancelDownloadsNothing(t *testing.T) {
 	}
 }
 
-// TestPR164AskFirstPickedDubDrivesBatch: the picked dub drives the
-// WHOLE batch strictly — the episodes carrying it download with it,
-// the others are skipped with the compact «пропущены» attribution.
-// No episode may fall back to another dub (no silent substitution).
+// TestPR164AskFirstPickedDubDrivesBatch: the picked stream drives the
+// WHOLE batch strictly — the episodes carrying its dub download, the
+// others are skipped with the compact «пропущены» attribution. No
+// episode may fall back to another dub (no silent substitution).
 func TestPR164AskFirstPickedDubDrivesBatch(t *testing.T) {
 	t.Cleanup(func() { _ = i18n.Init("en") })
 	if err := i18n.Init("ru"); err != nil {
 		t.Fatalf("Init(ru): %v", err)
 	}
 	s, dl := pr164AskSession(t)
-	ss := openDownloadAsk(t, s, false)
+	ss := openDownloadPicker(t, s)
 
-	// The menu lists the batch's dubs in sortedEmbedKeys order —
-	// [anilib] AniLib first, [animego] Дубль 1 second. Pick the animego
-	// dub — the one only ep1 carries.
-	ss.redubList.Jump(1)
-	next, cmd := ss.Update(enter())
-	ss = next.(*sessionScreen)
+	// Pick the animego dub — the one only ep1 carries.
+	ss = pickDownloadStream(t, ss, "720", "[animego] Дубль 1")
+	if ss.videoDub != "[animego] Дубль 1" || ss.lastQuality != "720" {
+		t.Fatalf("the pick must record dub+quality, got %q/%q", ss.videoDub, ss.lastQuality)
+	}
+	_, cmd := ss.Update(enter()) // the direct download row
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the download batch")
+		t.Fatal("the mode pick must push the download screen")
 	}
-
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
 	}
-	applied, _ := ss.Update(settled)
-	status := applied.(*sessionScreen).status
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	status := ds.summary
 
 	if settled.count != 1 || settled.total != 3 {
 		t.Fatalf("only ep 1 carries the picked dub: 1 of 3 must download, got %d/%d",
@@ -175,45 +209,61 @@ func TestPR164AskFirstPickedDubDrivesBatch(t *testing.T) {
 }
 
 // TestPR164AskFirstPickSettlesOnMenuSurface (review round 2, blocker):
-// the pick must LEAVE the ask menu — the batch and its settle run on
-// the session menu surface, the same owner surface the remembered-dub
-// path uses. A stranded menu would render dead for the whole batch
-// and turn Enter-after-settle into the previously-unreachable
-// silent-nothing default (PR41 B2: never silently nothing); the next
-// Enter re-opens the download prompt instead — visible, and never a
-// second batch.
+// the mode pick must LEAVE the picker — the batch and its settle run
+// on the session menu surface, the same owner surface the
+// remembered-dub path uses. A stranded menu would render dead for the
+// whole batch and turn Enter-after-settle into the previously
+// unreachable silent-nothing default (PR41 B2: never silently
+// nothing); the next Enter re-opens the download prompt instead —
+// visible, and never a second batch.
 func TestPR164AskFirstPickSettlesOnMenuSurface(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
 	s, dl := pr164AskSession(t)
-	ss := openDownloadAsk(t, s, false)
+	ss := openDownloadPicker(t, s)
+	ss = pickDownloadStream(t, ss, "720", "[animego] Дубль 1")
 
-	ss.redubList.Jump(1) // [animego] Дубль 1
-	next, cmd := ss.Update(enter())
-	ss = next.(*sessionScreen)
+	next, cmd := ss.Update(enter()) // the direct download row
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the download batch")
+		t.Fatal("the mode pick must push the download screen")
 	}
+	ss = next.(*sessionScreen)
 	if ss.state != sessionStateMenu {
-		t.Fatalf("the pick must return to the session menu, got %v", ss.state)
+		t.Fatalf("the mode pick must return to the session menu, got %v", ss.state)
 	}
 
-	var settled downloadSettledMsg
-	for _, m := range runLaunchBatch(t, cmd) {
-		if d, ok := m.(downloadSettledMsg); ok {
-			settled = d
-		}
+	// The settle lands ON THE SCREEN (its rows + summary) — the
+	// session below stays on its menu, untouched by the batch.
+	pushedMsg := cmd()
+	pushed, ok := pushedMsg.(pushMsg)
+	if !ok {
+		t.Fatalf("the mode pick must push the screen, got %T", pushedMsg)
 	}
-	applied, _ := ss.Update(settled)
-	ss = applied.(*sessionScreen)
+	ds, ok := pushed.screen.(*directDownloadScreen)
+	if !ok {
+		t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+	}
+	settled := driveDirectScreen(t, ds)
+	if !ds.done {
+		t.Fatal("the screen must settle done")
+	}
+	if !contains(ds.summary, "skipped: 2–3 (no dub [animego] Дубль 1)") {
+		t.Fatalf("the settle report must render on the screen:\n%s", ds.summary)
+	}
 	if ss.state != sessionStateMenu {
-		t.Fatalf("the settle must land on the session menu, got %v", ss.state)
-	}
-	if !contains(ss.status, "skipped: 2–3 (no dub [animego] Дубль 1)") {
-		t.Fatalf("the settle report must render on the menu surface:\n%s", ss.status)
+		t.Fatalf("the session below must stay on its menu, got %v", ss.state)
 	}
 
-	// Enter-after-settle: a visible surface (the download prompt
-	// re-entry), never a second batch, never a silent nothing.
+	// Any key on the settled screen pops back; Enter-after-pop opens
+	// a visible surface (the download prompt re-entry), never a
+	// second batch, never a silent nothing.
 	downloads := len(dl.downloads)
+	_, popCmd := ds.Update(enter())
+	if _, ok := popCmd().(popMsg); !ok {
+		t.Fatalf("a key on the settled screen must pop, got %T", popCmd)
+	}
 	next, _ = ss.Update(enter())
 	ss = next.(*sessionScreen)
 	if ss.state != sessionStateDownloadRange {
@@ -222,6 +272,7 @@ func TestPR164AskFirstPickSettlesOnMenuSurface(t *testing.T) {
 	if len(dl.downloads) != downloads {
 		t.Fatalf("enter after the settle must not re-dispatch, got %d downloads", len(dl.downloads))
 	}
+	_ = settled
 }
 
 // pr164LazySession builds a loaded session whose listing knows NO
@@ -248,13 +299,20 @@ func pr164LazySession(t *testing.T) (*sessionScreen, *fakeDownload) {
 }
 
 // TestPR164AskFirstEmptyUnionSuppressesWarning (review round 2): an
-// empty dub union renders the honest «Нет доступных озвучек» empty
-// state ALONE — the «⚠ Озвучка не выбрана» ask note must not pair
-// with it (a contradictory pair begs a choice the menu cannot offer).
+// empty picker AND an empty dub union render the honest «Нет
+// доступных озвучек» empty state ALONE — the «⚠ Озвучка не выбрана»
+// ask note must not pair with it (a contradictory pair begs a choice
+// the menu cannot offer).
 func TestPR164AskFirstEmptyUnionSuppressesWarning(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
 	s, dl := pr164LazySession(t)
-	ss := openDownloadAsk(t, s, false)
+	ss := openDownloadPicker(t, s)
 
+	// The empty resolve falls back to the #164 union menu — itself
+	// empty: the honest empty state alone.
 	if ss.state != sessionStateDownloadDub {
 		t.Fatalf("the empty-union ask menu must still open, got %v", ss.state)
 	}
@@ -277,21 +335,23 @@ func TestPR164AskFirstEmptyUnionSuppressesWarning(t *testing.T) {
 }
 
 // TestPR164AskFirstPickRememberedForBackground: ask-first covers the
-// background mode too — the picked mode survives the menu and the
-// batch queues strictly (carrying episodes only, the picked dub).
+// background mode too — the stream pick precedes the mode choice and
+// the batch queues strictly (carrying episodes only, the picked dub).
 func TestPR164AskFirstPickRememberedForBackground(t *testing.T) {
+	t.Cleanup(func() { _ = i18n.Init("en") })
+	if err := i18n.Init("en"); err != nil {
+		t.Fatalf("Init(en): %v", err)
+	}
 	s, dl := pr164AskSession(t)
-	ss := openDownloadAsk(t, s, true)
+	ss := openDownloadPicker(t, s)
+	ss = pickDownloadStream(t, ss, "720", "[animego] Дубль 1")
 
-	if ss.state != sessionStateDownloadDub {
-		t.Fatalf("no dub chosen must open the download dub menu, got %v", ss.state)
-	}
-	ss.redubList.Jump(1) // [animego] Дубль 1
+	ss.modeList.Jump(1) // background
 	next, cmd := ss.Update(enter())
-	ss = next.(*sessionScreen)
 	if cmd == nil {
-		t.Fatal("the dub pick must dispatch the queued batch")
+		t.Fatal("the background pick must dispatch the queued batch")
 	}
+	ss = next.(*sessionScreen)
 	msg := cmd()
 	queued, ok := msg.(backgroundQueuedMsg)
 	if !ok {

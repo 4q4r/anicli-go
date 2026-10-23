@@ -274,6 +274,20 @@ func (a App) updateGuarded(msg tea.Msg) (model tea.Model, cmd tea.Cmd, recovered
 		} else {
 			a.log.Error("tui: async failure", "screen", m.screen, "error", m.err)
 		}
+		// Fix-round MED-2: the direct download screen settles ITSELF
+		// on its own batch's panic — it cancels the batch context (the
+		// orphaned ffmpeg dies) and settles with the honest error
+		// status. Parking a recovery screen on top would strand the
+		// locked dashboard forever, so the errMsg is delivered to the
+		// screen instead of surfacing the error surface. Any other
+		// origin keeps the established recovery-screen contract.
+		if m.screen == downloadScreenID && len(a.stack) > 0 && a.stack[len(a.stack)-1].ID() == downloadScreenID {
+			top, c := a.stack[len(a.stack)-1].Update(msg)
+			replaced := cloneStack(a.stack)
+			replaced[len(replaced)-1] = top
+			return App{stack: replaced, deps: a.deps, log: a.log, width: a.width, height: a.height,
+				ctx: a.ctx, cancel: a.cancel}, c, nil
+		}
 		model, cmd = a.surfaceError(m)
 		return model, cmd, nil
 	case tea.WindowSizeMsg:

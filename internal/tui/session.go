@@ -62,13 +62,21 @@ const (
 	sessionStateDownloadMode   sessionState = "download_mode"
 	// sessionStateDownloadContent is the PR165 content-mode picker
 	// («видео+аудио» / «только видео» / «только аудио») between the
-	// range prompt and the foreground/background pick.
+	// range prompt and the direct/background pick.
 	sessionStateDownloadContent sessionState = "download_content"
 	// sessionStateDownloadDub is the #164 ask-first dub picker of the
 	// download flow: a batch started without a chosen dub opens it
 	// BEFORE anything downloads — the pick drives the whole batch,
-	// Back aborts with nothing downloaded.
+	// Back aborts with nothing downloaded. PR174: the fallback of the
+	// stream picker — the live merged resolve feeds the picker first.
 	sessionStateDownloadDub sessionState = "download_dub"
+	// sessionStateDownloadStream is the PR174 stream picker of the
+	// download flow: the merged quality·dub·provider list of the
+	// batch's representative episode — the owner picks streams, not
+	// «one studio for everything». The pick records the dub AND the
+	// quality before the mode menu; SPACE/d mark the download audio
+	// set as in the watch picker.
+	sessionStateDownloadStream sessionState = "download_stream"
 	// sessionStateSyncAsk is the PR165b audio_sync two-choice prompt
 	// («Да — анализировать и править» / «Нет — как есть»): one
 	// decision per batch, in the #164 dub-menu form. Esc answers
@@ -227,9 +235,10 @@ type bufferedProgressMsg struct {
 
 type bufferedProgressEnd struct{ gen int }
 
-// downloadSettledMsg reports a finished foreground download batch
-// (I8) with its per-episode report (PR64 #3): count/total successes,
-// the first error for the headline and one report line per episode.
+// downloadSettledMsg reports a finished download batch (I8) with its
+// per-episode report (PR64 #3): count/total successes, the first
+// error for the headline and one report line per episode. PR174: the
+// direct download screen reuses the shape for its settle summary.
 type downloadSettledMsg struct {
 	count  int
 	total  int
@@ -245,29 +254,6 @@ type backgroundQueuedMsg struct {
 	queued int
 	total  int
 	report []downloadEpisodeReport
-}
-
-// downloadProgressMsg is one per-episode tick of a running foreground
-// range download (review fix 2): a resolve verdict or a download
-// start/finish. gen tags the batch — a superseded batch's ticks drop.
-// downloadProgressEnd closes the pump (channel drained).
-type downloadProgressMsg struct {
-	gen  int
-	line string
-}
-
-type downloadProgressEnd struct{ gen int }
-
-// waitDownloadProgress is the re-arming pump of the range-download
-// progress channel (the buffered-watch pattern).
-func waitDownloadProgress(ch <-chan string, gen int) tea.Cmd {
-	return func() tea.Msg {
-		line, ok := <-ch
-		if !ok {
-			return downloadProgressEnd{gen: gen}
-		}
-		return downloadProgressMsg{gen: gen, line: line}
-	}
 }
 
 // sessionScreen is the watch-session state machine: a merged episode
@@ -333,12 +319,6 @@ type sessionScreen struct {
 	bufferGen    int
 	bufferProgCh chan buffered.Progress
 
-	// Range-download batch state (review fix 2): downloadGen tags the
-	// active batch (a newer batch drops the stale pump) and
-	// downloadProgCh carries the per-episode progress ticks.
-	downloadGen    int
-	downloadProgCh chan string
-
 	state sessionState
 
 	list          *PinList   // action menu
@@ -365,15 +345,25 @@ type sessionScreen struct {
 	// pending batch: "video_audio" (default), "video_only" or
 	// "audio_only".
 	downloadContentMode string
-	// downloadAskMode remembers the mode picked BEFORE the #164
-	// ask-first dub menu opened; the menu's pick resumes the batch in
-	// that mode. "" whenever the menu is not open.
-	downloadAskMode string
+	// downloadPickStrict marks how the pending batch's dub was chosen
+	// (PR174): an explicit download pick (the stream picker or the
+	// #164 union fallback) resolves STRICTLY — episodes not carrying
+	// the picked dub skip, never substitute; a remembered watch pair
+	// keeps the smart rotation (python resolve_dubs_smart parity).
+	downloadPickStrict bool
 	// syncAskMode/syncAskStrict stash the batch parameters across the
 	// PR165b sync-ask menu (the dub-menu pick may have re-entered the
 	// start with the strict mode — both ride the stash).
 	syncAskMode   string
 	syncAskStrict bool
+	// downloadInFlight is the synchronous single-flight marker of the
+	// PR174 fix-round: the background dispatch's dub resolution runs
+	// seconds-to-tens-of-seconds BEFORE the manager Submit lights
+	// the active banner — in that window downloadBusy() must not pass
+	// (a second resolve would race the first batch's .part files).
+	// Set at the background dispatch, cleared when the queue settles
+	// (the backgroundQueuedMsg handler).
+	downloadInFlight bool
 	// syncAskList is the PR165b two-choice sync menu (the #164 form).
 	syncAskList *PinList
 	// markedAudio is the PR165 ordered download audio set: the dub
@@ -810,25 +800,7 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		// embeds (the round ran before the resolve; both the audio
 		// pick at play time and the next round read the current
 		// links). The dub stats follow the key set delta.
-		if msg.freshEmbeds != nil {
-			if ep, ok := s.episodes[msg.skipEpisode]; ok {
-				for key := range ep.RawEmbeds {
-					if _, kept := msg.freshEmbeds[key]; !kept {
-						s.dubStats[key]--
-						if s.dubStats[key] <= 0 {
-							delete(s.dubStats, key)
-						}
-					}
-				}
-				for key, links := range msg.freshEmbeds {
-					if _, had := ep.RawEmbeds[key]; !had && len(links) > 0 {
-						s.dubStats[key]++
-					}
-				}
-				ep.RawEmbeds = msg.freshEmbeds
-				s.episodes[msg.skipEpisode] = ep
-			}
-		}
+		s.applyFreshEmbeds(msg.skipEpisode, msg.freshEmbeds)
 		if msg.err != nil {
 			if msg.skipCleanup != nil {
 				msg.skipCleanup()
@@ -918,6 +890,31 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.setStatus(composeStatusNote(s.status, line))
 		}
 		return s, nil
+	case downloadStreamsMsg:
+		// PR174: the download stream picker's settle. A superseded
+		// round (Esc or a newer resolve) drops silently — its fresh
+		// embeds write-back is skipped too (the newer round owns the
+		// episode).
+		if msg.gen != s.resolveGen {
+			return s, nil
+		}
+		s.applyFreshEmbeds(msg.episode, msg.freshEmbeds)
+		if len(msg.entries) == 0 {
+			// The live resolve of the representative episode yielded
+			// nothing (dead mirrors): the #164 listing union menu is
+			// the honest fallback — the batch is never walled, the
+			// strict resolve probes every episode fresh anyway.
+			if s.openDownloadDubMenu() {
+				s.setStatus(i18n.T("download.dub_not_chosen"))
+			}
+			return s, nil
+		}
+		s.streamEntries = msg.entries
+		s.buildStreamList()
+		if line := skippedSummary(msg.skipped); line != "" {
+			s.setStatus(composeStatusNote(s.status, line))
+		}
+		return s, nil
 	case playedMsg:
 		s.setState(sessionStateMenu)
 		// The chapters file was removed by the play pipeline's
@@ -957,18 +954,10 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.setShikimoriBinding(msg.id)
 		}
 		return s, nil
-	case downloadProgressMsg:
-		if msg.gen != s.downloadGen {
-			return s, nil
-		}
-		s.setStatus(msg.line)
-		return s, waitDownloadProgress(s.downloadProgCh, msg.gen)
-	case downloadProgressEnd:
-		return s, nil
-	case downloadSettledMsg:
-		s.setStatus(renderDownloadSettle(msg))
-		return s, nil
 	case backgroundQueuedMsg:
+		// The resolve window closed (fix-round HIGH-1): the marker
+		// clears exactly when the queue settles.
+		s.downloadInFlight = false
 		s.setStatus(renderBackgroundQueued(msg))
 		return s, nil
 	case tea.KeyPressMsg:
@@ -1011,6 +1000,8 @@ func (s *sessionScreen) handleKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return s.handleDownloadRangeKey(key)
 	case sessionStateDownloadContent:
 		return s.handleDownloadContentKey(key)
+	case sessionStateDownloadStream:
+		return s.handleDownloadStreamKey(key)
 	case sessionStateDownloadMode:
 		return s.handleDownloadModeKey(key)
 	case sessionStateDownloadDub:
@@ -1054,7 +1045,12 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 	case sessionStateDownloadDub:
 		// #164: Esc from the ask-first dub menu aborts the download —
 		// nothing was started; back to the session menu clean.
-		s.downloadAskMode = ""
+		s.setState(sessionStateMenu)
+		return s, nil
+	case sessionStateDownloadStream:
+		// PR174: Esc from the download stream picker aborts the
+		// download — the resolve round is already superseded by the
+		// shared resolveGen++ above.
 		s.setState(sessionStateMenu)
 		return s, nil
 	case sessionStateSyncAsk:
@@ -1067,8 +1063,16 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.setState(sessionStateMenu)
 		return s.startRangeDownload(mode, strict, syncNo())
 	case sessionStateMenu, sessionStatePlaying:
+		// Leaving the session abandons the in-flight marker with the
+		// popped screen (fix-round HIGH-1, defensive): a panic inside
+		// the resolve command strands the marker with no settle — the
+		// pop is the escape. Deliberately NOT cleared in the substate
+		// branches: an Esc from an unrelated list must not reopen the
+		// resolve-window hole while the background batch runs.
+		s.downloadInFlight = false
 		return s, pop()
 	case sessionStateLoading:
+		s.downloadInFlight = false
 		return s, pop()
 	case sessionStateBuffering:
 		s.stopBuffering(i18n.T("session.buffer_cancelled"))
@@ -1165,6 +1169,14 @@ func (s *sessionScreen) handleMenuKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "download":
 		if s.deps == nil || s.deps.Download == nil {
 			s.setStatus(i18n.T("session.download_unavailable"))
+			return s, nil
+		}
+		// PR174 S4 single-flight: while ANY download is in flight
+		// (a background batch — the direct screen below the lock
+		// cannot be bypassed), a second request is rejected: the
+		// FIRST request keeps running untouched.
+		if s.downloadBusy() {
+			s.setStatus(i18n.T("download.already_running"))
 			return s, nil
 		}
 		s.setState(sessionStateDownloadRange)
@@ -2051,6 +2063,37 @@ func (s *sessionScreen) openRedubMenuFromEmbeds(embeds map[string][]string, miss
 	s.setState(sessionStateRedub)
 }
 
+// applyFreshEmbeds writes an always-fresh hydration round's verdict
+// back into the episode (PR111): per provider, the fresh links replace
+// the cache — a provider whose round failed or yielded nothing keeps
+// its cached links — and the dub stats follow the key-set delta.
+// Shared by the watch resolve settle and the PR174 download picker
+// settle.
+func (s *sessionScreen) applyFreshEmbeds(episode string, fresh map[string][]string) {
+	if fresh == nil {
+		return
+	}
+	ep, ok := s.episodes[episode]
+	if !ok {
+		return
+	}
+	for key := range ep.RawEmbeds {
+		if _, kept := fresh[key]; !kept {
+			s.dubStats[key]--
+			if s.dubStats[key] <= 0 {
+				delete(s.dubStats, key)
+			}
+		}
+	}
+	for key, links := range fresh {
+		if _, had := ep.RawEmbeds[key]; !had && len(links) > 0 {
+			s.dubStats[key]++
+		}
+	}
+	ep.RawEmbeds = fresh
+	s.episodes[episode] = ep
+}
+
 func (s *sessionScreen) buildStreamList() {
 	choices := make([]Choice, 0, len(s.streamEntries)+1)
 	if len(s.streamEntries) == 0 {
@@ -2170,25 +2213,14 @@ func (s *sessionScreen) streamEntryLabel(e streamEntry) string {
 // handleQualityKey resolves the stream pick (PR61): the entry records
 // video dub + quality; a fresh session continues to the audio prompt
 // (python's second prompt), a remembered audio dub plays directly.
-// PR165: SPACE toggles the row's dub into the download audio set and
-// `d` moves the default disposition (the CheckList multiselect
-// pattern); the playback Enter path is untouched.
+// PR165/PR174: the SPACE/d marking is shared with the download picker
+// (handleStreamMarking).
 func (s *sessionScreen) handleQualityKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.qualityList.HandleKey(key) {
 		return s, nil
 	}
-	if cursor := s.qualityList.Cursor(); cursor >= 0 && cursor < len(s.streamEntries) {
-		dub := s.streamEntries[cursor].DubKey
-		switch key.Code { //nolint:exhaustive // the marking keys only
-		case tea.KeySpace:
-			s.toggleMarkedAudio(dub)
-			s.applyStreamMarkers()
-			return s, nil
-		case 'd':
-			s.markDefault(dub)
-			s.applyStreamMarkers()
-			return s, nil
-		}
+	if s.handleStreamMarking(key) {
+		return s, nil
 	}
 	resolved := ResolveKey(s.qualityList.Menu(), s.qualityList.Cursor(), key)
 	if resolved == nil {
@@ -2856,13 +2888,130 @@ func (s *sessionScreen) handleDownloadContentKey(key tea.KeyPressMsg) (Screen, t
 		mode = "video_audio"
 	}
 	s.downloadContentMode = mode
+	// PR174 S1/S2: a batch without a remembered stream pair offers the
+	// merged STREAM picker — quality·dub·provider rows of the range's
+	// representative episode — BEFORE the mode menu; the owner picks
+	// streams, never «one studio for everything». A remembered pair
+	// keeps the zero-prompt rotation straight into the mode menu.
+	s.downloadPickStrict = false
+	if s.videoDub == "" {
+		return s.beginDownloadStreamResolve()
+	}
 	s.setState(sessionStateDownloadMode)
 	s.buildModeList()
 	return s, nil
 }
 
-// handleDownloadModeKey dispatches foreground/background downloads
-// over the persisted mode list (C2).
+// downloadStreamsMsg carries the merged stream entries of the
+// download picker's representative episode (the first of the range):
+// the same quality-sorted, fail-soft resolve the watch picker runs
+// (PR94 semantics — skipped names the dead providers). gen tags the
+// resolve round; freshEmbeds is the always-fresh hydration verdict
+// (PR111) written back like the watch round's.
+type downloadStreamsMsg struct {
+	gen         int
+	episode     string
+	entries     []streamEntry
+	skipped     []resolveFailure
+	err         error
+	freshEmbeds map[string][]string
+}
+
+// beginDownloadStreamResolve opens the PR174 download stream picker
+// and resolves the batch's representative episode (the first of the
+// picked range): the always-fresh hydration (PR111 — the ResolveStream
+// cache is banned) followed by the unscoped merged resolve of every
+// dub carrying embed links. The picker renders its loading row until
+// the settle; an empty resolve falls back to the #164 listing union
+// menu (a dead mirror never walls the batch).
+func (s *sessionScreen) beginDownloadStreamResolve() (Screen, tea.Cmd) {
+	// PR84 review fix applies here too: CLEAR the previous round's
+	// entries before the surface is built — a stale frame must never
+	// render under the new resolve.
+	s.streamEntries = nil
+	s.setState(sessionStateDownloadStream)
+	s.buildStreamList()
+	s.resolveGen++
+	gen := s.resolveGen
+	ep := s.episodes[s.downloadEpisodes[0]]
+	deps := s.deps
+	return s, safeCmd(sessionScreenID, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		defer cancel()
+		fresh := hydrateEpisodeFresh(ctx, deps, ep)
+		entries, skipped, err := resolveAllStreams(ctx, deps.Episode, fresh, "", deps.Log)
+		return downloadStreamsMsg{
+			gen:         gen,
+			episode:     ep.Num,
+			entries:     entries,
+			skipped:     skipped,
+			err:         err,
+			freshEmbeds: fresh.RawEmbeds,
+		}
+	})
+}
+
+// handleDownloadStreamKey drives the PR174 download stream picker:
+// the PR165 SPACE/d marking (the download audio set) is shared with
+// the watch picker; Enter records the picked row's dub AND quality
+// and continues to the mode menu — the pick is an explicit choice,
+// so the batch resolves it strictly (episodes not carrying the picked
+// dub skip, never substitute). Back aborts the download.
+func (s *sessionScreen) handleDownloadStreamKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if s.qualityList.HandleKey(key) {
+		return s, nil
+	}
+	if s.handleStreamMarking(key) {
+		return s, nil
+	}
+	resolved := ResolveKey(s.qualityList.Menu(), s.qualityList.Cursor(), key)
+	if resolved == nil {
+		return s, nil
+	}
+	if resolved == Back {
+		s.setState(sessionStateMenu)
+		return s, nil
+	}
+	entry, ok := resolved.(streamEntry)
+	if !ok {
+		return s, nil
+	}
+	s.videoDub = entry.DubKey
+	s.lastQuality = entry.Quality
+	s.downloadPickStrict = true
+	s.setState(sessionStateDownloadMode)
+	s.buildModeList()
+	return s, nil
+}
+
+// handleStreamMarking applies the PR165 SPACE/d marking shared by the
+// watch picker and the PR174 download picker: SPACE toggles the
+// cursor row's dub in the ordered download audio set, `d` moves the
+// default disposition. Reports whether the key was a marking key.
+func (s *sessionScreen) handleStreamMarking(key tea.KeyPressMsg) bool {
+	cursor := s.qualityList.Cursor()
+	if cursor < 0 || cursor >= len(s.streamEntries) {
+		return false
+	}
+	dub := s.streamEntries[cursor].DubKey
+	switch key.Code { //nolint:exhaustive // the marking keys only
+	case tea.KeySpace:
+		s.toggleMarkedAudio(dub)
+		s.applyStreamMarkers()
+		return true
+	case 'd':
+		s.markDefault(dub)
+		s.applyStreamMarkers()
+		return true
+	}
+	return false
+}
+
+// handleDownloadModeKey dispatches the picked mode over the persisted
+// mode list (C2). The stream/dub pick already happened (PR174: the
+// picker precedes the mode choice); the strictness rides the pick
+// kind — an explicit download pick resolves strictly, a remembered
+// pair keeps the smart rotation.
 func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.modeList == nil {
 		s.buildModeList()
@@ -2880,12 +3029,18 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 	}
 	mode, _ := resolved.(string)
 	s.setState(sessionStateMenu)
-	// #164 ask-first: a batch without a chosen dub never starts on a
-	// default. The dub menu opens instead (the playback ask-first
-	// settle, PR #11: typed note + menu); the pick resumes the batch,
-	// Back aborts with nothing downloaded.
+	// PR174 S4 single-flight (defense at the dispatch seam): a batch
+	// started from elsewhere while the prompts were open is rejected
+	// here — never a second concurrent batch on the same files.
+	if s.downloadBusy() {
+		s.setStatus(i18n.T("download.already_running"))
+		return s, nil
+	}
+	// Defensive #164 shape: a batch can only reach the mode menu with
+	// a chosen dub (the picker or the remembered pair); if one ever
+	// arrives without one, the ask-first union menu opens instead of a
+	// default-driven batch.
 	if s.videoDub == "" {
-		s.downloadAskMode = mode
 		// The ask note only explains a choice the menu offers; on an
 		// empty union the empty state speaks alone (review round 2).
 		if s.openDownloadDubMenu() {
@@ -2893,7 +3048,9 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 		}
 		return s, nil
 	}
-	return s.startRangeDownload(mode, false, nil)
+	strict := s.downloadPickStrict
+	s.downloadPickStrict = false
+	return s.startRangeDownload(mode, strict, nil)
 }
 
 // startRangeDownload dispatches the picked range batch in the given
@@ -2902,12 +3059,17 @@ func (s *sessionScreen) handleDownloadModeKey(key tea.KeyPressMsg) (Screen, tea.
 // with the compact attribution, never substituted. A remembered dub
 // keeps the PR63 smart rotation (python resolve_dubs_smart parity).
 //
-// PR165b: syncChoice carries the audio_sync decision (nil = decide
-// here): config "no" or a non-qualifying batch (not видео+аудио, a
-// single-provider merge — no cross-provider pairs to fix) answers no
-// silently; config "yes" answers yes; "ask" opens the two-choice
-// menu (stashing mode+strict) and the answer re-enters with the
-// choice set.
+// PR165b/PR174: syncChoice carries the audio_sync decision (nil =
+// decide here). The analysis belongs to MIXING downloads alone — a
+// video+аудио batch carrying a marked audio set (external dub tracks
+// muxed onto the video). A plain single-dub batch has nothing to
+// sync — no prompt, whatever the session's provider topology (PR174
+// S3: the pre-174 gate keyed on `len(parts) >= 2`, so every merged
+// session asked on every plain download, and «Да» analyzed nothing
+// — no donors ride a plain task). Config "no" or a non-mixing batch
+// answers no silently; config "yes" answers yes; "ask" opens the
+// two-choice menu (stashing mode+strict) and the answer re-enters
+// with the choice set.
 func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice *bool) (Screen, tea.Cmd) {
 	deps := s.deps
 	preferred := s.videoDub
@@ -2919,6 +3081,14 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 	if content == "" {
 		content = "video_audio"
 	}
+	// The PR165 marked audio set rides every video+аудио task: every
+	// episode muxes the whole set (per-episode resolution inside the
+	// batch); the other modes resolve the chosen dub alone. Computed
+	// BEFORE the sync gate — mixing is the gate's qualifier.
+	var audioSet []string
+	if content == "video_audio" && len(s.markedAudio) > 0 {
+		audioSet = append([]string(nil), s.markedAudio...)
+	}
 	ask := false
 	if syncChoice == nil {
 		cfg := deps.DownloadSync // "ask" | "yes" | "no"; "" = the sync
@@ -2926,7 +3096,7 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		// exactly as pre-sync. Production never passes "": the config
 		// layer normalizes every unknown to "ask" before the snapshot.
 		switch {
-		case content != "video_audio" || len(s.parts) < 2 || cfg == "no" || cfg == "":
+		case content != "video_audio" || len(audioSet) == 0 || cfg == "no" || cfg == "":
 			syncChoice = syncNo()
 		case cfg == "yes":
 			syncChoice = syncYes()
@@ -2943,13 +3113,6 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		s.syncAskMode, s.syncAskStrict = mode, strict
 		s.openSyncAskMenu()
 		return s, nil
-	}
-	// The PR165 marked audio set rides every video+аудио task: every
-	// episode muxes the whole set (per-episode resolution inside the
-	// batch); the other modes resolve the chosen dub alone.
-	var audioSet []string
-	if content == "video_audio" && len(s.markedAudio) > 0 {
-		audioSet = append([]string(nil), s.markedAudio...)
 	}
 	// The dub is resolved PER EPISODE inside the command (PR64 #3):
 	// the remembered dub first, per-episode fallback otherwise (the
@@ -2970,21 +3133,26 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 		})
 	}
 	switch mode {
-	case "foreground":
-		count := len(tasks)
-		s.setStatus(i18n.T("download.starting_foreground", i18n.Vals{"count": strconv.Itoa(count)}))
-		s.downloadGen++
-		gen := s.downloadGen
-		progCh := make(chan string, 16)
-		s.downloadProgCh = progCh
-		return s, tea.Batch(
-			safeCmd(sessionScreenID, func() tea.Msg {
-				defer close(progCh)
-				return runForegroundDownload(context.Background(), deps, tasks, preferred, strict, progCh)
-			}),
-			waitDownloadProgress(progCh, gen),
-		)
+	case "direct":
+		// PR174 S5: the direct download runs on its dedicated locked
+		// screen — per-episode progress rows, cancel-with-confirm, the
+		// settle summary. Navigation below is structurally blocked
+		// while the screen is up (the single-flight pair of the
+		// downloadBusy guard).
+		labels := append([]string(nil), s.downloadEpisodes...)
+		return s, push(newDirectDownloadScreen(deps, directBatch{
+			tasks:     tasks,
+			preferred: preferred,
+			strict:    strict,
+			episodes:  labels,
+		}))
 	case "background":
+		// The resolve-window guard (fix-round HIGH-1): the marker is
+		// set HERE, synchronously before the command exists — a
+		// second request in the very same Update turn already sees
+		// the batch as busy (the manager banner only appears after
+		// the async resolve finishes and Submit runs).
+		s.downloadInFlight = true
 		s.setStatus(i18n.T("download.resolving_dubs", i18n.Vals{"count": strconv.Itoa(len(tasks))}))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {
 			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred, strict)
@@ -2992,6 +3160,18 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 	default:
 		return s, nil
 	}
+}
+
+// downloadBusy reports whether ANY download work is in flight (PR174
+// S4 + fix-round): a background batch (the manager's active banner or
+// the synchronous in-flight marker of the pre-Submit resolve window)
+// or a direct batch (its screen locks the session below —
+// unreachable, checked anyway). The guard is consulted at the
+// download ENTRY and the mode pick; a second request while one runs
+// is rejected — the FIRST request keeps running untouched.
+func (s *sessionScreen) downloadBusy() bool {
+	return s.downloadInFlight ||
+		(s.deps != nil && s.deps.Download != nil && s.deps.Download.ActiveBanner() != "")
 }
 
 // syncYes/syncNo render the sync-ask answers as pointers.
@@ -3067,9 +3247,10 @@ func (s *sessionScreen) openDownloadDubMenu() bool {
 	return len(union) > 0
 }
 
-// handleDownloadDubKey drives the #164 ask-first dub menu: the pick
-// becomes the remembered dub and starts the STRICT batch in the mode
-// picked before the menu opened; Back aborts — nothing downloaded.
+// handleDownloadDubKey drives the #164 ask-first dub menu — the
+// PR174 fallback of the stream picker (an empty live resolve): the
+// pick records the dub and continues to the mode menu as an explicit
+// strict choice; Back aborts — nothing downloaded.
 func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if s.redubList.HandleKey(key) {
 		return s, nil
@@ -3079,33 +3260,29 @@ func (s *sessionScreen) handleDownloadDubKey(key tea.KeyPressMsg) (Screen, tea.C
 		return s, nil
 	}
 	if resolved == Back {
-		s.downloadAskMode = ""
 		s.setState(sessionStateMenu)
 		return s, nil
 	}
 	dub, _ := resolved.(string)
 	s.videoDub = dub
-	mode := s.downloadAskMode
-	s.downloadAskMode = ""
-	// The batch leaves the ask menu (review round 2): the menu must
-	// not render dead under the batch and its settle — the session
-	// menu is the owning surface, exactly like the remembered-dub
-	// path. A stranded menu turned Enter-after-settle into the
-	// previously-unreachable silent-nothing default (PR41 B2).
-	s.setState(sessionStateMenu)
-	return s.startRangeDownload(mode, true, nil)
+	s.downloadPickStrict = true
+	// The menu must not render dead under the next surface (review
+	// round 2, the PR41 B2 class): the mode menu is the owning
+	// surface now.
+	s.setState(sessionStateDownloadMode)
+	s.buildModeList()
+	return s, nil
 }
 
-// buildModeList renders the foreground/background picker once per
-// visit (C2).
+// buildModeList renders the PR174 download-mode picker once per
+// visit (C2): the direct download screen first (the owner's primary
+// path), the background queue second.
 func (s *sessionScreen) buildModeList() {
 	s.modeList = NewPinList(NewMenu(i18n.T("download.mode_title"), "", []Choice{
-		{ID: "foreground", Label: i18n.T("download.mode_foreground"), Value: "foreground"},
+		{ID: "direct", Label: i18n.T("download.mode_direct"), Value: "direct"},
 		{ID: "background", Label: i18n.T("download.mode_background"), Value: "background"},
 	}...), defaultListHeight)
 }
-
-// downloadSettledMsg reports one finished foreground download.
 
 // finalizeMerge assembles the merged aggregate and the action menu.
 func (s *sessionScreen) finalizeMerge() {
@@ -3446,6 +3623,10 @@ func (s *sessionScreen) View() tea.View {
 		// #164 form.
 		body = themedList(s.syncAskList)
 	case sessionStateQuality:
+		body = themedList(s.qualityList) + "\n" + theme.StatusLine.Render(i18n.T("session.pick_stream_hint"))
+	case sessionStateDownloadStream:
+		// PR174: the download stream picker shares the watch
+		// picker's list and its marking hint.
 		body = themedList(s.qualityList) + "\n" + theme.StatusLine.Render(i18n.T("session.pick_stream_hint"))
 	case sessionStateFormat:
 		body = themedList(s.formatList)

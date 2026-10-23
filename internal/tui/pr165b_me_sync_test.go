@@ -401,8 +401,10 @@ func TestSyncProgressTicksReachTheManager(t *testing.T) {
 	c, _ := pr165bSyncCore(t, dl, analyzer, assembler, true)
 
 	var ticks []float64
-	_, _, _, err := c.downloadOne(context.Background(), pr165bSyncTask(), func(p float64) {
-		ticks = append(ticks, p)
+	_, _, _, err := c.downloadOne(context.Background(), pr165bSyncTask(), func(p DownloadProgress) {
+		if p.Known {
+			ticks = append(ticks, p.Fraction*100)
+		}
 	})
 	if err != nil {
 		t.Fatalf("downloadOne: %v", err)

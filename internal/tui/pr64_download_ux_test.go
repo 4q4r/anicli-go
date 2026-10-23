@@ -320,17 +320,21 @@ func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.M
 		t.Fatalf("the %s pick must dispatch a command", mode)
 	}
 	switch mode {
-	case "foreground":
-		// The pick arms a BATCH (the worker plus the progress pump) —
-		// flatten it and keep the settle.
-		var settled downloadSettledMsg
-		for _, m := range runLaunchBatch(t, cmd) {
-			if d, ok := m.(downloadSettledMsg); ok {
-				settled = d
-			}
+	case "direct":
+		// The pick PUSHES the direct download screen (PR174) — drive
+		// its batch to the settle and return the screen's summary
+		// (the established settle report format).
+		pushedMsg := cmd()
+		pushed, ok := pushedMsg.(pushMsg)
+		if !ok {
+			t.Fatalf("the direct pick must push the screen, got %T", pushedMsg)
 		}
-		applied, _ := ss.Update(settled)
-		return settled, applied.(*sessionScreen).status
+		ds, ok := pushed.screen.(*directDownloadScreen)
+		if !ok {
+			t.Fatalf("the pushed screen must be the direct screen, got %T", pushed.screen)
+		}
+		settle := driveDirectScreen(t, ds)
+		return settle, ds.summary
 	case "background":
 		msg := cmd()
 		queued, ok := msg.(backgroundQueuedMsg)
@@ -351,8 +355,9 @@ func driveDownloadRange(t *testing.T, s *sessionScreen, rng, mode string) (tea.M
 func TestDownloadRangeResolvesDubPerEpisode(t *testing.T) {
 	s, dl := pr64RotatingSession(t, map[string]bool{"2|[animego] Дубль 1": true})
 
-	msg, status := driveDownloadRange(t, s, "1-3", "foreground")
-	settled := msg.(downloadSettledMsg)
+	msg, status := driveDownloadRange(t, s, "1-3", "direct")
+	dsettled := msg.(directSettleMsg)
+	settled := downloadSettledMsg{count: dsettled.count, total: dsettled.total, err: dsettled.firstErr, report: dsettled.report}
 
 	if settled.err != nil {
 		t.Fatalf("every episode must resolve, got %v", settled.err)
@@ -395,8 +400,9 @@ func TestDownloadRangeTypesNoViableEpisode(t *testing.T) {
 		"2|[anilib] AniLib":   true,
 	})
 
-	msg, status := driveDownloadRange(t, s, "1-3", "foreground")
-	settled := msg.(downloadSettledMsg)
+	msg, status := driveDownloadRange(t, s, "1-3", "direct")
+	dsettled := msg.(directSettleMsg)
+	settled := downloadSettledMsg{count: dsettled.count, total: dsettled.total, err: dsettled.firstErr, report: dsettled.report}
 
 	if settled.count != 2 || settled.total != 3 {
 		t.Fatalf("2 of 3 must download, got %d/%d", settled.count, settled.total)
@@ -425,14 +431,15 @@ func TestDownloadRangeTypesNoViableEpisode(t *testing.T) {
 // report line shape — ep → dub → path / failure — plus the headline
 // semantics the older tests pin («Episodes downloaded», «Download failed»).
 func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
-	s := pr64Session(t)
 	msg := downloadSettledMsg{count: 1, total: 2, err: errors.New("ffmpeg exploded"),
 		report: []downloadEpisodeReport{
 			{Episode: "1", Dub: "[animego] Дубль 1", Path: "/dl/Тайтл/EP_1_Дубль_1_720p.mp4"},
 			{Episode: "2", Dub: "[anilib] AniLib", Err: errors.New("ffmpeg exploded")},
 		}}
-	next, _ := s.Update(msg)
-	status := next.(*sessionScreen).status
+	// PR174: the settle report renders on the direct screen (and its
+	// renderer is pinned here directly — the session no longer owns a
+	// foreground settle).
+	status := renderDownloadSettle(msg)
 	for _, want := range []string{
 		"Episodes downloaded: 1 of 2",
 		"Ep. 1 — [animego] Дубль 1 — /dl/Тайтл/EP_1_Дубль_1_720p.mp4",
@@ -445,8 +452,7 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 
 	msg2 := downloadSettledMsg{count: 0, total: 1, err: errNoViableDub,
 		report: []downloadEpisodeReport{{Episode: "7", Err: errNoViableDub}}}
-	next, _ = s.Update(msg2)
-	status = next.(*sessionScreen).status
+	status = renderDownloadSettle(msg2)
 	if !contains(status, "Download failed: 0 of 1 episodes") {
 		t.Fatalf("an all-failed range keeps the «Download failed» headline:\n%s", status)
 	}
@@ -462,8 +468,7 @@ func TestDownloadSettleReportRendersPerEpisode(t *testing.T) {
 			{Episode: "1", Dub: "[animego] Дубль 1", Err: errors.New("disk full")},
 			{Episode: "2", Err: errNoViableDub},
 		}}
-	next, _ = s.Update(msg3)
-	status = next.(*sessionScreen).status
+	status = renderDownloadSettle(msg3)
 	if !contains(status, "Download failed: 0 of 2 episodes — disk full") {
 		t.Fatalf("the headline must carry the first error verbatim:\n%s", status)
 	}
@@ -534,8 +539,9 @@ func TestDownloadRangeHydratesLazyEpisodes(t *testing.T) {
 	s.videoDub = "[animego] Дубль 1"
 
 	dl := deps.Download.(*fakeDownload)
-	msg, _ := driveDownloadRange(t, s, "1-3", "foreground")
-	settled := msg.(downloadSettledMsg)
+	msg, _ := driveDownloadRange(t, s, "1-3", "direct")
+	dsettled := msg.(directSettleMsg)
+	settled := downloadSettledMsg{count: dsettled.count, total: dsettled.total, err: dsettled.firstErr, report: dsettled.report}
 
 	if settled.count != 3 || len(dl.downloads) != 3 {
 		t.Fatalf("hydration must make all 3 episodes downloadable, got %d/%d",
@@ -680,8 +686,9 @@ func TestDownloadRangeReportOrdered(t *testing.T) {
 		},
 	}
 
-	msg, status := driveDownloadRange(t, s, "1-2", "foreground")
-	settled := msg.(downloadSettledMsg)
+	msg, status := driveDownloadRange(t, s, "1-2", "direct")
+	dsettled := msg.(directSettleMsg)
+	settled := downloadSettledMsg{count: dsettled.count, total: dsettled.total, err: dsettled.firstErr, report: dsettled.report}
 
 	if settled.count != 2 || settled.err != nil {
 		t.Fatalf("both episodes must download, got %d/%d err=%v", settled.count, settled.total, settled.err)
@@ -695,9 +702,11 @@ func TestDownloadRangeReportOrdered(t *testing.T) {
 	}
 }
 
-// TestDownloadProgressLines (review fix 2): the batch ticks per
-// episode — a resolve verdict per settled episode and the reviewer's
-// exact download-start line «Загрузка i/N: эп X — [dub]…».
+// TestDownloadProgressLines (review fix 2; PR174 migration): the
+// direct batch reports per-episode events — one resolve verdict per
+// settled episode and the per-episode download rows, in episode
+// order (the status-line progress format is superseded by the
+// direct screen's rows).
 func TestDownloadProgressLines(t *testing.T) {
 	s, _ := pr64RotatingSession(t, nil)
 	preferred := "[animego] Дубль 1"
@@ -706,72 +715,50 @@ func TestDownloadProgressLines(t *testing.T) {
 		{AnimeTitle: "Тайтл", EpisodeNum: "2", Episode: s.episodes["2"]},
 	}
 
-	ch := make(chan string, 64)
-	var settled downloadSettledMsg
-	done := make(chan struct{})
+	labels := []string{"1", "2"}
+	events := make(chan tea.Msg, 64)
+	collected := make(chan []tea.Msg, 1)
 	go func() {
-		defer close(done)
-		settled = runForegroundDownload(context.Background(), s.deps, tasks, preferred, false, ch)
-		close(ch)
+		var all []tea.Msg
+		for m := range events {
+			all = append(all, m)
+		}
+		collected <- all
 	}()
-	var lines []string
-	for line := range ch {
-		lines = append(lines, line)
-	}
-	<-done
+	runDirectBatch(context.Background(), s.deps, directBatch{
+		tasks: tasks, preferred: preferred, episodes: labels,
+	}, events)
+	all := <-collected
 
-	if settled.count != 2 {
-		t.Fatalf("both episodes must download, got %d", settled.count)
-	}
-	if len(lines) == 0 {
-		t.Fatal("progress lines expected")
-	}
-	var start1, resolve1 bool
-	for _, line := range lines {
-		if strings.Contains(line, "Downloading 1/2: ep 1 — [animego] Дубль 1…") {
-			start1 = true
-		}
-		if strings.HasPrefix(line, "Resolving dubs ") && strings.Contains(line, "ep 1 — [animego] Дубль 1") {
-			resolve1 = true // the counter follows COMPLETION order (parallel)
+	var resolves, rows []int
+	for _, m := range all {
+		switch e := m.(type) {
+		case directResolveMsg:
+			resolves = append(resolves, e.idx)
+		case directRowMsg:
+			rows = append(rows, e.idx)
+			if e.row.state != directRowDone {
+				t.Fatalf("episode %d must settle done, got %v", e.idx, e.row.state)
+			}
 		}
 	}
-	if !start1 {
-		t.Fatalf("the download-start progress line missing:\n%s", strings.Join(lines, "\n"))
+	if len(resolves) != 2 {
+		t.Fatalf("every episode must resolve exactly once, got %v", resolves)
 	}
-	if !resolve1 {
-		t.Fatalf("the resolve verdict line missing:\n%s", strings.Join(lines, "\n"))
+	if len(rows) != 2 || rows[0] != 0 || rows[1] != 1 {
+		t.Fatalf("the download rows must settle in episode order, got %v", rows)
 	}
 }
 
-// TestDownloadProgressScopesToSurface (review fix 2 + #1 semantics):
-// a progress line updates the status on the owning surface, the pump
-// re-arms, and a stale generation (a newer batch) is dropped.
-func TestDownloadProgressScopesToSurface(t *testing.T) {
-	s := pr64Session(t)
-	s.downloadProgCh = make(chan string, 8)
-
-	next, cmd := s.Update(downloadProgressMsg{gen: s.downloadGen, line: "Загрузка 1/2: эп 1 — [d]…"})
-	ss := next.(*sessionScreen)
-	if ss.status != "Загрузка 1/2: эп 1 — [d]…" {
-		t.Fatalf("progress must reach the status line, got %q", ss.status)
-	}
-	if cmd == nil {
-		t.Fatal("the progress message must re-arm the pump")
-	}
-	ss.downloadProgCh <- "Загрузка 2/2: эп 2 — [d]…"
-	m := cmd()
-	pm, ok := m.(downloadProgressMsg)
-	if !ok || pm.line != "Загрузка 2/2: эп 2 — [d]…" {
-		t.Fatalf("the pump must deliver the next line, got %#v", m)
-	}
-
-	// A stale generation (a newer batch superseded this one) drops.
-	next, cmd = ss.Update(downloadProgressMsg{gen: ss.downloadGen + 5, line: "устаревшее"})
-	ss = next.(*sessionScreen)
-	if cmd != nil || ss.status == "устаревшее" {
-		t.Fatalf("a stale generation must be dropped, status %q", ss.status)
-	}
-}
+// TestDownloadProgressScopesToSurface was REMOVED with the PR174
+// mode redesign: the status-line progress pump (downloadProgressMsg,
+// downloadProgCh, the generation drops) is superseded by the direct
+// screen — its events flow through its OWN channel to the screen
+// itself (structurally scoped: nothing else can render them), and the
+// stale-round supersession invariant lives on the resolve machinery
+// (resolveGen, pinned by the watch-resolve tests). The surface-status
+// scoping of the session's remaining download message
+// (backgroundQueuedMsg) is pinned by the background tests below.
 
 // TestDownloadResolutionBounded (review fix 2): the per-episode
 // resolution runs through the repo's bounded pool — at most 8
@@ -798,8 +785,9 @@ func TestDownloadResolutionBounded(t *testing.T) {
 	s.loadEpisodesSync()
 	s.videoDub = "[animego] Дубль 1"
 
-	msg, _ := driveDownloadRange(t, s, "1-16", "foreground")
-	settled := msg.(downloadSettledMsg)
+	msg, _ := driveDownloadRange(t, s, "1-16", "direct")
+	dsettled := msg.(directSettleMsg)
+	settled := downloadSettledMsg{count: dsettled.count, total: dsettled.total, err: dsettled.firstErr, report: dsettled.report}
 	if settled.count != eps {
 		t.Fatalf("all %d episodes must download, got %d", eps, settled.count)
 	}

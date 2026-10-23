@@ -2,7 +2,7 @@ package tui
 
 // Download-flow machinery (PR64): the availability line of the
 // download-range prompt and the per-episode dub resolution shared by
-// the foreground and background range downloads (the PR63 watch-flow
+// the direct and background range downloads (the PR63 watch-flow
 // semantics — python resolve_dubs_smart).
 
 import (
@@ -34,6 +34,10 @@ const (
 	SyncApplied     = "applied"
 	SyncUncertain   = "uncertain"
 	SyncUnavailable = "unavailable"
+	// SyncNoExternal marks the PR174 fix-round honest verdict of a
+	// sync-ON batch whose every donor is the video provider's own
+	// track: nothing external to analyze, nothing was performed.
+	SyncNoExternal = "no_external"
 )
 
 // availabilityMaxRuns caps the rendered run list: a pathological
@@ -121,8 +125,8 @@ type downloadEpisodeReport struct {
 	Episode string
 	// Dub is the resolved dub key; "" marks a no-viable-dub episode.
 	Dub string
-	// Path is the written file (foreground successes; the background
-	// mode queues and reports later).
+	// Path is the written file (direct-screen successes; the
+	// background mode queues and reports later).
 	Path string
 	// Err is the failure (resolution or download); nil on success.
 	Err error
@@ -248,43 +252,22 @@ func stampResolvedDub(task *DownloadTask, dub string) {
 // the provider fan-out consts.
 const downloadResolveFanout = 8
 
-// emitProgress publishes one progress line without ever blocking the
-// batch: a nil channel (background mode) or a saturated buffer just
-// drops the sample (the throttle keeps the next ones coming).
-func emitProgress(ch chan<- string, line string) {
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- line:
-	default:
-	}
-}
-
-// downloadResolveLine / downloadProgressLine render the per-episode
-// progress ticks of a running range batch.
-func downloadResolveLine(done, total int, episode, verdict string) string {
-	return i18n.T("download.resolve_line", i18n.Vals{
-		"done": strconv.Itoa(done), "total": strconv.Itoa(total),
-		"ep": episode, "verdict": verdict})
-}
-
-func downloadProgressLine(done, total int, episode, verdict string) string {
-	return i18n.T("download.progress_line", i18n.Vals{
-		"done": strconv.Itoa(done), "total": strconv.Itoa(total),
-		"ep": episode, "verdict": verdict})
-}
+// resolveObserver receives the PR174 direct screen's resolve events:
+// the done/total counters, the episode's row index, the resolved dub
+// (or the typed skip verdict with skip=true). nil = silent (the
+// background queue).
+type resolveObserver func(done, total, idx int, episode, verdict string, skip bool)
 
 // resolveDownloadDubs resolves EVERY range episode's dub through the
-// repo's bounded pool (≤ downloadResolveFanout; a probe fns never
+// repo's bounded pool (≤ downloadResolveFanout; a probe fn never
 // fails, so one episode's error cannot cancel its siblings — the
 // watch-flow fan-out rule). The returned report stubs are in EPISODE
-// order regardless of completion order; each settled episode emits a
-// resolve tick (nil channel = silent). The strict #164 mode types a
+// order regardless of completion order; each settled episode notifies
+// the observer (nil = silent). The strict #164 mode types a
 // not-carrying episode as a skip (SkipDub) instead of the
 // no-viable-dub error — the batch summary attributes the skips
 // compactly, nothing substitutes.
-func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool, progCh chan<- string) []downloadEpisodeReport {
+func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool, onResolve resolveObserver) []downloadEpisodeReport {
 	type indexedTask struct {
 		idx  int
 		task DownloadTask
@@ -308,14 +291,19 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 		mu.Lock()
 		defer mu.Unlock()
 		done++
+		observe := func(episode, verdict string, skip bool) {
+			if onResolve != nil {
+				onResolve(done, len(tasks), it.idx, episode, verdict, skip)
+			}
+		}
 		if dub == "" {
 			if strict {
 				stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, SkipDub: preferred}
-				emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.skip_verdict")))
+				observe(it.task.EpisodeNum, i18n.T("download.skip_verdict"), true)
 				return nil
 			}
 			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Err: errNoViableDub}
-			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.no_dubs_verdict")))
+			observe(it.task.EpisodeNum, i18n.T("download.no_dubs_verdict"), true)
 			return nil
 		}
 		if len(it.task.AudioSet) > 0 {
@@ -325,69 +313,18 @@ func resolveDownloadDubs(ctx context.Context, deps *Deps, tasks []DownloadTask, 
 				// episode skips with the compact attribution — never
 				// a silent video-only file (mandate #7).
 				stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub, SkipAudioSet: true}
-				emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, i18n.T("download.audio_skip_verdict")))
+				observe(it.task.EpisodeNum, i18n.T("download.audio_skip_verdict"), true)
 				return nil
 			}
 			stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub, DroppedAudio: dropped}
-			emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, dub))
+			observe(it.task.EpisodeNum, dub, false)
 			return nil
 		}
 		stubs[it.idx] = downloadEpisodeReport{Episode: it.task.EpisodeNum, Dub: dub}
-		emitProgress(progCh, downloadResolveLine(done, len(tasks), it.task.EpisodeNum, dub))
+		observe(it.task.EpisodeNum, dub, false)
 		return nil
 	})
 	return stubs
-}
-
-// runForegroundDownload resolves the range's dubs bounded-parallel
-// (the slow leg), then downloads sequentially in episode order (the
-// heavy leg), typing every episode's verdict in the report. A dead
-// episode never aborts its siblings; every settled episode ticks the
-// progress channel.
-func runForegroundDownload(ctx context.Context, deps *Deps, tasks []DownloadTask, preferred string, strict bool, progCh chan<- string) downloadSettledMsg {
-	stubs := resolveDownloadDubs(ctx, deps, tasks, preferred, strict, progCh)
-	report := make([]downloadEpisodeReport, len(tasks))
-	ok, firstErr := 0, error(nil)
-	for i, task := range tasks {
-		stub := stubs[i]
-		report[i] = downloadEpisodeReport{
-			Episode: stub.Episode, Dub: stub.Dub, Err: stub.Err,
-			SkipDub: stub.SkipDub, DroppedAudio: stub.DroppedAudio,
-			SkipAudioSet: stub.SkipAudioSet,
-		}
-		switch {
-		case stub.SkipDub != "":
-			continue // #164: the chosen dub is absent — skipped, never substituted
-		case stub.SkipAudioSet:
-			continue // #165: none of the marked dubs is on this episode — skipped
-		case stub.Err != nil:
-			if firstErr == nil {
-				firstErr = stub.Err
-			}
-			continue
-		}
-		stamped := task
-		stampResolvedDub(&stamped, stub.Dub)
-		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, stub.Dub+"…"))
-		path, dlDropped, dlSync, err := deps.Download.Download(ctx, stamped)
-		if err != nil {
-			report[i].Err = err
-			report[i].SyncNotes = dlSync
-			emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_error", i18n.Vals{"err": err.Error()})))
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		report[i].Path = path
-		// M2: the dubs that died between the resolve and the download
-		// land on the same row, in the same established suffix.
-		report[i].DroppedAudio = mergeDroppedAudio(report[i].DroppedAudio, dlDropped)
-		report[i].SyncNotes = dlSync
-		ok++
-		emitProgress(progCh, downloadProgressLine(i+1, len(tasks), stub.Episode, i18n.T("download.verdict_done")))
-	}
-	return downloadSettledMsg{count: ok, total: len(tasks), err: firstErr, report: report}
 }
 
 // queueBackgroundDownloads resolves the range's dubs bounded-parallel
@@ -482,6 +419,8 @@ func renderSyncSuffix(notes []SyncNote) string {
 			parts = append(parts, i18n.T("download.sync_note_uncertain", i18n.Vals{"dub": n.Dub}))
 		case SyncUnavailable:
 			parts = append(parts, i18n.T("download.sync_note_unavailable", i18n.Vals{"dub": n.Dub}))
+		case SyncNoExternal:
+			parts = append(parts, i18n.T("download.sync_note_no_external"))
 		}
 	}
 	if len(parts) == 0 {
@@ -529,7 +468,7 @@ func mergeDroppedAudio(base, extra []string) []string {
 	return merged
 }
 
-// renderDownloadSettle composes the foreground settle line: the
+// renderDownloadSettle composes the direct download settle line: the
 // headline plus the compact per-episode report. The all-failed
 // headline carries the first error verbatim — the pre-PR64
 // «Ошибка загрузки: …» contract (review fix 6); the typed no-dub

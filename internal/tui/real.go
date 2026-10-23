@@ -307,6 +307,9 @@ type realCore struct {
 // *download.Downloader in production, a capturing fake in tests.
 type mediaDownloader interface {
 	Download(ctx context.Context, in download.CommandInput) error
+	// DownloadDetailed is the PR174 progress-aware variant (the
+	// direct screen's bars); nil-sink callers keep Download.
+	DownloadDetailed(ctx context.Context, in download.CommandInput, onProgress func(download.Progress)) error
 }
 
 // codecProber probes stream codec names for the container decision
@@ -1003,6 +1006,15 @@ func (s *realDownload) Download(ctx context.Context, task DownloadTask) (string,
 	return s.core.downloadOne(ctx, task, nil)
 }
 
+// DownloadDetailed runs downloadOne with the honest progress sink
+// (PR174): the plain mux reports ffmpeg's out_time against the probed
+// duration; the sync assembly reports its stage ticks. The manager
+// Runner keeps the byte-identical legacy Download (nothing user-facing
+// consumes its fractions).
+func (s *realDownload) DownloadDetailed(ctx context.Context, task DownloadTask, progress func(DownloadProgress)) (string, []string, []SyncNote, error) {
+	return s.core.downloadOne(ctx, task, progress)
+}
+
 func (s *realDownload) Submit(task DownloadTask) {
 	id := downloadTaskID(task)
 	s.mu.Lock()
@@ -1095,9 +1107,11 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, progress
 	}
 	// The background mode reports through the manager progress ticks
 	// (10/30/90/100 on the assembly path, 100 on the legacy one) and
-	// LOGS the sync verdicts — the report row is foreground-only
-	// (owner decision Q1).
-	_, _, notes, err := c.downloadOne(ctx, parts, progress)
+	// LOGS the sync verdicts — the report rows belong to the direct
+	// download screen's settle (owner decision Q1). PR174: the
+	// manager's float64 ticks feed no user-facing surface — the
+	// download legs stay byte-identical (nil progress sink).
+	_, _, notes, err := c.downloadOne(ctx, parts, nil)
 	for _, n := range notes {
 		switch n.Kind {
 		case SyncApplied:
@@ -1113,8 +1127,8 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, progress
 }
 
 // downloadOne performs the full pipeline: resolve stream, resolve
-// skips, merge via ffmpeg, index the result (python
-// handle_download_flow foreground path). The written file path
+// skips, merge via ffmpeg, index the result (the python
+// handle_download_flow path). The written file path
 // returns to the caller (the PR64 #3 per-episode report) together
 // with the marked dubs that died BETWEEN the resolve and the download
 // (M2: the report row names them in the established «без отмеченных:
@@ -1138,7 +1152,7 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, progress
 // EPISODE (a silent file never ships). Everything else — sync off,
 // mkvmerge refused, analysis without offsets — degrades to today's
 // single-pass path with the honest sync notes.
-func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress func(float64)) (string, []string, []SyncNote, error) {
+func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress func(DownloadProgress)) (string, []string, []SyncNote, error) {
 	p, ok := c.registry.Get(task.ProviderID)
 	if !ok {
 		return "", nil, nil, fmt.Errorf("tui: download: unknown provider %q", task.ProviderID)
@@ -1204,7 +1218,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 			ChaptersFile: chaptersFile,
 			Title:        title,
 		}
-		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, input)
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, progress, input)
 		if err != nil {
 			return "", dropped, syncNotes, err
 		}
@@ -1238,7 +1252,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 			c.logger().Warn("download: every marked dub dropped at download time; muxing video-only",
 				"episode", task.Episode.Num, "dubs", dropped)
 			ext = c.videoOnlyExtension(ctx, task.Episode.Num, video)
-			path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+			path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, progress, download.CommandInput{
 				Mode:         download.ModeVideoOnly,
 				Video:        video,
 				ChaptersFile: chaptersFile,
@@ -1252,7 +1266,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 		}
 
 		donors := syncDonorsFromTracks(tracks, carriedKeys.carried)
-		syncPath, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, progress)
+		syncPath, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, syncStageTicks(progress))
 		if handled {
 			if serr != nil {
 				return "", dropped, notes, serr
@@ -1269,7 +1283,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 		// в синхроне» is not a note).
 		syncNotes = notes
 		ext = c.multiAudioExtension(ctx, task.Episode.Num, video, tracks)
-		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, progress, download.CommandInput{
 			Mode:         download.ModeVideoAudio,
 			Video:        video,
 			ChaptersFile: chaptersFile,
@@ -1310,7 +1324,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 				src:  *audio,
 				def:  true,
 			}}
-			if path, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, progress); handled {
+			if path, notes, serr, handled := c.trySyncDownload(ctx, task, video, donors, chaptersFile, outDir, quality, title, syncStageTicks(progress)); handled {
 				if serr != nil {
 					return "", dropped, notes, serr
 				}
@@ -1325,7 +1339,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 		}
 
 		ext = "mp4"
-		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, download.CommandInput{
+		path, err := c.downloadSinglePass(ctx, task, quality, ext, outDir, progress, download.CommandInput{
 			Video:        video,
 			Audio:        audio,
 			ChaptersFile: chaptersFile,
@@ -1345,7 +1359,7 @@ func (c *realCore) downloadOne(ctx context.Context, task DownloadTask, progress 
 // sanitized name (169-D belt inside), the atomic finalize. Every
 // PR165b degradation lands here — the argv is byte-identical to the
 // pre-sync shape.
-func (c *realCore) downloadSinglePass(ctx context.Context, task DownloadTask, quality, ext, outDir string, input download.CommandInput) (string, error) {
+func (c *realCore) downloadSinglePass(ctx context.Context, task DownloadTask, quality, ext, outDir string, progress func(DownloadProgress), input download.CommandInput) (string, error) {
 	name := fmt.Sprintf("EP_%s_%s_%sp.%s",
 		sanitizeFragment(task.Episode.Num), sanitizeFilename(task.DubID), sanitizeFragment(quality), ext)
 	outPath := filepath.Join(outDir, name)
@@ -1353,6 +1367,21 @@ func (c *realCore) downloadSinglePass(ctx context.Context, task DownloadTask, qu
 		return "", err
 	}
 	input.OutputPath = outPath
+	if progress != nil {
+		// PR174: the detailed pass reports ffmpeg's honest out_time
+		// against the probed duration (indeterminate on a failed
+		// probe — never a fabricated fraction).
+		if err := c.dl.DownloadDetailed(ctx, input, func(p download.Progress) {
+			progress(DownloadProgress{
+				Fraction: p.Fraction(),
+				Known:    p.TotalSec > 0,
+				TimeSec:  p.TimeSec,
+			})
+		}); err != nil {
+			return "", err
+		}
+		return outPath, nil
+	}
 	if err := c.dl.Download(ctx, input); err != nil {
 		return "", err
 	}
@@ -1473,6 +1502,7 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 	}
 
 	anyOffset := false
+	attemptedAny := false
 	for i := range donors {
 		d := &donors[i]
 		if d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
@@ -1481,6 +1511,7 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 			// ships unmeasured (byte-identical audio).
 			continue
 		}
+		attemptedAny = true
 		off, oerr := c.analyzer.Offset(ctx, ref, d.src)
 		if oerr != nil {
 			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
@@ -1495,6 +1526,17 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 		notes = append(notes, SyncNote{Dub: d.dub, Seconds: off.Seconds, Kind: SyncApplied})
 	}
 	if !anyOffset {
+		if !attemptedAny && len(donors) > 0 {
+			// Fix-round MED-4: the user answered «yes» but every
+			// donor is the video provider's own track — nothing
+			// external exists to even attempt. The honest note rides
+			// the established sync-notes channel; a sync-ON batch
+			// that silently analyzes nothing is never a silent
+			// no-op. (Failed analyses keep their uncertain notes —
+			// external tracks that failed to measure are NOT
+			// "no external tracks".)
+			notes = append(notes, SyncNote{Kind: SyncNoExternal})
+		}
 		return "", notes, nil, false
 	}
 
@@ -1788,4 +1830,18 @@ func ensurePathWithinRoot(root, path string) error {
 		return fmt.Errorf("tui: download: output %s escapes the download root %s", path, root)
 	}
 	return nil
+}
+
+// syncStageTicks adapts the PR174 progress sink onto the sync job's
+// stage ticks: RunSyncJob reports RAW PERCENTS (10/30/90/100), the
+// sink takes 0..1 fractions. Every stage tick is a known completion
+// step of the assembly — indeterminate fractions never masquerade as
+// stages.
+func syncStageTicks(progress func(DownloadProgress)) func(float64) {
+	if progress == nil {
+		return nil
+	}
+	return func(pct float64) {
+		progress(DownloadProgress{Fraction: pct / 100, Known: true})
+	}
 }

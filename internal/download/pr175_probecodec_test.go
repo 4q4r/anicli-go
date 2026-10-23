@@ -7,13 +7,21 @@ package download
 // degrading the container decision to the safe-Matroska fallback).
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/an0nx/anicli-go/internal/contracts"
 )
+
+// errProbeRefused is the test sentinel pinning the wrap contract:
+// ProbeCodec must wrap the runOut failure with %w so errors.Is reaches
+// the underlying cause. A regression to %v (or an unrelated error)
+// fails the assertion.
+var errProbeRefused = errors.New("probe refused")
 
 // TestProbeCodecReadsStdout: ffprobe prints the codec JSON to STDOUT.
 // The probe must read the payload through the stdout-capturing seam —
@@ -60,16 +68,17 @@ func TestProbeCodecReadsStdout(t *testing.T) {
 }
 
 // TestProbeCodecStillTypesFailures: a failed probe run keeps the typed
-// wrap; an empty stdout payload degrades to "" WITHOUT an error — the
-// callers' fallback contract (ContainerFor's safe Matroska) must not
-// change.
+// %w wrap (errors.Is reaches the sentinel — a %v wrap or an unrelated
+// error fails); an empty stdout payload degrades to "" WITHOUT an error
+// — the callers' fallback contract (ContainerFor's safe Matroska) must
+// not change.
 func TestProbeCodecStillTypesFailures(t *testing.T) {
 	d := New(Options{})
 	d.runOut = func(context.Context, string, []string) ([]byte, string, error) {
-		return nil, "boom", errors.New("probe refused")
+		return nil, "boom", errProbeRefused
 	}
-	if _, err := d.ProbeCodec(context.Background(), "a", testVideoSource("v1")); err == nil {
-		t.Fatal("a refused probe run must surface as the typed error")
+	if _, err := d.ProbeCodec(context.Background(), "a", testVideoSource("v1")); !errors.Is(err, errProbeRefused) {
+		t.Fatalf("the failed probe must wrap the run error with %%w (errors.Is sentinel), got: %v", err)
 	}
 	d.runOut = func(context.Context, string, []string) ([]byte, string, error) {
 		return []byte(""), "", nil // stdout empty: the degradation contract
@@ -80,5 +89,34 @@ func TestProbeCodecStillTypesFailures(t *testing.T) {
 	}
 	if codec != "" {
 		t.Fatalf("an empty stdout payload degrades to the empty codec, got %q", codec)
+	}
+}
+
+// TestProbeCodecWarnsOnEmptyPayload pins the PR28 diagnostics seam: a
+// successful probe run with an empty or unparsable stdout payload WARNs
+// through the Downloader's sink (the probeDuration warn pattern,
+// downloader.go:335) naming the probed source — the failure typing
+// stays "" without an error.
+func TestProbeCodecWarnsOnEmptyPayload(t *testing.T) {
+	d := New(Options{})
+	d.runOut = func(context.Context, string, []string) ([]byte, string, error) {
+		return []byte(""), "", nil
+	}
+	var buf bytes.Buffer
+	d.log = slog.New(slog.NewTextHandler(&buf, nil))
+	src := testVideoSource("v1")
+	codec, err := d.ProbeCodec(context.Background(), "v", src)
+	if err != nil {
+		t.Fatalf("an empty payload must degrade, not error: %v", err)
+	}
+	if codec != "" {
+		t.Fatalf("an empty payload degrades to the empty codec, got %q", codec)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "WARN") {
+		t.Fatalf("an empty/unparsable probe payload must WARN through the diagnostics sink, got: %q", out)
+	}
+	if !strings.Contains(out, src.URL) {
+		t.Fatalf("the WARN must name the probed source %q, got: %q", src.URL, out)
 	}
 }

@@ -85,5 +85,12 @@ func (d *Downloader) ProbeCodec(ctx context.Context, kind string, src contracts.
 	if err != nil {
 		return "", fmt.Errorf("download: probe %s codec: %w", kind, err)
 	}
-	return parseCodecName(out), nil
+	codec := parseCodecName(out)
+	if codec == "" {
+		// Diagnostics only (the probeDuration warn pattern,
+		// downloader.go:335): the failure typing stays "" without an
+		// error — the callers keep the safe Matroska fallback.
+		d.warnf("download: codec probe for %s (%s) returned no codec; container falls back to Matroska", kind, src.URL)
+	}
+	return codec, nil
 }

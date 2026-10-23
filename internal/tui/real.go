@@ -1107,10 +1107,10 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, progress
 	}
 	// The background mode reports through the manager progress ticks
 	// (10/30/90/100 on the assembly path, 100 on the legacy one) and
-	// LOGS the sync verdicts — the report row is foreground-only
-	// (owner decision Q1). PR174: the manager's float64 ticks feed no
-	// user-facing surface — the download legs stay byte-identical
-	// (nil progress sink).
+	// LOGS the sync verdicts — the report rows belong to the direct
+	// download screen's settle (owner decision Q1). PR174: the
+	// manager's float64 ticks feed no user-facing surface — the
+	// download legs stay byte-identical (nil progress sink).
 	_, _, notes, err := c.downloadOne(ctx, parts, nil)
 	for _, n := range notes {
 		switch n.Kind {
@@ -1127,8 +1127,8 @@ func (c *realCore) runDownload(ctx context.Context, task download.Task, progress
 }
 
 // downloadOne performs the full pipeline: resolve stream, resolve
-// skips, merge via ffmpeg, index the result (python
-// handle_download_flow foreground path). The written file path
+// skips, merge via ffmpeg, index the result (the python
+// handle_download_flow path). The written file path
 // returns to the caller (the PR64 #3 per-episode report) together
 // with the marked dubs that died BETWEEN the resolve and the download
 // (M2: the report row names them in the established «без отмеченных:
@@ -1502,6 +1502,7 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 	}
 
 	anyOffset := false
+	attemptedAny := false
 	for i := range donors {
 		d := &donors[i]
 		if d.key != "" && providerOfTrackKey(d.key) == task.ProviderID {
@@ -1510,6 +1511,7 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 			// ships unmeasured (byte-identical audio).
 			continue
 		}
+		attemptedAny = true
 		off, oerr := c.analyzer.Offset(ctx, ref, d.src)
 		if oerr != nil {
 			notes = append(notes, SyncNote{Dub: d.dub, Kind: SyncUncertain})
@@ -1524,6 +1526,17 @@ func (c *realCore) trySyncDownload(ctx context.Context, task DownloadTask, video
 		notes = append(notes, SyncNote{Dub: d.dub, Seconds: off.Seconds, Kind: SyncApplied})
 	}
 	if !anyOffset {
+		if !attemptedAny && len(donors) > 0 {
+			// Fix-round MED-4: the user answered «yes» but every
+			// donor is the video provider's own track — nothing
+			// external exists to even attempt. The honest note rides
+			// the established sync-notes channel; a sync-ON batch
+			// that silently analyzes nothing is never a silent
+			// no-op. (Failed analyses keep their uncertain notes —
+			// external tracks that failed to measure are NOT
+			// "no external tracks".)
+			notes = append(notes, SyncNote{Kind: SyncNoExternal})
+		}
 		return "", notes, nil, false
 	}
 

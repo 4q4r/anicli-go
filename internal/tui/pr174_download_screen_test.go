@@ -371,6 +371,12 @@ func TestDirectScreenCancelStopsBatch(t *testing.T) {
 	if !strings.Contains(v, "Download stopped") {
 		t.Fatalf("the cancelled settle must render:\n%s", v)
 	}
+	// Fix-round MED-3: the episode that was mid-download when the
+	// cancel landed reads the same «stopped» line as its siblings —
+	// the «context canceled» mechanics stay out of the surface.
+	if strings.Contains(v, "context canceled") {
+		t.Fatalf("the cancelled rows must not render the raw mechanics:\n%s", v)
+	}
 	// After the settle any key pops back.
 	next, cmd := d.Update(enter())
 	_ = next

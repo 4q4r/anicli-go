@@ -2,7 +2,7 @@ package tui
 
 // Download-flow machinery (PR64): the availability line of the
 // download-range prompt and the per-episode dub resolution shared by
-// the foreground and background range downloads (the PR63 watch-flow
+// the direct and background range downloads (the PR63 watch-flow
 // semantics — python resolve_dubs_smart).
 
 import (
@@ -34,6 +34,10 @@ const (
 	SyncApplied     = "applied"
 	SyncUncertain   = "uncertain"
 	SyncUnavailable = "unavailable"
+	// SyncNoExternal marks the PR174 fix-round honest verdict of a
+	// sync-ON batch whose every donor is the video provider's own
+	// track: nothing external to analyze, nothing was performed.
+	SyncNoExternal = "no_external"
 )
 
 // availabilityMaxRuns caps the rendered run list: a pathological
@@ -121,8 +125,8 @@ type downloadEpisodeReport struct {
 	Episode string
 	// Dub is the resolved dub key; "" marks a no-viable-dub episode.
 	Dub string
-	// Path is the written file (foreground successes; the background
-	// mode queues and reports later).
+	// Path is the written file (direct-screen successes; the
+	// background mode queues and reports later).
 	Path string
 	// Err is the failure (resolution or download); nil on success.
 	Err error
@@ -415,6 +419,8 @@ func renderSyncSuffix(notes []SyncNote) string {
 			parts = append(parts, i18n.T("download.sync_note_uncertain", i18n.Vals{"dub": n.Dub}))
 		case SyncUnavailable:
 			parts = append(parts, i18n.T("download.sync_note_unavailable", i18n.Vals{"dub": n.Dub}))
+		case SyncNoExternal:
+			parts = append(parts, i18n.T("download.sync_note_no_external"))
 		}
 	}
 	if len(parts) == 0 {
@@ -462,7 +468,7 @@ func mergeDroppedAudio(base, extra []string) []string {
 	return merged
 }
 
-// renderDownloadSettle composes the foreground settle line: the
+// renderDownloadSettle composes the direct download settle line: the
 // headline plus the compact per-episode report. The all-failed
 // headline carries the first error verbatim — the pre-PR64
 // «Ошибка загрузки: …» contract (review fix 6); the typed no-dub

@@ -413,17 +413,32 @@ func (d *Downloader) realRunProgress(ctx context.Context, bin string, args []str
 		}
 	}
 	waitErr := cmd.Wait()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if waitErr != nil {
+		// HIGH-2 (fix-round): the child's REAL exit status decides,
+		// not the context state. Go's exec injects ctx.Err() into
+		// Wait when the cancellation killed an UNREAPED process —
+		// including one that already exited successfully (the
+		// scanner-drain window: the kill on a zombie "succeeds").
+		// A cancellation landing after a successful exit must never
+		// turn the COMPLETED pass into an error (the caller would
+		// delete the finished file); the success status is the truth.
+		if cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("%s: %s", bin, oneLine(stderr.String(), waitErr))
 	}
 	return nil
 }
 
 // realProbeDuration measures the input's format duration via
-// ffprobe (the same binary derivation as ProbeCodec).
+// ffprobe (the same binary derivation as ProbeCodec). ffprobe prints
+// the duration to STDOUT — the probe reads the stdout-capturing seam
+// (fix-round CR-1: the stderr-capturing run seam read the empty pipe
+// and every real probe came back unparsable, leaving the progress
+// bars indeterminate in production).
 func (d *Downloader) realProbeDuration(ctx context.Context, src contracts.VideoSource) (float64, error) {
 	args := []string{
 		"-v", "error",
@@ -432,13 +447,13 @@ func (d *Downloader) realProbeDuration(ctx context.Context, src contracts.VideoS
 	}
 	args = append(args, headerArgs(src.Headers)...)
 	args = append(args, src.URL)
-	out, err := d.run(ctx, d.probeBin(), args)
+	out, _, err := d.runOut(ctx, d.probeBin(), args)
 	if err != nil {
 		return 0, fmt.Errorf("download: probe duration: %w", err)
 	}
-	secs, perr := strconv.ParseFloat(strings.TrimSpace(out), 64)
+	secs, perr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
 	if perr != nil || secs <= 0 {
-		return 0, fmt.Errorf("download: probe duration: unparsable %q", out)
+		return 0, fmt.Errorf("download: probe duration: unparsable %q", string(out))
 	}
 	return secs, nil
 }

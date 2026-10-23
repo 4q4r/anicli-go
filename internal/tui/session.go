@@ -62,7 +62,7 @@ const (
 	sessionStateDownloadMode   sessionState = "download_mode"
 	// sessionStateDownloadContent is the PR165 content-mode picker
 	// («видео+аудио» / «только видео» / «только аудио») between the
-	// range prompt and the foreground/background pick.
+	// range prompt and the direct/background pick.
 	sessionStateDownloadContent sessionState = "download_content"
 	// sessionStateDownloadDub is the #164 ask-first dub picker of the
 	// download flow: a batch started without a chosen dub opens it
@@ -356,6 +356,14 @@ type sessionScreen struct {
 	// start with the strict mode — both ride the stash).
 	syncAskMode   string
 	syncAskStrict bool
+	// downloadInFlight is the synchronous single-flight marker of the
+	// PR174 fix-round: the background dispatch's dub resolution runs
+	// seconds-to-tens-of-seconds BEFORE the manager Submit lights
+	// the active banner — in that window downloadBusy() must not pass
+	// (a second resolve would race the first batch's .part files).
+	// Set at the background dispatch, cleared when the queue settles
+	// (the backgroundQueuedMsg handler).
+	downloadInFlight bool
 	// syncAskList is the PR165b two-choice sync menu (the #164 form).
 	syncAskList *PinList
 	// markedAudio is the PR165 ordered download audio set: the dub
@@ -947,6 +955,9 @@ func (s *sessionScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return s, nil
 	case backgroundQueuedMsg:
+		// The resolve window closed (fix-round HIGH-1): the marker
+		// clears exactly when the queue settles.
+		s.downloadInFlight = false
 		s.setStatus(renderBackgroundQueued(msg))
 		return s, nil
 	case tea.KeyPressMsg:
@@ -1052,8 +1063,16 @@ func (s *sessionScreen) handleCancel() (Screen, tea.Cmd) {
 		s.setState(sessionStateMenu)
 		return s.startRangeDownload(mode, strict, syncNo())
 	case sessionStateMenu, sessionStatePlaying:
+		// Leaving the session abandons the in-flight marker with the
+		// popped screen (fix-round HIGH-1, defensive): a panic inside
+		// the resolve command strands the marker with no settle — the
+		// pop is the escape. Deliberately NOT cleared in the substate
+		// branches: an Esc from an unrelated list must not reopen the
+		// resolve-window hole while the background batch runs.
+		s.downloadInFlight = false
 		return s, pop()
 	case sessionStateLoading:
+		s.downloadInFlight = false
 		return s, pop()
 	case sessionStateBuffering:
 		s.stopBuffering(i18n.T("session.buffer_cancelled"))
@@ -3128,6 +3147,12 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 			episodes:  labels,
 		}))
 	case "background":
+		// The resolve-window guard (fix-round HIGH-1): the marker is
+		// set HERE, synchronously before the command exists — a
+		// second request in the very same Update turn already sees
+		// the batch as busy (the manager banner only appears after
+		// the async resolve finishes and Submit runs).
+		s.downloadInFlight = true
 		s.setStatus(i18n.T("download.resolving_dubs", i18n.Vals{"count": strconv.Itoa(len(tasks))}))
 		return s, safeCmd(sessionScreenID, func() tea.Msg {
 			return queueBackgroundDownloads(context.Background(), deps, tasks, preferred, strict)
@@ -3138,13 +3163,15 @@ func (s *sessionScreen) startRangeDownload(mode string, strict bool, syncChoice 
 }
 
 // downloadBusy reports whether ANY download work is in flight (PR174
-// S4): a background batch (the manager's active banner) or a direct
-// batch (its screen locks the session below — unreachable, checked
-// anyway). The guard is consulted at the download ENTRY and the mode
-// pick; a second request while one runs is rejected — the FIRST
-// request keeps running untouched.
+// S4 + fix-round): a background batch (the manager's active banner or
+// the synchronous in-flight marker of the pre-Submit resolve window)
+// or a direct batch (its screen locks the session below —
+// unreachable, checked anyway). The guard is consulted at the
+// download ENTRY and the mode pick; a second request while one runs
+// is rejected — the FIRST request keeps running untouched.
 func (s *sessionScreen) downloadBusy() bool {
-	return s.deps != nil && s.deps.Download != nil && s.deps.Download.ActiveBanner() != ""
+	return s.downloadInFlight ||
+		(s.deps != nil && s.deps.Download != nil && s.deps.Download.ActiveBanner() != "")
 }
 
 // syncYes/syncNo render the sync-ask answers as pointers.
@@ -3256,8 +3283,6 @@ func (s *sessionScreen) buildModeList() {
 		{ID: "background", Label: i18n.T("download.mode_background"), Value: "background"},
 	}...), defaultListHeight)
 }
-
-// downloadSettledMsg reports one finished foreground download.
 
 // finalizeMerge assembles the merged aggregate and the action menu.
 func (s *sessionScreen) finalizeMerge() {

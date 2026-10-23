@@ -12,7 +12,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -178,13 +180,21 @@ func (d *directDownloadScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				d.rows[m.idx].state = directRowSkipped
 				d.rows[m.idx].dub = m.verdict
 			} else {
-				d.rows[m.idx].state = directRowActive
+				// Fix-round MED-3: a resolved episode WAITS its turn —
+				// the row stays pending (the dub is stored) until its
+				// FIRST progress tick promotes it to active. A batch
+				// of 16 resolved rows must not look like 16
+				// simultaneous downloads.
+				d.rows[m.idx].state = directRowPending
 				d.rows[m.idx].dub = m.verdict
 			}
 		}
 		return d, waitDirectProgress(d.events)
 	case directTickMsg:
 		if m.idx >= 0 && m.idx < len(d.rows) {
+			if d.rows[m.idx].state == directRowPending || d.rows[m.idx].state == directRowResolving {
+				d.rows[m.idx].state = directRowActive
+			}
 			d.rows[m.idx].pct = m.pct
 			d.rows[m.idx].hasPct = m.hasPct
 			d.rows[m.idx].timeSec = m.timeSec
@@ -198,18 +208,57 @@ func (d *directDownloadScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case directSettleMsg:
 		d.done = true
 		d.cancelled = m.cancelled
-		d.summary = renderDownloadSettle(downloadSettledMsg{
-			count: m.count, total: m.total, err: m.firstErr, report: m.report,
-		})
 		if m.cancelled {
+			// A user-confirmed stop is not a failure report: the
+			// stopped framing carries it (fix-round MED-3 — «context
+			// canceled» is mechanics, not a user-facing verdict), and
+			// every non-terminal row settles on the same «stopped»
+			// line, the episode that was mid-download included.
+			d.summary = i18n.T("download.settle_cancelled", i18n.Vals{
+				"count": strconv.Itoa(m.count), "total": strconv.Itoa(m.total)})
 			for i := range d.rows {
 				switch d.rows[i].state {
 				case directRowPending, directRowResolving, directRowActive:
 					d.rows[i].state = directRowStopped
+				case directRowFailed:
+					if d.rows[i].err != nil && errors.Is(d.rows[i].err, context.Canceled) {
+						d.rows[i].state = directRowStopped
+					}
 				}
 			}
+		} else {
+			d.summary = renderDownloadSettle(downloadSettledMsg{
+				count: m.count, total: m.total, err: m.firstErr, report: m.report,
+			})
 		}
 		return d, waitDirectProgress(d.events)
+	case errMsg:
+		// Fix-round MED-2: a panic inside the batch goroutine must
+		// never strand the locked screen — the App routes the direct
+		// screen's own errMsg here. The batch context is cancelled
+		// (the orphaned ffmpeg dies with it), the interrupted rows
+		// settle on the stopped line, and the honest error status
+		// lets any key return to browsing.
+		if m.screen != downloadScreenID || d.done {
+			return d, nil
+		}
+		if d.cancel != nil && !d.stopping {
+			d.stopping = true
+			d.cancel()
+		}
+		d.done = true
+		cause := m.brief
+		if cause == "" {
+			cause = fmt.Sprint(m.err)
+		}
+		d.summary = i18n.T("download.screen_aborted", i18n.Vals{"err": cause})
+		for i := range d.rows {
+			switch d.rows[i].state {
+			case directRowPending, directRowResolving, directRowActive:
+				d.rows[i].state = directRowStopped
+			}
+		}
+		return d, nil
 	case directPumpEnd:
 		return d, nil
 	case tea.KeyPressMsg:
@@ -273,16 +322,29 @@ func formatDirectClock(sec float64) string {
 
 // renderBar draws the active row's progress: a filled bar with the
 // percentage when measurable, the honest elapsed output time
-// otherwise (never a fabricated fraction).
+// otherwise (never a fabricated fraction). The fraction clamps to
+// [0,1] (fix-round MED-1): a negative or corrupt sample must never
+// reach strings.Repeat with a negative count — that panics the whole
+// TUI.
 func renderBar(r directRow) string {
 	const width = 20
-	filled := int(r.pct * float64(width))
+	pct := r.pct
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct * float64(width))
+	if filled < 0 {
+		filled = 0 // a degenerate NaN sample: the int conversion is undefined
+	}
 	if filled > width {
 		filled = width
 	}
 	if r.hasPct {
 		return fmt.Sprintf("[%s%s] %3.0f%%",
-			strings.Repeat("█", filled), strings.Repeat("░", width-filled), r.pct*100)
+			strings.Repeat("█", filled), strings.Repeat("░", width-filled), pct*100)
 	}
 	return fmt.Sprintf("[%s] %s", strings.Repeat("░", width), formatDirectClock(r.timeSec))
 }

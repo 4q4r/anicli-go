@@ -302,10 +302,11 @@ type DownloadProgress struct {
 	TimeSec float64
 }
 
-// DownloadService backs «Скачать серии» with foreground and background
-// modes.
+// DownloadService backs «Скачать серии» with the direct progress
+// screen and the background manager queue.
 type DownloadService interface {
-	// Download runs one download to completion (foreground mode) and
+	// Download runs one download to completion (the direct download
+	// screen's batch leg) and
 	// returns the written file path (PR64 #3 — the per-episode report
 	// shows where the episode landed) plus the marked dubs that died
 	// between the resolve and the download (M2 — the report row names

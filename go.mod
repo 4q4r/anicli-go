@@ -14,7 +14,7 @@ require (
 	github.com/bogdanfinn/tls-client v1.16.0
 	github.com/chromedp/cdproto v0.0.0-20260912003405-686a5c723acc
 	github.com/chromedp/chromedp v0.16.0
-	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/jmespath/go-jmespath v0.4.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/gopher-lua v1.1.2
